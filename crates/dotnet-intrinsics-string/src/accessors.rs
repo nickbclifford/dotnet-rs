@@ -13,7 +13,7 @@ use dotnet_vm_ops::{
 };
 use std::sync::Arc;
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+use crate::NULL_REF_MSG;
 
 /// System.String::get_Chars(int)
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]

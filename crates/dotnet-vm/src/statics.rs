@@ -207,11 +207,7 @@ impl StaticStorageManager {
         if let Some(m) = metrics {
             m.record_static_field_layout_cache_miss();
         }
-        let result = Arc::new(LayoutFactory::static_fields_with_metrics(
-            description.clone(),
-            context,
-            metrics,
-        )?);
+        let result = Arc::new(LayoutFactory::static_fields(description.clone(), context)?);
         context
             .caches()
             .static_field_layout_cache

@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    instructions::NULL_REF_MSG,
     instructions::objects::{get_ptr_context, get_ptr_info},
     layout::LayoutFactory,
     resolution::ValueResolution,
@@ -13,7 +14,6 @@ use dotnet_value::{
     pointer::ManagedPtrInfo,
 };
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{

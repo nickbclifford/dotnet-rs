@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    sync::{Arc, LockResult, Mutex},
+    sync::{Arc, LockResult, Mutex, SyncBlockOps},
     threading::ThreadManagerOps,
 };
 use dotnet_metrics::RuntimeMetrics;
@@ -23,7 +23,7 @@ impl SyncBlock {
     }
 }
 
-impl super::SyncBlockBackend for SyncBlock {
+impl super::SyncBlockOps for SyncBlock {
     fn try_enter(&self, _thread_id: ArenaId) -> bool {
         self.recursion_count.fetch_add(1, Ordering::Relaxed);
         true
@@ -112,7 +112,7 @@ impl SyncBlockManager {
     }
 }
 
-impl super::SyncManagerBackend for SyncBlockManager {
+impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
     fn get_or_create_sync_block(
@@ -148,7 +148,7 @@ impl super::SyncManagerBackend for SyncBlockManager {
         thread_id: ArenaId,
         _metrics: &RuntimeMetrics,
     ) -> bool {
-        super::SyncBlockBackend::try_enter(block.as_ref(), thread_id)
+        block.try_enter(thread_id)
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    instructions::NULL_REF_MSG,
     layout::type_layout,
     resolution::TypeResolutionExt,
     stack::ops::{
@@ -10,7 +11,6 @@ use crate::{
 use dotnet_types::TypeDescription;
 use dotnet_value::pointer::PointerOrigin;
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{StackValue, object::ObjectRef};

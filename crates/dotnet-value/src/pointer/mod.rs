@@ -4,7 +4,7 @@ use crate::{
     ptr_common::PointerLike,
 };
 use dashmap::DashMap;
-use dotnet_types::{TypeDescription, error::MemoryError, generics::GenericLookup};
+use dotnet_types::{TypeDescription, generics::GenericLookup};
 use gc_arena::{Collect, collect::Trace, static_collect};
 use std::{
     cmp::Ordering as CmpOrdering,
@@ -216,16 +216,6 @@ impl<'gc> ManagedPtr<'gc> {
         self.offset
     }
 
-    pub fn offset_by(&self, bytes: isize) -> Result<Self, MemoryError> {
-        Ok(Self {
-            offset: ByteOffset(self.offset.0.wrapping_add_signed(bytes)),
-            _value: self
-                ._value
-                .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().wrapping_offset(bytes)) }),
-            ..self.clone()
-        })
-    }
-
     pub fn into_info(self) -> ManagedPtrInfo<'gc> {
         ManagedPtrInfo {
             address: self._value,
@@ -244,13 +234,6 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn with_inner_type(&self, inner_type: TypeDescription) -> Self {
         Self {
             inner_type,
-            ..self.clone()
-        }
-    }
-
-    pub fn with_pinned(&self, pinned: bool) -> Self {
-        Self {
-            pinned,
             ..self.clone()
         }
     }
@@ -440,52 +423,6 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    pub fn map_value(
-        self,
-        transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>,
-    ) -> Self {
-        self.validate_magic();
-        let old_ptr = match &self.origin {
-            PointerOrigin::Heap(owner) => owner.0.and_then(|h| {
-                // SAFETY: `h` is a live object handle and we only read the
-                // immutable base pointer for offset computation.
-                let base_ptr = unsafe { h.borrow().storage.raw_data_ptr() };
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
-                }
-            }),
-            #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
-                let base_ptr = ptr.as_heap_storage(|storage| {
-                    // SAFETY: `as_heap_storage` validates the object and keeps
-                    // the lock held for the closure duration; we only read the
-                    // base storage pointer.
-                    unsafe { storage.raw_data_ptr() }
-                });
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
-                }
-            }
-            _ => self._value,
-        };
-        let new_value = transform(old_ptr);
-        let mut m = self.clone();
-        m._value = new_value;
-        if let PointerOrigin::Stack(_idx) = m.origin {
-            let diff = if let (Some(new_p), Some(old_p)) = (new_value, old_ptr) {
-                (new_p.as_ptr() as isize).wrapping_sub(old_p.as_ptr() as isize)
-            } else {
-                0
-            };
-            m.offset = ByteOffset((m.offset.as_usize() as isize + diff) as usize);
-        }
-        m
-    }
-
     #[cfg(feature = "memory-validation")]
     fn validate_offset(&self, bytes: isize) {
         if let PointerOrigin::Heap(owner) = self.origin
@@ -539,11 +476,6 @@ impl<'gc> ManagedPtr<'gc> {
         self.validate_magic();
         self.origin = PointerOrigin::Stack(slot_index);
         self
-    }
-
-    pub fn is_stack_local(&self) -> bool {
-        self.validate_magic();
-        matches!(self.origin, PointerOrigin::Stack(_))
     }
 
     /// Returns true if this ManagedPtr represents a null pointer.

@@ -180,15 +180,6 @@ impl AssemblyLoader {
         crate::resolution::load_resolution_core(path, &self.metadata)
     }
 
-    /// Returns true if the given name is an alias for a stubbed type.
-    pub fn is_stub_alias(&self, name: &str) -> bool {
-        self.reverse_stubs.contains_key(name)
-    }
-
-    pub fn add_redirect(&self, name: String, redirect: BindingRedirect) {
-        self.redirects.entry(name).or_default().push(redirect);
-    }
-
     pub fn set_strict_versioning(&mut self, strict: bool) {
         self.strict_versioning = strict;
     }

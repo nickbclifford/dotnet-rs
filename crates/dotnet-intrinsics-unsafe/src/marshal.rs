@@ -14,9 +14,6 @@ use dotnet_vm_ops::{
 };
 use std::sync::Arc;
 
-#[allow(dead_code)]
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-
 pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
     if let StackValue::ManagedPtr(m) = val {
         let new_m = unsafe { m.offset(byte_offset) };

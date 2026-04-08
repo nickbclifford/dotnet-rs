@@ -12,7 +12,7 @@ use dotnet_vm_ops::{
     ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+use crate::NULL_REF_MSG;
 
 /// System.String::IndexOf(char)
 /// System.String::IndexOf(char, int)

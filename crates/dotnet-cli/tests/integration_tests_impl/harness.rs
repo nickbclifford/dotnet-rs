@@ -42,41 +42,16 @@ impl TestHarness {
     }
 
     fn new() -> Self {
-        let assemblies_path = Self::find_dotnet_app_path().to_str().unwrap().to_string();
+        let assemblies_path = assemblies::find_dotnet_app_path()
+            .expect("could not find .NET shared path")
+            .to_str()
+            .unwrap()
+            .to_string();
         let loader = assemblies::AssemblyLoader::new(assemblies_path)
             .expect("Failed to create AssemblyLoader");
         Self {
             loader: Arc::new(loader),
         }
-    }
-
-    fn find_dotnet_app_path() -> PathBuf {
-        let base = std::env::var("DOTNET_ROOT")
-            .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
-            .unwrap_or_else(|_| PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
-
-        let base = if !base.exists() {
-            let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-            if alt_base.exists() { alt_base } else { base }
-        } else {
-            base
-        };
-
-        if !base.exists() {
-            panic!("could not find .NET shared path at {:?}", base);
-        }
-
-        let mut entries: Vec<_> = std::fs::read_dir(base)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
-
-        entries.sort_by_key(|e| e.file_name());
-        entries
-            .last()
-            .expect("no versions found in .NET shared path")
-            .path()
     }
 
     pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
@@ -368,7 +343,8 @@ impl TestHarness {
     /// Runs the CLI binary as a subprocess and captures its output.
     #[cfg(not(feature = "fuzzing"))]
     pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
-        let assemblies_path = Self::find_dotnet_app_path();
+        let assemblies_path =
+            assemblies::find_dotnet_app_path().expect("could not find .NET shared path");
         let output = if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {
             Command::new(bin_path)
                 .args([

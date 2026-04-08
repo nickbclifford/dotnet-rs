@@ -268,7 +268,6 @@ impl<'gc> CallStack<'gc> {
     }
 }
 
-#[allow(dead_code)] // Integrated dump methods for comprehensive state capture during development
 impl<'gc: 'gc> CallStack<'gc> {
     // Tracer-integrated dump methods for comprehensive state capture
     pub fn trace_dump_stack(&self) {

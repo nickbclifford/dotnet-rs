@@ -42,10 +42,7 @@ where
         let t = self.normalize_type(t.clone())?;
 
         // ECMA-335 §I.8.2.4: Boxing Nullable<T> produces null if HasValue=false, or boxed T if HasValue=true.
-        if t.is_nullable(self.loader.as_ref()) && matches!(data, StackValue::ValueType(_)) {
-            let StackValue::ValueType(obj) = &data else {
-                unreachable!()
-            };
+        if t.is_nullable(self.loader.as_ref()) && let StackValue::ValueType(obj) = &data {
             let layout = obj.instance_storage.layout();
             let has_value_field = layout
                 .fields
@@ -184,10 +181,10 @@ where
     fn new_instance_fields_with_lookup(
         &self,
         td: TypeDescription,
-        resolution: ResolutionS,
+        _resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<FieldStorage, TypeResolutionError> {
-        let layout = self.instance_field_layout_cached_with_lookup(td, resolution, generics)?;
+        let layout = self.instance_field_layout_cached_with_lookup(td, generics)?;
         let size = layout.size();
         Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
@@ -195,10 +192,10 @@ where
     fn new_static_fields_with_lookup(
         &self,
         td: TypeDescription,
-        resolution: ResolutionS,
+        _resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<FieldStorage, TypeResolutionError> {
-        let layout = Arc::new(self.static_fields_with_lookup(td, resolution, generics)?);
+        let layout = Arc::new(self.static_fields_with_lookup(td, generics)?);
         let size = layout.size();
         Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
@@ -212,12 +209,10 @@ where
     ) -> Result<ValueType<'gc>, TypeResolutionError> {
         match self.new_cts_value_with_lookup(t, data, resolution, generics)? {
             CTSValue::Value(v) => Ok(v),
-            CTSValue::Ref(r) => {
-                panic!(
-                    "tried to instantiate value type, received object reference ({:?})",
-                    r
-                )
-            }
+            CTSValue::Ref(r) => Err(TypeResolutionError::InvalidLayout(format!(
+                "tried to instantiate value type, received object reference ({:?})",
+                r
+            ))),
         }
     }
 
@@ -231,32 +226,38 @@ where
         use ValueType::*;
         let t = self.normalize_type(t.clone())?;
         match t.get() {
-            BaseType::Boolean => Ok(CTSValue::Value(Bool(convert_num::<u8>(data) != 0))),
-            BaseType::Char => Ok(CTSValue::Value(Char(convert_num(data)))),
-            BaseType::Int8 => Ok(CTSValue::Value(Int8(convert_num(data)))),
-            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(convert_num(data)))),
-            BaseType::Int16 => Ok(CTSValue::Value(Int16(convert_num(data)))),
-            BaseType::UInt16 => Ok(CTSValue::Value(UInt16(convert_num(data)))),
-            BaseType::Int32 => Ok(CTSValue::Value(Int32(convert_num(data)))),
-            BaseType::UInt32 => Ok(CTSValue::Value(UInt32(convert_num(data)))),
-            BaseType::Int64 => Ok(CTSValue::Value(Int64(convert_i64(data)))),
-            BaseType::UInt64 => Ok(CTSValue::Value(UInt64(reinterpret_i64_as_u64(data)))),
-            BaseType::Float32 => Ok(CTSValue::Value(Float32(match data {
-                StackValue::NativeFloat(f) => f as f32,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            }))),
-            BaseType::Float64 => Ok(CTSValue::Value(Float64(match data {
-                StackValue::NativeFloat(f) => f,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            }))),
-            BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(convert_num(data)))),
+            BaseType::Boolean => Ok(CTSValue::Value(Bool(convert_num::<u8>(data)? != 0))),
+            BaseType::Char => Ok(CTSValue::Value(Char(convert_num(data)?))),
+            BaseType::Int8 => Ok(CTSValue::Value(Int8(convert_num(data)?))),
+            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(convert_num(data)?))),
+            BaseType::Int16 => Ok(CTSValue::Value(Int16(convert_num(data)?))),
+            BaseType::UInt16 => Ok(CTSValue::Value(UInt16(convert_num(data)?))),
+            BaseType::Int32 => Ok(CTSValue::Value(Int32(convert_num(data)?))),
+            BaseType::UInt32 => Ok(CTSValue::Value(UInt32(convert_num(data)?))),
+            BaseType::Int64 => Ok(CTSValue::Value(Int64(convert_i64(data)?))),
+            BaseType::UInt64 => Ok(CTSValue::Value(UInt64(reinterpret_i64_as_u64(data)?))),
+            BaseType::Float32 => match data {
+                StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float32(f as f32))),
+                other => Err(TypeResolutionError::InvalidLayout(format!(
+                    "invalid stack value {:?} for conversion into f32",
+                    other
+                ))),
+            },
+            BaseType::Float64 => match data {
+                StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float64(f))),
+                other => Err(TypeResolutionError::InvalidLayout(format!(
+                    "invalid stack value {:?} for conversion into f64",
+                    other
+                ))),
+            },
+            BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(convert_num(data)?))),
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Ok(CTSValue::Value(NativeUInt(convert_num(data))))
+                Ok(CTSValue::Value(NativeUInt(convert_num(data)?)))
             }
             BaseType::ValuePointer(_modifiers, inner) => match data {
                 StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p))),
                 _ => {
-                    let ptr = convert_num::<usize>(data);
+                    let ptr = convert_num::<usize>(data)?;
                     let inner_type = if let Some(source) = inner {
                         self.loader.find_concrete_type(source.clone())?
                     } else {
@@ -278,7 +279,10 @@ where
                 if let StackValue::ObjectRef(o) = data {
                     Ok(CTSValue::Ref(o))
                 } else {
-                    panic!("expected ObjectRef, got {:?}", data)
+                    Err(TypeResolutionError::InvalidLayout(format!(
+                        "expected ObjectRef, got {:?}",
+                        data
+                    )))
                 }
             }
             BaseType::Type {
@@ -288,7 +292,10 @@ where
                 if let StackValue::ObjectRef(o) = data {
                     Ok(CTSValue::Ref(o))
                 } else {
-                    panic!("expected ObjectRef, got {:?}", data)
+                    Err(TypeResolutionError::InvalidLayout(format!(
+                        "expected ObjectRef, got {:?}",
+                        data
+                    )))
                 }
             }
             BaseType::Type {
@@ -303,7 +310,10 @@ where
                     return Ok(CTSValue::Ref(if let StackValue::ObjectRef(r) = data {
                         r
                     } else {
-                        panic!("expected ObjectRef, got {:?}", data)
+                        return Err(TypeResolutionError::InvalidLayout(format!(
+                            "expected ObjectRef, got {:?}",
+                            data
+                        )));
                     }));
                 }
 
@@ -319,7 +329,10 @@ where
 
                 if td.type_name() == "System.TypedReference" {
                     let StackValue::TypedRef(p, t) = data else {
-                        panic!("expected TypedRef, got {:?}", data);
+                        return Err(TypeResolutionError::InvalidLayout(format!(
+                            "expected TypedRef, got {:?}",
+                            data
+                        )));
                     };
                     return Ok(CTSValue::Value(TypedRef(p, t)));
                 }
@@ -327,7 +340,6 @@ where
                 if let StackValue::ValueType(mut o) = data {
                     let expected_layout = self.instance_field_layout_cached_with_lookup(
                         td.clone(),
-                        resolution.clone(),
                         &new_lookup,
                     )?;
 
@@ -380,7 +392,11 @@ where
                                 });
                                 instance.instance_storage = replacement;
                             }
-                            _ => panic!("cannot unbox from non-object storage"),
+                            _ => {
+                                return Err(TypeResolutionError::InvalidLayout(
+                                    "cannot unbox from non-object storage".to_string(),
+                                ));
+                            }
                         }
                     }
                     Ok(CTSValue::Value(Struct(instance)))
@@ -444,6 +460,8 @@ where
                 };
 
                 if data.len() >= ManagedPtr::SIZE {
+                    // SAFETY: `data.len() >= ManagedPtr::SIZE` is checked above, and the bytes
+                    // come from VM-managed storage that uses ManagedPtr's serialization format.
                     let info = unsafe { ManagedPtr::read_branded(&data[..ManagedPtr::SIZE], &gc) }
                         .expect("read_cts_value: ManagedPtr deserialization failed");
                     let m = ManagedPtr::from_info_full(info, inner_type, false);
@@ -465,12 +483,18 @@ where
             | BaseType::String
             | BaseType::Vector(_, _)
             | BaseType::Array(_, _) => {
+                // SAFETY: These reference-like CLR types are serialized as `ObjectRef` and `data`
+                // is provided by managed storage with the expected object-reference width.
                 Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }))
             }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
-            } => Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) })),
+            } => {
+                // SAFETY: Class-typed values are represented as `ObjectRef` payloads in storage
+                // and use the same branded deserialization contract as other reference types.
+                Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }))
+            }
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
@@ -480,6 +504,8 @@ where
                 let td = self.locate_type(resolution.clone(), ut)?;
 
                 if !self.is_value_type(td.clone())? {
+                    // SAFETY: Non-value `Type` instances are runtime object references serialized
+                    // as `ObjectRef` bytes in managed storage.
                     return Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }));
                 }
 
@@ -495,6 +521,11 @@ where
                 }
 
                 if td.type_name() == "System.TypedReference" {
+                    debug_assert_eq!(
+                        ManagedPtr::SIZE,
+                        ObjectRef::SIZE * 2,
+                        "TypedReference serialization must contain [addr, type_ptr]"
+                    );
                     let mut buf = ManagedPtr::serialization_buffer();
                     buf.copy_from_slice(&data[..ManagedPtr::SIZE]);
                     let addr_bytes = buf[0..ObjectRef::SIZE].try_into().unwrap();
@@ -508,7 +539,9 @@ where
                         return Err(TypeResolutionError::InvalidHandle);
                     }
 
-                    // SAFETY: Reconstructing Arc from raw pointer stored in memory.
+                    // SAFETY: `type_ptr` comes from a `TypedReference` payload written as
+                    // `Arc::as_ptr` in VM code paths; we reconstruct, clone, then restore raw
+                    // ownership with `Arc::into_raw` to preserve the original refcount.
                     let type_desc = unsafe {
                         let arc = Arc::from_raw(type_ptr);
                         let clone = arc.clone();
@@ -602,53 +635,96 @@ where
     }
 }
 
-fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue<'_>) -> T {
+fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
+    data: StackValue<'_>,
+) -> Result<T, TypeResolutionError> {
     match data {
-        StackValue::Int32(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from i32")),
-        StackValue::NativeInt(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from isize")),
+        StackValue::Int32(i) => i.try_into().map_err(|_| {
+            TypeResolutionError::InvalidLayout(format!(
+                "failed to convert from i32 into {}",
+                any::type_name::<T>()
+            ))
+        }),
+        StackValue::NativeInt(i) => i.try_into().map_err(|_| {
+            TypeResolutionError::InvalidLayout(format!(
+                "failed to convert from isize into {}",
+                any::type_name::<T>()
+            ))
+        }),
         StackValue::UnmanagedPtr(p) => {
             p.0.as_ptr()
                 .expose_addr()
                 .try_into()
-                .unwrap_or_else(|_| panic!("failed to convert from pointer"))
+                .map_err(|_| {
+                    TypeResolutionError::InvalidLayout(format!(
+                        "failed to convert unmanaged pointer into {}",
+                        any::type_name::<T>()
+                    ))
+                })
         }
         StackValue::ManagedPtr(p) => {
             let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
             ptr.expose_addr()
                 .try_into()
-                .unwrap_or_else(|_| panic!("failed to convert from pointer"))
+                .map_err(|_| {
+                    TypeResolutionError::InvalidLayout(format!(
+                        "failed to convert managed pointer into {}",
+                        any::type_name::<T>()
+                    ))
+                })
         }
-        other => panic!(
+        other => Err(TypeResolutionError::InvalidLayout(format!(
             "invalid stack value {:?} for conversion into {}",
             other,
             any::type_name::<T>()
-        ),
+        ))),
     }
 }
 
-fn convert_i64<T: TryFrom<i64>>(data: StackValue<'_>) -> T
+fn convert_i64<T: TryFrom<i64>>(data: StackValue<'_>) -> Result<T, TypeResolutionError>
 where
     T::Error: Error,
 {
     match data {
-        StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
-            panic!(
+        StackValue::Int64(i) => i.try_into().map_err(|e| {
+            TypeResolutionError::InvalidLayout(format!(
                 "failed to convert from i64 to {} ({})",
                 any::type_name::<T>(),
                 e
-            )
+            ))
         }),
-        other => panic!("invalid stack value {:?} for integer conversion", other),
+        other => Err(TypeResolutionError::InvalidLayout(format!(
+            "invalid stack value {:?} for integer conversion",
+            other
+        ))),
     }
 }
 
-fn reinterpret_i64_as_u64(data: StackValue<'_>) -> u64 {
+fn reinterpret_i64_as_u64(data: StackValue<'_>) -> Result<u64, TypeResolutionError> {
     match data {
-        StackValue::Int64(i) => i as u64,
-        other => panic!("invalid stack value {:?} for u64 reinterpretation", other),
+        StackValue::Int64(i) => Ok(i as u64),
+        other => Err(TypeResolutionError::InvalidLayout(format!(
+            "invalid stack value {:?} for u64 reinterpretation",
+            other
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::convert_i64;
+    use dotnet_types::error::TypeResolutionError;
+    use dotnet_value::StackValue;
+
+    #[test]
+    fn convert_i64_rejects_non_int64_input() {
+        let result = convert_i64::<i64>(StackValue::Int32(7));
+        match result {
+            Err(TypeResolutionError::InvalidLayout(message)) => {
+                assert!(message.contains("invalid stack value"));
+                assert!(message.contains("integer conversion"));
+            }
+            other => panic!("expected InvalidLayout error, got {:?}", other),
+        }
     }
 }

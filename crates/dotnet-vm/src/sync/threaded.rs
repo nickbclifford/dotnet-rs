@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    sync::{Arc, Condvar, LockResult, Mutex},
+    sync::{Arc, Condvar, LockResult, Mutex, SyncBlockOps},
     threading::ThreadManagerOps,
 };
 use dotnet_metrics::RuntimeMetrics;
@@ -34,7 +34,7 @@ impl SyncBlock {
     }
 }
 
-impl super::SyncBlockBackend for SyncBlock {
+impl super::SyncBlockOps for SyncBlock {
     fn try_enter(&self, thread_id: ArenaId) -> bool {
         let mut state = self.state.lock();
         if state.owner_thread_id == ArenaId::INVALID {
@@ -79,7 +79,7 @@ impl super::SyncBlockBackend for SyncBlock {
         use std::time::{Duration, Instant};
 
         if timeout_ms == 0 {
-            return super::SyncBlockBackend::try_enter(self, thread_id);
+            return super::SyncBlockOps::try_enter(self, thread_id);
         }
 
         let mut state = self.state.lock();
@@ -261,7 +261,7 @@ impl SyncBlockManager {
     }
 }
 
-impl super::SyncManagerBackend for SyncBlockManager {
+impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
     fn get_or_create_sync_block(
@@ -301,7 +301,7 @@ impl super::SyncManagerBackend for SyncBlockManager {
         thread_id: ArenaId,
         _metrics: &RuntimeMetrics,
     ) -> bool {
-        super::SyncBlockBackend::try_enter(block.as_ref(), thread_id)
+        block.try_enter(thread_id)
     }
 }
 

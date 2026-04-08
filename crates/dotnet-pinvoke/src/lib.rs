@@ -164,6 +164,9 @@ impl NativeLibraries {
         let mut last_error = None;
 
         for n in &names_to_try {
+            // SAFETY: Loading a dynamic library is inherently unsafe because constructors may run
+            // and symbol layouts are unchecked. The sandbox gate and curated name list constrain
+            // inputs to approved libraries, and failures are surfaced as `PInvokeError::LoadError`.
             match unsafe { Library::new(n) } {
                 Ok(l) => {
                     lib = Some(l);
@@ -204,6 +207,9 @@ impl NativeLibraries {
             ));
         }
         let l = self.get_library(library, tracer)?;
+        // SAFETY: We request the raw symbol as an untyped C function pointer and immediately pass
+        // it to libffi. Arity/signature validation is handled by metadata-driven marshalling before
+        // invocation; lookup failure is converted to `PInvokeError::SymbolNotFound`.
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
             .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
         Ok(CodePtr::from_fun(*sym))
@@ -633,7 +639,11 @@ fn external_call_impl<'gc>(
                 let ptr = if let Some(h) = obj.0 {
                     ctx.pin_object(*obj);
                     pinned_objects.push(*obj);
+                    // SAFETY: `h` is pinned above for the full call duration, so the underlying
+                    // object storage address remains stable while libffi uses this pointer.
                     let guard = unsafe { PinnedGuard::new(h) };
+                    // SAFETY: The pinned guard guarantees stable backing storage and a valid data
+                    // pointer for the lifetime of `guard`.
                     let ptr = unsafe { guard.guard.storage.raw_data_ptr() };
                     local_guards.push(guard);
                     ptr
@@ -652,6 +662,9 @@ fn external_call_impl<'gc>(
                     pinned_objects.push(owner);
                 }
                 let mut bytes = ManagedPtr::serialization_buffer();
+                // SAFETY: For heap-backed pointers we pin and keep the guard alive in
+                // `local_guards` before taking/offsetting raw addresses; for non-heap pointers we
+                // only expose addresses already represented by `ManagedPtr`.
                 let addr = unsafe {
                     if let PointerOrigin::Heap(obj) = p.origin() {
                         if let Some(h) = obj.0 {
@@ -689,6 +702,8 @@ fn external_call_impl<'gc>(
                 let is_ref = matches!(p_type, ParameterType::Ref(_));
 
                 if is_ref {
+                    // SAFETY: `p.with_data` validates access against the managed origin and we copy
+                    // at most `buf_len` bytes into an owned buffer of the same length.
                     unsafe {
                         p.with_data(buf_len, |data| {
                             let to_copy = std::cmp::min(buf_len, data.len());
@@ -717,6 +732,9 @@ fn external_call_impl<'gc>(
                         pinned_objects.push(owner);
                     }
 
+                    // SAFETY: Heap pointers are pinned and their guards are kept alive in
+                    // `local_guards`; non-heap pointers come from `ManagedPtr` origin data and are
+                    // forwarded as-is for the duration of this call.
                     let ptr = unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
@@ -745,8 +763,12 @@ fn external_call_impl<'gc>(
             }
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
+                // SAFETY: `ptr` is an owned non-null handle to the cross-arena lock cell created
+                // by the VM; taking a shared reference here does not outlive the handle.
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
+                // SAFETY: The borrow guard keeps the object storage alive and immobile while this
+                // pointer is used by libffi.
                 let p = unsafe { guard.storage.raw_data_ptr() };
                 cross_arena_guards.push(guard);
                 temp_buffers.push(TempBuffer::Ptr(Box::new(p)));
@@ -763,10 +785,18 @@ fn external_call_impl<'gc>(
     let do_write_back = |ctx: &mut dyn PInvokeContext<'gc>| {
         for (source, buf_idx, len) in &write_backs {
             let buf = temp_buffers[*buf_idx].as_bytes();
+            debug_assert!(
+                *len <= buf.len(),
+                "write-back length exceeds temporary buffer length"
+            );
             match source {
+                // SAFETY: `origin`/`offset` were captured from the original managed pointer before
+                // call-out, and `len` is bounded by the temporary buffer length.
                 WriteBackSource::Managed(origin, offset) => unsafe {
                     let _ = ctx.write_bytes(origin.clone(), *offset, &buf[..*len]);
                 },
+                // SAFETY: `dest_ptr` was produced from a validated argument pointer for this call;
+                // we copy exactly `len` bytes from the owned write-back buffer.
                 WriteBackSource::Raw(dest_ptr) => unsafe {
                     std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
                 },

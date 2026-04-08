@@ -408,13 +408,12 @@ where
         td: TypeDescription,
         ctx: &Ctx,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        self.instance_fields_with_lookup(td, ctx.resolution().clone(), ctx.generics())
+        self.instance_fields_with_lookup(td, ctx.generics())
     }
 
     pub fn instance_fields_with_lookup(
         &self,
         td: TypeDescription,
-        _resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
         LayoutFactory::instance_fields_with_lookup(self, td, generics)
@@ -425,13 +424,12 @@ where
         td: TypeDescription,
         ctx: &Ctx,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        self.instance_field_layout_cached_with_lookup(td, ctx.resolution().clone(), ctx.generics())
+        self.instance_field_layout_cached_with_lookup(td, ctx.generics())
     }
 
     pub fn instance_field_layout_cached_with_lookup(
         &self,
         td: TypeDescription,
-        _resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
         let key = (td.clone(), generics.clone());
@@ -440,8 +438,7 @@ where
             return Ok(cached);
         }
 
-        let result =
-            Arc::new(self.instance_fields_with_lookup(td, key.0.resolution.clone(), &key.1)?);
+        let result = Arc::new(self.instance_fields_with_lookup(td, &key.1)?);
         self.layout
             .set_instance_field_layout_cached(key, Arc::clone(&result));
         Ok(result)
@@ -452,13 +449,12 @@ where
         td: TypeDescription,
         ctx: &Ctx,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        self.static_fields_with_lookup(td, ctx.resolution().clone(), ctx.generics())
+        self.static_fields_with_lookup(td, ctx.generics())
     }
 
     pub fn static_fields_with_lookup(
         &self,
         td: TypeDescription,
-        _resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
         LayoutFactory::static_fields_with_lookup(self, td, generics)

@@ -372,10 +372,6 @@ impl<'gc> FrameStack<'gc> {
         self.frames.last().expect("Frame stack underflow")
     }
 
-    pub fn current_frame_opt(&self) -> Option<&StackFrame<'gc>> {
-        self.frames.last()
-    }
-
     pub fn current_frame_opt_mut(&mut self) -> Option<&mut StackFrame<'gc>> {
         self.frames.last_mut()
     }

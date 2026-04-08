@@ -2,7 +2,7 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{DelegateInvokeHost, invoke::invoke_delegate};
+use crate::{BEGIN_END_NOT_SUPPORTED_MSG, DelegateInvokeHost, invoke::invoke_delegate};
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -13,10 +13,6 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps},
 };
-
-#[allow(dead_code)]
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
 /// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
 pub fn is_delegate_type<'gc, T: LoaderOps + ResolutionOps<'gc>>(
@@ -60,12 +56,12 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
     match method_name {
         "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" => {
-            Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG))
-        }
-        "EndInvoke" => {
-            Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG))
-        }
+        "BeginInvoke" | "EndInvoke" => Some(
+            ctx.throw_by_name_with_message(
+                "System.NotSupportedException",
+                BEGIN_END_NOT_SUPPORTED_MSG,
+            ),
+        ),
         _ => None,
     }
 }

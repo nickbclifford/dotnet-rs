@@ -1,4 +1,4 @@
-use crate::IntrinsicStringHost;
+use crate::{IntrinsicStringHost, NULL_REF_MSG};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
@@ -14,8 +14,6 @@ use dotnet_vm_ops::{
     ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps},
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)

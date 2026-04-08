@@ -4,7 +4,7 @@ use crate::{
 };
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
-    atomic::{self, Atomic},
+    atomic::Atomic,
     sync::{
         Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, Ordering, RwLock, RwLockReadGuard,
         RwLockWriteGuard,
@@ -164,33 +164,6 @@ impl FieldStorage {
         let guard = RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
         validate_alignment(guard.as_ptr(), alignment);
         guard
-    }
-
-    /// Returns a copy of the field's data, synchronized via RwLock to prevent tearing.
-    /// NOTE: This method ignores the `Ordering` parameter and should only be used
-    /// for non-volatile access where tearing prevention is the primary concern.
-    pub fn get_field_synchronized(
-        &self,
-        owner: TypeDescription,
-        name: &str,
-        _ord: Ordering,
-    ) -> Vec<u8> {
-        let guard = self.get_field_local(owner, name);
-        atomic::validate_atomic_access(guard.as_ptr(), false);
-        guard.to_vec()
-    }
-
-    /// Sets the field's data, synchronized via RwLock to prevent tearing.
-    pub fn set_field_synchronized(
-        &self,
-        owner: TypeDescription,
-        name: &str,
-        value: &[u8],
-        _ord: Ordering,
-    ) {
-        let mut dest = self.get_field_mut_local(owner, name);
-        atomic::validate_atomic_access(dest.as_ptr(), false);
-        dest.copy_from_slice(value);
     }
 
     /// Returns a copy of the field's data using atomic operations for supported sizes.

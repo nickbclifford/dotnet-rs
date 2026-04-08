@@ -1,10 +1,13 @@
 use crate::{
-    ArenaId, StackSlotIndex,
+    StackSlotIndex,
     object::{Object, ObjectRef},
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup};
 use gc_arena::{Collect, collect::Trace};
 use std::collections::HashSet;
+
+#[cfg(feature = "multithreading")]
+use crate::ArenaId;
 
 #[cfg(feature = "multithreading")]
 use crate::object::ObjectPtr;
@@ -96,24 +99,6 @@ impl<'gc> PointerOrigin<'gc> {
             Some(*r)
         } else {
             None
-        }
-    }
-
-    pub fn write_barrier_owner_id(&self) -> Option<ArenaId> {
-        match self {
-            Self::Heap(r) => r.0.as_ref().map(|h| unsafe { (*h.as_ptr()).owner_id }),
-            #[cfg(feature = "multithreading")]
-            Self::CrossArenaObjectRef(_, tid) => Some(*tid),
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn write_barrier_owner(&self) -> Option<(ObjectPtr, ArenaId)> {
-        match self {
-            Self::Heap(r) => r.as_ptr_info(),
-            Self::CrossArenaObjectRef(ptr, tid) => Some((*ptr, *tid)),
-            _ => None,
         }
     }
 

@@ -48,7 +48,6 @@ impl ManagedThread {
         }
     }
 
-    #[allow(dead_code)] // Useful for debugging thread states
     pub(super) fn get_state(&self) -> Result<ThreadState, u64> {
         ThreadState::try_from(self.state.load(Ordering::Acquire))
     }

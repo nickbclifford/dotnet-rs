@@ -10,6 +10,8 @@ pub mod constructors;
 pub mod operations;
 pub mod search;
 
+pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 pub trait IntrinsicStringHost<'gc>: VmStringIntrinsicHost<'gc> {
     fn string_intrinsic_as_span(
         &mut self,

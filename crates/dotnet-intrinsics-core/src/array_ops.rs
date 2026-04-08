@@ -12,6 +12,9 @@ use dotnet_vm_ops::{
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
+const NOT_ARRAY_MSG: &str = "Object must be of type Array.";
+const INDEX_ARG_TYPE_MSG: &str = "Index must be Int32, Int64, or Int32[].";
+const INDEX_ARRAY_TYPE_MSG: &str = "Indices must be provided as an Int32 array.";
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
@@ -27,7 +30,7 @@ pub fn intrinsic_array_get_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>
     let heap = handle.borrow();
     let len = match &heap.storage {
         HeapStorage::Vec(v) => v.layout.length,
-        _ => panic!("Not an array"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG),
     };
 
     ctx.push_i32(len as i32);
@@ -48,7 +51,7 @@ pub fn intrinsic_array_get_rank<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     let heap = handle.borrow();
     let rank = match &heap.storage {
         HeapStorage::Vec(_) => 1,
-        _ => panic!("Not an array"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG),
     };
 
     ctx.push_i32(rank);
@@ -76,7 +79,7 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
             let heap = indices_handle.borrow();
             let HeapStorage::Vec(v) = &heap.storage else {
-                panic!("Expected int array for indices");
+                return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
             if v.layout.length == 0 {
                 return ctx.throw_by_name_with_message(
@@ -85,15 +88,22 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
                 );
             }
             // For now only support 1D access via the first index in the array
-            let bytes = &v.get()[0..4];
-            i32::from_ne_bytes(bytes.try_into().unwrap()) as usize
+            if v.get().len() < 4 {
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+            }
+            let Ok(bytes): Result<[u8; 4], _> = v.get()[0..4].try_into() else {
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+            };
+            i32::from_ne_bytes(bytes) as usize
         }
-        _ => panic!("Invalid index type for GetValue: {:?}", arg),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
     };
 
     let heap = handle.borrow();
     let HeapStorage::Vec(v) = &heap.storage else {
-        panic!("Not an array");
+        return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
     };
 
     if index >= v.layout.length {
@@ -132,7 +142,7 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
             let heap = indices_handle.borrow();
             let HeapStorage::Vec(v) = &heap.storage else {
-                panic!("Expected int array for indices");
+                return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
             if v.layout.length == 0 {
                 return ctx.throw_by_name_with_message(
@@ -140,16 +150,23 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
                     "The number of indices provided does not match the number of dimensions of the array.",
                 );
             }
-            let bytes = &v.get()[0..4];
-            i32::from_ne_bytes(bytes.try_into().unwrap()) as usize
+            if v.get().len() < 4 {
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+            }
+            let Ok(bytes): Result<[u8; 4], _> = v.get()[0..4].try_into() else {
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+            };
+            i32::from_ne_bytes(bytes) as usize
         }
-        _ => panic!("Invalid index type for SetValue: {:?}", index_arg),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
     };
 
     {
         let heap = handle.borrow();
         let HeapStorage::Vec(v) = &heap.storage else {
-            panic!("Not an array");
+            return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
         };
 
         if index >= v.layout.length {
@@ -162,7 +179,7 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     }
     let mut heap = handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
     let HeapStorage::Vec(v) = &mut heap.storage else {
-        panic!("Not an array");
+        return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
     };
 
     let elem_size = v.layout.element_layout.size();

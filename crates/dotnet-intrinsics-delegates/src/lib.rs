@@ -11,6 +11,9 @@ pub mod operations;
 
 pub use helpers::try_delegate_dispatch;
 
+pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+pub(crate) const BEGIN_END_NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
+
 pub trait DelegateInvokeHost<'gc> {
     fn delegate_method_info(
         &self,

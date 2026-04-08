@@ -11,9 +11,6 @@ use dotnet_vm_ops::{
     ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
 
-#[allow(dead_code)]
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-
 /// System.String::FastAllocateString(int)
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
 #[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr)")]

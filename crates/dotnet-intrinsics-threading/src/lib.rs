@@ -5,6 +5,7 @@ use dotnet_value::{StackValue, object::ObjectRef, pointer::PointerOrigin};
 use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingIntrinsicHost as VmThreadingIntrinsicHost};
 use std::time::Instant;
 
+pub(crate) mod atomic_dispatch;
 pub mod interlocked;
 pub mod monitor;
 pub mod thread;

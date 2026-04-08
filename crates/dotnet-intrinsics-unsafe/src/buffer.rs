@@ -1,4 +1,4 @@
-use crate::{UnsafeIntrinsicHost, vm_try};
+use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, vm_try};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::ByteOffset;
@@ -8,8 +8,6 @@ use dotnet_vm_ops::{
     ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps},
 };
 use std::ptr;
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)")]
 #[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)")]

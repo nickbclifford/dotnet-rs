@@ -247,14 +247,6 @@ unsafe impl<'gc> Collect<'gc> for GenericLookup {
 }
 
 impl GenericLookup {
-    pub fn cache_key_hash(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {
         Self {
             type_generics: type_generics.into(),

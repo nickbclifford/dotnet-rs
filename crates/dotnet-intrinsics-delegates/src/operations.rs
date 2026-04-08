@@ -2,7 +2,7 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{DelegateInvokeHost, helpers::*};
+use crate::{DelegateInvokeHost, NULL_REF_MSG, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -20,12 +20,30 @@ use dotnet_vm_ops::{
     },
 };
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-#[allow(dead_code)]
-const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
+pub trait DelegateEqualsHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + ResolutionOps<'gc>
+    + ReflectionOps<'gc>
+    + MemoryOps<'gc>
+{
+}
+
+impl<'gc, T> DelegateEqualsHost<'gc> for T where
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>
+        + MemoryOps<'gc>
+{
+}
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
-pub fn delegate_get_target<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps>(
+pub fn delegate_get_target<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -54,11 +72,7 @@ pub fn delegate_get_target<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + Load
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
 pub fn delegate_get_method<
     'gc,
-    T: TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + ReflectionOps<'gc>
-        + LoaderOps
-        + DelegateInvokeHost<'gc>,
+    T: DelegateEqualsHost<'gc> + DelegateInvokeHost<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -89,16 +103,7 @@ pub fn delegate_get_method<
 
 #[dotnet_intrinsic("bool System.Delegate::Equals(object)")]
 #[dotnet_intrinsic("bool System.MulticastDelegate::Equals(object)")]
-pub fn delegate_equals<
-    'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>
-        + MemoryOps<'gc>,
->(
+pub fn delegate_equals<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -191,10 +196,7 @@ pub fn delegate_equals<
 
 #[dotnet_intrinsic("int System.Delegate::GetHashCode()")]
 #[dotnet_intrinsic("int System.MulticastDelegate::GetHashCode()")]
-pub fn delegate_get_hash_code<
-    'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps + ResolutionOps<'gc>,
->(
+pub fn delegate_get_hash_code<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -222,10 +224,7 @@ pub fn delegate_get_hash_code<
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Combine(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_combine<
-    'gc,
-    T: TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc> + MemoryOps<'gc>,
->(
+pub fn delegate_combine<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -288,10 +287,7 @@ pub fn delegate_combine<
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Remove(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_remove<
-    'gc,
-    T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps + ResolutionOps<'gc>,
->(
+pub fn delegate_remove<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

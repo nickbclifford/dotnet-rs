@@ -4,7 +4,7 @@ use crate::{
     state::{GlobalCaches, SharedGlobalState},
     sync::{Arc, Weak},
 };
-use dotnet_assemblies::{Ancestor, AssemblyLoader};
+use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -168,13 +168,6 @@ impl<'a> ResolutionContext<'a> {
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         self.resolver()
             .locate_field(self.resolution.clone(), field, self.generics)
-    }
-
-    pub fn get_ancestors(
-        &self,
-        child_type: TypeDescription,
-    ) -> impl Iterator<Item = Ancestor<'static>> + '_ {
-        self.state.loader.ancestors(child_type)
     }
 
     pub fn is_a(

@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    instructions::NULL_REF_MSG,
     ops::{ExceptionOps, RawMemoryOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
@@ -12,7 +13,6 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr;
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
 const OUT_OF_MEMORY_MSG: &str = "Insufficient memory to continue the execution of the program.";

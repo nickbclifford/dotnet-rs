@@ -70,14 +70,19 @@ impl Drop for WriteBarrierFlushGuard {
     }
 }
 
+#[cfg(feature = "multithreading")]
 pub struct WriteBarrierRecorder<'a, 'gc> {
-    #[cfg_attr(not(feature = "multithreading"), allow(dead_code))]
     arena_id: ArenaId,
-    #[cfg_attr(not(feature = "multithreading"), allow(dead_code))]
     buffer: &'a mut Vec<(ArenaId, usize)>,
     _gc: PhantomData<&'gc ()>,
 }
 
+#[cfg(not(feature = "multithreading"))]
+pub struct WriteBarrierRecorder<'a, 'gc> {
+    _marker: PhantomData<(&'a (), &'gc ())>,
+}
+
+#[cfg(feature = "multithreading")]
 impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
     pub fn new(arena_id: ArenaId, buffer: &'a mut Vec<(ArenaId, usize)>) -> Self {
         Self {
@@ -87,7 +92,6 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreading")]
     pub fn record_ref(&mut self, target: ObjectRef<'gc>) {
         if let Some(h) = target.0 {
             // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
@@ -100,7 +104,6 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreading")]
     pub fn record_managed_ptr(&mut self, target: &ManagedPtr<'gc>) {
         match target.origin() {
             PointerOrigin::CrossArenaObjectRef(p, ref_tid) => {
@@ -114,11 +117,18 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             _ => {}
         }
     }
+}
 
-    #[cfg(not(feature = "multithreading"))]
+#[cfg(not(feature = "multithreading"))]
+impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
+    pub fn new(_arena_id: ArenaId, _buffer: &'a mut Vec<(ArenaId, usize)>) -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+
     pub fn record_ref(&mut self, _target: ObjectRef<'gc>) {}
 
-    #[cfg(not(feature = "multithreading"))]
     pub fn record_managed_ptr(&mut self, _target: &ManagedPtr<'gc>) {}
 }
 

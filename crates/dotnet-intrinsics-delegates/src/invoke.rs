@@ -2,7 +2,7 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{DelegateInvokeHost, helpers::get_multicast_targets_ref};
+use crate::{DelegateInvokeHost, NULL_REF_MSG, helpers::get_multicast_targets_ref};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{StackValue, object::ObjectRef};
@@ -10,10 +10,6 @@ use dotnet_vm_ops::{
     MulticastState, StepResult,
     ops::{DelegateIntrinsicHost, ExceptionOps},
 };
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-#[allow(dead_code)]
-const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
 pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
     ctx: &mut T,

@@ -1,14 +1,16 @@
-use crate::ThreadingIntrinsicHost;
+use crate::{
+    ThreadingIntrinsicHost,
+    atomic_dispatch::{
+        VolatileAtomicTypeDispatch, resolve_atomic_ref_target_type, volatile_atomic_dispatch,
+    },
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::StepResult;
-use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
+use dotnetdll::prelude::BaseType;
 use gc_arena::Gc;
-
-#[allow(dead_code)]
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 /// System.Threading.Volatile::Read<T>(ref T location)
 #[dotnet_intrinsic("static T System.Threading.Volatile::Read<T>(T&)")]
@@ -31,25 +33,23 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let params = &method.method().signature.parameters;
-    let Parameter(_, first_param_type) = &params[0];
+    debug_assert_eq!(
+        ObjectRef::SIZE,
+        std::mem::size_of::<usize>(),
+        "ObjectRef must be pointer-sized for atomic pointer loads"
+    );
+    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+        ctx,
+        &method,
+        generics,
+        "intrinsic_volatile_read",
+    ));
 
-    let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        crate::vm_try!(generics.make_concrete(
-            method.resolution(),
-            inner.clone(),
-            ctx.loader().as_ref()
-        ))
-    } else {
-        panic!(
-            "intrinsic_volatile_read: First parameter must be Ref, found {:?}",
-            first_param_type
-        );
-    };
-
-    match target_type.get() {
-        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
+    match volatile_atomic_dispatch(target_type.get()) {
+        VolatileAtomicTypeDispatch::Byte => {
             let target_ptr = ctx.pop_managed_ptr();
+            // SAFETY: The intrinsic resolves `target_ptr` from a by-ref CLR argument and this
+            // branch enforces a 1-byte atomic width that matches the target type dispatch.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -61,8 +61,10 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
             };
             ctx.push_i32(val as i32);
         }
-        BaseType::Int16 | BaseType::UInt16 => {
+        VolatileAtomicTypeDispatch::Int16 => {
             let target_ptr = ctx.pop_managed_ptr();
+            // SAFETY: The pointer came from managed by-ref argument materialization and this branch
+            // performs a 2-byte atomic read consistent with the dispatch-selected type width.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -74,8 +76,10 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
             };
             ctx.push_i32(val as i32);
         }
-        BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
+        VolatileAtomicTypeDispatch::Word32 => {
             let target_ptr = ctx.pop_managed_ptr();
+            // SAFETY: `target_ptr` is a managed by-ref location and this dispatch arm guarantees a
+            // 4-byte atomic read for 32-bit scalar/float payloads.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -91,8 +95,10 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 ctx.push_i32(val as i32);
             }
         }
-        BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
+        VolatileAtomicTypeDispatch::Word64 => {
             let target_ptr = ctx.pop_managed_ptr();
+            // SAFETY: `target_ptr` is validated by the VM and this arm uses an 8-byte atomic read,
+            // matching the resolved 64-bit payload kind.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -108,9 +114,11 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 ctx.push_i64(val as i64);
             }
         }
-        BaseType::IntPtr | BaseType::UIntPtr => {
+        VolatileAtomicTypeDispatch::PointerSized => {
             let target_ptr = ctx.pop_managed_ptr();
             let size = ObjectRef::SIZE;
+            // SAFETY: Pointer-sized volatile reads use the runtime's object-reference width and the
+            // by-ref target pointer is sourced from managed stack state.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -122,9 +130,11 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
             };
             ctx.push_isize(val as isize);
         }
-        _ => {
+        VolatileAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef
             let target_ptr = ctx.pop_managed_ptr();
+            // SAFETY: This path is selected only for object-reference targets and reads exactly
+            // one pointer-sized slot atomically from managed memory.
             let val = unsafe {
                 ctx.threading_load_atomic(
                     target_ptr.origin().clone(),
@@ -167,31 +177,28 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    debug_assert_eq!(
+        ObjectRef::SIZE,
+        std::mem::size_of::<usize>(),
+        "ObjectRef must be pointer-sized for atomic pointer stores"
+    );
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
+    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+        ctx,
+        &method,
+        generics,
+        "intrinsic_volatile_write",
+    ));
 
-    let params = &method.method().signature.parameters;
-    let Parameter(_, target_ref_type) = &params[0];
-
-    let target_type = if let ParameterType::Ref(inner) = target_ref_type {
-        crate::vm_try!(generics.make_concrete(
-            method.resolution(),
-            inner.clone(),
-            ctx.loader().as_ref()
-        ))
-    } else {
-        panic!(
-            "intrinsic_volatile_write: First parameter must be Ref, found {:?}",
-            target_ref_type
-        );
-    };
-
-    match target_type.get() {
-        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
+    match volatile_atomic_dispatch(target_type.get()) {
+        VolatileAtomicTypeDispatch::Byte => {
             let val = match value {
                 StackValue::Int32(i) => i as u64,
                 _ => panic!("Expected Int32 for byte-sized Volatile.Write"),
             };
+            // SAFETY: The write target came from a managed by-ref argument and this arm writes a
+            // single byte, matching the resolved element width.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),
@@ -203,11 +210,13 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 .unwrap();
             }
         }
-        BaseType::Int16 | BaseType::UInt16 => {
+        VolatileAtomicTypeDispatch::Int16 => {
             let val = match value {
                 StackValue::Int32(i) => i as u64,
                 _ => panic!("Expected Int32 for 16-bit Volatile.Write"),
             };
+            // SAFETY: The dispatch guarantees 16-bit storage and the source value is normalized to
+            // the corresponding 2-byte representation before the atomic store.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),
@@ -219,12 +228,14 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 .unwrap();
             }
         }
-        BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
+        VolatileAtomicTypeDispatch::Word32 => {
             let val = match value {
                 StackValue::Int32(i) => i as u32 as u64,
                 StackValue::NativeFloat(f) => (f as f32).to_bits() as u64,
                 _ => panic!("Expected Int32 or Float for 32-bit Volatile.Write"),
             };
+            // SAFETY: This branch is only for 32-bit payloads and stores exactly 4 bytes into the
+            // managed by-ref location selected by the intrinsic dispatch.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),
@@ -236,12 +247,14 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 .unwrap();
             }
         }
-        BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
+        VolatileAtomicTypeDispatch::Word64 => {
             let val = match value {
                 StackValue::Int64(i) => i as u64,
                 StackValue::NativeFloat(f) => f.to_bits(),
                 _ => panic!("Expected Int64 or Float for 64-bit Volatile.Write"),
             };
+            // SAFETY: This arm handles only 64-bit payloads and performs an 8-byte atomic write
+            // against a managed by-ref pointer validated by the VM.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),
@@ -253,12 +266,14 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 .unwrap();
             }
         }
-        BaseType::IntPtr | BaseType::UIntPtr => {
+        VolatileAtomicTypeDispatch::PointerSized => {
             let val = match value {
                 StackValue::NativeInt(i) => i as u64,
                 _ => panic!("Expected NativeInt for Volatile.Write"),
             };
             let size = ObjectRef::SIZE;
+            // SAFETY: Pointer-sized values are written using the runtime pointer width and the
+            // destination pointer originates from a managed by-ref argument.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),
@@ -270,7 +285,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 .unwrap();
             }
         }
-        _ => {
+        VolatileAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef
             let val_raw = match value {
                 StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize as u64,
@@ -279,6 +294,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
             };
             let size = ObjectRef::SIZE;
+            // SAFETY: This branch stores one object-reference-sized slot atomically; source values
+            // are converted to raw pointer-sized integers before the write.
             unsafe {
                 ctx.threading_store_atomic(
                     target_ptr.origin().clone(),

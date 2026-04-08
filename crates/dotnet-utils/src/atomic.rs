@@ -59,7 +59,6 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
 
 #[cfg(not(feature = "memory-validation"))]
 #[inline(always)]
-#[allow(dead_code)] // Only used when multithreading is enabled, but kept as a stub in other configurations
 pub fn validate_atomic_access(_ptr: *const u8, _is_atomic: bool) {}
 
 /// Unified atomic memory access operations.

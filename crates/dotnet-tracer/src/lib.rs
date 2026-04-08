@@ -8,7 +8,7 @@ use std::{
     env,
     fmt::Arguments,
     fs::File,
-    io::{Write, stderr, stdout},
+    io::{stderr, stdout},
     sync::{
         Arc, Once,
         atomic::{AtomicU64, Ordering},
@@ -409,14 +409,6 @@ impl Tracer {
         ));
     }
 
-    pub fn trace_type_info(&self, indent: usize, operation: &str, type_name: &str) {
-        self.send(LogEntry::TypeInfo(
-            indent,
-            operation.to_string(),
-            type_name.to_string(),
-        ));
-    }
-
     pub fn trace_intrinsic(&self, indent: usize, operation: &str, details: &str) {
         self.send(LogEntry::Intrinsic(
             indent,
@@ -486,14 +478,6 @@ impl Tracer {
         self.send(LogEntry::GcPin(indent, operation.to_string(), obj_addr));
     }
 
-    pub fn trace_gc_weak_ref(&self, indent: usize, operation: &str, handle_id: usize) {
-        self.send(LogEntry::GcWeakRef(
-            indent,
-            operation.to_string(),
-            handle_id,
-        ));
-    }
-
     pub fn trace_gc_resurrection(&self, indent: usize, obj_type: &str, obj_addr: usize) {
         self.send(LogEntry::GcResurrection(
             indent,
@@ -506,11 +490,6 @@ impl Tracer {
     #[cfg(feature = "multithreading")]
     pub fn trace_thread_create(&self, indent: usize, thread_id: dotnet_utils::ArenaId, name: &str) {
         self.send(LogEntry::ThreadCreate(indent, thread_id, name.to_string()));
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn trace_thread_start(&self, indent: usize, thread_id: dotnet_utils::ArenaId) {
-        self.send(LogEntry::ThreadStart(indent, thread_id));
     }
 
     #[cfg(feature = "multithreading")]
@@ -533,64 +512,8 @@ impl Tracer {
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_suspend(
-        &self,
-        indent: usize,
-        thread_id: dotnet_utils::ArenaId,
-        reason: &str,
-    ) {
-        self.send(LogEntry::ThreadSuspend(
-            indent,
-            thread_id,
-            reason.to_string(),
-        ));
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn trace_thread_resume(&self, indent: usize, thread_id: dotnet_utils::ArenaId) {
-        self.send(LogEntry::ThreadResume(indent, thread_id));
-    }
-
-    #[cfg(feature = "multithreading")]
     pub fn trace_stw_start(&self, indent: usize, active_threads: usize) {
         self.send(LogEntry::StwStart(indent, active_threads));
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn trace_stw_end(&self, indent: usize, duration_us: u64) {
-        self.send(LogEntry::StwEnd(indent, duration_us));
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn trace_thread_state(
-        &self,
-        indent: usize,
-        thread_id: dotnet_utils::ArenaId,
-        old_state: &str,
-        new_state: &str,
-    ) {
-        self.send(LogEntry::ThreadState(
-            indent,
-            thread_id,
-            old_state.to_string(),
-            new_state.to_string(),
-        ));
-    }
-
-    #[cfg(feature = "multithreading")]
-    pub fn trace_thread_sync(
-        &self,
-        indent: usize,
-        thread_id: dotnet_utils::ArenaId,
-        operation: &str,
-        obj_addr: usize,
-    ) {
-        self.send(LogEntry::ThreadSync(
-            indent,
-            thread_id,
-            operation.to_string(),
-            obj_addr,
-        ));
     }
 
     // Snapshots
@@ -703,10 +626,6 @@ impl Tracer {
         ));
     }
 
-    pub fn trace_gc_raw(&self, msg: &str) {
-        // Direct output to stderr to bypass any channel or mutex
-        let _ = writeln!(stderr(), "♻ GC RAW: {}", msg);
-    }
 }
 
 impl Default for Tracer {

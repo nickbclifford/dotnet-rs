@@ -100,10 +100,6 @@ impl Executor {
         self.shared.get_cache_stats()
     }
 
-    pub fn dump_last_instructions(&self) -> String {
-        self.shared.last_instructions.lock().dump()
-    }
-
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {

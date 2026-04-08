@@ -1,4 +1,9 @@
-use crate::ThreadingIntrinsicHost;
+use crate::{
+    ThreadingIntrinsicHost,
+    atomic_dispatch::{
+        InterlockedAtomicTypeDispatch, interlocked_atomic_dispatch, resolve_atomic_ref_target_type,
+    },
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     error::{CompareExchangeError, VmError},
@@ -8,10 +13,6 @@ use dotnet_types::{
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::StepResult;
-use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
-
-#[allow(dead_code)]
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,
@@ -31,26 +32,17 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let params = &method.method().signature.parameters;
     // CompareExchange(ref T, T, T) -> T
-    // params[0] is 'ref T'.
-    let Parameter(_, first_param_type) = &params[0];
+    // First parameter is always `ref T`.
+    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+        ctx,
+        &method,
+        generics,
+        "intrinsic_interlocked_compare_exchange",
+    ));
 
-    let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        crate::vm_try!(generics.make_concrete(
-            method.resolution(),
-            inner.clone(),
-            ctx.loader().as_ref()
-        ))
-    } else {
-        panic!(
-            "intrinsic_interlocked_compare_exchange: First parameter must be Ref, found {:?}",
-            first_param_type
-        );
-    };
-
-    match target_type.get() {
-        BaseType::Int32 => {
+    match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Int32 => {
             let comparand = ctx.pop_i32();
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
@@ -76,7 +68,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             ctx.push_i32(prev);
         }
-        BaseType::Int64 => {
+        InterlockedAtomicTypeDispatch::Int64 => {
             let comparand = ctx.pop_i64();
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
@@ -102,7 +94,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             ctx.push_i64(prev);
         }
-        BaseType::IntPtr | BaseType::UIntPtr => {
+        InterlockedAtomicTypeDispatch::PointerSized => {
             let comparand = ctx.pop_isize();
             let value = ctx.pop_isize();
             let target_ptr = ctx.pop_managed_ptr();
@@ -129,7 +121,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             ctx.push_isize(prev);
         }
-        _ => {
+        InterlockedAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             let comparand = ctx.pop_obj();
             let value = ctx.pop_obj();
@@ -192,26 +184,17 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let params = &method.method().signature.parameters;
     // Exchange(ref T, T) -> T
-    // params[0] is 'ref T'.
-    let Parameter(_, first_param_type) = &params[0];
+    // First parameter is always `ref T`.
+    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+        ctx,
+        &method,
+        generics,
+        "intrinsic_interlocked_exchange",
+    ));
 
-    let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        crate::vm_try!(generics.make_concrete(
-            method.resolution(),
-            inner.clone(),
-            ctx.loader().as_ref()
-        ))
-    } else {
-        panic!(
-            "intrinsic_interlocked_exchange: First parameter must be Ref, found {:?}",
-            first_param_type
-        );
-    };
-
-    match target_type.get() {
-        BaseType::Int32 => {
+    match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Int32 => {
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
@@ -229,7 +212,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             ctx.push_i32(prev);
         }
-        BaseType::Int64 => {
+        InterlockedAtomicTypeDispatch::Int64 => {
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
@@ -247,7 +230,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             ctx.push_i64(prev);
         }
-        BaseType::IntPtr | BaseType::UIntPtr => {
+        InterlockedAtomicTypeDispatch::PointerSized => {
             let value = ctx.pop_isize();
             let target_ptr = ctx.pop_managed_ptr();
 
@@ -266,7 +249,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             ctx.push_isize(prev);
         }
-        _ => {
+        InterlockedAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
             let value = ctx.pop();
@@ -321,24 +304,15 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let params = &method.method().signature.parameters;
-    let Parameter(_, first_param_type) = &params[0];
+    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+        ctx,
+        &method,
+        generics,
+        "intrinsic_interlocked_exchange_add",
+    ));
 
-    let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        crate::vm_try!(generics.make_concrete(
-            method.resolution(),
-            inner.clone(),
-            ctx.loader().as_ref()
-        ))
-    } else {
-        panic!(
-            "intrinsic_interlocked_exchange_add: First parameter must be Ref, found {:?}",
-            first_param_type
-        );
-    };
-
-    match target_type.get() {
-        BaseType::Int32 => {
+    match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Int32 => {
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
@@ -361,7 +335,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 ctx.push_i32(prev);
             }
         }
-        BaseType::Int64 => {
+        InterlockedAtomicTypeDispatch::Int64 => {
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
@@ -384,7 +358,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 ctx.push_i64(prev);
             }
         }
-        _ => {
+        InterlockedAtomicTypeDispatch::PointerSized | InterlockedAtomicTypeDispatch::ObjectRef => {
             panic!(
                 "intrinsic_interlocked_exchange_add: Unsupported type {:?}",
                 target_type

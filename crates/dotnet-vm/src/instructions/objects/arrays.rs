@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    instructions::NULL_REF_MSG,
     layout::type_layout,
     stack::ops::{
         EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ResolutionOps,
@@ -17,7 +18,6 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
 const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";

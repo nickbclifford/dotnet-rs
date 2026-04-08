@@ -5,7 +5,7 @@
 use dotnet_vm::threading::ThreadManagerOps;
 
 use dotnet_vm::state;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 // ============================================================================
 // Single-threaded Configuration Tests (no features)
@@ -121,44 +121,15 @@ fn test_basic_functionality_exists() {
 fn create_test_loader() -> Arc<dotnet_assemblies::AssemblyLoader> {
     thread_local! {
         static LOADER: Arc<dotnet_assemblies::AssemblyLoader> = {
-            let assemblies_path = find_dotnet_app_path().to_str().unwrap().to_string();
+            let assemblies_path = dotnet_assemblies::find_dotnet_app_path()
+                .expect("could not find .NET shared path")
+                .to_str()
+                .unwrap()
+                .to_string();
             let loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path).expect("failed to create AssemblyLoader");
             Arc::new(loader)
         };
     }
 
     LOADER.with(|l| l.clone())
-}
-
-fn find_dotnet_app_path() -> PathBuf {
-    let base = std::env::var("DOTNET_ROOT")
-        .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
-        .unwrap_or_else(|_| PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
-
-    let base = if !base.exists() {
-        let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-        if alt_base.exists() { alt_base } else { base }
-    } else {
-        base
-    };
-
-    if !base.exists() {
-        panic!("could not find .NET shared path at {:?}", base);
-    }
-
-    // Find the latest version
-    let mut versions: Vec<_> = std::fs::read_dir(&base)
-        .expect("failed to read_unchecked dotnet directory")
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|s| s.chars().next().unwrap_or('0').is_ascii_digit())
-                .unwrap_or(false)
-        })
-        .collect();
-
-    versions.sort_by_key(|e| e.file_name());
-    versions.last().expect("no .NET version found").path()
 }

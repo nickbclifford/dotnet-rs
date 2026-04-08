@@ -526,37 +526,9 @@ impl<State: CompletionGuardState> Drop for CommandCompletionGuard<'_, State> {
 }
 
 #[cfg(not(feature = "multithreading"))]
-pub mod stubs {
-    use dotnet_value::object::ObjectPtr;
-    use std::collections::HashSet;
-
-    #[derive(Debug, Clone)]
-    pub enum GCCommand {
-        MarkAll,
-        MarkObjects(HashSet<ObjectPtr>),
-        Sweep,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct ArenaHandle {
-        pub thread_id: dotnet_utils::ArenaId,
-    }
-
-    impl ArenaHandle {
-        pub fn new(thread_id: dotnet_utils::ArenaId) -> Self {
-            Self { thread_id }
-        }
-        pub fn record_allocation(&self, _size: usize) {}
-    }
-
-    pub struct CollectionSession<'coord> {
-        _marker: std::marker::PhantomData<&'coord ()>,
-    }
-
-    impl CollectionSession<'_> {
-        pub fn collect_all_arenas(&self, _initiating_thread_id: dotnet_utils::ArenaId) {}
-        pub fn finish(self) {}
-    }
+mod stubs {
+    #[derive(Debug, Clone, Copy)]
+    pub struct GCCommand;
 
     pub struct GCCoordinator;
 
@@ -566,41 +538,9 @@ pub mod stubs {
         ) -> Self {
             Self
         }
-        pub fn register_arena(&self, _handle: ArenaHandle) {}
-        pub fn unregister_arena(&self, _thread_id: dotnet_utils::ArenaId) {}
-        pub fn should_collect(&self) -> bool {
-            false
-        }
-        pub fn record_cross_arena_ref(
-            &self,
-            _target_thread_id: dotnet_utils::ArenaId,
-            _ptr: ObjectPtr,
-        ) {
-        }
-
-        pub fn begin_collection(&self) -> Option<CollectionSession<'_>> {
-            None
-        }
-        pub fn total_allocated(&self) -> usize {
-            0
-        }
-        pub fn total_gc_allocation(&self) -> usize {
-            0
-        }
-        pub fn total_external_allocation(&self) -> usize {
-            0
-        }
     }
 
-    pub fn set_currently_tracing(_thread_id: Option<dotnet_utils::ArenaId>) {}
-    pub fn get_currently_tracing() -> Option<dotnet_utils::ArenaId> {
-        None
-    }
-    pub fn clear_tracing_state() {}
-    pub fn take_found_cross_arena_refs() -> Vec<(dotnet_utils::ArenaId, ObjectPtr)> {
-        Vec::new()
-    }
-    pub fn record_cross_arena_ref(_target_thread_id: dotnet_utils::ArenaId, _ptr: ObjectPtr) {}
+    pub(crate) fn clear_tracing_state() {}
 
     impl Default for GCCoordinator {
         fn default() -> Self {
@@ -612,7 +552,9 @@ pub mod stubs {
 }
 
 #[cfg(not(feature = "multithreading"))]
-pub use stubs::*;
+pub use stubs::{GCCommand, GCCoordinator};
+#[cfg(not(feature = "multithreading"))]
+pub(crate) use stubs::clear_tracing_state;
 
 #[cfg(all(test, feature = "multithreading"))]
 mod tests {

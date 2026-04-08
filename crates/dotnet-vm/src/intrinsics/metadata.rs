@@ -19,7 +19,7 @@
 //! Methods that MUST bypass any BCL implementation for correctness or performance.
 //! The VM intercepts these calls even when a BCL implementation exists.
 //! Examples: String.Length (internal representation differs), Math functions (performance)
-use crate::intrinsics::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry, MethodIntrinsicId};
+use crate::intrinsics::{INTRINSIC_ATTR, IntrinsicMethodId, IntrinsicRegistry, MethodIntrinsicId};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::members::MethodDescription;
 
@@ -63,7 +63,11 @@ pub struct IntrinsicMetadata {
 
 impl IntrinsicMetadata {
     /// Creates new intrinsic metadata.
-    pub const fn new(kind: IntrinsicKind, handler: IntrinsicHandler, reason: &'static str) -> Self {
+    pub const fn new(
+        kind: IntrinsicKind,
+        handler: IntrinsicMethodId,
+        reason: &'static str,
+    ) -> Self {
         Self {
             kind,
             handler,
@@ -75,7 +79,7 @@ impl IntrinsicMetadata {
     /// Creates new intrinsic metadata with a signature filter.
     pub const fn with_filter(
         kind: IntrinsicKind,
-        handler: IntrinsicHandler,
+        handler: IntrinsicMethodId,
         reason: &'static str,
         filter: fn(&MethodDescription) -> bool,
     ) -> Self {
@@ -88,17 +92,17 @@ impl IntrinsicMetadata {
     }
 
     /// Creates metadata for a static intrinsic.
-    pub const fn static_intrinsic(handler: IntrinsicHandler, reason: &'static str) -> Self {
+    pub const fn static_intrinsic(handler: IntrinsicMethodId, reason: &'static str) -> Self {
         Self::new(IntrinsicKind::Static, handler, reason)
     }
 
     /// Creates metadata for a virtual override intrinsic.
-    pub const fn virtual_override(handler: IntrinsicHandler, reason: &'static str) -> Self {
+    pub const fn virtual_override(handler: IntrinsicMethodId, reason: &'static str) -> Self {
         Self::new(IntrinsicKind::VirtualOverride, handler, reason)
     }
 
     /// Creates metadata for a direct intercept intrinsic.
-    pub const fn direct_intercept(handler: IntrinsicHandler, reason: &'static str) -> Self {
+    pub const fn direct_intercept(handler: IntrinsicMethodId, reason: &'static str) -> Self {
         Self::new(IntrinsicKind::DirectIntercept, handler, reason)
     }
 }
@@ -154,9 +158,8 @@ pub fn classify_intrinsic(
         {
             // If we're here, it means the intrinsic was NOT found in the registry (step 1).
             // So we treat it as a missing intrinsic rather than recursively checking the registry.
-            use crate::intrinsics::get_missing_intrinsic_handler;
             return Some(IntrinsicMetadata::direct_intercept(
-                get_missing_intrinsic_handler(),
+                MethodIntrinsicId::Missing,
                 "Marked with IntrinsicAttribute but not implemented",
             ));
         }

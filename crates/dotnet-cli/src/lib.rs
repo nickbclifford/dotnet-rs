@@ -4,10 +4,9 @@
 //!
 //! ## Feature Flags
 //!
-//! - `multithreading`: Enables basic multithreading support, including the .NET `Thread` class
-//!   and `Monitor` synchronization primitives. Pulls in `parking_lot`.
-//! - `multithreading`: Enables stop-the-world coordinated garbage collection across
-//!   multiple thread-local arenas. Depends on `multithreading`.
+//! - `multithreading`: Enables OS-thread execution support (including .NET `Thread`,
+//!   `Monitor`, and stop-the-world GC coordination across per-thread arenas). Pulls in
+//!   `parking_lot`.
 #![allow(clippy::arc_with_non_send_sync)]
 use clap::Parser;
 use dotnet_types::{TypeDescription, members::MethodDescription};

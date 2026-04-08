@@ -6,9 +6,9 @@ This document describes the structured exception handling (SEH) system in `dotne
 
 Exception handling is split across three crates:
 
-- **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`. Also contains the `parse` function that converts `dotnetdll` metadata to `ProtectedSection`/`Handler`.
+- **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/lib.rs`, re-exporting `crates/dotnet-vm-data/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`.
 - **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`, ~584 lines): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
-- **`dotnet-vm`** (`crates/dotnet-vm/src/exceptions.rs`): Re-exports from `dotnet-exceptions` for backward compatibility.
+- **`dotnet-vm`** (`crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/exception_ops_impl.rs`): Runtime integration points that drive `ExceptionState` transitions and invoke `dotnet-exceptions`.
 
 The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
 
@@ -40,28 +40,26 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 
 ## Key Methods on `ExceptionHandlingSystem`
 
-<!-- TODO: Document the detailed flow of each method -->
-
-- **`handle_exception`**: Entry point called by the dispatch loop when `ExceptionState` is not `None`. Routes to the appropriate phase method.
-- **`begin_throwing`**: Initializes the search state. Sets up the handler cursor starting from the current frame's handlers.
-- **`search_for_handler`**: Iterates through handlers across frames. For `catch` handlers, checks type compatibility. For `filter` handlers, transitions to `Filtering` state. If no handler is found in a frame, pops the frame and continues searching up the call stack.
-- **`unwind`**: Executes finally/fault handlers between throw site and target. When all intermediate handlers have run, transitions to `ExecutingHandler`.
+- **`handle_exception`** (`crates/dotnet-exceptions/src/lib.rs`): State dispatcher for `ExceptionState`. Called from `VesContext::handle_exception` in `crates/dotnet-vm/src/stack/context.rs`, which is invoked by `ExecutionEngine::step`/`run` in `crates/dotnet-vm/src/dispatch/mod.rs`.
+- **`begin_throwing`** (`crates/dotnet-exceptions/src/lib.rs`): Captures stack trace text (including intrinsic context), preserves existing traces for `rethrow`, resets suspended state when appropriate, and seeds `Searching(SearchState)` with a `HandlerAddress` cursor.
+- **`search_for_handler`** (`crates/dotnet-exceptions/src/lib.rs`): Scans `frame.state.info_handle.exceptions` across frames, transitions to `Unwinding` for matching catches, transitions to `Filtering` for filter clauses (suspending stacks), and returns `StepResult::MethodThrew` when no handler is found.
+- **`unwind`** (`crates/dotnet-exceptions/src/lib.rs`): Executes `finally`/`fault` handlers while exiting protected sections, pops frames via `ctx.unwind_frame()`, and finally jumps to either the handler start (`UnwindTarget::Handler`) or a `leave` target (`UnwindTarget::Instruction`).
 
 ## Non-Obvious Connections
 
-<!-- TODO: Expand each of these with code references and examples -->
-
 ### Integration with Dispatch Loop (`dispatch/mod.rs`)
-- `ExecutionEngine::step` checks `ExceptionState` before normal instruction dispatch. If an exception is active, it calls `handle_exception` instead of fetching the next instruction.
-- The `step_normal` method catches `StepResult::Throw` from instruction handlers and transitions to `Throwing` state.
+- `ExecutionEngine::step` (`crates/dotnet-vm/src/dispatch/mod.rs`) checks `ExceptionState` before normal instruction dispatch. If an exception is active, it routes to `VesContext::handle_exception()`.
+- Instruction handlers signal exceptions with `StepResult::Exception` (not `StepResult::Throw`). The throw/rethrow opcodes in `crates/dotnet-vm/src/instructions/exceptions.rs` call `ExceptionOps`, and `VesContext` updates `ExceptionState::Throwing` in `crates/dotnet-vm/src/stack/exception_ops_impl.rs`.
 
 ### Integration with Call Stack
-- `ProtectedSection` data is stored per-frame (parsed from method metadata during frame setup). `StackFrame` and `FrameStack` are defined in `dotnet-vm-ops/src/stack.rs`.
+- `ProtectedSection` data is parsed by `dotnet_exceptions::parse` during method-info construction in `crates/dotnet-vm/src/lib.rs` (`build_method_info`) and stored on each frame in `MethodInfo::exceptions`.
+- `StackFrame`, `FrameStack`, and `BasePointer` are defined in `dotnet-vm-data/src/stack.rs` and re-exported by `dotnet-vm-ops`.
 - Frame unwinding during exception handling must properly clean up the evaluation stack — `BasePointer` tracks where each frame's stack values begin.
-- `VesContext::unwind_frame` is called during the unwind phase to pop frames.
+- `VesContext::unwind_frame` (`crates/dotnet-vm/src/stack/context.rs`) is called during unwind to pop frames, clear stack slots, and wrap `.cctor` failures as `TypeInitializationException`.
 
 ### Filter Execution
-- Filters are unusual: they execute arbitrary user CIL code *during* the exception search phase. The VM transitions to `Filtering` state, resumes normal dispatch to run the filter code, then reads the `endfilter` result to decide whether to handle the exception.
+- In `search_for_handler` (`crates/dotnet-exceptions/src/lib.rs`), filter handlers transition to `ExceptionState::Filtering`, suspend higher frames/stacks (`suspend_above`), set the filter IP, and push the exception object as filter input.
+- The `endfilter` opcode (`crates/dotnet-vm/src/instructions/exceptions.rs`) calls `ExceptionOps::endfilter` (`crates/dotnet-vm/src/stack/exception_ops_impl.rs`), which restores suspended state and continues either unwinding (`result == 1`) or searching (`result == 0`).
 - This means the dispatch loop must handle re-entrant exception states.
 
 ### `leave` Instruction
@@ -79,7 +77,7 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 ## Implementation Details
 
 ### Rethrow Stack Trace Preservation
-- **`crates/dotnet-vm-ops/src/exceptions.rs`**: `ExceptionState::Throwing` includes a `bool` flag for trace preservation.
+- **`crates/dotnet-vm-data/src/exceptions.rs`**: `ExceptionState::Throwing` includes a `bool` flag for trace preservation.
 - **`crates/dotnet-vm/src/stack/exception_ops_impl.rs`**: `rethrow()` sets this flag to `true`, while `throw()` sets it to `false`.
 - **`crates/dotnet-exceptions/src/lib.rs`**: `begin_throwing()` reads this flag and optionally skips stack trace generation if an existing trace is present and preservation is requested.
 

@@ -36,13 +36,20 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Continue;
     }
 
-    let name = name_obj.as_heap_storage(|s| {
-        if let HeapStorage::Str(s) = s {
-            s.as_string()
-        } else {
-            panic!("GetType argument is not a string")
-        }
-    });
+    let ObjectRef(Some(name_handle)) = name_obj else {
+        ctx.push(StackValue::null());
+        return StepResult::Continue;
+    };
+    let name = {
+        let name_storage = name_handle.borrow();
+        let HeapStorage::Str(s) = &name_storage.storage else {
+            return ctx.throw_by_name_with_message(
+                "System.InvalidCastException",
+                "Type.GetType requires a string argument.",
+            );
+        };
+        s.as_string()
+    };
 
     match ctx.loader().corlib_type(&name) {
         Ok(td) => {
@@ -154,7 +161,15 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("GetInterface", 2) => handle_get_interface(ctx, generics),
         ("GetElementType", 0) => handle_get_element_type(ctx, generics),
         ("GetAttributeFlagsImpl", 0) => handle_get_attribute_flags_impl(ctx, generics),
-        _ => panic!("unimplemented runtime type intrinsic: {:?}", method),
+        _ => {
+            let message = format!(
+                "Unsupported System.RuntimeType intrinsic call: {}.{} with {} parameter(s).",
+                method.parent.type_name(),
+                method_name,
+                param_count
+            );
+            ctx.throw_by_name_with_message("System.MissingMethodException", &message)
+        }
     }
 }
 
@@ -232,40 +247,46 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     .unwrap()
                     .read(),
                 StackValue::ObjectRef(rt_obj) => rt_obj,
-                v => panic!(
-                    "invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)",
-                    v
-                ),
+                v => {
+                    let message = format!(
+                        "Invalid type on stack ({:?}); expected RuntimeTypeHandle or RuntimeType.",
+                        v
+                    );
+                    return ctx.throw_by_name_with_message("System.InvalidCastException", &message);
+                }
             };
 
             let rt = crate::common::resolve_runtime_type(ctx, rt_obj);
             let td = match &rt {
                 RuntimeType::Type(td) => td.clone(),
                 RuntimeType::Generic(td, _) => td.clone(),
-                _ => panic!("GetActivationInfo called on non-type: {:?}", rt),
+                _ => {
+                    return ctx.throw_by_name_with_message(
+                        "System.ArgumentException",
+                        "GetActivationInfo requires a RuntimeType that represents a type.",
+                    );
+                }
             };
 
             let val = StackValue::NativeInt(0);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
             unsafe {
-                ctx.write_unaligned(
+                vm_try!(ctx.write_unaligned(
                     pfn_allocator.origin().clone(),
                     pfn_allocator.byte_offset(),
                     val,
                     &layout,
-                )
-                .expect("pfn_allocator write failed");
+                ));
             }
 
             let val = StackValue::NativeInt(0);
             unsafe {
-                ctx.write_unaligned(
+                vm_try!(ctx.write_unaligned(
                     allocator_first_arg.origin().clone(),
                     allocator_first_arg.byte_offset(),
                     val,
                     &layout,
-                )
-                .expect("allocator_first_arg write failed");
+                ));
             }
 
             let mut found_ctor = false;
@@ -295,25 +316,23 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     let method_val = StackValue::NativeInt(method_idx as isize);
                     let layout = LayoutManager::Scalar(Scalar::NativeInt);
                     unsafe {
-                        ctx.write_unaligned(
+                        vm_try!(ctx.write_unaligned(
                             pfn_ctor.origin().clone(),
                             pfn_ctor.byte_offset(),
                             method_val,
                             &layout,
-                        )
-                        .expect("pfn_ctor write failed");
+                        ));
                     }
 
                     let public_val = StackValue::Int32(1);
                     let byte_layout = LayoutManager::Scalar(Scalar::Int8);
                     unsafe {
-                        ctx.write_unaligned(
+                        vm_try!(ctx.write_unaligned(
                             ctor_is_public.origin().clone(),
                             ctor_is_public.byte_offset(),
                             public_val,
                             &byte_layout,
-                        )
-                        .expect("ctor_is_public write failed");
+                        ));
                     }
                     found_ctor = true;
                     break;
@@ -321,16 +340,24 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             if !found_ctor {
-                panic!("Could not find default constructor for {}", td.type_name());
+                let message = format!(
+                    "Could not find parameterless constructor for {}.",
+                    td.type_name()
+                );
+                return ctx.throw_by_name_with_message("System.MissingMethodException", &message);
             }
 
             StepResult::Continue
         }
-        _ => panic!(
-            "Unknown RuntimeTypeHandle intrinsic: {}.{}",
-            method.parent.type_name(),
-            method_name
-        ),
+        _ => {
+            let message = format!(
+                "Unsupported System.RuntimeTypeHandle intrinsic call: {}.{} with {} parameter(s).",
+                method.parent.type_name(),
+                method_name,
+                param_count
+            );
+            ctx.throw_by_name_with_message("System.MissingMethodException", &message)
+        }
     }
 }
 
@@ -348,7 +375,13 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
         StackValue::ObjectRef(ObjectRef(None)) => {
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
-        _ => panic!("invalid type on stack"),
+        value => {
+            let message = format!(
+                "Invalid type on stack ({:?}); expected object reference.",
+                value
+            );
+            return ctx.throw_by_name_with_message("System.InvalidCastException", &message);
+        }
     };
 
     let mt_ptr = vm_try!(object_type).definition() as *const _;

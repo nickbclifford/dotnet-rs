@@ -1,10 +1,9 @@
 use crate::{
     ExceptionOps, StepResult,
+    instructions::NULL_REF_MSG,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::ops::{EvalStackOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps},
 };
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;

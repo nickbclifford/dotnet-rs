@@ -94,3 +94,5 @@ pub mod memory;
 pub mod objects;
 pub mod reflection;
 pub mod stack_ops;
+
+pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";

@@ -718,6 +718,61 @@ pub(crate) fn load_resolution_core(
     Ok(ResolutionS::new(res_ptr, arena.clone()))
 }
 
+fn find_latest_runtime_in_base(base: &Path) -> Option<PathBuf> {
+    if !base.exists() {
+        return None;
+    }
+
+    let entries = fs::read_dir(base).ok()?;
+    let mut versions: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            if name.chars().next()?.is_ascii_digit() {
+                Some((name, e.path()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    versions.sort_by(|(a, _), (b, _)| {
+        let parse_version = |s: &str| {
+            s.split('.')
+                .map(|part| part.parse::<u32>().unwrap_or(0))
+                .collect::<Vec<_>>()
+        };
+        parse_version(b).cmp(&parse_version(a))
+    });
+
+    versions.first().map(|(_, path)| path.clone())
+}
+
+pub fn find_dotnet_app_path() -> Option<PathBuf> {
+    let mut base_paths = vec![];
+    if let Ok(dotnet_root) = std::env::var("DOTNET_ROOT") {
+        base_paths.push(PathBuf::from(dotnet_root).join("shared/Microsoft.NETCore.App"));
+    }
+
+    if cfg!(target_os = "windows") {
+        base_paths.push(PathBuf::from(
+            "C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App",
+        ));
+    } else if cfg!(target_os = "macos") {
+        base_paths.push(PathBuf::from(
+            "/usr/local/share/dotnet/shared/Microsoft.NETCore.App",
+        ));
+    } else {
+        base_paths.push(PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
+        base_paths.push(PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App"));
+    }
+
+    base_paths
+        .into_iter()
+        .find_map(|base| find_latest_runtime_in_base(&base))
+}
+
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
     let base_paths = if cfg!(target_os = "windows") {
         vec![PathBuf::from(
@@ -734,37 +789,7 @@ pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
         ]
     };
 
-    for base in base_paths {
-        if base.exists()
-            && let Ok(entries) = fs::read_dir(base)
-        {
-            let mut versions: Vec<_> = entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .filter_map(|e| {
-                    let name = e.file_name().into_string().ok()?;
-                    if name.chars().next()?.is_numeric() {
-                        Some((name, e.path()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Sort versions to get the latest
-            versions.sort_by(|(a, _), (b, _)| {
-                let parse_version = |s: &str| {
-                    s.split('.')
-                        .map(|part| part.parse::<u32>().unwrap_or(0))
-                        .collect::<Vec<_>>()
-                };
-                parse_version(b).cmp(&parse_version(a))
-            });
-
-            if let Some((_, path)) = versions.first() {
-                return Some(path.clone());
-            }
-        }
-    }
-    None
+    base_paths
+        .into_iter()
+        .find_map(|base| find_latest_runtime_in_base(&base))
 }

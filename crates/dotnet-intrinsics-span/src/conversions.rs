@@ -105,6 +105,8 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
             let heap = h.borrow();
             match &heap.storage {
                 HeapStorage::Str(s) => (
+                    // SAFETY: `heap` borrow pins the string storage for this scope; we only use
+                    // the pointer to build a managed reference with validated bounds below.
                     unsafe { heap.storage.raw_data_ptr() },
                     s.len(),
                     vm_try!(ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))),
@@ -114,6 +116,8 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
                     let elem_type = a.element.clone();
                     let elem_size = a.layout.element_layout.size();
                     (
+                        // SAFETY: `heap` borrow keeps vector storage alive and we only derive an
+                        // offset pointer after explicit start/length range checks.
                         unsafe { a.raw_data_ptr() },
                         a.layout.length,
                         elem_type,
@@ -159,13 +163,21 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     } else {
         total_len - start
     };
+    let byte_start = start * element_size;
+    debug_assert_eq!(
+        start.checked_mul(element_size),
+        Some(byte_start),
+        "AsSpan byte offset overflowed usize during pointer arithmetic"
+    );
 
     let ptr = if base_ptr.is_null() {
         base_ptr
     } else {
-        unsafe { base_ptr.add(start * element_size) }
+        // SAFETY: `start <= total_len` and `actual_length` checks above ensure this computed
+        // element offset remains within the source span's backing allocation.
+        unsafe { base_ptr.add(byte_start) }
     };
-    offset += ByteOffset(start * element_size);
+    offset += ByteOffset(byte_start);
     let len = actual_length;
 
     let span_type_concrete = match &method.method().signature.return_type.1 {
@@ -444,6 +456,8 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         vm_try!(
+            // SAFETY: `length_ref` points to Span `_length` field and we write exactly 4 bytes
+            // (`i32`) to that location.
             unsafe {
                 ctx.write_bytes(
                     length_ref.origin().clone(),
@@ -495,6 +509,8 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
         if let HeapStorage::Vec(v) = &inner.storage {
+            // SAFETY: `inner` borrow keeps vector backing storage alive while deriving a pointer to
+            // its first element.
             let ptr = unsafe { v.raw_data_ptr() };
 
             // For Vectors, the ManagedPtr offset must be relative to the raw data pointer

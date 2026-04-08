@@ -10,7 +10,7 @@ This document describes the garbage collection subsystem, memory safety invarian
 - **`dotnet-runtime-memory/src/`**: Heap manager, raw memory access, and memory ops
 - **`dotnet-value/src/object/`**: Heap object representation (`mod.rs`, `heap_storage.rs`, `types.rs`)
 - **`dotnet-value/src/storage.rs`**: Field storage with atomic capabilities
-- **`dotnet-utils/src/lib.rs`**: `GcScopeGuard<'ctx>` (legacy alias: `BorrowGuardHandle<'ctx>`) and `BorrowScopeOps`
+- **`dotnet-utils/src/lib.rs`**: `GcScopeGuard<'ctx>` and `BorrowScopeOps`
 - **`dotnet-utils/src/gc/`**: GC utility types (`mod.rs`), `GCCommand`, `ThreadSafeLock` (`thread_safe_lock.rs`), arena helpers (`arena.rs`), and cross-arena refs (`cross_arena.rs`)
 
 ## Arena Architecture
@@ -138,7 +138,7 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 
 ### The Solution: `GcScopeGuard<'ctx>` (`dotnet-utils/src/lib.rs`)
 - `BorrowScopeOps` trait (GC scope API): `enter_gc_scope()` / `exit_gc_scope()` / `active_gc_scope_depth()`.
-- `GcScopeGuard<'ctx>` is an owner-carrying RAII guard (legacy alias: `BorrowGuardHandle<'ctx>`). The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
+- `GcScopeGuard<'ctx>` is an owner-carrying RAII guard. The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
 - Construct via `GcScopeGuard::enter(ctx, token)` — increments the GC scope counter; when `counter > 0`, `check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager.
 - RAII — `Drop` decrements the counter.
 - **`data_ptr()` Tracing**: During the STW pause, `gc-arena` tracing callbacks use `raw_data_ptr()` or `data_ptr()` to read object fields, directly bypassing `ThreadSafeLock` checks. This is safe because all mutator threads are suspended.

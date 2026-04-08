@@ -42,11 +42,6 @@ pub fn is_valid_object_ptr(ptr: usize) -> bool {
     OBJECT_REGISTRY.contains(&ptr)
 }
 
-#[cfg(feature = "fuzzing")]
-pub fn clear_object_registry() {
-    OBJECT_REGISTRY.clear();
-}
-
 pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
 #[derive(Collect, Debug)]
@@ -515,13 +510,6 @@ impl<'gc> ObjectRef<'gc> {
             // SAFETY: Use write_unaligned to avoid UB. Caller holds lock.
             (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr_val);
         }
-    }
-
-    pub fn expect_object_ref(self) -> Self {
-        if self.0.is_none() {
-            panic!("NullReferenceException");
-        }
-        self
     }
 
     pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {

@@ -68,8 +68,8 @@ pub struct GlobalCaches {
 }
 
 impl GlobalCaches {
-    pub fn new(loader: &AssemblyLoader, tracer: &Tracer) -> Self {
-        let intrinsic_registry = IntrinsicRegistry::initialize(loader, Some(tracer));
+    pub fn new(_loader: &AssemblyLoader, _tracer: &Tracer) -> Self {
+        let intrinsic_registry = IntrinsicRegistry::initialize();
         Self {
             layout_cache: DashMap::new(),
             instance_field_layout_cache: DashMap::new(),

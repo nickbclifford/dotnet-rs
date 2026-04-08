@@ -1,8 +1,18 @@
 #[cfg(test)]
 mod tests {
     use crate::object::{HeapStorage, ObjectRef};
+    #[cfg(feature = "multithreading")]
+    use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(feature = "memory-validation")]
     use dotnet_utils::sync::MANAGED_THREAD_ID;
+
+    #[cfg(feature = "multithreading")]
+    static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[cfg(feature = "multithreading")]
+    fn next_test_arena_id() -> dotnet_utils::ArenaId {
+        dotnet_utils::ArenaId(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
+    }
     use gc_arena::{Arena, Rootable};
     #[cfg(feature = "memory-validation")]
     struct ManagedThreadIdGuard {
@@ -29,7 +39,9 @@ mod tests {
     fn test_read_branded_null() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+        #[cfg(feature = "multithreading")]
+        let arena_id = next_test_arena_id();
+        #[cfg(all(not(feature = "multithreading"), feature = "memory-validation"))]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(
@@ -68,7 +80,9 @@ mod tests {
     fn test_read_valid_object() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+        #[cfg(feature = "multithreading")]
+        let arena_id = next_test_arena_id();
+        #[cfg(all(not(feature = "multithreading"), feature = "memory-validation"))]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(

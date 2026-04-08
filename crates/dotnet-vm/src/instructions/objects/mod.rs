@@ -1,11 +1,10 @@
 use crate::{
     ExceptionOps, StepResult,
+    instructions::NULL_REF_MSG,
     layout::{LayoutFactory, type_layout},
     resolution::ValueResolution,
     stack::ops::{StackOps, VesOps},
 };
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;

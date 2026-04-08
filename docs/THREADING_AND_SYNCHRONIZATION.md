@@ -100,7 +100,6 @@ Safe points are checked at:
 
 ### Safe Point ↔ GcScopeGuard Interaction
 When a `GcScopeGuard` is active (GC scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
-`BorrowGuardHandle` remains a compatibility alias for `GcScopeGuard`.
 
 The path to thread suspension:
 1. `check_gc_safe_point()` evaluates `ThreadManager::is_gc_stop_requested()`.

@@ -11,6 +11,8 @@ pub mod buffer;
 pub mod marshal;
 pub mod unsafe_ptr;
 
+pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
     fn unsafe_type_layout(
         &self,

@@ -21,23 +21,9 @@ impl LayoutFactory {
         context: &ResolutionContext,
         _metrics: Option<&RuntimeMetrics>,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        context.resolver().instance_field_layout_cached_with_lookup(
-            td,
-            context.resolution.clone(),
-            context.generics,
-        )
-    }
-
-    pub fn instance_fields_with_metrics(
-        td: TypeDescription,
-        context: &ResolutionContext,
-        _metrics: Option<&RuntimeMetrics>,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        context.resolver().instance_fields_with_lookup(
-            td,
-            context.resolution.clone(),
-            context.generics,
-        )
+        context
+            .resolver()
+            .instance_field_layout_cached_with_lookup(td, context.generics)
     }
 
     pub fn static_fields(
@@ -45,18 +31,6 @@ impl LayoutFactory {
         context: &ResolutionContext,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
         context.resolver().static_fields(td, context)
-    }
-
-    pub fn static_fields_with_metrics(
-        td: TypeDescription,
-        context: &ResolutionContext,
-        _metrics: Option<&RuntimeMetrics>,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        context.resolver().static_fields_with_lookup(
-            td,
-            context.resolution.clone(),
-            context.generics,
-        )
     }
 
     pub fn create_array_layout(
@@ -67,20 +41,6 @@ impl LayoutFactory {
         context
             .resolver()
             .create_array_layout(element, length, context)
-    }
-
-    pub fn create_array_layout_with_metrics(
-        element: ConcreteType,
-        length: usize,
-        context: &ResolutionContext,
-        _metrics: Option<&RuntimeMetrics>,
-    ) -> Result<ArrayLayoutManager, TypeResolutionError> {
-        context.resolver().create_array_layout_with_lookup(
-            element,
-            length,
-            context.resolution.clone(),
-            context.generics,
-        )
     }
 
     #[cfg(test)]
@@ -96,56 +56,27 @@ pub fn type_layout(
     context.resolver().type_layout_cached(t, context)
 }
 
-pub fn type_layout_with_metrics(
-    t: ConcreteType,
-    context: &ResolutionContext,
-    _metrics: Option<&RuntimeMetrics>,
-) -> Result<Arc<LayoutManager>, TypeResolutionError> {
-    context.resolver().type_layout_cached_with_lookup(
-        t,
-        context.resolution.clone(),
-        context.generics,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::LayoutFactory;
     use crate::{context::ResolutionContext, state::SharedGlobalState};
-    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_assemblies::{AssemblyLoader, find_dotnet_app_path};
     use dotnet_types::generics::{ConcreteType, GenericLookup};
     use dotnet_value::layout::{LayoutManager, Scalar};
     use dotnetdll::prelude::{BaseType, TypeSource, UserType};
-    use std::{path::PathBuf, sync::Arc};
-
-    fn find_dotnet_app_path() -> PathBuf {
-        let base = std::env::var("DOTNET_ROOT")
-            .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
-            .unwrap_or_else(|_| PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
-
-        let base = if !base.exists() {
-            let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-            if alt_base.exists() { alt_base } else { base }
-        } else {
-            base
-        };
-
-        let mut entries: Vec<_> = std::fs::read_dir(base)
-            .expect("failed to read .NET shared path")
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        entries
-            .last()
-            .expect("no .NET runtime version found")
-            .path()
-    }
+    use std::sync::Arc;
 
     #[test]
     fn nullable_int_layout_has_empty_gc_desc() {
-        let loader =
-            Arc::new(AssemblyLoader::new(find_dotnet_app_path().display().to_string()).unwrap());
+        let loader = Arc::new(
+            AssemblyLoader::new(
+                find_dotnet_app_path()
+                    .expect("could not find .NET shared path")
+                    .display()
+                    .to_string(),
+            )
+            .unwrap(),
+        );
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let empty = GenericLookup::default();
 
