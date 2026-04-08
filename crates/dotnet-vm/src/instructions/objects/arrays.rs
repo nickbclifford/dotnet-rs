@@ -233,13 +233,16 @@ fn ldelema_internal<
         .loader()
         .find_concrete_type(concrete_t)
         .expect("Array element type must exist for ldelema");
-    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-        NonNull::new(ptr),
-        target_type,
-        Some(obj),
-        readonly,
-        Some(ByteOffset(element_offset)),
-    )));
+    ctx.push(StackValue::ManagedPtr(
+        ManagedPtr::new(
+            NonNull::new(ptr),
+            target_type,
+            Some(obj),
+            readonly,
+            Some(ByteOffset(element_offset)),
+        )
+        .into(),
+    ));
 
     StepResult::Continue
 }

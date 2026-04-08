@@ -67,8 +67,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let base_ptr = slot.data_location().as_ptr();
                 unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data(|data| unsafe {
                     NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
                 })
@@ -115,8 +117,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data_mut(|data| {
                     if offset.as_usize() + layout.size().as_usize() > data.len() {
                         return Err(MemoryAccessError::BoundsCheck {
@@ -203,8 +207,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data(|data| {
                     if offset.as_usize() + layout.size().as_usize() > data.len() {
                         return Err(MemoryAccessError::BoundsCheck {
@@ -281,8 +287,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.write_bytes(self.gc, None, ByteOffset(ptr.as_ptr().expose_addr()), data)
                 }
             }
-            PointerOrigin::Static(type_desc, lookup) => {
-                let storage = self.statics().get(type_desc, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data_mut(|obj_data| {
                     if offset.as_usize() + data.len() > obj_data.len() {
                         return Err(MemoryAccessError::BoundsCheck {
@@ -349,8 +357,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_addr()), dest) }
             }
-            PointerOrigin::Static(type_desc, lookup) => {
-                let storage = self.statics().get(type_desc, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data(|obj_data| {
                     if offset.as_usize() + dest.len() > obj_data.len() {
                         return Err(MemoryAccessError::BoundsCheck {
@@ -430,8 +440,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -535,8 +547,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -628,8 +642,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -713,8 +729,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.load_atomic(Some(MemoryOwner::Local(owner)), offset, size, ordering)
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -783,8 +801,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Static(static_type, lookup) => {
-                let storage = self.statics().get(static_type, &lookup);
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);

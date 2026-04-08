@@ -71,7 +71,7 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
         self.push(StackValue::ValueType(value));
     }
     fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
-        self.push(StackValue::ManagedPtr(value));
+        self.push(StackValue::ManagedPtr(value.into()));
     }
     fn push_string(&mut self, value: CLRString);
 

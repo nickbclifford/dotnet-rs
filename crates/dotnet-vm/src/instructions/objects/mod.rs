@@ -46,7 +46,7 @@ pub(crate) fn get_ptr_info<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
             dotnet_utils::ByteOffset(*p as usize),
         )),
         StackValue::ValueType(obj) => Ok((
-            PointerOrigin::Transient(obj.clone()),
+            PointerOrigin::new_transient(obj.clone()),
             dotnet_utils::ByteOffset(0),
         )),
         _ => {
@@ -222,10 +222,11 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 // IMPORTANT: Set the stack origin BEFORE updating the cached ptr,
                 // otherwise update_cached_ptr will set offset to the absolute address
                 // thinking it's an Unmanaged pointer.
-                let mut this_ptr_val =
-                    this_ptr_val.with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
+                let mut this_ptr_val = this_ptr_val
+                    .into_inner()
+                    .with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
                 this_ptr_val.update_cached_ptr(real_addr);
-                ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val));
+                ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val.into()));
 
                 let res = ctx.execute_intrinsic_call(method, &lookup);
                 if res != StepResult::Continue {

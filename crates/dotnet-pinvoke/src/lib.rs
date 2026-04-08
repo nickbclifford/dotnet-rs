@@ -977,7 +977,7 @@ fn external_call_impl<'gc>(
                 Some(ByteOffset(0)),
             );
             let _ = ctx.pop_multiple(arg_count);
-            ctx.push(StackValue::TypedRef(m, type_desc));
+            ctx.push(StackValue::TypedRef(m.into(), type_desc));
         }
     }
 

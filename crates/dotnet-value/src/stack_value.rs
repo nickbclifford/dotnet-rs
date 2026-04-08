@@ -22,7 +22,7 @@ use sptr::Strict;
 use std::{
     cmp::Ordering,
     fmt::Debug,
-    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
+    ops::{Add, BitAnd, BitOr, BitXor, Deref, DerefMut, Mul, Neg, Not, Shl, Sub},
     ptr::NonNull,
     sync::Arc,
 };
@@ -36,6 +36,46 @@ pub struct ManagedExceptionError {
     pub message: &'static str,
 }
 
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub struct StackManagedPtr<'gc>(Box<ManagedPtr<'gc>>);
+
+impl<'gc> StackManagedPtr<'gc> {
+    pub fn new(ptr: ManagedPtr<'gc>) -> Self {
+        Self(Box::new(ptr))
+    }
+
+    pub fn into_inner(self) -> ManagedPtr<'gc> {
+        *self.0
+    }
+}
+
+impl<'gc> From<ManagedPtr<'gc>> for StackManagedPtr<'gc> {
+    fn from(value: ManagedPtr<'gc>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<'gc> Deref for StackManagedPtr<'gc> {
+    type Target = ManagedPtr<'gc>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'gc> DerefMut for StackManagedPtr<'gc> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+// SAFETY: StackManagedPtr contains a boxed ManagedPtr and delegates tracing to it.
+unsafe impl<'gc> Collect<'gc> for StackManagedPtr<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        self.0.trace(cc);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -44,9 +84,9 @@ pub enum StackValue<'gc> {
     NativeFloat(f64),
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
-    ManagedPtr(ManagedPtr<'gc>),
+    ManagedPtr(StackManagedPtr<'gc>),
     ValueType(Object<'gc>),
-    TypedRef(ManagedPtr<'gc>, Arc<TypeDescription>),
+    TypedRef(StackManagedPtr<'gc>, Arc<TypeDescription>),
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreading")]
@@ -64,10 +104,10 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
             3 => Ok(StackValue::NativeFloat(u.arbitrary()?)),
             4 => Ok(StackValue::ObjectRef(u.arbitrary()?)),
             5 => Ok(StackValue::UnmanagedPtr(u.arbitrary()?)),
-            6 => Ok(StackValue::ManagedPtr(u.arbitrary()?)),
+            6 => Ok(StackValue::ManagedPtr(StackManagedPtr::new(u.arbitrary()?))),
             7 => Ok(StackValue::ValueType(u.arbitrary()?)),
             8 => Ok(StackValue::TypedRef(
-                u.arbitrary()?,
+                StackManagedPtr::new(u.arbitrary()?),
                 Arc::new(u.arbitrary()?),
             )),
             #[cfg(feature = "multithreading")]
@@ -284,13 +324,13 @@ impl<'gc> StackValue<'gc> {
         pinned: bool,
         offset: Option<ByteOffset>,
     ) -> Self {
-        Self::ManagedPtr(ManagedPtr::new(
+        Self::ManagedPtr(StackManagedPtr::new(ManagedPtr::new(
             NonNull::new(ptr),
             target_type,
             owner,
             pinned,
             offset,
-        ))
+        )))
     }
     pub fn managed_stack_ptr(
         index: StackSlotIndex,
@@ -301,7 +341,7 @@ impl<'gc> StackValue<'gc> {
     ) -> Self {
         let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned, Some(offset));
         m.origin = PointerOrigin::Stack(index);
-        Self::ManagedPtr(m)
+        Self::ManagedPtr(StackManagedPtr::new(m))
     }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
@@ -330,8 +370,8 @@ impl<'gc> StackValue<'gc> {
             Self::NativeFloat(f) => ref_to_ptr(f),
             Self::ObjectRef(o) => ref_to_ptr(o),
             Self::UnmanagedPtr(u) => ref_to_ptr(u),
-            Self::ManagedPtr(m) => ref_to_ptr(m),
-            Self::TypedRef(m, _) => ref_to_ptr(m),
+            Self::ManagedPtr(m) => ref_to_ptr(m.deref()),
+            Self::TypedRef(m, _) => ref_to_ptr(m.deref()),
             Self::ValueType(o) => {
                 // SAFETY: Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
@@ -398,7 +438,7 @@ impl<'gc> StackValue<'gc> {
 
     pub fn as_managed_ptr(&self) -> ManagedPtr<'gc> {
         match self {
-            Self::ManagedPtr(m) => m.clone(),
+            Self::ManagedPtr(m) => m.deref().clone(),
             v => panic!("expected ManagedPtr, received {:?}", v),
         }
     }
@@ -708,12 +748,12 @@ impl<'gc> Add for StackValue<'gc> {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(m.offset(i as isize)) }
+                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) }
             }
             (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(m.offset(i)) }
+                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) }
             }
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
                 UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
@@ -738,17 +778,17 @@ impl<'gc> Sub for StackValue<'gc> {
             (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(m.offset(-(i as isize))) }
+                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize)))) }
             }
             (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(m.offset(-i)) }
+                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) }
             }
             (ManagedPtr(m), Int64(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(m.offset(-(i as isize))) }
+                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize)))) }
             }
             (UnmanagedPtr(u), Int32(i)) => UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))

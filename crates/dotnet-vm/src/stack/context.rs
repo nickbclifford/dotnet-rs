@@ -542,11 +542,7 @@ impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
         let inner = h.borrow();
         let cloned_storage = inner.storage.clone();
 
-        let new_inner = dotnet_value::object::ObjectInner {
-            magic: inner.magic,
-            owner_id: self.thread_id.get(),
-            storage: cloned_storage,
-        };
+        let new_inner = dotnet_value::object::ObjectInner::new(cloned_storage, self.thread_id.get());
 
         let new_h = gc_arena::Gc::new(&gc, dotnet_utils::gc::ThreadSafeLock::new(new_inner));
         let new_ref = ObjectRef(Some(new_h));

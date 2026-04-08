@@ -71,7 +71,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
                 return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "ptr");
             }
             // Already a managed pointer, just use it
-            m
+            m.into_inner()
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
             if length > 0 {

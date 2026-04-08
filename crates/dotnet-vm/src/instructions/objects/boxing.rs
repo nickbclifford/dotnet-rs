@@ -327,13 +327,16 @@ pub fn unbox<
         let h = boxed_nullable.0.unwrap();
         let ptr = unsafe { h.borrow().storage.raw_data_ptr() };
         let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));
-        ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(ptr),
-            target_type,
-            Some(boxed_nullable),
-            false,
-            Some(ByteOffset(0)),
-        )));
+        ctx.push(StackValue::ManagedPtr(
+            ManagedPtr::new(
+                NonNull::new(ptr),
+                target_type,
+                Some(boxed_nullable),
+                false,
+                Some(ByteOffset(0)),
+            )
+            .into(),
+        ));
         return StepResult::Continue;
     }
 
@@ -348,13 +351,16 @@ pub fn unbox<
     };
 
     let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));
-    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-        NonNull::new(ptr),
-        target_type,
-        Some(obj),
-        false,
-        Some(ByteOffset(0)),
-    )));
+    ctx.push(StackValue::ManagedPtr(
+        ManagedPtr::new(
+            NonNull::new(ptr),
+            target_type,
+            Some(obj),
+            false,
+            Some(ByteOffset(0)),
+        )
+        .into(),
+    ));
 
     StepResult::Continue
 }

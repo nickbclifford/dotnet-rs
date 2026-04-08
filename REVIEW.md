@@ -123,55 +123,87 @@ Risk:
 
 ### 1b. ManagedPtr compaction
 
-Evidence:
+Update (2026-04-08): completed.
 
-- `ManagedPtr` fields: `magic`, optional raw pointer, `PointerOrigin`, `ByteOffset(usize)`, `TypeDescription`, `pinned: bool`: `crates/dotnet-value/src/pointer/mod.rs:125-135`.
-- `PointerOrigin` has large variants (`Static(TypeDescription, GenericLookup)`, `Transient(Object)`): `crates/dotnet-value/src/pointer/origin.rs:18-27`.
-- `ValidationTag` is already zero-sized only when both `memory-validation` and `debug_assertions` are off: `crates/dotnet-value/src/validation.rs:1-35`.
+Implemented:
 
-Current measurement:
+1. Replaced `ManagedPtr`'s `pinned: bool` with packed `flags: u8`.
+2. Added `ManagedByteOffset(u32)` (`dotnet-utils`) and switched `ManagedPtr` to compact offset storage.
+3. Preserved unmanaged correctness by using `_value` as authoritative full-width address fallback when offset does not fit `u32`.
+4. Compacted `PointerOrigin` by moving cold metadata out of enum payload:
+   - `Static(TypeDescription, GenericLookup)` -> `Static(Arc<StaticMetadata>)`
+   - `Transient(Object)` -> `Transient(Box<Object>)`
+5. Updated pointer serialization/deserialization and all downstream `PointerOrigin` consumers.
 
-- `size_of::<ManagedPtr>() == 168` release, `184` with `memory-validation`.
+Measured layout impact (64-bit):
 
-Proposed change:
+- Default release:
+  - `ManagedPtr`: `168` -> `72` bytes (`-57.14%`)
+  - `PointerOrigin`: `120` -> `24` bytes (`-80.00%`)
+- Default debug:
+  - `ManagedPtr`: `184` -> `80` bytes (`-56.52%`)
+  - `PointerOrigin`: `128` -> `24` bytes (`-81.25%`)
+- `--no-default-features`:
+  - `ManagedPtr`: `72` debug / `64` release
+  - `PointerOrigin`: `16` (debug/release)
 
-1. Replace `pinned: bool` with packed flags in a `u8` metadata field (or pointer-tag bits where safe).
-2. Reduce `ByteOffset` width for managed-object-relative offsets (e.g., `u32`) while keeping unmanaged path explicit.
-3. Consider replacing inline `TypeDescription` in the hot representation with a compact ID or interned handle.
-4. Split `PointerOrigin` into compact hot representation + cold metadata for uncommon variants.
+Pointer-heavy benchmark reruns (`criterion`, sample-size 10, measurement-time 5s):
 
-Expected impact:
+- `gc`: median `441.66 ms` vs Phase 0 baseline `433.05 ms` (`+1.99%`)
+- `dispatch`: median `741.26 ms` vs Phase 0 baseline `794.17 ms` (`-6.66%`)
+- `json`: median `324.99 ms` vs baseline `312.11 ms` (`+4.13%`), with Criterion reporting no significant change in the immediate A/B (`p=0.38`).
 
-- Direct reduction of `ManagedPtr` and `StackValue` footprint.
-- Lower memory traffic in pointer-heavy code (`ldloca`, `ldflda`, span intrinsics).
+Risk notes:
 
-Risk:
-
-- High: pointer serialization format compatibility, cross-arena rules, and `'gc` branding invariants.
+- Serialization compatibility and cross-arena pointer recovery remain high-sensitivity areas; covered by pointer round-trip tests and full default/no-default validation runs.
 
 ### 1c. Object header compaction
 
-Evidence:
+Update (2026-04-08): completed.
 
-- `ObjectInner` always stores `magic`, `owner_id`, `storage`: `crates/dotnet-value/src/object/mod.rs:47-54`.
-- `magic` is `ValidationTag` and currently debug/release-feature-dependent type: `crates/dotnet-value/src/validation.rs:1-35`.
+Implemented:
 
-Current measurement:
+1. Compacted `ObjectInner` header field presence:
+   - `magic` is now only present when `memory-validation` or `debug_assertions` is enabled.
+   - `owner_id` is now only present when `multithreading` or `memory-validation` is enabled.
+2. Added `ObjectInner::new(storage, owner_id)` and `ObjectInner::owner_id()` to centralize layout/ownership behavior across configurations.
+3. Audited and updated all `owner_id` consumers (`dotnet-value`, `dotnet-runtime-memory`, `dotnet-vm`) to read owner IDs through the immutable accessor contract.
+4. Documented owner invariants directly on `ObjectInner`:
+   - required by cross-arena write barriers and tagged serialization,
+   - immutable after construction, therefore lock-free reads are valid.
+5. Added a compile-time guarantee that `ValidationTag` is zero-sized in non-validation release builds.
+6. Extended layout guards in `dotnet-value/tests/layout_sizes.rs` with `ObjectInner` size/alignment assertions under validation and non-validation configurations.
 
-- `ObjectInner` is `136` bytes (release) and `152` with `memory-validation`.
+Measured layout impact (64-bit release):
 
-Proposed change:
+- `default`:
+  - `HeapStorage`: `128` bytes
+  - `ObjectInner`: `136` bytes (`+8` header overhead, unchanged)
+- `--no-default-features`:
+  - `HeapStorage`: `128` bytes
+  - `ObjectInner`: `128` bytes (`+0` header overhead; previously implied `+8`)
+- `default + memory-validation`:
+  - `HeapStorage`: `136` bytes
+  - `ObjectInner`: `152` bytes (`+16` header overhead)
 
-1. Keep validation semantics, but isolate validation-only metadata from hot object header in non-validation builds.
-2. Audit `owner_id` usage to determine whether always-on per-object storage is required or can be externalized in some modes.
+Per-object memory impact:
 
-Expected impact:
+- single-threaded non-validation release path: `8` bytes saved per object (`136 -> 128`, `-5.88%`).
+- multithreaded default release path: no layout delta (owner metadata remains required for cross-arena fast paths).
 
-- Per-object memory overhead reduction (multiplies across all heap allocations).
+Allocation benchmark (`gc`, criterion, sample-size 10, measurement-time 5s):
 
-Risk:
+- before: `450.04 ms`
+- after: `445.56 ms`
+- delta: `-0.99%` (criterion reported no statistically significant change, `p=0.11`).
+- vs Phase 0 baseline (`433.05 ms`): `+2.89%` in this run.
 
-- Medium/High: cross-arena safety checks and diagnostics rely on metadata locality.
+Validation/correctness checks:
+
+- Full default and `--no-default-features` clippy/test suites passed.
+- Additional targeted validation runs passed:
+  - `cargo test -p dotnet-value --features memory-validation -- --nocapture`
+  - `cargo test -p dotnet-value --no-default-features --features memory-validation -- --nocapture --test-threads=1`
 
 ---
 

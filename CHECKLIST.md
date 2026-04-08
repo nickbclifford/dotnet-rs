@@ -39,40 +39,40 @@
 ## Phase 1: Data Layout and Type Size
 
 ### Step 1a: StackValue footprint reduction
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-value/src/stack_value.rs, crates/dotnet-value/src/object/types.rs, crates/dotnet-value/src/pointer/mod.rs, crates/dotnet-value/tests/layout_sizes.rs
 - **Depends on**: 0c
 - **Risk**: high
 - **Tasks**:
-  - [ ] Add compile-time assertions for `size_of` and `align_of` of `StackValue`, `ManagedPtr`, and `PointerOrigin`.
-  - [ ] Implement an indirection strategy for rare large `StackValue` variants (`ManagedPtr` and/or `TypedRef`) and keep common scalar/object variants inline.
-  - [ ] Update GC tracing and serialization logic for the new representation.
-  - [ ] Run criterion arithmetic benchmark and JSON benchmark before/after and record deltas.
-  - [ ] Verify: `cargo test -p dotnet-value -- --nocapture` passes and size assertions match expected target values.
+  - [x] Add compile-time assertions for `size_of` and `align_of` of `StackValue`, `ManagedPtr`, and `PointerOrigin`.
+  - [x] Implement an indirection strategy for rare large `StackValue` variants (`ManagedPtr` and/or `TypedRef`) and keep common scalar/object variants inline.
+  - [x] Update GC tracing and serialization logic for the new representation.
+  - [x] Run criterion arithmetic benchmark and JSON benchmark before/after and record deltas.
+  - [x] Verify: `cargo test -p dotnet-value -- --nocapture` passes and size assertions match expected target values.
 
 ### Step 1b: ManagedPtr compaction
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-value/src/pointer/mod.rs, crates/dotnet-value/src/pointer/origin.rs, crates/dotnet-utils/src/newtypes.rs, crates/dotnet-value/src/pointer/serde.rs
 - **Depends on**: 1a
 - **Risk**: high
 - **Tasks**:
-  - [ ] Replace `pinned: bool` storage with packed flags and update accessor methods.
-  - [ ] Evaluate and implement a narrower managed-object offset representation where safe (retain unmanaged fallback correctness).
-  - [ ] Reduce `PointerOrigin` hot-path payload size by moving cold metadata out of the main enum when feasible.
-  - [ ] Re-run pointer-heavy fixtures and record size and runtime deltas.
-  - [ ] Verify: run `cargo test -p dotnet-value -- --nocapture` and ensure pointer serde tests still pass.
+  - [x] Replace `pinned: bool` storage with packed flags and update accessor methods.
+  - [x] Evaluate and implement a narrower managed-object offset representation where safe (retain unmanaged fallback correctness).
+  - [x] Reduce `PointerOrigin` hot-path payload size by moving cold metadata out of the main enum when feasible.
+  - [x] Re-run pointer-heavy fixtures and record size and runtime deltas.
+  - [x] Verify: run `cargo test -p dotnet-value -- --nocapture` and ensure pointer serde tests still pass.
 
 ### Step 1c: Object header compaction
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-value/src/object/mod.rs, crates/dotnet-value/src/validation.rs, crates/dotnet-runtime-memory/src/heap.rs
 - **Depends on**: 0c
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Make validation-only object header state zero-cost in non-validation release builds without removing feature functionality.
-  - [ ] Audit `owner_id` consumers and document required invariants for any packing/externalization.
-  - [ ] Add size assertions for `ObjectInner` under validation and non-validation builds.
-  - [ ] Run allocation-pressure benchmark before/after and record per-object memory impact.
-  - [ ] Verify: run default and no-default test suites and confirm no cross-arena validation regressions.
+  - [x] Make validation-only object header state zero-cost in non-validation release builds without removing feature functionality.
+  - [x] Audit `owner_id` consumers and document required invariants for any packing/externalization.
+  - [x] Add size assertions for `ObjectInner` under validation and non-validation builds.
+  - [x] Run allocation-pressure benchmark before/after and record per-object memory impact.
+  - [x] Verify: run default and no-default test suites and confirm no cross-arena validation regressions.
 
 ## Phase 2: Algorithm and Data Structure
 

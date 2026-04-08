@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
     if let StackValue::ManagedPtr(m) = val {
-        let new_m = unsafe { m.offset(byte_offset) };
-        StackValue::ManagedPtr(new_m)
+        let new_m = unsafe { m.into_inner().offset(byte_offset) };
+        StackValue::ManagedPtr(new_m.into())
     } else {
         let ptr = val.as_ptr();
         let result_ptr = unsafe { ptr.offset(byte_offset) };

@@ -5,7 +5,9 @@ use crate::{
 };
 use dashmap::DashMap;
 use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_utils::ManagedByteOffset;
 use gc_arena::{Collect, collect::Trace, static_collect};
+use sptr::Strict;
 use std::{
     cmp::Ordering as CmpOrdering,
     fmt::{self, Debug, Formatter},
@@ -30,6 +32,7 @@ pub(crate) fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
     NonNull::new(sptr::from_exposed_addr_mut::<u8>(addr))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticMetadata {
     pub type_desc: TypeDescription,
     pub generics: GenericLookup,
@@ -121,16 +124,19 @@ impl<'gc> ManagedPtrInfo<'gc> {
 
 pub(crate) const MANAGED_PTR_MAGIC: u32 = 0x504F_494E;
 
+const MANAGED_PTR_FLAG_PINNED: u8 = 0b0000_0001;
+const MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET: u8 = 0b0000_0010;
+
 #[derive(Clone)]
 #[repr(C)]
 pub struct ManagedPtr<'gc> {
     pub(crate) magic: ValidationTag,
     pub(crate) _value: Option<NonNull<u8>>,
     pub(crate) origin: PointerOrigin<'gc>,
-    /// The offset from the owner's base pointer.
-    pub(crate) offset: ByteOffset,
+    /// Compact byte offset for managed origins; unmanaged absolute addresses are read from `_value`.
+    pub(crate) offset: ManagedByteOffset,
     pub(crate) inner_type: TypeDescription,
-    pub(crate) pinned: bool,
+    pub(crate) flags: u8,
     pub(crate) _marker: std::marker::PhantomData<&'gc ()>,
 }
 
@@ -138,13 +144,23 @@ pub struct ManagedPtr<'gc> {
 impl<'a, 'gc> Arbitrary<'a> for ManagedPtr<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
+        let origin: PointerOrigin<'gc> = u.arbitrary()?;
+        let offset = u.arbitrary()?;
+        let pinned: bool = u.arbitrary()?;
+        let value = nonnull_from_exposed_addr(ptr_val);
+        let packed_offset = Self::pack_offset(&origin, value, offset);
+        let unmanaged_inline_offset = matches!(origin, PointerOrigin::Unmanaged)
+            && packed_offset.as_usize() == offset.as_usize();
         Ok(Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
-            _value: nonnull_from_exposed_addr(ptr_val),
-            origin: u.arbitrary()?,
-            offset: u.arbitrary()?,
+            _value: value,
+            offset: packed_offset,
+            origin,
             inner_type: u.arbitrary()?,
-            pinned: u.arbitrary()?,
+            flags: Self::with_unmanaged_inline_offset_flag(
+                Self::flags_from_pinned(pinned),
+                unmanaged_inline_offset,
+            ),
             _marker: std::marker::PhantomData,
         })
     }
@@ -157,9 +173,9 @@ impl Debug for ManagedPtr<'_> {
             f,
             "[{}] offset: {:?} (origin: {:?}, pinned: {})",
             self.inner_type.type_name(),
-            self.offset,
+            self.byte_offset(),
             self.origin,
-            self.pinned
+            self.is_pinned()
         )
     }
 }
@@ -168,7 +184,7 @@ impl PartialEq for ManagedPtr<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.validate_magic();
         other.validate_magic();
-        self.origin == other.origin && self.offset == other.offset
+        self.origin == other.origin && self.byte_offset() == other.byte_offset()
     }
 }
 
@@ -194,7 +210,7 @@ impl PartialOrd for ManagedPtr<'_> {
                 // If they are the same variant, we use offset as a tie-breaker.
                 // We could compare the inner origin data, but that would require
                 // implementing PartialOrd for TypeDescription, etc.
-                self.offset.partial_cmp(&other.offset)
+                self.byte_offset().partial_cmp(&other.byte_offset())
             }
             ord => Some(ord),
         }
@@ -202,6 +218,66 @@ impl PartialOrd for ManagedPtr<'_> {
 }
 
 impl<'gc> ManagedPtr<'gc> {
+    #[inline]
+    fn flags_from_pinned(pinned: bool) -> u8 {
+        if pinned { MANAGED_PTR_FLAG_PINNED } else { 0 }
+    }
+
+    #[inline]
+    fn with_unmanaged_inline_offset_flag(flags: u8, enabled: bool) -> u8 {
+        if enabled {
+            flags | MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET
+        } else {
+            flags & !MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET
+        }
+    }
+
+    #[inline]
+    fn has_unmanaged_inline_offset(&self) -> bool {
+        self.flags & MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET != 0
+    }
+
+    #[inline]
+    fn pack_offset(
+        origin: &PointerOrigin<'gc>,
+        value: Option<NonNull<u8>>,
+        offset: ByteOffset,
+    ) -> ManagedByteOffset {
+        if matches!(origin, PointerOrigin::Unmanaged) {
+            // Unmanaged pointers keep compact offset when representable; otherwise `_value`
+            // remains the authoritative absolute address.
+            return ManagedByteOffset::try_from(offset.as_usize())
+                .unwrap_or(ManagedByteOffset::ZERO);
+        }
+
+        match ManagedByteOffset::try_from(offset.as_usize()) {
+            Ok(compact) => compact,
+            Err(_) => {
+                // For unmanaged pointers we preserve full-width absolute address in `_value`.
+                // Any managed origin offset that exceeds u32 is unsupported by the compact form.
+                let resolved = value.map(|p| p.as_ptr().expose_addr()).unwrap_or(0);
+                panic!(
+                    "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
+                    offset.as_usize(),
+                    origin
+                );
+            }
+        }
+    }
+
+    #[inline]
+    fn unpack_offset(&self) -> ByteOffset {
+        if matches!(self.origin, PointerOrigin::Unmanaged) {
+            if self.has_unmanaged_inline_offset() {
+                ByteOffset(self.offset.as_usize())
+            } else {
+                ByteOffset(self._value.map_or(0, |p| p.as_ptr().expose_addr()))
+            }
+        } else {
+            ByteOffset(self.offset.as_usize())
+        }
+    }
+
     // Read-only accessors
     pub fn origin(&self) -> &PointerOrigin<'gc> {
         &self.origin
@@ -210,25 +286,33 @@ impl<'gc> ManagedPtr<'gc> {
         self.inner_type.clone()
     }
     pub fn is_pinned(&self) -> bool {
-        self.pinned
+        self.flags & MANAGED_PTR_FLAG_PINNED != 0
     }
     pub fn byte_offset(&self) -> ByteOffset {
-        self.offset
+        self.unpack_offset()
     }
 
     pub fn into_info(self) -> ManagedPtrInfo<'gc> {
+        let offset = self.unpack_offset();
         ManagedPtrInfo {
             address: self._value,
             origin: self.origin,
-            offset: self.offset,
+            offset,
         }
     }
 
     pub fn with_origin(&self, origin: PointerOrigin<'gc>) -> Self {
-        Self {
-            origin,
-            ..self.clone()
-        }
+        let mut clone = self.clone();
+        let byte_offset = self.byte_offset();
+        let packed_offset = Self::pack_offset(&origin, clone._value, byte_offset);
+        clone.origin = origin;
+        clone.offset = packed_offset;
+        clone.flags = Self::with_unmanaged_inline_offset_flag(
+            clone.flags,
+            matches!(clone.origin, PointerOrigin::Unmanaged)
+                && packed_offset.as_usize() == byte_offset.as_usize(),
+        );
+        clone
     }
 
     pub fn with_inner_type(&self, inner_type: TypeDescription) -> Self {
@@ -247,7 +331,7 @@ impl<'gc> ManagedPtr<'gc> {
 
     pub fn stack_slot_origin(&self) -> Option<(StackSlotIndex, ByteOffset)> {
         if let PointerOrigin::Stack(idx) = self.origin {
-            Some((idx, self.offset))
+            Some((idx, self.byte_offset()))
         } else {
             None
         }
@@ -259,13 +343,14 @@ impl<'gc> ManagedPtr<'gc> {
         obj: Object<'gc>,
         offset: ByteOffset,
     ) -> Self {
+        let origin = PointerOrigin::new_transient(obj);
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
             inner_type,
-            origin: PointerOrigin::Transient(obj),
-            offset,
-            pinned: false,
+            offset: Self::pack_offset(&origin, value, offset),
+            origin,
+            flags: 0,
             _marker: std::marker::PhantomData,
         }
     }
@@ -290,14 +375,20 @@ impl<'gc> ManagedPtr<'gc> {
                 ByteOffset(0)
             }
         });
+        let packed_offset = Self::pack_offset(&origin, value, offset);
+        let unmanaged_inline_offset = matches!(origin, PointerOrigin::Unmanaged)
+            && packed_offset.as_usize() == offset.as_usize();
 
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
             inner_type,
+            offset: packed_offset,
             origin,
-            offset,
-            pinned,
+            flags: Self::with_unmanaged_inline_offset_flag(
+                Self::flags_from_pinned(pinned),
+                unmanaged_inline_offset,
+            ),
             _marker: std::marker::PhantomData,
         }
     }
@@ -308,8 +399,8 @@ impl<'gc> ManagedPtr<'gc> {
             _value: None,
             inner_type: TypeDescription::NULL,
             origin: PointerOrigin::Unmanaged,
-            offset: ByteOffset::ZERO,
-            pinned: false,
+            offset: ManagedByteOffset::ZERO,
+            flags: 0,
             _marker: std::marker::PhantomData,
         }
     }
@@ -326,14 +417,20 @@ impl<'gc> ManagedPtr<'gc> {
         if origin.is_null() && offset == ByteOffset::ZERO && value.is_none() {
             origin = PointerOrigin::Unmanaged;
         }
+        let packed_offset = Self::pack_offset(&origin, value, offset);
+        let unmanaged_inline_offset = matches!(origin, PointerOrigin::Unmanaged)
+            && packed_offset.as_usize() == offset.as_usize();
 
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
             inner_type,
+            offset: packed_offset,
             origin,
-            offset,
-            pinned,
+            flags: Self::with_unmanaged_inline_offset_flag(
+                Self::flags_from_pinned(pinned),
+                unmanaged_inline_offset,
+            ),
             _marker: std::marker::PhantomData,
         }
     }
@@ -360,20 +457,20 @@ impl<'gc> ManagedPtr<'gc> {
                 // SAFETY: `ptr` points to `inner.storage` which remains locked
                 // for this scope, and `size_bytes()` is the exact allocation size.
                 let slice = unsafe { std::slice::from_raw_parts(ptr, inner.storage.size_bytes()) };
-                let offset = self.offset.as_usize();
+                let offset = self.byte_offset().as_usize();
                 let available = slice.len().saturating_sub(offset);
                 let to_access = std::cmp::min(size, available);
                 f(&slice[offset..offset + to_access])
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _) => ptr.with_data(|data| {
-                let offset = self.offset.as_usize();
+                let offset = self.byte_offset().as_usize();
                 let available = data.len().saturating_sub(offset);
                 let to_access = std::cmp::min(size, available);
                 f(&data[offset..offset + to_access])
             }),
             PointerOrigin::Transient(obj) => obj.with_data(|data| {
-                let offset = self.offset.as_usize();
+                let offset = self.byte_offset().as_usize();
                 let available = data.len().saturating_sub(offset);
                 let to_access = std::cmp::min(size, available);
                 f(&data[offset..offset + to_access])
@@ -399,8 +496,8 @@ impl<'gc> ManagedPtr<'gc> {
         self.validate_magic();
         self._value = Some(ptr);
         if let PointerOrigin::Unmanaged = self.origin {
-            // If it's a static pointer, also update the offset
-            self.offset = ByteOffset(ptr.as_ptr() as usize);
+            self.offset = ManagedByteOffset::ZERO;
+            self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, false);
         }
     }
 
@@ -412,13 +509,14 @@ impl<'gc> ManagedPtr<'gc> {
         pinned: bool,
         offset: ByteOffset,
     ) -> Self {
+        let origin = PointerOrigin::new_static(type_desc, generics);
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
             inner_type,
-            origin: PointerOrigin::Static(type_desc, generics),
-            offset,
-            pinned,
+            offset: Self::pack_offset(&origin, value, offset),
+            origin,
+            flags: Self::flags_from_pinned(pinned),
             _marker: std::marker::PhantomData,
         }
     }
@@ -433,7 +531,7 @@ impl<'gc> ManagedPtr<'gc> {
             let inner = handle.borrow();
             inner.validate_magic();
             let obj_size = inner.storage.size_bytes();
-            let current_offset = self.offset.as_usize();
+            let current_offset = self.byte_offset().as_usize();
             let new_offset = (current_offset as isize).saturating_add(bytes);
             if new_offset < 0 || (new_offset as usize) > obj_size {
                 panic!(
@@ -453,19 +551,26 @@ impl<'gc> ManagedPtr<'gc> {
         self.validate_offset(bytes);
 
         let mut m = self;
-        let new_offset_isize = (m.offset.as_usize() as isize)
+        let current_offset = m.byte_offset().as_usize();
+        let new_offset_isize = (current_offset as isize)
             .checked_add(bytes)
             .expect("ManagedPtr::offset overflow");
 
         if new_offset_isize < 0 {
             panic!(
                 "ManagedPtr::offset: negative result (offset={}, bytes={})",
-                m.offset.as_usize(),
-                bytes
+                current_offset, bytes
             );
         }
 
-        m.offset = ByteOffset(new_offset_isize as usize);
+        let new_offset = ByteOffset(new_offset_isize as usize);
+        let packed_offset = Self::pack_offset(&m.origin, m._value, new_offset);
+        m.flags = Self::with_unmanaged_inline_offset_flag(
+            m.flags,
+            matches!(m.origin, PointerOrigin::Unmanaged)
+                && packed_offset.as_usize() == new_offset.as_usize(),
+        );
+        m.offset = packed_offset;
         m._value = m
             ._value
             .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().offset(bytes)) });
@@ -474,7 +579,10 @@ impl<'gc> ManagedPtr<'gc> {
 
     pub fn with_stack_origin(mut self, slot_index: StackSlotIndex, _offset: ByteOffset) -> Self {
         self.validate_magic();
+        let byte_offset = self.byte_offset();
         self.origin = PointerOrigin::Stack(slot_index);
+        self.offset = Self::pack_offset(&self.origin, self._value, byte_offset);
+        self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, false);
         self
     }
 
@@ -485,7 +593,7 @@ impl<'gc> ManagedPtr<'gc> {
         // A canonical null ManagedPtr MUST have origin Unmanaged, offset 0, AND no cached address.
         // We also check for non-canonical nulls (like Heap(None)) for robustness.
         match &self.origin {
-            PointerOrigin::Unmanaged => self.offset == ByteOffset::ZERO && self._value.is_none(),
+            PointerOrigin::Unmanaged => self._value.is_none(),
             PointerOrigin::Heap(o) => o.0.is_none(),
             _ => false,
         }
@@ -524,7 +632,7 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
                     None
                 } else {
                     // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
-                    NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+                    NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
                 }
             }
             #[cfg(feature = "multithreading")]
@@ -539,7 +647,7 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
                     None
                 } else {
                     // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
-                    NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+                    NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
                 }
             }
             _ => {

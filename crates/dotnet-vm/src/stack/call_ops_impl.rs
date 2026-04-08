@@ -117,7 +117,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                         Some(ByteOffset(0)),
                     );
                     self.evaluation_stack
-                        .set_slot_at(argument_base, StackValue::ManagedPtr(managed_ptr));
+                        .set_slot_at(argument_base, StackValue::ManagedPtr(managed_ptr.into()));
                 }
             }
         }

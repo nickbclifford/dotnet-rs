@@ -211,18 +211,21 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
     );
     let m_val = ctx.pop();
     match m_val {
-        StackValue::ManagedPtr(mut m) => {
-            m = m.with_inner_type(target_type);
-            ctx.push(StackValue::ManagedPtr(m));
+        StackValue::ManagedPtr(m) => {
+            let m = m.with_inner_type(target_type);
+            ctx.push(StackValue::ManagedPtr(m.into()));
         }
         StackValue::ObjectRef(o) => {
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                o.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
-                target_type,
-                o.0.map(|_| o),
-                false,
-                Some(ByteOffset(0)),
-            )));
+            ctx.push(StackValue::ManagedPtr(
+                ManagedPtr::new(
+                    o.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
+                    target_type,
+                    o.0.map(|_| o),
+                    false,
+                    Some(ByteOffset(0)),
+                )
+                .into(),
+            ));
         }
         rest => {
             let m = rest.as_ptr();
@@ -306,7 +309,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
         offset_base,
     );
     m = m.with_origin(origin);
-    ctx.push(StackValue::ManagedPtr(m));
+    ctx.push(StackValue::ManagedPtr(m.into()));
     StepResult::Continue
 }
 
@@ -375,10 +378,10 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
             // because read_unaligned returns ManagedPtr with void/unknown type.
-            if let StackValue::ManagedPtr(mut m) = v {
+            if let StackValue::ManagedPtr(m) = v {
                 let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
-                m = m.with_inner_type(target_type);
-                ctx.push(StackValue::ManagedPtr(m));
+                let m = m.with_inner_type(target_type);
+                ctx.push(StackValue::ManagedPtr(m.into()));
             } else {
                 ctx.push(v);
             }

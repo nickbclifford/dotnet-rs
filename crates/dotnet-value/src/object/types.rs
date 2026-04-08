@@ -121,10 +121,10 @@ impl<'gc> CTSValue<'gc> {
             Value(UInt64(i)) => StackValue::Int64(i as i64),
             Value(NativeInt(i)) => StackValue::NativeInt(i),
             Value(NativeUInt(i)) => StackValue::NativeInt(i as isize),
-            Value(Pointer(p)) => StackValue::ManagedPtr(p),
+            Value(Pointer(p)) => StackValue::ManagedPtr(p.into()),
             Value(Float32(f)) => StackValue::NativeFloat(f as f64),
             Value(Float64(f)) => StackValue::NativeFloat(f),
-            Value(TypedRef(p, t)) => StackValue::TypedRef(p, t),
+            Value(TypedRef(p, t)) => StackValue::TypedRef(p.into(), t),
             Value(Struct(s)) => StackValue::ValueType(s),
             Ref(o) => StackValue::ObjectRef(o),
         }

@@ -147,3 +147,156 @@
 - Use `crates/dotnet-benchmarks/baselines/phase0/baseline.json` as the baseline reference for Step `1a` performance comparisons.
 - If instrumentation perturbation blocks interpretation in later steps, reduce per-op instrumentation overhead (e.g., category/signature classification cost) while keeping counters functionally equivalent.
 ---
+## Session: 2026-04-08T12:00:00-05:00
+### Context
+- Phase/Step: Phase 1 / Step 1a (StackValue footprint reduction)
+- Goal: Reduce `StackValue` hot-path footprint via indirection for large byref variants, add compile-time size guards, and record benchmark impact.
+### Actions Taken
+- Read `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/GC_AND_MEMORY_SAFETY.md`, `CHECKLIST.md`, `REVIEW.md`, and all step-relevant files (`stack_value.rs`, `object/types.rs`, `pointer/mod.rs`, plus downstream call sites).
+- Implemented boxed indirection for stack byref variants:
+  - added `StackManagedPtr` wrapper (`Box<ManagedPtr>`) in `crates/dotnet-value/src/stack_value.rs`,
+  - changed `StackValue::ManagedPtr` and `StackValue::TypedRef` to store `StackManagedPtr`,
+  - updated constructors/arithmetic/pointer access paths to preserve semantics.
+- Updated tracing/representation plumbing:
+  - added `Collect` impl for `StackManagedPtr`,
+  - updated `StackValue` GC tracing to trace wrapped pointers,
+  - updated `CTSValue::into_stack` mappings for pointer/typedref values.
+- Updated serialization-adjacent and byref consumers across workspace to construct/deconstruct the new `StackValue` representation (`.into()` / `.into_inner()` conversions) in resolver, runtime-memory, pinvoke, intrinsics, VM instruction handlers, and call setup.
+- Added `crates/dotnet-value/tests/layout_sizes.rs`:
+  - compile-time assertions (`const` asserts) for `size_of`/`align_of` of `StackValue`, `ManagedPtr`, and `PointerOrigin`,
+  - config-aware expected sizes for debug/memory-validation vs optimized non-validation builds.
+- Updated `CHECKLIST.md` Step `1a` status/tasks to completed.
+- Ran required verification:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran step benchmarks before and after change:
+  - before: `cargo bench -p dotnet-benchmarks --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - before: `cargo bench -p dotnet-benchmarks --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - after: same two commands.
+### Findings
+- Layout impact (64-bit):
+  - `StackValue` release size reduced from `184` to `120` bytes (`-34.8%`),
+  - `StackValue` debug/default size is `128` bytes,
+  - `ManagedPtr` remained `168` (release) / `184` (debug or `memory-validation`),
+  - `PointerOrigin` remained `120` (release) / `128` (debug or `memory-validation`).
+- Benchmark impact (point estimates from Criterion run):
+  - `arithmetic`: before `602.67 ms`, after `534.48 ms` (`-11.31%`).
+  - `json`: before `337.19 ms`, after `311.44 ms` (`-7.64%`).
+- Comparison vs Phase 0 stored baseline medians (`baseline.json`):
+  - `arithmetic`: `585.06 ms` -> `534.48 ms` (`-8.64%`).
+  - `json`: `312.11 ms` -> `311.44 ms` (`-0.21%`, effectively neutral/slightly improved).
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `1b` (ManagedPtr compaction), now that `StackValue` size is reduced and guarded by compile-time assertions.
+- As part of Step `1b`, remove the existing pre-existing release warning in `pointer/serde.rs` (`OBJECT_MAGIC` import) to keep bench runs warning-clean.
+---
+## Session: 2026-04-08T12:37:42-05:00
+### Context
+- Phase/Step: Phase 1 / Step 1b (ManagedPtr compaction)
+- Goal: Compact `ManagedPtr`/`PointerOrigin` layout, preserve pointer serialization and `'gc` safety, and record pointer-heavy benchmark impact.
+### Actions Taken
+- Read `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/GC_AND_MEMORY_SAFETY.md`, `CHECKLIST.md`, `REVIEW.md`, and step-relevant files in `dotnet-value` and `dotnet-utils`.
+- Added `ManagedByteOffset(u32)` in `crates/dotnet-utils/src/newtypes.rs` and re-exported it from `dotnet-utils`.
+- Refactored `ManagedPtr` in `crates/dotnet-value/src/pointer/mod.rs`:
+  - replaced `pinned: bool` with packed `flags: u8`,
+  - stored compact `ManagedByteOffset` for managed origins,
+  - kept unmanaged full-width correctness by falling back to `_value` for absolute addresses when offset exceeds `u32`,
+  - updated constructors/accessors (`byte_offset`, `is_pinned`, `with_origin`, `with_stack_origin`, `offset`, etc.).
+- Compacted `PointerOrigin` in `crates/dotnet-value/src/pointer/origin.rs`:
+  - `Static(TypeDescription, GenericLookup)` -> `Static(Arc<StaticMetadata>)`,
+  - `Transient(Object)` -> `Transient(Box<Object>)`,
+  - added helper constructors/accessors (`new_static`, `new_transient`, `static_parts`).
+- Updated pointer serialization paths in `crates/dotnet-value/src/pointer/serde.rs`:
+  - switched to `self.byte_offset()` instead of raw stored field,
+  - adjusted static origin round-trip to use `Arc<StaticMetadata>`,
+  - fixed pre-existing warning by tightening `OBJECT_MAGIC` import cfg.
+- Updated downstream call sites:
+  - transient origin creators in `crates/dotnet-intrinsics-unsafe/src/lib.rs` and `crates/dotnet-vm/src/instructions/objects/mod.rs`,
+  - static origin pattern matches in `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs`.
+- Updated tests and layout guards:
+  - pointer static-origin assertions in `crates/dotnet-value/src/pointer/tests.rs`,
+  - feature-aware size assertions in `crates/dotnet-value/tests/layout_sizes.rs`.
+- Updated docs/status:
+  - marked Step `1b` completed in `CHECKLIST.md`,
+  - recorded Step `1b` implementation and measurements in `REVIEW.md`.
+- Ran required verification:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+  - `cargo test -p dotnet-value -- --nocapture`
+- Ran pointer-heavy benchmarks:
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+### Findings
+- Layout impact (64-bit):
+  - default release: `ManagedPtr 168 -> 72` (`-57.14%`), `PointerOrigin 120 -> 24` (`-80.00%`),
+  - default debug: `ManagedPtr 184 -> 80` (`-56.52%`), `PointerOrigin 128 -> 24` (`-81.25%`),
+  - no-default: `ManagedPtr 72` (debug) / `64` (release), `PointerOrigin 16`.
+- Benchmark medians vs Phase 0 baseline (`baseline.json`):
+  - `gc`: `433.05 ms -> 441.66 ms` (`+1.99%`),
+  - `dispatch`: `794.17 ms -> 741.26 ms` (`-6.66%`),
+  - `json`: `312.11 ms -> 324.99 ms` (`+4.13%`), with Criterion run-level comparison reporting no significant change (`p=0.38`).
+- Pointer serde and round-trip behavior remained passing in `dotnet-value` test suite.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `1c` (Object header compaction).
+- If Step `1c` uses `json` as an indicator workload, re-run `json` with longer Criterion windows to reduce variance before attributing small regressions.
+---
+## Session: 2026-04-08T12:52:29-05:00
+### Context
+- Phase/Step: Phase 1 / Step 1c (Object header compaction)
+- Goal: Compact `ObjectInner` header metadata while preserving cross-arena safety and validation semantics.
+### Actions Taken
+- Read `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/GC_AND_MEMORY_SAFETY.md`, `CHECKLIST.md`, `REVIEW.md`, and step-relevant files (`crates/dotnet-value/src/object/mod.rs`, `crates/dotnet-value/src/validation.rs`, `crates/dotnet-runtime-memory/src/heap.rs`, plus owner-id consumers in `dotnet-runtime-memory` and `dotnet-vm`).
+- Refactored `ObjectInner` layout in `crates/dotnet-value/src/object/mod.rs`:
+  - gated `magic` field to `any(feature = "memory-validation", debug_assertions)`,
+  - gated `owner_id` field to `any(feature = "multithreading", feature = "memory-validation")`,
+  - added `ObjectInner::new(storage, owner_id)` and `ObjectInner::owner_id()` accessors,
+  - documented owner-id invariants and added `with_magic_for_tests` helper for corruption tests.
+- Updated all direct owner/magic consumers to use accessors:
+  - `crates/dotnet-value/src/object/mod.rs` (trace path, serialization read/write, tests),
+  - `crates/dotnet-value/src/pointer/serde.rs`,
+  - `crates/dotnet-runtime-memory/src/access.rs`,
+  - `crates/dotnet-vm/src/stack/context.rs`.
+- Added zero-cost compile-time guard in `crates/dotnet-value/src/validation.rs` asserting `ValidationTag` is zero-sized in non-validation release builds.
+- Extended `crates/dotnet-value/tests/layout_sizes.rs` with `ObjectInner` size/alignment assertions (validation and non-validation configurations).
+- Updated status/docs:
+  - marked Step `1c` completed in `CHECKLIST.md`,
+  - replaced REVIEW Step `1c` section with implemented changes and measurements.
+- Ran required and step-relevant verification:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+  - targeted validation checks:
+    - `cargo test -p dotnet-value --features memory-validation -- --nocapture`
+    - `cargo test -p dotnet-value --no-default-features --features memory-validation -- --nocapture --test-threads=1`
+- Ran allocation benchmark before/after:
+  - before: `cargo bench -p dotnet-benchmarks --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - after: same command post-change.
+- Collected release object-layout probes (default, no-default, memory-validation) via temporary path-based `dotnet-value` size probe crates.
+### Findings
+- Object header/layout impact (64-bit release):
+  - default: `ObjectInner 136`, `HeapStorage 128`, overhead `+8` (unchanged),
+  - no-default: `ObjectInner 128`, `HeapStorage 128`, overhead `+0` (previously implied `+8`),
+  - default + memory-validation: `ObjectInner 152`, `HeapStorage 136`, overhead `+16`.
+- Per-object memory impact:
+  - single-threaded non-validation release path saves `8` bytes per object (`136 -> 128`, `-5.88%`).
+- Allocation benchmark (`gc`) point estimate:
+  - before `450.04 ms`, after `445.56 ms` (`-0.99%`),
+  - Criterion reported no statistically significant change (`p=0.11`).
+- Baseline comparison (Phase 0 median):
+  - `gc`: `433.05 ms -> 445.56 ms` (`+2.89%`) on this run.
+- Cross-arena and validation behavior remained passing across default/no-default test suites and targeted memory-validation test runs.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `2a` (evaluation stack reallocation elimination).
+- If allocation-pressure variance remains noisy, rerun `gc` with longer Criterion windows before attributing sub-2% deltas.
+---

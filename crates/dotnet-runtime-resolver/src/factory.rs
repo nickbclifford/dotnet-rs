@@ -257,7 +257,7 @@ where
                 Ok(CTSValue::Value(NativeUInt(convert_num(data)?)))
             }
             BaseType::ValuePointer(_modifiers, inner) => match data {
-                StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p))),
+                StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p.into_inner()))),
                 _ => {
                     let ptr = convert_num::<usize>(data)?;
                     let inner_type = if let Some(source) = inner {
@@ -336,7 +336,7 @@ where
                             data
                         )));
                     };
-                    return Ok(CTSValue::Value(TypedRef(p, t)));
+                    return Ok(CTSValue::Value(TypedRef(p.into_inner(), t)));
                 }
 
                 if let StackValue::ValueType(mut o) = data {

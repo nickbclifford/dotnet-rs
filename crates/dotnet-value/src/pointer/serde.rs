@@ -11,10 +11,7 @@ use sptr::Strict;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
-use crate::{
-    ArenaId,
-    object::{OBJECT_MAGIC, ObjectPtr},
-};
+use crate::{ArenaId, object::ObjectPtr};
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::ThreadSafeLock;
 
@@ -161,11 +158,7 @@ impl<'gc> ManagedPtr<'gc> {
                         {
                             if !lock_ptr.is_null() {
                                 let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
-                                unsafe {
-                                    (*inner_ptr)
-                                        .magic
-                                        .validate(OBJECT_MAGIC, "ManagedPtr::read (CrossArena)")
-                                };
+                                unsafe { (*inner_ptr).validate_magic() };
                             }
                         }
 
@@ -215,10 +208,7 @@ impl<'gc> ManagedPtr<'gc> {
                             {
                                 Ok(ManagedPtrInfo {
                                     address: raw_ptr,
-                                    origin: PointerOrigin::Static(
-                                        meta.type_desc.clone(),
-                                        meta.generics.clone(),
-                                    ),
+                                    origin: PointerOrigin::Static(meta.clone()),
                                     offset: ByteOffset(slot_offset),
                                 })
                             } else {
@@ -283,11 +273,12 @@ impl<'gc> ManagedPtr<'gc> {
         self.validate_magic();
 
         let ptr_size = ObjectRef::SIZE;
+        let byte_offset = self.byte_offset();
 
         let (word0, word1) = match &self.origin {
             PointerOrigin::Stack(slot_idx) => {
                 let w0: usize =
-                    1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (self.offset.as_usize() << 33);
+                    1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (byte_offset.as_usize() << 33);
                 let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
                 (w0, w1)
             }
@@ -296,28 +287,22 @@ impl<'gc> ManagedPtr<'gc> {
                     Some(h) => gc_arena::Gc::as_ptr(h).expose_addr(),
                     None => 0,
                 };
-                let w1 = self.offset.as_usize();
+                let w1 = byte_offset.as_usize();
                 (w0, w1)
             }
-            PointerOrigin::Static(type_desc, generics) => {
-                let key = (type_desc.clone(), generics.clone());
+            PointerOrigin::Static(metadata) => {
+                let key = (metadata.type_desc.clone(), metadata.generics.clone());
                 let id = *super::static_dedup_map().entry(key).or_insert_with(|| {
                     let new_id =
                         super::NEXT_STATIC_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    super::static_registry().insert(
-                        new_id,
-                        std::sync::Arc::new(super::StaticMetadata {
-                            type_desc: type_desc.clone(),
-                            generics: generics.clone(),
-                        }),
-                    );
+                    super::static_registry().insert(new_id, metadata.clone());
                     new_id
                 });
 
                 let w0: usize = 7
                     | (1 << 3)
                     | ((id as usize & 0xFFFFFFFF) << 6)
-                    | (self.offset.as_usize() << 38);
+                    | (byte_offset.as_usize() << 38);
                 let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
                 (w0, w1)
             }
@@ -331,13 +316,13 @@ impl<'gc> ManagedPtr<'gc> {
                 let w0: usize = ptr.as_ptr().expose_addr() | 5;
                 // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
                 // This avoids dereferencing the pointer during deserialization/GC.
-                let offset_u32 = self.offset.as_usize() & 0xFFFFFFFF;
+                let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
                 let tid_u32 = (tid.as_u64() & 0xFFFFFFFF) as usize;
                 let w1 = offset_u32 | (tid_u32 << 32);
                 (w0, w1)
             }
             PointerOrigin::Transient(_) => {
-                let w0: usize = 7 | (2 << 3) | (self.offset.as_usize() << 6);
+                let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
                 let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
                 (w0, w1)
             }
@@ -363,9 +348,9 @@ impl<'gc> ManagedPtr<'gc> {
 
             if !matches!(self_origin_norm, PointerOrigin::Unmanaged) {
                 assert_eq!(
-                    recovered.offset, self.offset,
+                    recovered.offset, byte_offset,
                     "ManagedPtr serialization round-trip failed: offset mismatch. Original: {:?}, Recovered: {:?}",
-                    self.offset, recovered.offset
+                    byte_offset, recovered.offset
                 );
             }
         }

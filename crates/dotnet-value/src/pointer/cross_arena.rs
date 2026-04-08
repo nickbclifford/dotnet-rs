@@ -16,13 +16,14 @@ impl<'gc> ManagedPtr<'gc> {
         tid: ArenaId,
         offset: ByteOffset,
     ) -> Self {
+        let origin = PointerOrigin::CrossArenaObjectRef(ptr, tid);
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
             inner_type,
-            origin: PointerOrigin::CrossArenaObjectRef(ptr, tid),
-            offset,
-            pinned: false,
+            offset: Self::pack_offset(&origin, value, offset),
+            origin,
+            flags: 0,
             _marker: std::marker::PhantomData,
         }
     }

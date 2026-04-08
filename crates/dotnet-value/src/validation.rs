@@ -16,6 +16,9 @@ unsafe impl<'gc> gc_arena::Collect<'gc> for ValidationTag {
     fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
 }
 
+#[cfg(all(not(feature = "memory-validation"), not(debug_assertions)))]
+const _: () = assert!(core::mem::size_of::<ValidationTag>() == 0);
+
 impl ValidationTag {
     #[inline(always)]
     pub fn new(_magic: u64) -> Self {

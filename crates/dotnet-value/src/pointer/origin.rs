@@ -1,10 +1,11 @@
 use crate::{
     StackSlotIndex,
     object::{Object, ObjectRef},
+    pointer::StaticMetadata,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup};
 use gc_arena::{Collect, collect::Trace};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 #[cfg(feature = "multithreading")]
 use crate::{ArenaId, object::ObjectPtr};
@@ -18,12 +19,12 @@ use arbitrary::Arbitrary;
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
     Stack(StackSlotIndex),
-    Static(TypeDescription, GenericLookup),
+    Static(Arc<StaticMetadata>),
     Unmanaged,
     #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
     /// A value type resident on the evaluation stack (transient).
-    Transient(Object<'gc>),
+    Transient(Box<Object<'gc>>),
 }
 
 #[cfg(feature = "fuzzing")]
@@ -33,13 +34,16 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
         match variant {
             0 => Ok(Self::Heap(u.arbitrary()?)),
             1 => Ok(Self::Stack(u.arbitrary()?)),
-            2 => Ok(Self::Static(u.arbitrary()?, u.arbitrary()?)),
+            2 => Ok(Self::Static(Arc::new(StaticMetadata {
+                type_desc: u.arbitrary()?,
+                generics: u.arbitrary()?,
+            }))),
             3 => Ok(Self::Unmanaged),
             #[cfg(feature = "multithreading")]
             4 => Ok(Self::CrossArenaObjectRef(u.arbitrary()?, u.arbitrary()?)),
             #[cfg(not(feature = "multithreading"))]
             4 => Ok(Self::Unmanaged),
-            5 => Ok(Self::Transient(u.arbitrary()?)),
+            5 => Ok(Self::Transient(Box::new(u.arbitrary()?))),
             _ => unreachable!(),
         }
     }
@@ -63,6 +67,30 @@ unsafe impl<'gc> Collect<'gc> for PointerOrigin<'gc> {
 }
 
 impl<'gc> PointerOrigin<'gc> {
+    pub fn new_static(type_desc: TypeDescription, generics: GenericLookup) -> Self {
+        Self::Static(Arc::new(StaticMetadata {
+            type_desc,
+            generics,
+        }))
+    }
+
+    pub fn new_transient(obj: Object<'gc>) -> Self {
+        Self::Transient(Box::new(obj))
+    }
+
+    pub fn static_metadata(&self) -> Option<&StaticMetadata> {
+        if let Self::Static(metadata) = self {
+            Some(metadata.as_ref())
+        } else {
+            None
+        }
+    }
+
+    pub fn static_parts(&self) -> Option<(&TypeDescription, &GenericLookup)> {
+        self.static_metadata()
+            .map(|metadata| (&metadata.type_desc, &metadata.generics))
+    }
+
     pub fn is_null(&self) -> bool {
         match self {
             Self::Unmanaged => true,
@@ -75,7 +103,7 @@ impl<'gc> PointerOrigin<'gc> {
         match self {
             Self::Heap(_) => 0,
             Self::Stack(_) => 1,
-            Self::Static(_, _) => 2,
+            Self::Static(_) => 2,
             Self::Unmanaged => 3,
             #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(_, _) => 4,

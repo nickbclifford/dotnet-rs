@@ -246,7 +246,7 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     pub fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
-        self.push(StackValue::ManagedPtr(value));
+        self.push(StackValue::ManagedPtr(value.into()));
     }
 
     pub fn push_ptr(

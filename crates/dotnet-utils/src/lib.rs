@@ -12,7 +12,9 @@ pub mod gc;
 pub mod newtypes;
 pub mod sync;
 
-pub use newtypes::{ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex};
+pub use newtypes::{
+    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, ManagedByteOffset, StackSlotIndex,
+};
 
 pub struct DebugStr(pub String);
 

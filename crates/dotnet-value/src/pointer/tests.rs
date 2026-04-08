@@ -228,7 +228,10 @@ fn test_managed_ptr_serialization_roundtrip() {
             info.address,
             nonnull_from_exposed_addr(static_addr + static_offset)
         );
-        assert_eq!(info.origin, PointerOrigin::Static(type_desc, generics));
+        let (resolved_type, resolved_generics) =
+            info.origin.static_parts().expect("expected static origin");
+        assert_eq!(resolved_type, &type_desc);
+        assert_eq!(resolved_generics, &generics);
         assert_eq!(info.offset.as_usize(), static_offset);
 
         // 5. CrossArenaObjectRef (if enabled)

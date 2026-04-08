@@ -278,7 +278,7 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
     }
 
     let ptr = unsafe { base_ptr.offset((index as usize * element_size) as isize) };
-    ctx.push(StackValue::ManagedPtr(ptr));
+    ctx.push(StackValue::ManagedPtr(ptr.into()));
     StepResult::Continue
 }
 

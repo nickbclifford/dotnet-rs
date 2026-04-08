@@ -116,6 +116,37 @@ impl SubAssign<ByteOffset> for ByteOffset {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub struct ManagedByteOffset(pub u32);
+
+impl ManagedByteOffset {
+    pub const ZERO: Self = ManagedByteOffset(0);
+
+    pub fn new(offset: u32) -> Self {
+        ManagedByteOffset(offset)
+    }
+
+    pub fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl From<u32> for ManagedByteOffset {
+    fn from(offset: u32) -> Self {
+        ManagedByteOffset(offset)
+    }
+}
+
+impl TryFrom<usize> for ManagedByteOffset {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(offset: usize) -> Result<Self, Self::Error> {
+        Ok(ManagedByteOffset(u32::try_from(offset)?))
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
+#[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct FieldIndex(pub usize);
 
 impl Display for FieldIndex {

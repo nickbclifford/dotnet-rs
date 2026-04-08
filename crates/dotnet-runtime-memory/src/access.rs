@@ -96,7 +96,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         if let Some(h) = target.0 {
             // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
             // does not move or mutate the object.
-            let ref_tid = unsafe { (*h.as_ptr()).owner_id };
+            let ref_tid = unsafe { (*h.as_ptr()).owner_id() };
             if ref_tid != self.arena_id {
                 self.buffer
                     .push((ref_tid, gc_arena::Gc::as_ptr(h) as usize));
@@ -143,7 +143,7 @@ impl<'gc> MemoryOwner<'gc> {
             Self::Local(r) => {
                 // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
                 // does not move or mutate the object.
-                r.0.map(|h| unsafe { (*h.as_ptr()).owner_id })
+                r.0.map(|h| unsafe { (*h.as_ptr()).owner_id() })
                     .unwrap_or(ArenaId(0))
             }
             #[cfg(feature = "multithreading")]
@@ -1377,7 +1377,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             .unwrap_or(TypeDescription::new(ResolutionS::NULL, std::mem::zeroed()));
 
                         let m = ManagedPtr::from_info_full(info, actual_desc, false);
-                        StackValue::ManagedPtr(m)
+                        StackValue::ManagedPtr(m.into())
                     }
                 },
                 LayoutManager::Field(flm) => {
@@ -1545,8 +1545,8 @@ mod tests {
     use dotnet_utils::gc::{ArenaHandle, GCHandle, ThreadSafeLock};
     #[cfg(feature = "multithreading")]
     use dotnet_value::{
-        CLRString, ValidationTag,
-        object::{HeapStorage, OBJECT_MAGIC, ObjectInner, ObjectPtr},
+        CLRString,
+        object::{HeapStorage, ObjectInner, ObjectPtr},
     };
     #[cfg(feature = "multithreading")]
     use gc_arena::{Arena, Rootable};
@@ -1575,11 +1575,10 @@ mod tests {
     #[test]
     fn cross_arena_heap_storage_access_supports_non_static_gc_lifetime() {
         let arena_id = ArenaId::new(4043);
-        let lock = Box::new(ThreadSafeLock::new(ObjectInner {
-            magic: ValidationTag::new(OBJECT_MAGIC),
-            owner_id: arena_id,
-            storage: HeapStorage::Str(CLRString::from("cross-arena-lifetime")),
-        }));
+        let lock = Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(CLRString::from("cross-arena-lifetime")),
+            arena_id,
+        )));
         let raw: *const ThreadSafeLock<ObjectInner<'static>> = Box::leak(lock);
         // SAFETY: `raw` comes from `Box::leak`, is non-null, and remains valid
         // for the duration of this test until reconstructed with `Box::from_raw`.

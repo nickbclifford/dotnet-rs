@@ -1,4 +1,6 @@
-use crate::{ArenaId, ValidationTag, ptr_common::PointerLike};
+use crate::{ArenaId, ptr_common::PointerLike};
+#[cfg(any(feature = "memory-validation", debug_assertions, test))]
+use crate::ValidationTag;
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
@@ -48,38 +50,69 @@ pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 #[collect(no_drop)]
 #[repr(C)]
 pub struct ObjectInner<'gc> {
-    pub magic: ValidationTag,
-    pub owner_id: ArenaId,
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
+    magic: ValidationTag,
+    /// Arena owner used by:
+    /// - write-barrier cross-arena reference recording
+    /// - tagged cross-arena serialization (`Tag 5`)
+    /// - `memory-validation` arena-consistency checks
+    ///
+    /// Invariant: immutable after construction and safe for lock-free reads.
+    #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+    owner_id: ArenaId,
     pub storage: HeapStorage<'gc>,
 }
 
 impl<'gc> ObjectInner<'gc> {
+    #[inline]
+    pub fn new(storage: HeapStorage<'gc>, owner_id: ArenaId) -> Self {
+        #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
+        let _ = owner_id;
+
+        Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: ValidationTag::new(OBJECT_MAGIC),
+            #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+            owner_id,
+            storage,
+        }
+    }
+
+    #[inline(always)]
+    pub fn owner_id(&self) -> ArenaId {
+        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+        return self.owner_id;
+        #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
+        return ArenaId::new(1);
+    }
+
     pub fn validate_arena_id(&self) {
         #[cfg(feature = "memory-validation")]
         {
+            let owner_id = self.owner_id();
             let current_id = get_current_thread_id();
-            if self.owner_id != current_id && self.owner_id != ArenaId::INVALID {
+            if owner_id != current_id && owner_id != ArenaId::INVALID {
                 // In multithreading mode, this might be a valid cross-arena reference.
                 // But it's unsafe to borrow it directly without coordination.
                 #[cfg(not(feature = "multithreading"))]
                 panic!(
                     "Arena mismatch: object owned by {:?}, but accessed by {:?}",
-                    self.owner_id, current_id
+                    owner_id, current_id
                 );
 
                 #[cfg(feature = "multithreading")]
                 {
-                    if !is_valid_cross_arena_ref(self.owner_id) {
+                    if !is_valid_cross_arena_ref(owner_id) {
                         panic!(
                             "Dangling cross-arena reference: arena {:?} is no longer valid (thread exited?)",
-                            self.owner_id
+                            owner_id
                         );
                     }
 
-                    if is_stw_in_progress(self.owner_id) && get_currently_tracing().is_none() {
+                    if is_stw_in_progress(owner_id) && get_currently_tracing().is_none() {
                         panic!(
                             "Uncoordinated cross-arena access during STW GC: object owned by {:?}, accessed by {:?}",
-                            self.owner_id, current_id
+                            owner_id, current_id
                         );
                     }
                 }
@@ -88,12 +121,29 @@ impl<'gc> ObjectInner<'gc> {
     }
 
     pub fn validate_magic(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
         self.magic.validate(OBJECT_MAGIC, "ObjectInner");
     }
 
     pub fn validate_resurrection_invariants(&self) {
         self.validate_magic();
         self.storage.validate_resurrection_invariants();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_magic_for_tests(
+        storage: HeapStorage<'gc>,
+        owner_id: ArenaId,
+        magic: u64,
+    ) -> Self {
+        let mut inner = Self::new(storage, owner_id);
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        {
+            inner.magic = ValidationTag::new(magic);
+        }
+        #[cfg(not(any(feature = "memory-validation", debug_assertions)))]
+        let _ = magic;
+        inner
     }
 }
 
@@ -159,7 +209,7 @@ impl ObjectPtr {
         // to the interior `ObjectInner` without acquiring the lock.  Reading
         // `owner_id` is safe because it is written once at construction and is
         // thereafter immutable.
-        unsafe { (*self.0.as_ref().as_ptr()).owner_id }
+        unsafe { (*self.0.as_ref().as_ptr()).owner_id() }
     }
 
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
@@ -222,7 +272,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // so the owning arena cannot be freed.  `owner_id` is
                     // immutable after construction, so reading it without the
                     // lock is safe even under concurrent observation.
-                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
+                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != tracing_id {
                         let ptr = Gc::as_ptr(h) as usize;
                         if !record_cross_arena_ref(owner_id, ptr) {
@@ -334,11 +384,7 @@ impl<'gc> ObjectRef<'gc> {
 
         let h = Gc::new(
             &gc,
-            ThreadSafeLock::new(ObjectInner {
-                magic: ValidationTag::new(OBJECT_MAGIC),
-                owner_id,
-                storage: value,
-            }),
+            ThreadSafeLock::new(ObjectInner::new(value, owner_id)),
         );
 
         #[cfg(feature = "fuzzing")]
@@ -407,9 +453,7 @@ impl<'gc> ObjectRef<'gc> {
                         // the owning arena — and therefore this allocation — has not
                         // been freed.  Alignment was verified by `is_multiple_of` above.
                         let inner = &*(*ptr).as_ptr();
-                        inner
-                            .magic
-                            .validate(OBJECT_MAGIC, "ObjectRef::read (CrossArena)");
+                        inner.validate_magic();
                     }
 
                     return ObjectRef(Some(Gc::from_ptr(ptr)));
@@ -440,7 +484,7 @@ impl<'gc> ObjectRef<'gc> {
                     // guarantees `source` contains a live `Gc` pointer, so the
                     // allocation is valid for the lifetime of this call.
                     let inner = &*(*ptr).as_ptr();
-                    inner.magic.validate(OBJECT_MAGIC, "ObjectRef::read");
+                    inner.validate_magic();
                 }
 
                 // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
@@ -479,7 +523,7 @@ impl<'gc> ObjectRef<'gc> {
                     let lock_ptr = Gc::as_ptr(s);
                     // DANGER: speculative read of owner_id.
                     // Safe because owner_id is immutable after object creation.
-                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
+                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != ArenaId::INVALID {
                         // Verify with a lease that the arena is still alive before
                         // we encode its ID into the tagged reference.
@@ -761,11 +805,8 @@ mod tests {
             register_arena(arena_id, Arc::new(AtomicBool::new(false)));
 
             // We need a pointer to something that looks like an ObjectInner to pass magic check.
-            let inner = ObjectInner {
-                magic: ValidationTag::new(OBJECT_MAGIC),
-                owner_id: arena_id,
-                storage: HeapStorage::Str(crate::string::CLRString::from("test")),
-            };
+            let inner =
+                ObjectInner::new(HeapStorage::Str(crate::string::CLRString::from("test")), arena_id);
             let lock = Gc::new(mc, ThreadSafeLock::new(inner));
             let lock_ptr = Gc::as_ptr(lock) as usize;
 
@@ -859,11 +900,11 @@ mod tests {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         // Build an ObjectInner with a deliberately wrong magic value.
-        let corrupt = Box::new(ThreadSafeLock::new(ObjectInner {
-            magic: ValidationTag::new(0xDEAD_BEEF_1234_5678),
-            owner_id: ArenaId::INVALID,
-            storage: HeapStorage::Str(crate::string::CLRString::from("bad")),
-        }));
+        let corrupt = Box::new(ThreadSafeLock::new(ObjectInner::with_magic_for_tests(
+            HeapStorage::Str(crate::string::CLRString::from("bad")),
+            ArenaId::INVALID,
+            0xDEAD_BEEF_1234_5678,
+        )));
         let raw = Box::into_raw(corrupt);
 
         // SAFETY: `raw` was produced by `Box::into_raw` immediately above and
@@ -902,11 +943,10 @@ mod tests {
         unregister_arena(foreign_arena);
 
         // Build an ObjectInner with a valid magic but a foreign owner_id.
-        let obj = Box::new(ThreadSafeLock::new(ObjectInner {
-            magic: ValidationTag::new(OBJECT_MAGIC),
-            owner_id: foreign_arena,
-            storage: HeapStorage::Str(crate::string::CLRString::from("cross")),
-        }));
+        let obj = Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(crate::string::CLRString::from("cross")),
+            foreign_arena,
+        )));
         let raw = Box::into_raw(obj);
 
         // SAFETY: `raw` was produced by `Box::into_raw` immediately above and

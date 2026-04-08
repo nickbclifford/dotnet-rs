@@ -76,7 +76,7 @@ pub(crate) fn ptr_info<
             dotnet_utils::ByteOffset(*p as usize),
         )),
         dotnet_value::StackValue::ValueType(obj) => Ok((
-            PointerOrigin::Transient(obj.clone()),
+            PointerOrigin::new_transient(obj.clone()),
             dotnet_utils::ByteOffset(0),
         )),
         _ => Err(ctx.throw_by_name_with_message(

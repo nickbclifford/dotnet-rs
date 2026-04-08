@@ -314,13 +314,16 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
             if !ptr.is_null() {
                 let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                 drop(data);
-                ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                    NonNull::new(ptr),
-                    target_type,
-                    Some(ObjectRef(Some(*h))),
-                    false,
-                    Some(ByteOffset(0)),
-                )));
+                ctx.push(StackValue::ManagedPtr(
+                    ManagedPtr::new(
+                        NonNull::new(ptr),
+                        target_type,
+                        Some(ObjectRef(Some(*h))),
+                        false,
+                        Some(ByteOffset(0)),
+                    )
+                    .into(),
+                ));
                 return StepResult::Continue;
             }
         }
@@ -351,13 +354,16 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                         )
                     };
                     drop(data);
-                    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                        NonNull::new(ptr),
-                        target_type,
-                        Some(ObjectRef(Some(*h))),
-                        false,
-                        Some(offset),
-                    )));
+                    ctx.push(StackValue::ManagedPtr(
+                        ManagedPtr::new(
+                            NonNull::new(ptr),
+                            target_type,
+                            Some(ObjectRef(Some(*h))),
+                            false,
+                            Some(offset),
+                        )
+                        .into(),
+                    ));
                     return StepResult::Continue;
                 }
             }
@@ -425,7 +431,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         };
         let managed_ptr = MP::from_info_full(info, target_type, false);
 
-        ctx.push(StackValue::ManagedPtr(managed_ptr));
+        ctx.push(StackValue::ManagedPtr(managed_ptr.into()));
     } else {
         // Regular field - use parent's origin + field offset
         let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
@@ -434,11 +440,9 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
             origin,
             offset: field_offset,
         };
-        ctx.push(StackValue::ManagedPtr(ManagedPtr::from_info_full(
-            info,
-            target_type,
-            false,
-        )));
+        ctx.push(StackValue::ManagedPtr(
+            ManagedPtr::from_info_full(info, target_type, false).into(),
+        ));
     }
 
     StepResult::Continue
@@ -471,14 +475,17 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     let t = vm_try!(res_ctx.get_field_type(field.clone()));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    ctx.push(StackValue::ManagedPtr(ManagedPtr::new_static(
-        NonNull::new(field_ptr),
-        target_type,
-        field.parent,
-        static_lookup,
-        false,
-        field_layout.position,
-    )));
+    ctx.push(StackValue::ManagedPtr(
+        ManagedPtr::new_static(
+            NonNull::new(field_ptr),
+            target_type,
+            field.parent,
+            static_lookup,
+            false,
+            field_layout.position,
+        )
+        .into(),
+    ));
 
     StepResult::Continue
 }

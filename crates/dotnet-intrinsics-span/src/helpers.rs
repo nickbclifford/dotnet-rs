@@ -121,7 +121,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
         ctx.write_unaligned(
             span_ptr.origin().clone(),
             span_ptr.byte_offset() + ref_field.position,
-            StackValue::ManagedPtr(managed.clone()),
+            StackValue::ManagedPtr(managed.clone().into()),
             &ref_field.layout,
         )
     }
