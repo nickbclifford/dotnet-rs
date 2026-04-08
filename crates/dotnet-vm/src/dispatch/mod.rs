@@ -8,6 +8,8 @@ use crate::{
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
+#[cfg(feature = "bench-instrumentation")]
+use dotnet_metrics::OpcodeCategory;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
@@ -113,6 +115,12 @@ impl<'gc> ExecutionEngine<'gc> {
             ip,
             i.opcode()
         );
+
+        #[cfg(feature = "bench-instrumentation")]
+        self.stack
+            .shared
+            .metrics
+            .record_opcode_dispatch(opcode_category_for(i));
 
         let mut ctx = self.ves_context(gc);
         let res = InstructionRegistry::dispatch(&mut ctx, i);
@@ -328,5 +336,74 @@ impl<'gc> ExecutionEngine<'gc> {
             // All targets called.
             ctx.handle_return()
         }
+    }
+}
+
+#[cfg(feature = "bench-instrumentation")]
+fn opcode_category_for(instr: &Instruction) -> OpcodeCategory {
+    use OpcodeCategory::*;
+    let name = format!("{:?}", instr);
+
+    if name.starts_with("Add")
+        || name.starts_with("Sub")
+        || name.starts_with("Mul")
+        || name.starts_with("Div")
+        || name.starts_with("Rem")
+        || name.starts_with("Neg")
+        || name.starts_with("And")
+        || name.starts_with("Or")
+        || name.starts_with("Xor")
+        || name.starts_with("Shift")
+    {
+        Arithmetic
+    } else if name.starts_with("Call")
+        || name.starts_with("Jump")
+        || name.starts_with("NewObject")
+        || name.starts_with("LoadFunction")
+    {
+        Calls
+    } else if name.starts_with("Compare") {
+        Comparisons
+    } else if name.starts_with("Convert") {
+        Conversions
+    } else if name.starts_with("Throw") || name.starts_with("EndFinally") || name == "Rethrow" {
+        Exceptions
+    } else if name.starts_with("Branch") || name.starts_with("Leave") || name.starts_with("Return")
+    {
+        Flow
+    } else if name.starts_with("LoadIndirect")
+        || name.starts_with("StoreIndirect")
+        || name.starts_with("Initialize")
+        || name.starts_with("Copy")
+        || name.starts_with("LoadToken")
+        || name.starts_with("LoadLength")
+        || name.starts_with("LocalMemory")
+    {
+        Memory
+    } else if name.starts_with("LoadElement")
+        || name.starts_with("StoreElement")
+        || name.starts_with("LoadField")
+        || name.starts_with("StoreField")
+        || name.starts_with("LoadStaticField")
+        || name.starts_with("StoreStaticField")
+        || name.starts_with("NewArray")
+        || name.starts_with("Box")
+        || name.starts_with("Unbox")
+        || name.starts_with("CastClass")
+        || name.starts_with("IsInstance")
+    {
+        Objects
+    } else if name.starts_with("LoadMethodPointer") || name.starts_with("LoadVirtualMethodPointer")
+    {
+        Reflection
+    } else if name.starts_with("Load")
+        || name.starts_with("Store")
+        || name.starts_with("Duplicate")
+        || name == "Pop"
+        || name == "NoOperation"
+    {
+        Stack
+    } else {
+        Other
     }
 }

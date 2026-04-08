@@ -69,6 +69,10 @@ fuzzing = [
     "dotnet-utils/fuzzing",
     "dotnet-pinvoke/fuzzing",
 ]
+bench-instrumentation = [
+    "dotnet-metrics/bench-instrumentation",
+    "dotnet-vm-ops/bench-instrumentation",
+]
 
 [build-dependencies]
 dotnet-macros-core = { workspace = true }

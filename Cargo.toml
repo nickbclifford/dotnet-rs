@@ -21,6 +21,7 @@ members = [
     "crates/dotnet-exceptions",
     "crates/dotnet-pinvoke",
     "crates/dotnet-cli",
+    "crates/dotnet-benchmarks",
     "crates/dotnet-macros",
     "crates/dotnet-macros-core",
 ]

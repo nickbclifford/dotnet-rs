@@ -3,5 +3,9 @@ name = "dotnet-metrics"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+bench-instrumentation = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

@@ -14,6 +14,8 @@ use dotnet_value::{
 };
 use gc_arena::Collect;
 use std::ptr::NonNull;
+#[cfg(feature = "bench-instrumentation")]
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
 #[collect(require_static)]
@@ -104,7 +106,11 @@ impl<'gc> EvaluationStack<'gc> {
         let old_capacity = self.stack.capacity();
         self.stack.push(value);
         if self.stack.capacity() > old_capacity {
+            #[cfg(feature = "bench-instrumentation")]
+            let fixup_start = Instant::now();
             self.update_stack_pointers();
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_eval_stack_reallocation(fixup_start.elapsed());
         }
     }
 

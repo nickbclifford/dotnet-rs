@@ -1,0 +1,733 @@
+{
+  "captured_at_utc": "2026-04-08T02:31:58.313897+00:00",
+  "instrumentation": {
+    "instrumented_default": {
+      "arithmetic": {
+        "bench": {
+          "eval_stack_pointer_fixup_count": 2,
+          "eval_stack_pointer_fixup_total_ns": 611,
+          "eval_stack_reallocations": 2,
+          "intrinsic_call_total": 0,
+          "intrinsic_calls_by_signature": {},
+          "opcode_dispatch_by_category": {
+            "arithmetic": 2000000,
+            "calls": 0,
+            "comparisons": 400002,
+            "conversions": 800001,
+            "exceptions": 0,
+            "flow": 200005,
+            "memory": 0,
+            "objects": 0,
+            "other": 0,
+            "reflection": 0,
+            "stack": 5000014
+          },
+          "opcode_dispatch_total": 8400022
+        },
+        "cache_stats": {
+          "assembly_method": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "assembly_type": {
+            "hit_rate": 0.9696969696969697,
+            "hits": 96,
+            "misses": 3,
+            "size": 3
+          },
+          "has_finalizer": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "hierarchy": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "instance_field_layout": {
+            "hit_rate": 0.9411764705882353,
+            "hits": 16,
+            "misses": 1,
+            "size": 1
+          },
+          "intrinsic": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "intrinsic_field": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "method_info": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "overrides": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_fields": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_methods": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_types": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 17
+          },
+          "static_field_layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "value_type": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "vmt": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          }
+        },
+        "current_external_allocated": 0,
+        "current_gc_allocated": 0,
+        "gc_pause_count": 1187,
+        "gc_pause_total_us": 1687,
+        "lock_contention_count": 0,
+        "lock_contention_total_us": 0
+      },
+      "dispatch": {
+        "bench": {
+          "eval_stack_pointer_fixup_count": 3,
+          "eval_stack_pointer_fixup_total_ns": 600,
+          "eval_stack_reallocations": 3,
+          "intrinsic_call_total": 0,
+          "intrinsic_calls_by_signature": {},
+          "opcode_dispatch_by_category": {
+            "arithmetic": 800000,
+            "calls": 200010,
+            "comparisons": 200001,
+            "conversions": 200000,
+            "exceptions": 0,
+            "flow": 400015,
+            "memory": 200000,
+            "objects": 200006,
+            "other": 0,
+            "reflection": 0,
+            "stack": 4200035
+          },
+          "opcode_dispatch_total": 6400067
+        },
+        "cache_stats": {
+          "assembly_method": {
+            "hit_rate": 0.9999872732045275,
+            "hits": 4400109,
+            "misses": 56,
+            "size": 56
+          },
+          "assembly_type": {
+            "hit_rate": 0.815625,
+            "hits": 261,
+            "misses": 59,
+            "size": 59
+          },
+          "has_finalizer": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "hierarchy": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "instance_field_layout": {
+            "hit_rate": 0.8181818181818182,
+            "hits": 18,
+            "misses": 4,
+            "size": 4
+          },
+          "intrinsic": {
+            "hit_rate": 0.4,
+            "hits": 2,
+            "misses": 3,
+            "size": 3
+          },
+          "intrinsic_field": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 2,
+            "size": 2
+          },
+          "method_info": {
+            "hit_rate": 0.999960002199879,
+            "hits": 200003,
+            "misses": 8,
+            "size": 8
+          },
+          "overrides": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_fields": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_methods": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_types": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 17
+          },
+          "static_field_layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 3,
+            "size": 3
+          },
+          "value_type": {
+            "hit_rate": 0.9999700040494534,
+            "hits": 200021,
+            "misses": 6,
+            "size": 6
+          },
+          "vmt": {
+            "hit_rate": 0.999985,
+            "hits": 199997,
+            "misses": 3,
+            "size": 3
+          }
+        },
+        "current_external_allocated": 0,
+        "current_gc_allocated": 0,
+        "gc_pause_count": 877,
+        "gc_pause_total_us": 3282,
+        "lock_contention_count": 0,
+        "lock_contention_total_us": 0
+      },
+      "gc": {
+        "bench": {
+          "eval_stack_pointer_fixup_count": 3,
+          "eval_stack_pointer_fixup_total_ns": 571,
+          "eval_stack_reallocations": 3,
+          "intrinsic_call_total": 0,
+          "intrinsic_calls_by_signature": {},
+          "opcode_dispatch_by_category": {
+            "arithmetic": 175000,
+            "calls": 90000,
+            "comparisons": 100001,
+            "conversions": 0,
+            "exceptions": 0,
+            "flow": 200005,
+            "memory": 0,
+            "objects": 175000,
+            "other": 0,
+            "reflection": 0,
+            "stack": 1440014
+          },
+          "opcode_dispatch_total": 2180020
+        },
+        "cache_stats": {
+          "assembly_method": {
+            "hit_rate": 0.9999846153846154,
+            "hits": 1754973,
+            "misses": 27,
+            "size": 27
+          },
+          "assembly_type": {
+            "hit_rate": 0.9999895113513401,
+            "hits": 2860205,
+            "misses": 30,
+            "size": 30
+          },
+          "has_finalizer": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "hierarchy": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "instance_field_layout": {
+            "hit_rate": 0.9999909097933342,
+            "hits": 220015,
+            "misses": 2,
+            "size": 2
+          },
+          "intrinsic": {
+            "hit_rate": 0.9999777777777777,
+            "hits": 44999,
+            "misses": 1,
+            "size": 1
+          },
+          "intrinsic_field": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 3,
+            "size": 3
+          },
+          "method_info": {
+            "hit_rate": 0.999966667037033,
+            "hits": 89998,
+            "misses": 3,
+            "size": 3
+          },
+          "overrides": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_fields": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_methods": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_types": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 17
+          },
+          "static_field_layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "value_type": {
+            "hit_rate": 0.9999833338888704,
+            "hits": 180003,
+            "misses": 3,
+            "size": 3
+          },
+          "vmt": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          }
+        },
+        "current_external_allocated": 0,
+        "current_gc_allocated": 0,
+        "gc_pause_count": 253,
+        "gc_pause_total_us": 3647,
+        "lock_contention_count": 0,
+        "lock_contention_total_us": 0
+      },
+      "generics": {
+        "bench": {
+          "eval_stack_pointer_fixup_count": 4,
+          "eval_stack_pointer_fixup_total_ns": 841,
+          "eval_stack_reallocations": 4,
+          "intrinsic_call_total": 0,
+          "intrinsic_calls_by_signature": {},
+          "opcode_dispatch_by_category": {
+            "arithmetic": 11420192,
+            "calls": 2560010,
+            "comparisons": 2580066,
+            "conversions": 3860065,
+            "exceptions": 0,
+            "flow": 5260082,
+            "memory": 2560000,
+            "objects": 2600148,
+            "other": 0,
+            "reflection": 2,
+            "stack": 47621157
+          },
+          "opcode_dispatch_total": 78461722
+        },
+        "cache_stats": {
+          "assembly_method": {
+            "hit_rate": 0.9999977391768535,
+            "hits": 84039997,
+            "misses": 190,
+            "size": 190
+          },
+          "assembly_type": {
+            "hit_rate": 0.9999993981364652,
+            "hits": 111320849,
+            "misses": 67,
+            "size": 67
+          },
+          "has_finalizer": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "hierarchy": {
+            "hit_rate": 0.9999996031746031,
+            "hits": 5039998,
+            "misses": 2,
+            "size": 2
+          },
+          "instance_field_layout": {
+            "hit_rate": 0.6666666666666666,
+            "hits": 20,
+            "misses": 10,
+            "size": 10
+          },
+          "intrinsic": {
+            "hit_rate": 0.4,
+            "hits": 2,
+            "misses": 3,
+            "size": 3
+          },
+          "intrinsic_field": {
+            "hit_rate": 0.9999250056245782,
+            "hits": 40000,
+            "misses": 3,
+            "size": 3
+          },
+          "layout": {
+            "hit_rate": 0.9999960937911982,
+            "hits": 2560017,
+            "misses": 10,
+            "size": 10
+          },
+          "method_info": {
+            "hit_rate": 0.9999937500292967,
+            "hits": 2559996,
+            "misses": 16,
+            "size": 16
+          },
+          "overrides": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_fields": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_methods": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 2
+          },
+          "shared_runtime_types": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 17
+          },
+          "static_field_layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 5,
+            "size": 5
+          },
+          "value_type": {
+            "hit_rate": 0.9999995370380474,
+            "hits": 15120026,
+            "misses": 7,
+            "size": 7
+          },
+          "vmt": {
+            "hit_rate": 0.9999992063492064,
+            "hits": 2519998,
+            "misses": 2,
+            "size": 2
+          }
+        },
+        "current_external_allocated": 0,
+        "current_gc_allocated": 0,
+        "gc_pause_count": 13191,
+        "gc_pause_total_us": 66716,
+        "lock_contention_count": 0,
+        "lock_contention_total_us": 0
+      },
+      "json": {
+        "bench": {
+          "eval_stack_pointer_fixup_count": 4,
+          "eval_stack_pointer_fixup_total_ns": 601,
+          "eval_stack_reallocations": 4,
+          "intrinsic_call_total": 0,
+          "intrinsic_calls_by_signature": {},
+          "opcode_dispatch_by_category": {
+            "arithmetic": 84600,
+            "calls": 120900,
+            "comparisons": 164101,
+            "conversions": 300,
+            "exceptions": 0,
+            "flow": 193806,
+            "memory": 300,
+            "objects": 908,
+            "other": 0,
+            "reflection": 0,
+            "stack": 1111230
+          },
+          "opcode_dispatch_total": 1676145
+        },
+        "cache_stats": {
+          "assembly_method": {
+            "hit_rate": 0.9999799449516023,
+            "hits": 5534655,
+            "misses": 111,
+            "size": 111
+          },
+          "assembly_type": {
+            "hit_rate": 0.9943145925457991,
+            "hits": 14166,
+            "misses": 81,
+            "size": 81
+          },
+          "has_finalizer": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "hierarchy": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "instance_field_layout": {
+            "hit_rate": 0.9411764705882353,
+            "hits": 16,
+            "misses": 1,
+            "size": 1
+          },
+          "intrinsic": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "intrinsic_field": {
+            "hit_rate": 0.9983361064891847,
+            "hits": 600,
+            "misses": 1,
+            "size": 1
+          },
+          "layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 3,
+            "size": 3
+          },
+          "method_info": {
+            "hit_rate": 0.997504159733777,
+            "hits": 1199,
+            "misses": 3,
+            "size": 3
+          },
+          "overrides": {
+            "hit_rate": 0.5,
+            "hits": 1,
+            "misses": 1,
+            "size": 1
+          },
+          "shared_runtime_fields": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_methods": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 0
+          },
+          "shared_runtime_types": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 0,
+            "size": 17
+          },
+          "static_field_layout": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "value_type": {
+            "hit_rate": 0.0,
+            "hits": 0,
+            "misses": 1,
+            "size": 1
+          },
+          "vmt": {
+            "hit_rate": 0.999983291562239,
+            "hits": 119698,
+            "misses": 2,
+            "size": 2
+          }
+        },
+        "current_external_allocated": 0,
+        "current_gc_allocated": 0,
+        "gc_pause_count": 225,
+        "gc_pause_total_us": 806,
+        "lock_contention_count": 0,
+        "lock_contention_total_us": 0
+      }
+    }
+  },
+  "results": {
+    "default": {
+      "arithmetic": {
+        "mean_ns": 585597219.2,
+        "median_ns": 585056975.5,
+        "p95_ns": 592758673.5
+      },
+      "dispatch": {
+        "mean_ns": 792679524.8,
+        "median_ns": 794170145.5,
+        "p95_ns": 801892188.3499999
+      },
+      "gc": {
+        "mean_ns": 436088871.6,
+        "median_ns": 433049308.0,
+        "p95_ns": 891602497.85
+      },
+      "generics": {
+        "mean_ns": 18872559818.3,
+        "median_ns": 18754463663.0,
+        "p95_ns": 19304494015.15
+      },
+      "json": {
+        "mean_ns": 311727218.1,
+        "median_ns": 312110069.0,
+        "p95_ns": 629794897.1
+      }
+    },
+    "instrumented_default": {
+      "arithmetic": {
+        "mean_ns": 1036284279.1,
+        "median_ns": 1034818521.0,
+        "p95_ns": 1051392449.05
+      },
+      "dispatch": {
+        "mean_ns": 1205213168.9,
+        "median_ns": 1200717942.5,
+        "p95_ns": 1223981944.75
+      },
+      "gc": {
+        "mean_ns": 609240153.0,
+        "median_ns": 608923494.5,
+        "p95_ns": 613576219.65
+      },
+      "generics": {
+        "mean_ns": 23284099377.6,
+        "median_ns": 23229218598.5,
+        "p95_ns": 23733307827.1
+      },
+      "json": {
+        "mean_ns": 412895340.7,
+        "median_ns": 412761822.0,
+        "p95_ns": 831418889.5999999
+      }
+    },
+    "no_default": {
+      "arithmetic": {
+        "mean_ns": 573176375.9,
+        "median_ns": 574235634.0,
+        "p95_ns": 579165159.7
+      },
+      "dispatch": {
+        "mean_ns": 767074403.9,
+        "median_ns": 764010808.5,
+        "p95_ns": 779105869.7
+      },
+      "gc": {
+        "mean_ns": 429451905.7,
+        "median_ns": 428876868.75,
+        "p95_ns": 873360816.35
+      },
+      "generics": {
+        "mean_ns": 17974782975.4,
+        "median_ns": 17920702781.5,
+        "p95_ns": 18185101043.25
+      },
+      "json": {
+        "mean_ns": 313966053.25,
+        "median_ns": 312954796.5,
+        "p95_ns": 643601358.25
+      }
+    }
+  },
+  "schema_version": 1,
+  "workloads": [
+    "arithmetic",
+    "dispatch",
+    "gc",
+    "generics",
+    "json"
+  ]
+}

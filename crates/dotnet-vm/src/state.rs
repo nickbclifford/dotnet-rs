@@ -5,7 +5,7 @@ use crate::{
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_metrics::{CacheSizes, CacheStats, RuntimeMetrics};
+use dotnet_metrics::{CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot};
 use dotnet_pinvoke::NativeLibraries;
 use dotnet_runtime_memory::HeapManager;
 use dotnet_tracer::{TraceLevel, Tracer};
@@ -215,7 +215,15 @@ impl SharedGlobalState {
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {
-        self.metrics.cache_statistics(CacheSizes {
+        self.metrics.cache_statistics(self.cache_sizes())
+    }
+
+    pub fn get_runtime_metrics_snapshot(&self) -> RuntimeMetricsSnapshot {
+        self.metrics.snapshot(self.get_cache_stats())
+    }
+
+    fn cache_sizes(&self) -> CacheSizes {
+        CacheSizes {
             layout_size: self.caches.layout_cache.len(),
             vmt_size: self.caches.vmt_cache.len(),
             intrinsic_size: self.caches.intrinsic_cache.len(),
@@ -249,7 +257,7 @@ impl SharedGlobalState {
             shared_runtime_fields_size: self.shared_runtime_fields.len(),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_size: 0,
-        })
+        }
     }
 
     pub fn resolution_shared(self: &Arc<Self>) -> Arc<crate::context::ResolutionShared> {

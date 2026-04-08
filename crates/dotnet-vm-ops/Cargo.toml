@@ -26,3 +26,4 @@ fuzzing = [
     "dotnet-types/fuzzing",
     "dotnet-utils/fuzzing",
 ]
+bench-instrumentation = ["dotnet-vm-data/bench-instrumentation"]

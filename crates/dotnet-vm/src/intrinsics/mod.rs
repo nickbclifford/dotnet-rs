@@ -367,6 +367,24 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
         &format!("{}.{}", method.parent.type_name(), method.method().name)
     );
 
+    #[cfg(feature = "bench-instrumentation")]
+    {
+        let arity = if method.method().signature.instance {
+            method.method().signature.parameters.len() + 1
+        } else {
+            method.method().signature.parameters.len()
+        };
+        let signature = format!(
+            "{}::{}#{}",
+            method.parent.type_name(),
+            method.method().name,
+            arity
+        );
+        ctx.shared()
+            .metrics
+            .record_intrinsic_signature_call(signature);
+    }
+
     if let Some(metadata) = classify_intrinsic(
         method.clone(),
         ctx.loader(),

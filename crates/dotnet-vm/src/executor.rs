@@ -11,7 +11,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_exceptions::ManagedException;
-use dotnet_metrics::CacheStats;
+use dotnet_metrics::{CacheStats, RuntimeMetricsSnapshot};
 use dotnet_tracer::Tracer;
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::{
@@ -100,6 +100,10 @@ impl Executor {
         self.shared.get_cache_stats()
     }
 
+    pub fn get_runtime_metrics_snapshot(&self) -> RuntimeMetricsSnapshot {
+        self.shared.get_runtime_metrics_snapshot()
+    }
+
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
@@ -159,6 +163,8 @@ impl Executor {
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
+        #[cfg(feature = "bench-instrumentation")]
+        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         #[cfg(feature = "memory-validation")]
         let thread_id = self.thread_id;
         self.with_arena(|arena| {
@@ -189,6 +195,8 @@ impl Executor {
 
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
+        #[cfg(feature = "bench-instrumentation")]
+        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         let result = loop {
             if self.shared.abort_requested.load(Ordering::Relaxed) {
                 break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(

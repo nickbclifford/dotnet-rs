@@ -5,6 +5,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "bench-instrumentation")]
+use std::{collections::BTreeMap, sync::Mutex};
+
 #[derive(Debug, Serialize, Clone, Copy)]
 pub struct CacheStat {
     pub hits: u64,
@@ -101,6 +104,65 @@ pub struct CacheSizes {
     pub shared_runtime_fields_size: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcodeCategory {
+    Arithmetic,
+    Calls,
+    Comparisons,
+    Conversions,
+    Exceptions,
+    Flow,
+    Memory,
+    Objects,
+    Reflection,
+    Stack,
+    Other,
+}
+
+impl OpcodeCategory {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Arithmetic => "arithmetic",
+            Self::Calls => "calls",
+            Self::Comparisons => "comparisons",
+            Self::Conversions => "conversions",
+            Self::Exceptions => "exceptions",
+            Self::Flow => "flow",
+            Self::Memory => "memory",
+            Self::Objects => "objects",
+            Self::Reflection => "reflection",
+            Self::Stack => "stack",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeMetricsSnapshot {
+    pub gc_pause_total_us: u64,
+    pub gc_pause_count: u64,
+    pub lock_contention_count: u64,
+    pub lock_contention_total_us: u64,
+    pub current_gc_allocated: u64,
+    pub current_external_allocated: u64,
+    pub cache_stats: CacheStats,
+    #[cfg(feature = "bench-instrumentation")]
+    pub bench: BenchInstrumentationSnapshot,
+}
+
+#[cfg(feature = "bench-instrumentation")]
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchInstrumentationSnapshot {
+    pub eval_stack_reallocations: u64,
+    pub eval_stack_pointer_fixup_count: u64,
+    pub eval_stack_pointer_fixup_total_ns: u64,
+    pub opcode_dispatch_total: u64,
+    pub opcode_dispatch_by_category: BTreeMap<String, u64>,
+    pub intrinsic_call_total: u64,
+    pub intrinsic_calls_by_signature: BTreeMap<String, u64>,
+}
+
 /// Metrics counters.
 ///
 /// All counters use `Ordering::Relaxed` because they are independent and do not
@@ -144,6 +206,40 @@ pub struct RuntimeMetrics {
     pub overrides_cache_misses: AtomicU64,
     pub method_info_cache_hits: AtomicU64,
     pub method_info_cache_misses: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    eval_stack_reallocations: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    eval_stack_pointer_fixup_count: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    eval_stack_pointer_fixup_total_ns: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_total: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_arithmetic: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_calls: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_comparisons: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_conversions: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_exceptions: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_flow: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_memory: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_objects: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_reflection: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_stack: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    opcode_dispatch_other: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    intrinsic_call_total: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    intrinsic_calls_by_signature: Mutex<BTreeMap<String, u64>>,
 }
 
 impl RuntimeMetrics {
@@ -285,6 +381,84 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_eval_stack_reallocation(&self, pointer_fixup_duration: Duration) {
+        self.eval_stack_reallocations
+            .fetch_add(1, Ordering::Relaxed);
+        self.eval_stack_pointer_fixup_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.eval_stack_pointer_fixup_total_ns
+            .fetch_add(pointer_fixup_duration.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_eval_stack_reallocation(&self, _pointer_fixup_duration: Duration) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_opcode_dispatch(&self, category: OpcodeCategory) {
+        self.opcode_dispatch_total.fetch_add(1, Ordering::Relaxed);
+        match category {
+            OpcodeCategory::Arithmetic => {
+                self.opcode_dispatch_arithmetic
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Calls => {
+                self.opcode_dispatch_calls.fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Comparisons => {
+                self.opcode_dispatch_comparisons
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Conversions => {
+                self.opcode_dispatch_conversions
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Exceptions => {
+                self.opcode_dispatch_exceptions
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Flow => {
+                self.opcode_dispatch_flow.fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Memory => {
+                self.opcode_dispatch_memory.fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Objects => {
+                self.opcode_dispatch_objects.fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Reflection => {
+                self.opcode_dispatch_reflection
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Stack => {
+                self.opcode_dispatch_stack.fetch_add(1, Ordering::Relaxed);
+            }
+            OpcodeCategory::Other => {
+                self.opcode_dispatch_other.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_opcode_dispatch(&self, _category: OpcodeCategory) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn record_intrinsic_signature_call(&self, signature: impl Into<String>) {
+        self.intrinsic_call_total.fetch_add(1, Ordering::Relaxed);
+        let mut map = self
+            .intrinsic_calls_by_signature
+            .lock()
+            .expect("intrinsic metric lock poisoned");
+        *map.entry(signature.into()).or_insert(0) += 1;
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    pub fn record_intrinsic_signature_call(&self, _signature: impl Into<String>) {}
+
     pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
         CacheStats {
             layout: self.stat(
@@ -361,6 +535,88 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn snapshot(&self, cache_stats: CacheStats) -> RuntimeMetricsSnapshot {
+        RuntimeMetricsSnapshot {
+            gc_pause_total_us: self.gc_pause_total_us.load(Ordering::Relaxed),
+            gc_pause_count: self.gc_pause_count.load(Ordering::Relaxed),
+            lock_contention_count: self.lock_contention_count.load(Ordering::Relaxed),
+            lock_contention_total_us: self.lock_contention_total_us.load(Ordering::Relaxed),
+            current_gc_allocated: self.current_gc_allocated.load(Ordering::Relaxed),
+            current_external_allocated: self.current_external_allocated.load(Ordering::Relaxed),
+            cache_stats,
+            #[cfg(feature = "bench-instrumentation")]
+            bench: self.bench_snapshot(),
+        }
+    }
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn bench_snapshot(&self) -> BenchInstrumentationSnapshot {
+        let mut opcode_dispatch_by_category = BTreeMap::new();
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Arithmetic.as_key().to_string(),
+            self.opcode_dispatch_arithmetic.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Calls.as_key().to_string(),
+            self.opcode_dispatch_calls.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Comparisons.as_key().to_string(),
+            self.opcode_dispatch_comparisons.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Conversions.as_key().to_string(),
+            self.opcode_dispatch_conversions.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Exceptions.as_key().to_string(),
+            self.opcode_dispatch_exceptions.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Flow.as_key().to_string(),
+            self.opcode_dispatch_flow.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Memory.as_key().to_string(),
+            self.opcode_dispatch_memory.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Objects.as_key().to_string(),
+            self.opcode_dispatch_objects.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Reflection.as_key().to_string(),
+            self.opcode_dispatch_reflection.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Stack.as_key().to_string(),
+            self.opcode_dispatch_stack.load(Ordering::Relaxed),
+        );
+        opcode_dispatch_by_category.insert(
+            OpcodeCategory::Other.as_key().to_string(),
+            self.opcode_dispatch_other.load(Ordering::Relaxed),
+        );
+        let intrinsic_calls_by_signature = self
+            .intrinsic_calls_by_signature
+            .lock()
+            .expect("intrinsic metric lock poisoned")
+            .clone();
+
+        BenchInstrumentationSnapshot {
+            eval_stack_reallocations: self.eval_stack_reallocations.load(Ordering::Relaxed),
+            eval_stack_pointer_fixup_count: self
+                .eval_stack_pointer_fixup_count
+                .load(Ordering::Relaxed),
+            eval_stack_pointer_fixup_total_ns: self
+                .eval_stack_pointer_fixup_total_ns
+                .load(Ordering::Relaxed),
+            opcode_dispatch_total: self.opcode_dispatch_total.load(Ordering::Relaxed),
+            opcode_dispatch_by_category,
+            intrinsic_call_total: self.intrinsic_call_total.load(Ordering::Relaxed),
+            intrinsic_calls_by_signature,
+        }
+    }
+
     fn stat(&self, hits: u64, misses: u64, size: usize) -> CacheStat {
         let total = hits + misses;
         let hit_rate = if total == 0 {
@@ -375,4 +631,44 @@ impl RuntimeMetrics {
             size,
         }
     }
+}
+
+#[cfg(feature = "bench-instrumentation")]
+std::thread_local! {
+    static ACTIVE_RUNTIME_METRICS: std::cell::Cell<Option<*const RuntimeMetrics>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub struct ActiveRuntimeMetricsGuard {
+    previous: Option<*const RuntimeMetrics>,
+}
+
+#[cfg(feature = "bench-instrumentation")]
+impl ActiveRuntimeMetricsGuard {
+    pub fn enter(metrics: &RuntimeMetrics) -> Self {
+        let previous = ACTIVE_RUNTIME_METRICS.with(|slot| {
+            let prev = slot.get();
+            slot.set(Some(metrics as *const RuntimeMetrics));
+            prev
+        });
+        Self { previous }
+    }
+}
+
+#[cfg(feature = "bench-instrumentation")]
+impl Drop for ActiveRuntimeMetricsGuard {
+    fn drop(&mut self) {
+        ACTIVE_RUNTIME_METRICS.with(|slot| slot.set(self.previous));
+    }
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_eval_stack_reallocation(pointer_fixup_duration: Duration) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_eval_stack_reallocation(pointer_fixup_duration);
+        }
+    });
 }

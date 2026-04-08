@@ -43,6 +43,7 @@ pub mod sync;
 mod tail_calls_tests;
 pub mod threading;
 
+pub use dotnet_metrics::RuntimeMetricsSnapshot;
 pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,

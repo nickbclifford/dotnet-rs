@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dotnet-metrics = { workspace = true, optional = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
@@ -15,3 +16,4 @@ default = ["multithreading"]
 multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]
 memory-validation = ["dotnet-value/memory-validation"]
 fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]
+bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumentation"]
