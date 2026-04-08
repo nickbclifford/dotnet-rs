@@ -4,7 +4,8 @@ include!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
 
 #[cfg(test)]
 mod tests {
-    const DISPATCH_TABLE: &str = include_str!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
+    const DISPATCH_SOURCE: &str =
+        include_str!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
 
     fn normalize_ws(input: &str) -> String {
         input.chars().filter(|c| !c.is_whitespace()).collect()
@@ -12,7 +13,7 @@ mod tests {
 
     #[test]
     fn dispatch_table_includes_representative_opcodes_per_category() {
-        let dispatch = normalize_ws(DISPATCH_TABLE);
+        let dispatch = normalize_ws(DISPATCH_SOURCE);
 
         // Golden checks: one representative opcode mapping per instruction category.
         let expected_mappings = [
@@ -44,5 +45,27 @@ mod tests {
                 "expected dispatch table to contain mapping: {mapping}"
             );
         }
+    }
+
+    #[test]
+    fn jump_table_dispatch_is_generated() {
+        let dispatch = normalize_ws(DISPATCH_SOURCE);
+
+        assert!(
+            dispatch.contains("pubfndispatch_jump_table<'gc,T:crate::stack::ops::VesOps<'gc>>("),
+            "expected generated source to include dispatch_jump_table function"
+        );
+        assert!(
+            dispatch.contains("matchinstr.opcode()"),
+            "expected jump-table dispatch to switch on opcode index"
+        );
+        assert!(
+            dispatch.contains("fndispatch_opcode_add<'gc,T:crate::stack::ops::VesOps<'gc>>("),
+            "expected jump-table wrapper for Add to be generated"
+        );
+        assert!(
+            dispatch.contains("dispatch_opcode_add::<T>"),
+            "expected jump-table to reference Add wrapper function"
+        );
     }
 }

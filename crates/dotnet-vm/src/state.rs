@@ -24,7 +24,10 @@ use dotnet_value::{
 use gc_arena::{Collect, collect::Trace};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, VecDeque},
+    env,
+    hash::Hash,
+    mem::size_of,
     sync::OnceLock,
 };
 
@@ -32,6 +35,131 @@ use std::{
 use dotnet_utils::sync::AtomicUsize;
 
 pub use crate::statics::StaticStorageManager;
+
+#[derive(Clone, Copy, Debug)]
+struct CachePolicy {
+    method_info_capacity: Option<usize>,
+    vmt_capacity: Option<usize>,
+    hierarchy_capacity: Option<usize>,
+    front_cache_enabled: bool,
+    front_cache_capacity: usize,
+}
+
+impl Default for CachePolicy {
+    fn default() -> Self {
+        Self {
+            method_info_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_METHOD_INFO"),
+            vmt_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_VMT"),
+            hierarchy_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_HIERARCHY"),
+            front_cache_enabled: parse_env_bool("DOTNET_FRONT_CACHE_ENABLED", false),
+            front_cache_capacity: parse_env_usize("DOTNET_FRONT_CACHE_CAPACITY").unwrap_or(128),
+        }
+    }
+}
+
+fn parse_env_usize(key: &str) -> Option<usize> {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+}
+
+fn parse_env_bool(key: &str, default: bool) -> bool {
+    match env::var(key) {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
+
+fn estimated_dashmap_bytes<K, V>(map: &DashMap<K, V>) -> u64
+where
+    K: Eq + Hash,
+{
+    (map.len() as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64)
+}
+
+fn insert_with_optional_capacity<K, V>(
+    map: &DashMap<K, V>,
+    key: K,
+    value: V,
+    capacity: Option<usize>,
+) where
+    K: Eq + Hash + Clone,
+{
+    if let Some(max_entries) = capacity {
+        if let Some(mut existing) = map.get_mut(&key) {
+            *existing = value;
+            return;
+        }
+
+        while map.len() >= max_entries {
+            let victim = map.iter().next().map(|entry| entry.key().clone());
+            if let Some(victim_key) = victim {
+                map.remove(&victim_key);
+            } else {
+                break;
+            }
+        }
+    }
+
+    map.insert(key, value);
+}
+
+#[derive(Default)]
+struct MethodInfoFrontCache {
+    entries: VecDeque<(MethodDescription, GenericLookup, Arc<MethodInfo<'static>>)>,
+}
+
+impl MethodInfoFrontCache {
+    fn get(
+        &mut self,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+    ) -> Option<Arc<MethodInfo<'static>>> {
+        let index = self
+            .entries
+            .iter()
+            .position(|(m, g, _)| m == method && g == generics)?;
+        let entry = self.entries.remove(index)?;
+        let value = Arc::clone(&entry.2);
+        self.entries.push_back(entry);
+        Some(value)
+    }
+
+    fn insert(
+        &mut self,
+        method: MethodDescription,
+        generics: GenericLookup,
+        value: Arc<MethodInfo<'static>>,
+        capacity: usize,
+    ) {
+        if capacity == 0 {
+            return;
+        }
+
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|(m, g, _)| m == &method && g == &generics)
+        {
+            self.entries.remove(index);
+        }
+
+        self.entries.push_back((method, generics, value));
+        while self.entries.len() > capacity {
+            self.entries.pop_front();
+        }
+    }
+}
+
+thread_local! {
+    static METHOD_INFO_FRONT_CACHE: RefCell<MethodInfoFrontCache> =
+        RefCell::new(MethodInfoFrontCache::default());
+}
 
 /// Grouped caches for type resolution and layout computation.
 /// This struct reduces the API surface area of ResolutionContext.
@@ -65,11 +193,13 @@ pub struct GlobalCaches {
     pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<MethodInfo<'static>>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
+    cache_policy: CachePolicy,
 }
 
 impl GlobalCaches {
     pub fn new(_loader: &AssemblyLoader, _tracer: &Tracer) -> Self {
         let intrinsic_registry = IntrinsicRegistry::initialize();
+        let cache_policy = CachePolicy::default();
         Self {
             layout_cache: DashMap::new(),
             instance_field_layout_cache: DashMap::new(),
@@ -83,7 +213,33 @@ impl GlobalCaches {
             overrides_cache: DashMap::new(),
             method_info_cache: DashMap::new(),
             intrinsic_registry,
+            cache_policy,
         }
+    }
+
+    pub fn front_cache_enabled(&self) -> bool {
+        self.cache_policy.front_cache_enabled
+    }
+
+    pub fn front_cache_capacity(&self) -> usize {
+        self.cache_policy.front_cache_capacity
+    }
+
+    pub fn set_vmt(
+        &self,
+        key: (MethodDescription, TypeDescription, GenericLookup),
+        value: MethodDescription,
+    ) {
+        insert_with_optional_capacity(&self.vmt_cache, key, value, self.cache_policy.vmt_capacity);
+    }
+
+    pub fn set_hierarchy(&self, key: (ConcreteType, ConcreteType), is_match: bool) {
+        insert_with_optional_capacity(
+            &self.hierarchy_cache,
+            key,
+            is_match,
+            self.cache_policy.hierarchy_capacity,
+        );
     }
 }
 
@@ -145,14 +301,56 @@ impl GlobalCaches {
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
     ) -> Result<MethodInfo<'static>, TypeResolutionError> {
+        if self.front_cache_enabled() {
+            if let Some(front_cached) =
+                METHOD_INFO_FRONT_CACHE.with(|cache| cache.borrow_mut().get(&method, generics))
+            {
+                shared.metrics.record_method_info_front_cache_hit();
+                shared.metrics.record_method_info_cache_hit();
+                return Ok((*front_cached).clone());
+            }
+            shared.metrics.record_method_info_front_cache_miss();
+        }
+
+        shared.metrics.record_method_info_key_clones(2);
         let key = (method.clone(), generics.clone());
         if let Some(entry) = self.method_info_cache.get(&key) {
             shared.metrics.record_method_info_cache_hit();
-            return Ok((**entry).clone());
+            let cached = Arc::clone(&entry);
+            drop(entry);
+            if self.front_cache_enabled() {
+                let (method_key, generic_key) = key;
+                METHOD_INFO_FRONT_CACHE.with(|cache| {
+                    cache.borrow_mut().insert(
+                        method_key,
+                        generic_key,
+                        Arc::clone(&cached),
+                        self.front_cache_capacity(),
+                    );
+                });
+            }
+            return Ok((*cached).clone());
         }
         shared.metrics.record_method_info_cache_miss();
-        let built = crate::build_method_info(method, generics, shared)?;
-        self.method_info_cache.insert(key, Arc::new(built.clone()));
+        let built = crate::build_method_info(method, generics, shared.clone())?;
+        let built_arc = Arc::new(built.clone());
+        insert_with_optional_capacity(
+            &self.method_info_cache,
+            key.clone(),
+            Arc::clone(&built_arc),
+            self.cache_policy.method_info_capacity,
+        );
+        if self.front_cache_enabled() {
+            shared.metrics.record_method_info_key_clones(2);
+            METHOD_INFO_FRONT_CACHE.with(|cache| {
+                cache.borrow_mut().insert(
+                    key.0,
+                    key.1,
+                    Arc::clone(&built_arc),
+                    self.front_cache_capacity(),
+                );
+            });
+        }
         Ok(built)
     }
 }
@@ -219,22 +417,39 @@ impl SharedGlobalState {
     }
 
     pub fn get_runtime_metrics_snapshot(&self) -> RuntimeMetricsSnapshot {
-        self.metrics.snapshot(self.get_cache_stats())
+        let cache_sizes = self.cache_sizes();
+        let cache_stats = self.metrics.cache_statistics(cache_sizes);
+        self.metrics.snapshot(cache_stats, cache_sizes)
     }
 
     fn cache_sizes(&self) -> CacheSizes {
         CacheSizes {
             layout_size: self.caches.layout_cache.len(),
+            layout_bytes: estimated_dashmap_bytes(&self.caches.layout_cache),
             vmt_size: self.caches.vmt_cache.len(),
+            vmt_bytes: estimated_dashmap_bytes(&self.caches.vmt_cache),
             intrinsic_size: self.caches.intrinsic_cache.len(),
+            intrinsic_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_cache),
             intrinsic_field_size: self.caches.intrinsic_field_cache.len(),
+            intrinsic_field_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_field_cache),
             hierarchy_size: self.caches.hierarchy_cache.len(),
+            hierarchy_bytes: estimated_dashmap_bytes(&self.caches.hierarchy_cache),
             static_field_layout_size: self.caches.static_field_layout_cache.len(),
+            static_field_layout_bytes: estimated_dashmap_bytes(
+                &self.caches.static_field_layout_cache,
+            ),
             instance_field_layout_size: self.caches.instance_field_layout_cache.len(),
+            instance_field_layout_bytes: estimated_dashmap_bytes(
+                &self.caches.instance_field_layout_cache,
+            ),
             value_type_size: self.caches.value_type_cache.len(),
+            value_type_bytes: estimated_dashmap_bytes(&self.caches.value_type_cache),
             has_finalizer_size: self.caches.has_finalizer_cache.len(),
+            has_finalizer_bytes: estimated_dashmap_bytes(&self.caches.has_finalizer_cache),
             overrides_size: self.caches.overrides_cache.len(),
+            overrides_bytes: estimated_dashmap_bytes(&self.caches.overrides_cache),
             method_info_size: self.caches.method_info_cache.len(),
+            method_info_bytes: estimated_dashmap_bytes(&self.caches.method_info_cache),
             assembly_type_info: (
                 self.loader.type_cache_hits.load(Ordering::Relaxed),
                 self.loader.type_cache_misses.load(Ordering::Relaxed),
@@ -250,13 +465,25 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_size: 0,
             #[cfg(feature = "multithreading")]
+            shared_runtime_types_bytes: estimated_dashmap_bytes(&self.shared_runtime_types),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_types_bytes: 0,
+            #[cfg(feature = "multithreading")]
             shared_runtime_methods_size: self.shared_runtime_methods.len(),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_size: 0,
             #[cfg(feature = "multithreading")]
+            shared_runtime_methods_bytes: estimated_dashmap_bytes(&self.shared_runtime_methods),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_methods_bytes: 0,
+            #[cfg(feature = "multithreading")]
             shared_runtime_fields_size: self.shared_runtime_fields.len(),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_size: 0,
+            #[cfg(feature = "multithreading")]
+            shared_runtime_fields_bytes: estimated_dashmap_bytes(&self.shared_runtime_fields),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_fields_bytes: 0,
         }
     }
 
@@ -335,17 +562,7 @@ unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
 impl<'gc> ArenaLocalState<'gc> {
     pub fn new(statics: Arc<StaticStorageManager>) -> Self {
         Self {
-            heap: HeapManager {
-                _all_objs: RefCell::new(BTreeMap::new()),
-                finalization_queue: RefCell::new(vec![]),
-                pending_finalization: RefCell::new(vec![]),
-                pinned_objects: RefCell::new(HashSet::new()),
-                gchandles: RefCell::new(vec![]),
-                processing_finalizer: Cell::new(false),
-                needs_full_collect: Cell::new(false),
-                #[cfg(feature = "multithreading")]
-                cross_arena_roots: RefCell::new(HashSet::new()),
-            },
+            heap: HeapManager::new(),
             statics,
             runtime_asms: RefCell::new(HashMap::new()),
             runtime_types: RefCell::new(HashMap::new()),

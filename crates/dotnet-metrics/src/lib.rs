@@ -87,21 +87,35 @@ impl std::fmt::Display for CacheStat {
 #[derive(Debug, Clone, Copy)]
 pub struct CacheSizes {
     pub layout_size: usize,
+    pub layout_bytes: u64,
     pub vmt_size: usize,
+    pub vmt_bytes: u64,
     pub intrinsic_size: usize,
+    pub intrinsic_bytes: u64,
     pub intrinsic_field_size: usize,
+    pub intrinsic_field_bytes: u64,
     pub hierarchy_size: usize,
+    pub hierarchy_bytes: u64,
     pub static_field_layout_size: usize,
+    pub static_field_layout_bytes: u64,
     pub instance_field_layout_size: usize,
+    pub instance_field_layout_bytes: u64,
     pub value_type_size: usize,
+    pub value_type_bytes: u64,
     pub has_finalizer_size: usize,
+    pub has_finalizer_bytes: u64,
     pub overrides_size: usize,
+    pub overrides_bytes: u64,
     pub method_info_size: usize,
+    pub method_info_bytes: u64,
     pub assembly_type_info: (u64, u64, usize),
     pub assembly_method_info: (u64, u64, usize),
     pub shared_runtime_types_size: usize,
+    pub shared_runtime_types_bytes: u64,
     pub shared_runtime_methods_size: usize,
+    pub shared_runtime_methods_bytes: u64,
     pub shared_runtime_fields_size: usize,
+    pub shared_runtime_fields_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -161,6 +175,12 @@ pub struct BenchInstrumentationSnapshot {
     pub opcode_dispatch_by_category: BTreeMap<String, u64>,
     pub intrinsic_call_total: u64,
     pub intrinsic_calls_by_signature: BTreeMap<String, u64>,
+    pub cache_key_clone_total: u64,
+    pub cache_key_clones_by_cache: BTreeMap<String, u64>,
+    pub front_cache_hits_by_cache: BTreeMap<String, u64>,
+    pub front_cache_misses_by_cache: BTreeMap<String, u64>,
+    pub cache_memory_bytes_total: u64,
+    pub cache_memory_bytes_by_cache: BTreeMap<String, u64>,
 }
 
 /// Metrics counters.
@@ -240,6 +260,24 @@ pub struct RuntimeMetrics {
     intrinsic_call_total: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     intrinsic_calls_by_signature: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    method_info_key_clones: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    vmt_key_clones: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    hierarchy_key_clones: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    method_info_front_cache_hits: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    method_info_front_cache_misses: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    vmt_front_cache_hits: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    vmt_front_cache_misses: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    hierarchy_front_cache_hits: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    hierarchy_front_cache_misses: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -459,6 +497,102 @@ impl RuntimeMetrics {
     #[cfg(not(feature = "bench-instrumentation"))]
     pub fn record_intrinsic_signature_call(&self, _signature: impl Into<String>) {}
 
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_method_info_key_clones(&self, count: u64) {
+        self.method_info_key_clones
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_method_info_key_clones(&self, _count: u64) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_vmt_key_clones(&self, count: u64) {
+        self.vmt_key_clones.fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_vmt_key_clones(&self, _count: u64) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_hierarchy_key_clones(&self, count: u64) {
+        self.hierarchy_key_clones
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_hierarchy_key_clones(&self, _count: u64) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_method_info_front_cache_hit(&self) {
+        self.method_info_front_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_method_info_front_cache_hit(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_method_info_front_cache_miss(&self) {
+        self.method_info_front_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_method_info_front_cache_miss(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_vmt_front_cache_hit(&self) {
+        self.vmt_front_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_vmt_front_cache_hit(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_vmt_front_cache_miss(&self) {
+        self.vmt_front_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_vmt_front_cache_miss(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_hierarchy_front_cache_hit(&self) {
+        self.hierarchy_front_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_hierarchy_front_cache_hit(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_hierarchy_front_cache_miss(&self) {
+        self.hierarchy_front_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_hierarchy_front_cache_miss(&self) {}
+
     pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
         CacheStats {
             layout: self.stat(
@@ -535,7 +669,11 @@ impl RuntimeMetrics {
         }
     }
 
-    pub fn snapshot(&self, cache_stats: CacheStats) -> RuntimeMetricsSnapshot {
+    pub fn snapshot(
+        &self,
+        cache_stats: CacheStats,
+        _cache_sizes: CacheSizes,
+    ) -> RuntimeMetricsSnapshot {
         RuntimeMetricsSnapshot {
             gc_pause_total_us: self.gc_pause_total_us.load(Ordering::Relaxed),
             gc_pause_count: self.gc_pause_count.load(Ordering::Relaxed),
@@ -545,12 +683,12 @@ impl RuntimeMetrics {
             current_external_allocated: self.current_external_allocated.load(Ordering::Relaxed),
             cache_stats,
             #[cfg(feature = "bench-instrumentation")]
-            bench: self.bench_snapshot(),
+            bench: self.bench_snapshot(_cache_sizes),
         }
     }
 
     #[cfg(feature = "bench-instrumentation")]
-    pub fn bench_snapshot(&self) -> BenchInstrumentationSnapshot {
+    pub fn bench_snapshot(&self, cache_sizes: CacheSizes) -> BenchInstrumentationSnapshot {
         let mut opcode_dispatch_by_category = BTreeMap::new();
         opcode_dispatch_by_category.insert(
             OpcodeCategory::Arithmetic.as_key().to_string(),
@@ -601,6 +739,79 @@ impl RuntimeMetrics {
             .lock()
             .expect("intrinsic metric lock poisoned")
             .clone();
+        let mut cache_key_clones_by_cache = BTreeMap::new();
+        let method_info_key_clones = self.method_info_key_clones.load(Ordering::Relaxed);
+        cache_key_clones_by_cache.insert("method_info".to_string(), method_info_key_clones);
+        let vmt_key_clones = self.vmt_key_clones.load(Ordering::Relaxed);
+        cache_key_clones_by_cache.insert("vmt".to_string(), vmt_key_clones);
+        let hierarchy_key_clones = self.hierarchy_key_clones.load(Ordering::Relaxed);
+        cache_key_clones_by_cache.insert("hierarchy".to_string(), hierarchy_key_clones);
+        let cache_key_clone_total = method_info_key_clones + vmt_key_clones + hierarchy_key_clones;
+
+        let mut front_cache_hits_by_cache = BTreeMap::new();
+        front_cache_hits_by_cache.insert(
+            "method_info".to_string(),
+            self.method_info_front_cache_hits.load(Ordering::Relaxed),
+        );
+        front_cache_hits_by_cache.insert(
+            "vmt".to_string(),
+            self.vmt_front_cache_hits.load(Ordering::Relaxed),
+        );
+        front_cache_hits_by_cache.insert(
+            "hierarchy".to_string(),
+            self.hierarchy_front_cache_hits.load(Ordering::Relaxed),
+        );
+
+        let mut front_cache_misses_by_cache = BTreeMap::new();
+        front_cache_misses_by_cache.insert(
+            "method_info".to_string(),
+            self.method_info_front_cache_misses.load(Ordering::Relaxed),
+        );
+        front_cache_misses_by_cache.insert(
+            "vmt".to_string(),
+            self.vmt_front_cache_misses.load(Ordering::Relaxed),
+        );
+        front_cache_misses_by_cache.insert(
+            "hierarchy".to_string(),
+            self.hierarchy_front_cache_misses.load(Ordering::Relaxed),
+        );
+
+        let mut cache_memory_bytes_by_cache = BTreeMap::new();
+        cache_memory_bytes_by_cache.insert("layout".to_string(), cache_sizes.layout_bytes);
+        cache_memory_bytes_by_cache.insert("vmt".to_string(), cache_sizes.vmt_bytes);
+        cache_memory_bytes_by_cache.insert("intrinsic".to_string(), cache_sizes.intrinsic_bytes);
+        cache_memory_bytes_by_cache.insert(
+            "intrinsic_field".to_string(),
+            cache_sizes.intrinsic_field_bytes,
+        );
+        cache_memory_bytes_by_cache.insert("hierarchy".to_string(), cache_sizes.hierarchy_bytes);
+        cache_memory_bytes_by_cache.insert(
+            "static_field_layout".to_string(),
+            cache_sizes.static_field_layout_bytes,
+        );
+        cache_memory_bytes_by_cache.insert(
+            "instance_field_layout".to_string(),
+            cache_sizes.instance_field_layout_bytes,
+        );
+        cache_memory_bytes_by_cache.insert("value_type".to_string(), cache_sizes.value_type_bytes);
+        cache_memory_bytes_by_cache
+            .insert("has_finalizer".to_string(), cache_sizes.has_finalizer_bytes);
+        cache_memory_bytes_by_cache.insert("overrides".to_string(), cache_sizes.overrides_bytes);
+        cache_memory_bytes_by_cache
+            .insert("method_info".to_string(), cache_sizes.method_info_bytes);
+        cache_memory_bytes_by_cache.insert(
+            "shared_runtime_types".to_string(),
+            cache_sizes.shared_runtime_types_bytes,
+        );
+        cache_memory_bytes_by_cache.insert(
+            "shared_runtime_methods".to_string(),
+            cache_sizes.shared_runtime_methods_bytes,
+        );
+        cache_memory_bytes_by_cache.insert(
+            "shared_runtime_fields".to_string(),
+            cache_sizes.shared_runtime_fields_bytes,
+        );
+        let cache_memory_bytes_total = cache_memory_bytes_by_cache.values().copied().sum();
 
         BenchInstrumentationSnapshot {
             eval_stack_reallocations: self.eval_stack_reallocations.load(Ordering::Relaxed),
@@ -614,6 +825,12 @@ impl RuntimeMetrics {
             opcode_dispatch_by_category,
             intrinsic_call_total: self.intrinsic_call_total.load(Ordering::Relaxed),
             intrinsic_calls_by_signature,
+            cache_key_clone_total,
+            cache_key_clones_by_cache,
+            front_cache_hits_by_cache,
+            front_cache_misses_by_cache,
+            cache_memory_bytes_total,
+            cache_memory_bytes_by_cache,
         }
     }
 

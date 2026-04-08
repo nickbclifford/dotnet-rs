@@ -19,6 +19,8 @@ validation-all = [
     "generic-constraint-validation",
 ]
 fuzzing = ["dotnet-vm/fuzzing"]
+heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
+segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

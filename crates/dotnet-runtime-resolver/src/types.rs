@@ -77,13 +77,12 @@ where
             return Ok(true);
         }
 
-        let cache_key = (value.clone(), ancestor.clone());
-        if let Some(cached) = self.caches.get_hierarchy_cached(&cache_key) {
+        if let Some(cached) = self.caches.get_hierarchy_cached(&value, &ancestor) {
             return Ok(cached);
         }
 
-        let value_td = self.loader.find_concrete_type(value)?;
-        let ancestor_td = self.loader.find_concrete_type(ancestor)?;
+        let value_td = self.loader.find_concrete_type(value.clone())?;
+        let ancestor_td = self.loader.find_concrete_type(ancestor.clone())?;
 
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
@@ -113,7 +112,7 @@ where
             }
         }
 
-        self.caches.set_hierarchy_cached(cache_key, result);
+        self.caches.set_hierarchy_cached(value, ancestor, result);
         Ok(result)
     }
 

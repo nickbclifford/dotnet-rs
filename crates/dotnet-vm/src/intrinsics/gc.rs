@@ -190,7 +190,7 @@ pub fn intrinsic_gchandle_internal_alloc<
     };
 
     if handle_type == GCHandleType::Pinned {
-        ctx.heap().pinned_objects.borrow_mut().insert(obj);
+        ctx.heap().pin_object(obj);
 
         if ctx.tracer_enabled() {
             let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
@@ -226,7 +226,7 @@ pub fn intrinsic_gchandle_internal_free<
             if let Some((obj, handle_type)) = handles[index]
                 && handle_type == GCHandleType::Pinned
             {
-                ctx.heap().pinned_objects.borrow_mut().remove(&obj);
+                ctx.heap().unpin_object(obj);
 
                 if ctx.tracer_enabled() {
                     let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
@@ -289,9 +289,8 @@ pub fn intrinsic_gchandle_internal_set<'gc, T: TypedStackOps<'gc> + MemoryOps<'g
             && let Some(entry) = &mut handles[index]
         {
             if entry.1 == GCHandleType::Pinned {
-                let mut pinned = ctx.heap().pinned_objects.borrow_mut();
-                pinned.remove(&entry.0);
-                pinned.insert(obj);
+                ctx.heap().unpin_object(entry.0);
+                ctx.heap().pin_object(obj);
             }
             entry.0 = obj;
         }

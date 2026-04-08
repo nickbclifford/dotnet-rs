@@ -326,14 +326,7 @@ impl<'gc: 'gc> CallStack<'gc> {
             return;
         }
 
-        let objects: Vec<_> = self
-            .local
-            .heap
-            ._all_objs
-            .borrow()
-            .values()
-            .copied()
-            .collect();
+        let objects: Vec<_> = self.local.heap.snapshot_objects();
         let tracer = self.tracer();
         tracer.dump_heap_snapshot_start(objects.len());
 
@@ -386,7 +379,7 @@ impl<'gc: 'gc> CallStack<'gc> {
             self.local.heap.pending_finalization.borrow().len(),
             self.local.heap.pinned_objects.borrow().len(),
             self.local.heap.gchandles.borrow().len(),
-            self.local.heap._all_objs.borrow().len(),
+            self.local.heap.live_object_count(),
         );
     }
 

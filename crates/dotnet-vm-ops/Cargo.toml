@@ -27,3 +27,4 @@ fuzzing = [
     "dotnet-utils/fuzzing",
 ]
 bench-instrumentation = ["dotnet-vm-data/bench-instrumentation"]
+segmented-eval-stack-prototype = ["dotnet-vm-data/segmented-eval-stack-prototype"]

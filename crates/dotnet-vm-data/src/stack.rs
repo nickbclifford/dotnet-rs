@@ -95,6 +95,9 @@ impl<'gc> Default for EvaluationStack<'gc> {
 }
 
 impl<'gc> EvaluationStack<'gc> {
+    #[cfg(feature = "segmented-eval-stack-prototype")]
+    const SEGMENTED_STACK_GRANULARITY: usize = 64;
+
     pub fn new() -> Self {
         Self {
             stack: vec![],
@@ -102,15 +105,58 @@ impl<'gc> EvaluationStack<'gc> {
         }
     }
 
+    #[inline]
+    fn apply_reallocation_fixup(&mut self) {
+        #[cfg(feature = "bench-instrumentation")]
+        let fixup_start = Instant::now();
+        self.update_stack_pointers();
+        #[cfg(feature = "bench-instrumentation")]
+        dotnet_metrics::record_active_eval_stack_reallocation(fixup_start.elapsed());
+    }
+
+    #[cfg(feature = "segmented-eval-stack-prototype")]
+    #[inline]
+    fn normalize_reserve_target(required_slots: usize) -> usize {
+        if required_slots == 0 {
+            return 0;
+        }
+
+        let rem = required_slots % Self::SEGMENTED_STACK_GRANULARITY;
+        if rem == 0 {
+            required_slots
+        } else {
+            required_slots.saturating_add(Self::SEGMENTED_STACK_GRANULARITY - rem)
+        }
+    }
+
+    #[cfg(not(feature = "segmented-eval-stack-prototype"))]
+    #[inline]
+    fn normalize_reserve_target(required_slots: usize) -> usize {
+        required_slots
+    }
+
+    /// Ensures the active evaluation stack has capacity for `total_slots` entries.
+    /// If the underlying `Vec` reallocates, stack-origin managed pointers are fixed up.
+    pub fn reserve_slots(&mut self, total_slots: usize) {
+        if total_slots <= self.stack.capacity() {
+            return;
+        }
+
+        let old_capacity = self.stack.capacity();
+        let reserve_target = Self::normalize_reserve_target(total_slots).max(total_slots);
+        let additional = reserve_target.saturating_sub(self.stack.len());
+        self.stack.reserve(additional);
+
+        if self.stack.capacity() > old_capacity {
+            self.apply_reallocation_fixup();
+        }
+    }
+
     pub fn push(&mut self, value: StackValue<'gc>) {
         let old_capacity = self.stack.capacity();
         self.stack.push(value);
         if self.stack.capacity() > old_capacity {
-            #[cfg(feature = "bench-instrumentation")]
-            let fixup_start = Instant::now();
-            self.update_stack_pointers();
-            #[cfg(feature = "bench-instrumentation")]
-            dotnet_metrics::record_active_eval_stack_reallocation(fixup_start.elapsed());
+            self.apply_reallocation_fixup();
         }
     }
 

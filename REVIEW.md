@@ -211,99 +211,280 @@ Validation/correctness checks:
 
 ### 2a. Evaluation stack reallocation and fixup
 
+Update (2026-04-08): completed.
+
+Implemented:
+
+1. Added `max_stack` to `MethodInfo` and populated it from IL method headers (`body.header.maximum_stack_size`) in `build_method_info`.
+2. Added `EvaluationStack::reserve_slots(total_slots)` in `dotnet-vm-data`:
+   - reserves ahead of demand,
+   - runs stack-origin managed pointer fixup exactly once when reserve causes reallocation,
+   - reuses the same instrumentation accounting path as push-driven reallocations.
+3. Updated call-frame setup paths to pre-reserve from method metadata:
+   - `call_frame`: reserves for `current_top + locals + max_stack`,
+   - `entrypoint_frame`: reserves for `args + locals + max_stack` before argument push.
+4. Added opt-in segmented-growth prototype feature:
+   - `segmented-eval-stack-prototype` in `dotnet-vm-data` (forwarded through `dotnet-vm-ops`, `dotnet-vm`, `dotnet-cli`, and `dotnet-benchmarks`),
+   - reserve target rounds to 64-slot chunks when enabled.
+
+Measured impact (`dispatch`, Criterion sample-size 10, measurement-time 5s, warm-up 1s):
+
+- Default runtime median:
+  - pre-change: `751.15 ms`
+  - post-change: `725.98 ms`
+  - delta: `-3.35%`
+- Versus Phase 0 baseline (`794.17 ms`): `-8.59%`.
+
+Bench instrumentation counters (`dispatch`):
+
+- pre-change: `eval_stack_reallocations=3`, `pointer_fixup_total_ns=711`
+- post-change: `eval_stack_reallocations=2`, `pointer_fixup_total_ns=331`
+- delta: reallocations `-33.33%`, fixup time `-53.45%`.
+
+Segmented prototype (`--features segmented-eval-stack-prototype`):
+
+- Default median: `726.27 ms` (`+0.04%` vs non-prototype post-change run; effectively neutral).
+- Instrumented counters: `eval_stack_reallocations=1`, `pointer_fixup_total_ns=110`.
+
+Managed pointer/deep-stack semantics checks:
+
+- Full default and no-default clippy/test matrices passed.
+- Targeted stack/byref fixtures passed:
+  - `basic_span_stack_read_0`
+  - `basic_span_pinnable_stack_0`
+  - `pointers_ref_struct_stress_42`
+  - `unsafe_ref_struct_gc_safety_42`
+
+Risk notes:
+
+- Stack-slot address identity remains sensitive; reserve-before-push removes growth events but does not remove the fixup mechanism.
+- Current segmented prototype is a growth-policy prototype (chunked capacity), not a fully segmented storage layout yet.
+
+### 2f. Segmented stack architecture integration
+
 Evidence:
 
-- Every capacity increase triggers full-stack pointer fixup: `crates/dotnet-vm-data/src/stack.rs:103-174`.
-- Fixup rewrites both direct `ManagedPtr` stack origins and embedded managed pointers in value types (`visit_managed_ptrs`): `crates/dotnet-vm-data/src/stack.rs:134-163`.
-- Method metadata currently does not expose/store `maxstack` in `MethodInfo`: `crates/dotnet-vm-data/src/lib.rs:46-53`, build path `crates/dotnet-vm/src/lib.rs:89-102`.
-
-Current measurement:
-
-- Reallocation path cost grows with stack size; 1M-push probe shows non-trivial aggregate time in reallocation/fixup path (`~9.6-11.9ms` for 19 growth events).
+- Step `2a` prototype reduced realloc/fixup events (`eval_stack_reallocations: 3 -> 2`, prototype run to `1`) but is still a growth-policy shim over contiguous `Vec` storage.
+- Stack operations throughout the VM still assume contiguous backing (`stack[index]`, `split_off`, direct `truncate`) in evaluation-stack and frame/exception flows.
+- Full pointer-fixup machinery remains in the hot path whenever contiguous storage moves.
 
 Proposed change:
 
-1. Thread `body.header.max_stack` into `MethodInfo` and pre-reserve eval stack on frame entry.
-2. Add growth policy tuned for deep stack methods (fewer reallocations).
-3. Evaluate segmented stack design for byref stability (eliminate relocation fixup entirely).
+1. Implement a true segmented evaluation-stack backend with stable slot addresses across growth.
+2. Introduce an explicit stack-storage abstraction consumed by `VesContext`/stack ops instead of direct `Vec` access.
+3. Keep contiguous backend as default/fallback; select segmented backend via feature flag for rollout.
+4. Rework suspend/restore and unwind/truncate flows to be segment-aware without changing externally visible stack semantics.
 
 Expected impact:
 
-- Lower latency spikes on deep-stack workloads.
-- Better worst-case behavior for pointer-heavy IL.
+- Eliminates relocation-driven full-stack pointer fixup in segmented mode.
+- Improves worst-case latency for deep stack and byref-heavy workloads.
 
 Risk:
 
-- High: stack address identity semantics and `ManagedPtr::PointerOrigin::Stack` correctness.
+- High: stack-slot identity and exception/suspension correctness are cross-cutting invariants.
 
 ### 2b. HeapManager structures
 
-Evidence:
+Update (2026-04-08): completed.
 
-- `_all_objs: RefCell<BTreeMap<usize, ObjectRef>>` and pinned `HashSet` are always present: `crates/dotnet-runtime-memory/src/heap.rs:13-27` and initialization in `crates/dotnet-vm/src/state.rs:330-339`.
-- `find_object()` performs range search over `BTreeMap`: `crates/dotnet-runtime-memory/src/heap.rs:29-46`.
+Implemented:
 
-Proposed change:
+1. Added `HeapManager::new()` and moved heap-container initialization out of `dotnet-vm` state construction.
+2. Added feature-gated diagnostics object registry:
+   - new feature `heap-diagnostics` in `dotnet-runtime-memory` (default off),
+   - `_all_objs` now exists only under `heap-diagnostics`,
+   - feature forwarding added in `dotnet-vm`, `dotnet-cli`, and `dotnet-benchmarks`.
+3. Replaced production object lookup path with an indexed registry:
+   - `Slab<RegistryEntry>` + `start_to_id` map + bucket index map in `heap.rs`,
+   - `find_object()` now routes to the slab+bucket path when diagnostics are disabled.
+4. Switched small-cardinality containers in `HeapManager`:
+   - `finalization_queue` and `pending_finalization` to `SmallVec<[ObjectRef; 8]>`,
+   - `pinned_objects` to `SmallVec<[ObjectRef; 8]>` with deduped `pin_object`/`unpin_object` helpers.
+5. Updated VM call sites to use `HeapManager` APIs:
+   - object registration (`register_object`),
+   - pinned tracking (`pin_object`/`unpin_object`),
+   - tracer heap snapshot and object-count paths (`snapshot_objects`/`live_object_count`).
 
-1. Gate `_all_objs` behind a debug/diagnostic feature if not required in production.
-2. Replace `BTreeMap` with slab/indexed registry if random lookup dominates.
-3. Evaluate `SmallVec` for short finalization queues and compact pinned tracking for common small cardinalities.
+Measured impact (`gc` workload, Criterion sample-size 10, measurement-time 5s, warm-up 1s):
 
-Expected impact:
+- Non-instrumented:
+  - pre-step run: `511.39 ms`
+  - post-step run: `435.33 ms`
+  - delta: `-14.87%`
+- Instrumented:
+  - pre-step run: `721.84 ms`
+  - post-step run: `629.71 ms`
+  - delta: `-12.76%`
 
-- Reduced heap bookkeeping overhead and allocator churn.
+GC pause/throughput comparison:
 
-Risk:
+- post-step instrumented snapshot (`target/release/dotnet-bench-metrics/gc.json`):
+  - `gc_pause_total_us=4,941`, `gc_pause_count=169`
+  - average pause per GC: `29.24 us`
+- Phase 0 instrumented baseline snapshot:
+  - `gc_pause_total_us=3,647`, `gc_pause_count=253`
+  - average pause per GC: `14.42 us`
+- Interpretation: post-step run performed fewer collections with higher average pause, while workload throughput improved materially in this A/B run.
 
-- Medium: affects diagnostics and conservative scan helpers.
+Phase 0 baseline comparison:
+
+- baseline `gc` median (`results.default`): `433.05 ms`
+  - post-step non-instrumented: `435.33 ms` (`+0.53%`)
+- baseline `gc` median (`results.instrumented_default`): `608.92 ms`
+  - post-step instrumented: `629.71 ms` (`+3.41%`)
+
+Risk notes:
+
+- `heap-diagnostics` now controls full heap snapshot visibility; with feature off, `trace_dump_heap()` emits zero objects by design.
+- Conservative owner lookup (`find_object`) remains active in production mode via slab index; no GC fixture regressions observed.
 
 ### 2c. Cache optimization
 
-Evidence:
+Update (2026-04-08): completed.
 
-- 12+ runtime caches are unbounded `DashMap::new()`: `crates/dotnet-vm/src/state.rs:38-87`.
-- Cache keys include clone-heavy tuples with `GenericLookup`: `crates/dotnet-vm/src/state.rs:45,53-65`; `crates/dotnet-runtime-resolver/src/layout.rs:435-444`; `crates/dotnet-runtime-resolver/src/methods.rs:120-206`.
-- `DashMap::len()` is called for all caches in `get_cache_stats`: `crates/dotnet-vm/src/state.rs:217-252`.
+Implemented:
 
-Current measurement sample (`cache_test_0`):
+1. Added optional bounded mode for selected global caches:
+   - `DOTNET_CACHE_LIMIT_METHOD_INFO`
+   - `DOTNET_CACHE_LIMIT_VMT`
+   - `DOTNET_CACHE_LIMIT_HIERARCHY`
+   - insertion uses bounded eviction/fallback semantics (cache miss recomputation remains authoritative).
+2. Added thread-local front-caches for:
+   - `method_info` (`crates/dotnet-vm/src/state.rs`)
+   - `vmt` and `hierarchy` (`crates/dotnet-vm/src/resolver/mod.rs`)
+3. Updated resolver cache adapter API to use key-part lookups for hot reads, avoiding forced tuple-key construction in resolver call sites (`crates/dotnet-runtime-resolver/src/lib.rs`, `methods.rs`, `types.rs`).
+4. Added bench instrumentation for:
+   - key clone counters by cache (`method_info`, `vmt`, `hierarchy`)
+   - front-cache hit/miss counters by cache
+   - estimated cache memory footprint (`CacheSizes` bytes + per-cache maps in bench snapshot)
+5. Added per-cache estimated byte accounting in shared cache sizing (`crates/dotnet-vm/src/state.rs`).
+6. Added mitigation default:
+   - front-cache is now opt-in (`DOTNET_FRONT_CACHE_ENABLED`, default `false`) to avoid always-on regressions on low-contention dispatch-heavy runs.
 
-- High hit rates for `vmt`, `intrinsic`, `method_info`, but no bounding or eviction policy.
+Measured impact (Criterion, sample-size 10, measurement-time 5s, warm-up 1s):
 
-Proposed change:
+- Non-instrumented (`dispatch`, `generics`) with/without front-cache:
+  - front-cache **on** (`DOTNET_FRONT_CACHE_ENABLED=1`):
+    - `dispatch`: `759.91 ms`
+    - `generics`: `18.908 s`
+  - front-cache **off** (`DOTNET_FRONT_CACHE_ENABLED=0`):
+    - `dispatch`: `736.79 ms`
+    - `generics`: `19.589 s`
+  - delta (on vs off):
+    - `dispatch`: `+3.14%` (regression)
+    - `generics`: `-3.48%` (improvement)
 
-1. Add optional bounded mode (LRU/admission) for heavy caches.
-2. Add thread-local front-cache for hot read-mostly keys (`method_info`, `vmt`, `hierarchy`).
-3. Replace default hasher for selected caches with `FxHash`-based maps where collision risk is acceptable.
-4. Add per-cache clone/memory counters under instrumentation feature.
+- Instrumented comparison (latest paired runs):
+  - front-cache **on**:
+    - `dispatch`: `1.1522 s`
+    - `generics`: `24.044 s`
+  - front-cache **off**:
+    - `dispatch`: `1.1542 s`
+    - `generics`: `24.670 s`
+  - delta (on vs off):
+    - `dispatch`: `-0.17%` (neutral)
+    - `generics`: `-2.54%` (improvement)
 
-Expected impact:
+Bench counter highlights (`target/release/dotnet-bench-metrics/*.json`):
 
-- Lower contention and lower heap growth in large applications.
+- `dispatch`:
+  - key clones: `64` (on) vs `1,000,040` (off)
+  - front-cache hits (on): `method_info=200,004`, `vmt=199,994`
+  - estimated cache memory bytes: `4,553` (on) vs `4,689` (off)
+- `generics`:
+  - key clones: `78` (on) vs `22,760,030` (off)
+  - front-cache hits (on): `hierarchy=5,040,000`, `method_info=2,559,997`, `vmt=2,519,996`
+  - estimated cache memory bytes: `6,605` (on) vs `6,839` (off)
 
-Risk:
+Phase 0 baseline comparison (`results.default`):
 
-- Medium: cache eviction correctness (must preserve semantic correctness when missing).
+- baseline `dispatch` median: `794.17 ms`
+  - front-cache on run: `759.91 ms` (`-4.31%`)
+  - front-cache off run: `736.79 ms` (`-7.22%`)
+- baseline `generics` median: `18.75446 s`
+  - front-cache on run: `18.908 s` (`+0.82%`)
+  - front-cache off run: `19.589 s` (`+4.45%`)
+
+Risk notes:
+
+- Front-cache is workload-sensitive; it reduced clone pressure substantially and improved generics stress but regressed non-instrumented virtual dispatch in this environment.
+- Mitigation in place: front-cache is opt-in via env var, keeping default behavior stable while retaining the contention optimization path for targeted workloads.
 
 ### 2d. Instruction dispatch optimization
 
 Evidence:
 
-- Runtime batch loop: 128 instructions with 32-instruction safe-point polls: `crates/dotnet-vm/src/dispatch/mod.rs:167-183`.
-- Build-generated instruction dispatcher is `match`-based: `crates/dotnet-vm/build.rs:316-350`.
+- Runtime batch loop was fixed at 128 instructions with hardcoded 32-instruction safe-point polls.
+- Build-generated instruction dispatcher only emitted a monomorphic `match` backend.
 
-Proposed change:
+Implemented change:
 
-1. Benchmark current `match` against indexed function-pointer table for opcode classes with dense discriminants.
-2. Sweep safe-point interval (`32`, `64`, `128`) while tracking GC latency percentiles.
-3. Prototype super-instruction fusion for common pairs (`ldarg.*` + field load, etc.) in build-time generation.
+1. Added dual dispatch generation in `crates/dotnet-vm/build.rs`:
+   - retained `dispatch_monomorphic`,
+   - generated `dispatch_jump_table` with opcode-indexed function-pointer selection and per-opcode wrappers,
+   - added duplicate-opcode registration guard at build time.
+2. Added build-time dispatch backend selection via feature flag:
+   - `dotnet-vm` feature `instruction-dispatch-jump-table`,
+   - `dotnet-benchmarks` feature forwarding for benchmark matrix runs.
+3. Added configurable safe-point polling interval in the batch loop:
+   - env var `DOTNET_SAFE_POINT_POLL_INTERVAL`,
+   - accepted values: `32`, `64`, `128`,
+   - invalid values fall back to `32` with a warning.
+4. Added super-instruction prototype behind feature flag:
+   - `dotnet-vm` feature `dispatch-super-instruction-prototype`,
+   - fused pair in hot batch path: `LoadConstantInt32(1)` then `Add`,
+   - preserves per-instruction tracing/ring-buffer and opcode metrics accounting.
+5. Added generated-dispatch coverage assertions in `crates/dotnet-vm/src/dispatch/registry.rs` for jump-table artifacts.
 
-Expected impact:
+Verification:
 
-- Reduced dispatch overhead on tight loops.
+- `cargo fmt`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test -- --nocapture`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `cargo test --no-default-features -- --nocapture --test-threads=1`
+- `cargo test -p dotnet-vm --features instruction-dispatch-jump-table -- --nocapture`
+- `cargo test -p dotnet-vm --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" -- --nocapture`
 
-Risk:
+Measured results (Criterion medians, non-instrumented):
 
-- Medium/High: super-instruction correctness and debug trace fidelity.
+- Match dispatch (`instruction-dispatch-jump-table` disabled)
+  - poll `32`: `arithmetic=532.48 ms`, `dispatch=767.04 ms`
+  - poll `64`: `arithmetic=551.07 ms`, `dispatch=768.06 ms`
+  - poll `128`: `arithmetic=542.35 ms`, `dispatch=759.97 ms`
+- Jump-table dispatch (`instruction-dispatch-jump-table`)
+  - poll `32`: `arithmetic=553.00 ms`, `dispatch=791.16 ms`
+  - poll `64`: `arithmetic=549.86 ms`, `dispatch=770.73 ms`
+  - poll `128`: `arithmetic=557.45 ms`, `dispatch=769.13 ms`
+- Jump-table + super-instruction (`instruction-dispatch-jump-table dispatch-super-instruction-prototype`)
+  - poll `32`: `arithmetic=568.05 ms`, `dispatch=787.32 ms`
+  - poll `64`: `arithmetic=579.16 ms`, `dispatch=786.49 ms`
+
+Key deltas vs current default config (match + poll `32`):
+
+- Safe-point interval sweep:
+  - poll `64`: arithmetic `+3.49%`, dispatch `+0.13%`
+  - poll `128`: arithmetic `+1.85%`, dispatch `-0.92%`
+- Jump-table vs match (`poll=32`):
+  - arithmetic `+3.85%`, dispatch `+3.14%` (regression)
+- Jump-table+super vs match (`poll=32`):
+  - arithmetic `+6.68%`, dispatch `+2.64%` (regression)
+
+Phase 0 baseline context (`results.default` medians):
+
+- baseline arithmetic: `585.0569755 ms`
+  - current best observed arithmetic (match, poll `32`): `532.48 ms` (`-8.99%`)
+- baseline dispatch: `794.1701455 ms`
+  - current best observed dispatch (match, poll `128`): `759.97 ms` (`-4.31%`)
+
+Risk notes and mitigation:
+
+- In this environment, jump-table and super-instruction prototype both regress the targeted workloads.
+- Mitigation in place:
+  - both paths are feature-gated and remain disabled by default,
+  - runtime default behavior remains monomorphic `match` dispatch with poll interval default `32`,
+  - safe-point poll interval remains tunable via env var for workload-specific trade-offs (`dispatch` improved slightly at `128`, arithmetic regressed).
 
 ### 2e. Intrinsic dispatch optimization
 
@@ -460,7 +641,7 @@ Risk:
 
 ## Risk Assessment Summary
 
-- High risk: `1a`, `1b`, `2a`, `3a` (layout/GC correctness critical)
+- High risk: `1a`, `1b`, `2a`, `2f`, `3a` (layout/GC correctness critical)
 - Medium risk: `1c`, `2b`, `2c`, `2d`, `2e`, `3b`, `3c`, `4a`, `4c`
 - Low/Medium risk: `4b`
 
@@ -474,15 +655,16 @@ Potential public API breakage:
 1. `0a` + `0b` (benchmark + instrumentation) unlock trustworthy measurement for all other phases.
 2. `1a`/`1b` should precede `2a` because stack/fixup redesign depends on final byref/value representation.
 3. `1c` can run in parallel with `2b` once validation constraints are pinned down.
-4. `2c` should start before `2d`/`2e` to establish cache pressure and intrinsic call baselines.
-5. `3a` should run before deeper GC algorithm changes (`3b`/`3c`).
-6. `4a`/`4b`/`4c` should be last after structural changes stabilize.
+4. `2f` should follow `2a` before dispatch tuning so segmented-stack semantics are settled.
+5. `2c` should start before `2d`/`2e` to establish cache pressure and intrinsic call baselines.
+6. `3a` should run before deeper GC algorithm changes (`3b`/`3c`).
+7. `4a`/`4b`/`4c` should be last after structural changes stabilize.
 
 ## Recommended Implementation Sequence
 
 1. Phase 0 (`0a`, `0b`, `0c`)
 2. `1a` -> `1b` -> `1c`
-3. `2a` -> `2b` -> `2c` -> `2e` -> `2d`
+3. `2a` -> `2f` -> `2b` -> `2c` -> `2e` -> `2d`
 4. `3a` -> `3b` -> `3c`
 5. `4a` -> `4b` -> `4c`
 

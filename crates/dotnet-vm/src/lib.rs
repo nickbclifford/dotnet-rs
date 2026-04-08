@@ -94,6 +94,7 @@ pub fn build_method_info(
                 && method.method().signature.parameters.is_empty(),
             signature: &method.method().signature,
             locals: &body.header.local_variables,
+            max_stack: body.header.maximum_stack_size,
             exceptions: dotnet_exceptions::parse(exceptions, &ctx)?
                 .into_iter()
                 .map(Arc::new)
@@ -106,6 +107,7 @@ pub fn build_method_info(
             is_cctor: false,
             signature: &method.method().signature,
             locals: &[],
+            max_stack: 0,
             exceptions: vec![],
             instructions: &[],
             source: method,

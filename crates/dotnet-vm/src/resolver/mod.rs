@@ -13,7 +13,11 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_value::layout::{FieldLayoutManager, LayoutManager};
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    ops::Deref,
+};
 
 #[derive(Clone)]
 pub struct ResolverService {
@@ -59,6 +63,103 @@ impl ResolverService {
     pub fn loader(&self) -> &AssemblyLoader {
         self.inner.loader()
     }
+}
+
+#[derive(Default)]
+struct ResolverFrontCache {
+    vmt: VecDeque<(
+        MethodDescription,
+        TypeDescription,
+        GenericLookup,
+        MethodDescription,
+    )>,
+    hierarchy: VecDeque<(ConcreteType, ConcreteType, bool)>,
+}
+
+impl ResolverFrontCache {
+    fn get_vmt(
+        &mut self,
+        base_method: &MethodDescription,
+        this_type: &TypeDescription,
+        generics: &GenericLookup,
+    ) -> Option<MethodDescription> {
+        let index = self
+            .vmt
+            .iter()
+            .position(|(m, t, g, _)| m == base_method && t == this_type && g == generics)?;
+        let entry = self.vmt.remove(index)?;
+        let value = entry.3.clone();
+        self.vmt.push_back(entry);
+        Some(value)
+    }
+
+    fn insert_vmt(
+        &mut self,
+        base_method: MethodDescription,
+        this_type: TypeDescription,
+        generics: GenericLookup,
+        resolved_method: MethodDescription,
+        capacity: usize,
+    ) {
+        if capacity == 0 {
+            return;
+        }
+
+        if let Some(index) = self
+            .vmt
+            .iter()
+            .position(|(m, t, g, _)| m == &base_method && t == &this_type && g == &generics)
+        {
+            self.vmt.remove(index);
+        }
+
+        self.vmt
+            .push_back((base_method, this_type, generics, resolved_method));
+        while self.vmt.len() > capacity {
+            self.vmt.pop_front();
+        }
+    }
+
+    fn get_hierarchy(&mut self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool> {
+        let index = self
+            .hierarchy
+            .iter()
+            .position(|(c, p, _)| c == child && p == parent)?;
+        let entry = self.hierarchy.remove(index)?;
+        let value = entry.2;
+        self.hierarchy.push_back(entry);
+        Some(value)
+    }
+
+    fn insert_hierarchy(
+        &mut self,
+        child: ConcreteType,
+        parent: ConcreteType,
+        is_match: bool,
+        capacity: usize,
+    ) {
+        if capacity == 0 {
+            return;
+        }
+
+        if let Some(index) = self
+            .hierarchy
+            .iter()
+            .position(|(c, p, _)| c == &child && p == &parent)
+        {
+            self.hierarchy.remove(index);
+        }
+
+        self.hierarchy.push_back((child, parent, is_match));
+        while self.hierarchy.len() > capacity {
+            self.hierarchy.pop_front();
+        }
+    }
+}
+
+thread_local! {
+    static RESOLVER_FRONT_CACHE: RefCell<ResolverFrontCache> =
+        RefCell::new(ResolverFrontCache::default());
 }
 
 #[derive(Clone)]
@@ -126,13 +227,48 @@ impl ResolverCacheAdapter for VmResolverCaches {
 
     fn get_vmt_cached(
         &self,
-        key: &(MethodDescription, TypeDescription, GenericLookup),
+        base_method: &MethodDescription,
+        this_type: &TypeDescription,
+        generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        if let Some(cached) = self.caches.vmt_cache.get(key) {
+        if self.caches.front_cache_enabled() {
+            if let Some(front_cached) = RESOLVER_FRONT_CACHE
+                .with(|cache| cache.borrow_mut().get_vmt(base_method, this_type, generics))
+            {
+                if let Some(shared) = self.shared_state() {
+                    shared.metrics.record_vmt_front_cache_hit();
+                    shared.metrics.record_vmt_cache_hit();
+                }
+                return Some(front_cached);
+            }
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_vmt_front_cache_miss();
+            }
+        }
+
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_vmt_key_clones(3);
+        }
+        let key = (base_method.clone(), this_type.clone(), generics.clone());
+        if let Some(cached) = self.caches.vmt_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_vmt_cache_hit();
             }
-            Some(cached.clone())
+            let cached_method = cached.clone();
+            drop(cached);
+            if self.caches.front_cache_enabled() {
+                let (method_key, type_key, generic_key) = key;
+                RESOLVER_FRONT_CACHE.with(|cache| {
+                    cache.borrow_mut().insert_vmt(
+                        method_key,
+                        type_key,
+                        generic_key,
+                        cached_method.clone(),
+                        self.caches.front_cache_capacity(),
+                    );
+                });
+            }
+            Some(cached_method)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_vmt_cache_miss();
@@ -143,10 +279,19 @@ impl ResolverCacheAdapter for VmResolverCaches {
 
     fn set_vmt_cached(
         &self,
-        key: (MethodDescription, TypeDescription, GenericLookup),
+        base_method: MethodDescription,
+        this_type: TypeDescription,
+        generics: GenericLookup,
         method: MethodDescription,
     ) {
-        self.caches.vmt_cache.insert(key, method);
+        self.caches
+            .set_vmt((base_method, this_type, generics), method);
+    }
+
+    fn record_vmt_key_clones(&self, count: u64) {
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_vmt_key_clones(count);
+        }
     }
 
     fn get_overrides_cached(
@@ -174,12 +319,44 @@ impl ResolverCacheAdapter for VmResolverCaches {
         self.caches.overrides_cache.insert(key, overrides);
     }
 
-    fn get_hierarchy_cached(&self, key: &(ConcreteType, ConcreteType)) -> Option<bool> {
-        if let Some(cached) = self.caches.hierarchy_cache.get(key) {
+    fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool> {
+        if self.caches.front_cache_enabled() {
+            if let Some(front_cached) =
+                RESOLVER_FRONT_CACHE.with(|cache| cache.borrow_mut().get_hierarchy(child, parent))
+            {
+                if let Some(shared) = self.shared_state() {
+                    shared.metrics.record_hierarchy_front_cache_hit();
+                    shared.metrics.record_hierarchy_cache_hit();
+                }
+                return Some(front_cached);
+            }
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_hierarchy_front_cache_miss();
+            }
+        }
+
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_hierarchy_key_clones(2);
+        }
+        let key = (child.clone(), parent.clone());
+        if let Some(cached) = self.caches.hierarchy_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_hierarchy_cache_hit();
             }
-            Some(*cached)
+            let cached_value = *cached;
+            drop(cached);
+            if self.caches.front_cache_enabled() {
+                let (child_key, parent_key) = key;
+                RESOLVER_FRONT_CACHE.with(|cache| {
+                    cache.borrow_mut().insert_hierarchy(
+                        child_key,
+                        parent_key,
+                        cached_value,
+                        self.caches.front_cache_capacity(),
+                    );
+                });
+            }
+            Some(cached_value)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_hierarchy_cache_miss();
@@ -188,8 +365,14 @@ impl ResolverCacheAdapter for VmResolverCaches {
         }
     }
 
-    fn set_hierarchy_cached(&self, key: (ConcreteType, ConcreteType), is_match: bool) {
-        self.caches.hierarchy_cache.insert(key, is_match);
+    fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool) {
+        self.caches.set_hierarchy((child, parent), is_match);
+    }
+
+    fn record_hierarchy_key_clones(&self, count: u64) {
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_hierarchy_key_clones(count);
+        }
     }
 
     fn get_value_type_cached(&self, td: &TypeDescription) -> Option<bool> {

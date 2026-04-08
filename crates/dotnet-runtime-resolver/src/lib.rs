@@ -29,13 +29,18 @@ pub trait ResolverCacheAdapter: Send + Sync + 'static {
 
     fn get_vmt_cached(
         &self,
-        key: &(MethodDescription, TypeDescription, GenericLookup),
+        base_method: &MethodDescription,
+        this_type: &TypeDescription,
+        generics: &GenericLookup,
     ) -> Option<MethodDescription>;
     fn set_vmt_cached(
         &self,
-        key: (MethodDescription, TypeDescription, GenericLookup),
+        base_method: MethodDescription,
+        this_type: TypeDescription,
+        generics: GenericLookup,
         method: MethodDescription,
     );
+    fn record_vmt_key_clones(&self, _count: u64) {}
 
     fn get_overrides_cached(
         &self,
@@ -47,8 +52,9 @@ pub trait ResolverCacheAdapter: Send + Sync + 'static {
         overrides: Arc<HashMap<MethodDescription, MethodDescription>>,
     );
 
-    fn get_hierarchy_cached(&self, key: &(ConcreteType, ConcreteType)) -> Option<bool>;
-    fn set_hierarchy_cached(&self, key: (ConcreteType, ConcreteType), is_match: bool);
+    fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool>;
+    fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool);
+    fn record_hierarchy_key_clones(&self, _count: u64) {}
 
     fn get_value_type_cached(&self, td: &TypeDescription) -> Option<bool>;
     fn set_value_type_cached(&self, td: TypeDescription, is_value_type: bool);

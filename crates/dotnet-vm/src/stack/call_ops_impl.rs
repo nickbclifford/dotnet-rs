@@ -86,6 +86,9 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             .expect("not enough values on stack for call");
 
         let locals_base = self.evaluation_stack.top_of_stack();
+        let local_slot_count = method.locals.len();
+        self.evaluation_stack
+            .reserve_slots(locals_base.as_usize() + local_slot_count + method.max_stack);
         let (local_values, pinned_locals) =
             self.init_locals(method.source.clone(), method.locals, &generic_inst)?;
 
@@ -155,6 +158,11 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         let _ = self.check_gc_safe_point();
         let _gc = self.gc;
         let argument_base = self.evaluation_stack.top_of_stack();
+        let arg_count = args.len();
+        let local_slot_count = method.locals.len();
+        self.evaluation_stack.reserve_slots(
+            argument_base.as_usize() + arg_count + local_slot_count + method.max_stack,
+        );
         for a in args {
             self.push(a);
         }

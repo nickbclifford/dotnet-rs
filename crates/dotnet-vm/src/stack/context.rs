@@ -366,12 +366,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     #[inline]
     pub(crate) fn register_new_object(&self, instance: &ObjectRef<'gc>) {
         if let Some(ptr) = instance.0 {
-            let addr = gc_arena::Gc::as_ptr(ptr) as usize;
-            self.local
-                .heap
-                ._all_objs
-                .borrow_mut()
-                .insert(addr, *instance);
+            self.local.heap.register_object(*instance);
 
             // Add to finalization queue if it has a finalizer.
             // Note: We skip System.Object because it defines a virtual Finalize() method
@@ -403,12 +398,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     #[inline]
     pub(crate) fn pin_object(&mut self, object: ObjectRef<'gc>) {
-        self.local.heap.pinned_objects.borrow_mut().insert(object);
+        self.local.heap.pin_object(object);
     }
 
     #[inline]
     pub(crate) fn unpin_object(&mut self, object: ObjectRef<'gc>) {
-        self.local.heap.pinned_objects.borrow_mut().remove(&object);
+        self.local.heap.unpin_object(object);
     }
 }
 
@@ -542,7 +537,8 @@ impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
         let inner = h.borrow();
         let cloned_storage = inner.storage.clone();
 
-        let new_inner = dotnet_value::object::ObjectInner::new(cloned_storage, self.thread_id.get());
+        let new_inner =
+            dotnet_value::object::ObjectInner::new(cloned_storage, self.thread_id.get());
 
         let new_h = gc_arena::Gc::new(&gc, dotnet_utils::gc::ThreadSafeLock::new(new_inner));
         let new_ref = ObjectRef(Some(new_h));

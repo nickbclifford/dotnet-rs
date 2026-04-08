@@ -300,3 +300,371 @@
 - Proceed to Step `2a` (evaluation stack reallocation elimination).
 - If allocation-pressure variance remains noisy, rerun `gc` with longer Criterion windows before attributing sub-2% deltas.
 ---
+## Session: 2026-04-08T13:05:00-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2a (Evaluation stack reallocation elimination)
+- Goal: Thread IL `max_stack` into runtime method metadata, pre-reserve eval stack capacity on frame push, prototype segmented reserve behavior behind a feature flag, and validate stack-origin managed pointer correctness.
+### Actions Taken
+- Read `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/GC_AND_MEMORY_SAFETY.md`, `docs/THREADING_AND_SYNCHRONIZATION.md`, `CHECKLIST.md`, `REVIEW.md`, and all step-relevant files (`crates/dotnet-vm-data/src/lib.rs`, `crates/dotnet-vm-data/src/stack.rs`, `crates/dotnet-vm/src/lib.rs`, `crates/dotnet-vm/src/stack/call_ops_impl.rs`).
+- Added `max_stack: usize` to `MethodInfo` in `crates/dotnet-vm-data/src/lib.rs`.
+- Updated `build_method_info` in `crates/dotnet-vm/src/lib.rs` to populate:
+  - `max_stack: body.header.maximum_stack_size` for methods with bodies,
+  - `max_stack: 0` for body-less methods.
+- Added `EvaluationStack::reserve_slots(total_slots)` in `crates/dotnet-vm-data/src/stack.rs`:
+  - reserves capacity ahead of use,
+  - applies `update_stack_pointers()` once when reserve reallocation occurs,
+  - records bench instrumentation through the existing reallocation counter path.
+- Refactored `EvaluationStack::push` to share a single reallocation-fixup helper.
+- Added segmented prototype reserve behavior behind new feature `segmented-eval-stack-prototype`:
+  - reserve target rounds to 64-slot boundaries under the feature.
+- Wired feature forwarding through:
+  - `crates/dotnet-vm-data/Cargo.toml`
+  - `crates/dotnet-vm-ops/Cargo.toml`
+  - `crates/dotnet-vm/Cargo.toml`
+  - `crates/dotnet-cli/Cargo.toml`
+  - `crates/dotnet-benchmarks/Cargo.toml`
+- Updated frame setup in `crates/dotnet-vm/src/stack/call_ops_impl.rs`:
+  - `call_frame` now reserves `locals_base + locals + method.max_stack` before local initialization,
+  - `entrypoint_frame` now reserves `argument_base + args + locals + method.max_stack` before argument push.
+- Updated docs/status:
+  - marked Step `2a` complete with all atomic tasks in `CHECKLIST.md`,
+  - replaced REVIEW Step `2a` section with implementation and measurements.
+- Ran verification:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran targeted deep-stack/byref fixtures:
+  - `cargo test -p dotnet-cli --test integration_tests -- --nocapture basic_span_stack_read_0`
+  - `cargo test -p dotnet-cli --test integration_tests -- --nocapture basic_span_pinnable_stack_0`
+  - `cargo test -p dotnet-cli --test integration_tests -- --nocapture pointers_ref_struct_stress_42`
+  - `cargo test -p dotnet-cli --test integration_tests -- --nocapture unsafe_ref_struct_gc_safety_42`
+- Benchmarked dispatch workload before/after and prototype:
+  - pre-change instrumented: `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - pre-change default: `cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - post-change instrumented/default: same commands
+  - prototype instrumented/default: same commands with `--features segmented-eval-stack-prototype` (plus `bench-instrumentation` where applicable).
+### Findings
+- Dispatch runtime (default, Criterion median point estimate):
+  - pre-change: `751.15 ms`
+  - post-change: `725.98 ms`
+  - delta: `-3.35%`.
+- Dispatch vs Phase 0 baseline (`794.17 ms`): `-8.59%`.
+- Bench instrumentation (`dispatch`) reallocation/fixup counters:
+  - pre-change: `eval_stack_reallocations=3`, `eval_stack_pointer_fixup_total_ns=711`
+  - post-change: `eval_stack_reallocations=2`, `eval_stack_pointer_fixup_total_ns=331`
+  - delta: reallocations `-33.33%`, fixup time `-53.45%`.
+- Segmented prototype (`segmented-eval-stack-prototype`) results:
+  - default median: `726.27 ms` (`+0.04%` vs non-prototype post-change run, effectively neutral),
+  - instrumented counters: `eval_stack_reallocations=1`, `eval_stack_pointer_fixup_total_ns=110`.
+- Managed pointer stack-origin semantics remained correct in targeted stack/byref fixtures and full integration suites.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `2b` (HeapManager container modernization).
+- For deeper Step `2a` follow-up, consider a true segmented backing store (not only chunked reserve policy) if further reallocation elimination is required.
+---
+## Session: 2026-04-08T13:33:14-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2f rollback
+- Goal: Revert Step `2f` integration complexity and return workspace behavior/status to Step `2a` baseline.
+### Actions Taken
+- Reverted `2f` code-path changes while preserving existing Step `2a` work.
+- Restored `EvaluationStack` in `crates/dotnet-vm-data/src/stack.rs` to contiguous `Vec` backing plus the existing Step `2a` reserve policy and fixup behavior.
+- Removed `2f`-specific VM call-site adaptations and restored prior stack access paths:
+  - `crates/dotnet-vm/src/stack/mod.rs`
+  - `crates/dotnet-vm/src/stack/stack_ops_impl.rs`
+  - `crates/dotnet-vm/src/executor.rs`
+- Reverted planning/status docs for `2f` back to not-started/proposed:
+  - `CHECKLIST.md` Step `2f` status/tasks reset
+  - `REVIEW.md` Step `2f` section restored to Evidence/Proposed Change/Expected Impact/Risk
+  - removed the prior `2f` completion entry from `AGENT_MEMORY.md`.
+- Ran verification:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran dispatch benchmark and instrumentation at the reverted state:
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+### Findings
+- Reverted default dispatch median point estimate: `752.93 ms` for this run.
+- Bench instrumentation at reverted state:
+  - `eval_stack_reallocations=2`
+  - `eval_stack_pointer_fixup_count=2`
+  - `eval_stack_pointer_fixup_total_ns=520`
+- Behavior and test parity returned to the prior contiguous stack model with Step `2a` reserve/fixup mechanics.
+### Blockers
+- none
+### Next Steps
+- Proceed from Step `2a` baseline to Step `2b` (HeapManager container modernization) or revisit `2f` later with a tighter complexity/perf budget.
+---
+## Session: 2026-04-08T14:10:00-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2c (Cache capacity and contention optimization)
+- Goal: Add optional bounded cache mode, add thread-local resolver front-caches (`method_info`, `vmt`, `hierarchy`), add clone/footprint instrumentation, benchmark dispatch+generics with/without front-cache, and validate correctness.
+### Actions Taken
+- Read required context before editing:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/TYPE_RESOLUTION_AND_CACHING.md`
+  - `docs/THREADING_AND_SYNCHRONIZATION.md`
+  - `docs/GC_AND_MEMORY_SAFETY.md`
+  - `CHECKLIST.md`, `REVIEW.md`
+  - Step-relevant source files listed in prompt.
+- Implemented bounded cache policy and front-cache policy in `crates/dotnet-vm/src/state.rs`:
+  - added env-driven cache policy:
+    - `DOTNET_CACHE_LIMIT_METHOD_INFO`
+    - `DOTNET_CACHE_LIMIT_VMT`
+    - `DOTNET_CACHE_LIMIT_HIERARCHY`
+    - `DOTNET_FRONT_CACHE_ENABLED`
+    - `DOTNET_FRONT_CACHE_CAPACITY`
+  - added bounded insertion helper with opportunistic eviction,
+  - added thread-local `method_info` front-cache,
+  - updated `GlobalCaches::get_method_info` to front-cache -> global-cache fallback,
+  - added estimated cache byte accounting for all exported cache sizes,
+  - updated runtime snapshot path to pass full `CacheSizes` into metrics snapshot.
+- Added thread-local resolver front-cache plumbing in `crates/dotnet-vm/src/resolver/mod.rs`:
+  - front-caches for `vmt` and `hierarchy`,
+  - front-cache hit/miss metric recording,
+  - clone-counter recording on clone-required paths,
+  - bounded insertion routing via `GlobalCaches::set_vmt` and `GlobalCaches::set_hierarchy`.
+- Refactored resolver cache adapter interfaces in `crates/dotnet-runtime-resolver/src/lib.rs`:
+  - changed VMT/hierarchy cache methods to key-part signatures to avoid mandatory tuple construction at call sites,
+  - added optional clone-counter hooks (`record_vmt_key_clones`, `record_hierarchy_key_clones`).
+- Updated resolver call sites:
+  - `crates/dotnet-runtime-resolver/src/methods.rs`
+  - `crates/dotnet-runtime-resolver/src/types.rs`
+- Extended instrumentation and snapshot payload in `crates/dotnet-metrics/src/lib.rs`:
+  - added cache bytes to `CacheSizes`,
+  - added bench fields for:
+    - `cache_key_clone_total`
+    - `cache_key_clones_by_cache`
+    - `front_cache_hits_by_cache`
+    - `front_cache_misses_by_cache`
+    - `cache_memory_bytes_total`
+    - `cache_memory_bytes_by_cache`
+  - added no-op/non-feature-safe recording methods for new counters.
+- Updated `crates/dotnet-tracer/src/lib.rs` `CacheSizes` dummy literal for new fields.
+- Applied mitigation after benchmark results:
+  - changed front-cache default to opt-in (`DOTNET_FRONT_CACHE_ENABLED` default `false`) to avoid always-on dispatch regression.
+- Updated planning/status docs:
+  - `CHECKLIST.md`: marked Step `2c` completed and all atomic tasks checked,
+  - `REVIEW.md`: replaced Step `2c` proposed section with implementation + measured results + mitigation.
+- Ran verification:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran Step `2c` benchmarks:
+  - non-instrumented:
+    - `cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `cargo bench -p dotnet-benchmarks --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_FRONT_CACHE_ENABLED=0 cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_FRONT_CACHE_ENABLED=0 cargo bench -p dotnet-benchmarks --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - instrumented:
+    - `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_FRONT_CACHE_ENABLED=0 cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_FRONT_CACHE_ENABLED=0 cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Preserved instrumentation snapshots for both modes under `/tmp/step2c_metrics/`.
+### Findings
+- Non-instrumented Criterion medians:
+  - front-cache on (`DOTNET_FRONT_CACHE_ENABLED=1`):
+    - `dispatch`: `759.91 ms`
+    - `generics`: `18.908 s`
+  - front-cache off (`DOTNET_FRONT_CACHE_ENABLED=0`):
+    - `dispatch`: `736.79 ms`
+    - `generics`: `19.589 s`
+  - on vs off delta:
+    - `dispatch`: `+3.14%` (regression)
+    - `generics`: `-3.48%` (improvement)
+- Instrumented paired medians:
+  - front-cache on:
+    - `dispatch`: `1.1522 s`
+    - `generics`: `24.044 s`
+  - front-cache off:
+    - `dispatch`: `1.1542 s`
+    - `generics`: `24.670 s`
+  - on vs off delta:
+    - `dispatch`: `-0.17%` (neutral)
+    - `generics`: `-2.54%` (improvement)
+- New instrumentation counters (snapshot highlights):
+  - `dispatch`: key clones `64` (on) vs `1,000,040` (off); front hits `method_info=200,004`, `vmt=199,994`.
+  - `generics`: key clones `78` (on) vs `22,760,030` (off); front hits `hierarchy=5,040,000`, `method_info=2,559,997`, `vmt=2,519,996`.
+  - estimated cache memory bytes decreased slightly with front-cache-enabled runs in measured snapshots.
+- Phase 0 baseline comparisons (`crates/dotnet-benchmarks/baselines/phase0/baseline.json`, default medians):
+  - baseline `dispatch`: `794.17 ms`
+    - front-cache on run: `759.91 ms` (`-4.31%`)
+    - front-cache off run: `736.79 ms` (`-7.22%`)
+  - baseline `generics`: `18.75446 s`
+    - front-cache on run: `18.908 s` (`+0.82%`)
+    - front-cache off run: `19.589 s` (`+4.45%`)
+- Correctness remained stable via full default/no-default clippy+test matrices.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `2b` (HeapManager container modernization).
+- Revisit front-cache policy per workload (for example per-cache toggles for `vmt`/`method_info`/`hierarchy`) if later multithreaded contention benchmarks justify enabling subsets by default.
+---
+## Session: 2026-04-08T15:35:00-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2b (HeapManager container modernization)
+- Goal: Modernize HeapManager containers for production performance by gating diagnostics-only tracking, replacing hot lookup structures, and reducing small-cardinality allocation overhead.
+### Actions Taken
+- Read required context before editing:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/GC_AND_MEMORY_SAFETY.md`
+  - `docs/THREADING_AND_SYNCHRONIZATION.md`
+  - step files and targets in `CHECKLIST.md`, `REVIEW.md`, and relevant source files.
+- Captured pre-change benchmark snapshots:
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Implemented HeapManager modernization in `crates/dotnet-runtime-memory/src/heap.rs`:
+  - added `HeapManager::new()` and `Default` impl,
+  - introduced `heap-diagnostics` feature-gated `_all_objs` storage,
+  - added production object registry (`Slab` + indexed buckets) for `find_object()`,
+  - changed `finalization_queue`/`pending_finalization` to `SmallVec<[ObjectRef; 8]>`,
+  - changed `pinned_objects` to `SmallVec<[ObjectRef; 8]>` with deduped `pin_object`/`unpin_object`,
+  - added helper APIs: `register_object`, `snapshot_objects`, `live_object_count`.
+- Updated VM call sites:
+  - `crates/dotnet-vm/src/state.rs`: switched to `HeapManager::new()`.
+  - `crates/dotnet-vm/src/stack/context.rs`: switched object registration and pin/unpin to HeapManager methods.
+  - `crates/dotnet-vm/src/stack/mod.rs`: switched tracer heap/object-count reads to HeapManager methods.
+  - `crates/dotnet-vm/src/intrinsics/gc.rs`: switched pinned GCHandle updates to HeapManager methods.
+- Updated feature/dependency wiring:
+  - `crates/dotnet-runtime-memory/Cargo.toml`: added `heap-diagnostics` feature and `smallvec`/`slab` deps.
+  - `Cargo.toml` (workspace deps): added `smallvec`, `slab`.
+  - `crates/dotnet-vm/Cargo.toml`: added `heap-diagnostics` forwarding.
+  - `crates/dotnet-cli/Cargo.toml` and `crates/dotnet-benchmarks/Cargo.toml`: added `heap-diagnostics` forwarding.
+- Updated planning/status docs:
+  - `CHECKLIST.md`: marked Step `2b` completed with all atomic tasks checked.
+  - `REVIEW.md`: replaced Step `2b` proposal section with implementation details and measured results.
+- Ran verification:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Captured post-change benchmark snapshots:
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end --features bench-instrumentation -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+### Findings
+- Criterion medians (`gc`) before vs after Step `2b`:
+  - non-instrumented: `511.39 ms` -> `435.33 ms` (`-14.87%`)
+  - instrumented: `721.84 ms` -> `629.71 ms` (`-12.76%`)
+- Phase 0 baseline comparison:
+  - baseline default `gc`: `433.05 ms`
+    - post-step default run: `435.33 ms` (`+0.53%`)
+  - baseline instrumented `gc`: `608.92 ms`
+    - post-step instrumented run: `629.71 ms` (`+3.41%`)
+- GC pause metrics (instrumented snapshot at `target/release/dotnet-bench-metrics/gc.json`):
+  - post-step: `gc_pause_total_us=4941`, `gc_pause_count=169` (avg `29.24 us`)
+  - Phase 0 instrumented baseline snapshot: `gc_pause_total_us=3647`, `gc_pause_count=253` (avg `14.42 us`)
+- Correctness remained stable across default and no-default clippy/test matrices, including GC fixture coverage under `dotnet-cli` integration tests.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `2d` or `2e` per dependency plan; keep `heap-diagnostics` disabled by default for performance runs.
+- If detailed heap snapshot tracing is needed during future debugging, enable `heap-diagnostics` explicitly and rerun targeted workloads.
+---
+## Session: 2026-04-08T17:43:08-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2d (Instruction dispatch tuning)
+- Goal: Add alternate jump-table instruction dispatch generation, add configurable safe-point polling interval, prototype a super-instruction pair behind a feature flag, benchmark arithmetic+virtual dispatch variants, and verify opcode parity.
+### Actions Taken
+- Read required context before editing:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/BUILD_TIME_CODE_GENERATION.md`
+  - `docs/DELEGATES_AND_DISPATCH.md`
+  - Step targets in `CHECKLIST.md` and `REVIEW.md`
+  - Relevant files: `crates/dotnet-vm/build.rs`, `crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/dispatch/registry.rs`
+- Implemented dispatch generation and selection:
+  - `crates/dotnet-vm/build.rs`
+    - added build-time duplicate-opcode registration guard,
+    - retained monomorphic `dispatch_monomorphic` generation,
+    - added generated opcode-indexed function-pointer dispatcher `dispatch_jump_table`,
+    - generated per-opcode wrapper functions and shared unimplemented fallback.
+  - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - `InstructionRegistry::dispatch` now selects generated backend by feature:
+      - default: monomorphic match dispatcher,
+      - `instruction-dispatch-jump-table`: jump-table dispatcher.
+- Implemented safe-point polling configuration:
+  - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - added `DOTNET_SAFE_POINT_POLL_INTERVAL` (`32|64|128`) via `OnceLock`,
+    - invalid values warn and fall back to default `32`,
+    - batch loop now uses configured interval while retaining batch size `128`.
+- Implemented super-instruction prototype:
+  - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - added `dispatch-super-instruction-prototype` fast path in batch execution,
+    - fused pair: `LoadConstantInt32(1)` + `Add`,
+    - kept per-instruction ring-buffer/tracing/opcode-metric accounting,
+    - added fallback to normal stepping when pair preconditions are not met.
+- Updated feature wiring:
+  - `crates/dotnet-vm/Cargo.toml`
+    - added `instruction-dispatch-jump-table`
+    - added `dispatch-super-instruction-prototype`
+  - `crates/dotnet-benchmarks/Cargo.toml`
+    - added forwarding features for both flags.
+- Updated generated-dispatch tests:
+  - `crates/dotnet-vm/src/dispatch/registry.rs`
+    - added assertions that jump-table dispatch artifacts are generated.
+- Updated planning/status docs:
+  - `CHECKLIST.md`: marked Step `2d` completed with all atomic tasks checked.
+  - `REVIEW.md`: replaced Step `2d` proposal section with implementation, verification, measurements, and mitigation.
+- Ran verification:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+  - `cargo test -p dotnet-vm --features instruction-dispatch-jump-table -- --nocapture`
+  - `cargo test -p dotnet-vm --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" -- --nocapture`
+- Ran Step `2d` benchmark matrix (non-instrumented):
+  - Match dispatch:
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=128 cargo bench -p dotnet-benchmarks --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=128 cargo bench -p dotnet-benchmarks --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - Jump-table dispatch:
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=128 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=128 cargo bench -p dotnet-benchmarks --features instruction-dispatch-jump-table --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - Jump-table + super-instruction prototype:
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=32 cargo bench -p dotnet-benchmarks --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `DOTNET_SAFE_POINT_POLL_INTERVAL=64 cargo bench -p dotnet-benchmarks --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+### Findings
+- Criterion medians (ms) by variant:
+  - match, poll 32: `arithmetic=532.48`, `dispatch=767.04`
+  - match, poll 64: `arithmetic=551.07`, `dispatch=768.06`
+  - match, poll 128: `arithmetic=542.35`, `dispatch=759.97`
+  - jump-table, poll 32: `arithmetic=553.00`, `dispatch=791.16`
+  - jump-table, poll 64: `arithmetic=549.86`, `dispatch=770.73`
+  - jump-table, poll 128: `arithmetic=557.45`, `dispatch=769.13`
+  - jump-table+super, poll 32: `arithmetic=568.05`, `dispatch=787.32`
+  - jump-table+super, poll 64: `arithmetic=579.16`, `dispatch=786.49`
+- Deltas vs current default config (match, poll 32):
+  - match poll 64: arithmetic `+3.49%`, dispatch `+0.13%`
+  - match poll 128: arithmetic `+1.85%`, dispatch `-0.92%`
+  - jump-table poll 32: arithmetic `+3.85%`, dispatch `+3.14%`
+  - jump-table+super poll 32: arithmetic `+6.68%`, dispatch `+2.64%`
+- Baseline (`phase0/results.default`) context:
+  - baseline arithmetic median `585.0569755 ms` vs best observed here `532.48 ms` (`-8.99%`)
+  - baseline dispatch median `794.1701455 ms` vs best observed here `759.97 ms` (`-4.31%`)
+- Functional parity:
+  - dispatch-focused and opcode behavior tests passed under default, jump-table, and jump-table+super feature configurations.
+### Blockers
+- none
+### Next Steps
+- Keep jump-table and super-instruction prototype features disabled by default due regressions in this benchmark environment.
+- Proceed to Step `2e` (Intrinsic dispatch fast path), then revisit jump-table/super variants after 2e/4a changes to reassess interaction with call-heavy workloads.

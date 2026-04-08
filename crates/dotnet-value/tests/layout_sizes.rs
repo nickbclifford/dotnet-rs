@@ -1,6 +1,6 @@
 use dotnet_value::{
-    object::{HeapStorage, ObjectInner},
     StackValue,
+    object::{HeapStorage, ObjectInner},
     pointer::{ManagedPtr, PointerOrigin},
 };
 use std::mem::{align_of, size_of};
@@ -95,7 +95,10 @@ fn layout_sizes_match_expected() {
             size_of::<PointerOrigin<'static>>(),
             EXPECTED_POINTER_ORIGIN_SIZE
         );
-        assert_eq!(size_of::<ObjectInner<'static>>(), expected_object_inner_size);
+        assert_eq!(
+            size_of::<ObjectInner<'static>>(),
+            expected_object_inner_size
+        );
         assert_eq!(align_of::<StackValue<'static>>(), 8);
         assert_eq!(align_of::<ManagedPtr<'static>>(), 8);
         assert_eq!(align_of::<PointerOrigin<'static>>(), 8);

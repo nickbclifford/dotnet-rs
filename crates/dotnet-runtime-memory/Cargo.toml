@@ -10,6 +10,8 @@ dotnet-value = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 gc-arena = { workspace = true }
 sptr = { workspace = true }
+smallvec = { workspace = true }
+slab = { workspace = true }
 
 [features]
 default = ["multithreading"]
@@ -18,6 +20,7 @@ multithreading = [
     "dotnet-value/multithreading",
     "dotnet-vm-ops/multithreading",
 ]
+heap-diagnostics = []
 memory-validation = [
     "dotnet-utils/memory-validation",
     "dotnet-value/memory-validation",

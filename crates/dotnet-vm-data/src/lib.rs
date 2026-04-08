@@ -46,6 +46,7 @@ unsafe impl<'gc> Collect<'gc> for MethodState {}
 pub struct MethodInfo<'a> {
     pub signature: &'a ManagedMethod<MethodType>,
     pub locals: &'a [LocalVariable],
+    pub max_stack: usize,
     pub exceptions: Vec<Arc<exceptions::ProtectedSection>>,
     pub instructions: &'a [Instruction],
     pub source: MethodDescription,

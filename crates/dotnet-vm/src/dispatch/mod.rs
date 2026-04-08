@@ -15,6 +15,7 @@ use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
+use std::sync::OnceLock;
 
 pub mod registry;
 pub mod ring_buffer;
@@ -23,8 +24,40 @@ pub struct InstructionRegistry;
 
 impl InstructionRegistry {
     pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
+        #[cfg(feature = "instruction-dispatch-jump-table")]
+        {
+            return registry::dispatch_jump_table(ctx, instr);
+        }
+        #[cfg(not(feature = "instruction-dispatch-jump-table"))]
         registry::dispatch_monomorphic(ctx, instr)
     }
+}
+
+const DISPATCH_BATCH_SIZE: usize = 128;
+const DEFAULT_SAFE_POINT_POLL_INTERVAL: usize = 32;
+
+fn dispatch_safe_point_poll_interval() -> usize {
+    static POLL_INTERVAL: OnceLock<usize> = OnceLock::new();
+    *POLL_INTERVAL.get_or_init(|| match std::env::var("DOTNET_SAFE_POINT_POLL_INTERVAL") {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(interval) if matches!(interval, 32 | 64 | 128) => interval,
+            Ok(interval) => {
+                tracing::warn!(
+                    "invalid DOTNET_SAFE_POINT_POLL_INTERVAL={interval}; expected one of 32, 64, 128; using {}",
+                    DEFAULT_SAFE_POINT_POLL_INTERVAL
+                );
+                DEFAULT_SAFE_POINT_POLL_INTERVAL
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "failed to parse DOTNET_SAFE_POINT_POLL_INTERVAL={raw:?}: {err}; using {}",
+                    DEFAULT_SAFE_POINT_POLL_INTERVAL
+                );
+                DEFAULT_SAFE_POINT_POLL_INTERVAL
+            }
+        },
+        Err(_) => DEFAULT_SAFE_POINT_POLL_INTERVAL,
+    })
 }
 
 impl<'gc> CallStack<'gc> {
@@ -147,6 +180,151 @@ impl<'gc> ExecutionEngine<'gc> {
         }
     }
 
+    #[inline]
+    fn step_batch_instruction(
+        &mut self,
+        gc: GCHandle<'gc>,
+        remaining_budget: usize,
+    ) -> (StepResult, usize) {
+        #[cfg(not(feature = "dispatch-super-instruction-prototype"))]
+        let _ = remaining_budget;
+
+        #[cfg(feature = "dispatch-super-instruction-prototype")]
+        if let Some((res, consumed)) =
+            self.try_step_super_load_const_i32_1_add(gc, remaining_budget)
+        {
+            return (res, consumed);
+        }
+
+        (self.step_normal(gc), 1)
+    }
+
+    #[cfg(feature = "dispatch-super-instruction-prototype")]
+    fn try_step_super_load_const_i32_1_add(
+        &mut self,
+        gc: GCHandle<'gc>,
+        remaining_budget: usize,
+    ) -> Option<(StepResult, usize)> {
+        if remaining_budget < 2
+            || self.stack.execution.frame_stack.is_empty()
+            || self.stack.current_frame().multicast_state.is_some()
+        {
+            return None;
+        }
+
+        let ip = self.stack.state().ip;
+        let instructions = self.stack.state().info_handle.instructions;
+        if ip + 1 >= instructions.len()
+            || !matches!(
+                (&instructions[ip], &instructions[ip + 1]),
+                (Instruction::LoadConstantInt32(1), Instruction::Add)
+            )
+        {
+            return None;
+        }
+
+        let first = instructions[ip].clone();
+        let second = instructions[ip + 1].clone();
+        let resolution = self.stack.state().info_handle.source.resolution();
+
+        // Keep suspension/retry metadata aligned with each fused instruction.
+        self.stack.execution.original_ip = ip;
+        self.stack.execution.original_stack_height =
+            self.stack.execution.evaluation_stack.top_of_stack();
+
+        self.ring_buffer
+            .push(ip, first.show(resolution.definition()));
+        if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
+            let first_text = first.show(resolution.definition());
+            vm_trace_instruction!(self.stack, ip, &first_text);
+        }
+
+        #[cfg(feature = "bench-instrumentation")]
+        self.stack
+            .shared
+            .metrics
+            .record_opcode_dispatch(opcode_category_for(&first));
+
+        tracing::debug!(
+            "step_super: frame={}, ip={}, first={:?}, second={:?}",
+            self.stack.execution.frame_stack.len(),
+            ip,
+            first.opcode(),
+            second.opcode()
+        );
+
+        let first_res = {
+            let mut ctx = self.ves_context(gc);
+            InstructionRegistry::dispatch(&mut ctx, &first)
+        };
+        let mut consumed = 1usize;
+
+        match first_res {
+            StepResult::Continue => {
+                self.stack.increment_ip();
+            }
+            StepResult::Jump(target) => {
+                self.stack.branch(target);
+                return Some((StepResult::Continue, consumed));
+            }
+            StepResult::Yield => return Some((StepResult::Yield, consumed)),
+            StepResult::Exception => return Some((StepResult::Exception, consumed)),
+            StepResult::Return => {
+                let res = self.ves_context(gc).handle_return();
+                tracing::debug!("step_super: first handle_return result={:?}", res);
+                return Some((res, consumed));
+            }
+            _ => return Some((first_res, consumed)),
+        }
+
+        let second_ip = self.stack.state().ip;
+        if second_ip != ip + 1 {
+            return Some((StepResult::Continue, consumed));
+        }
+
+        self.stack.execution.original_ip = second_ip;
+        self.stack.execution.original_stack_height =
+            self.stack.execution.evaluation_stack.top_of_stack();
+        self.ring_buffer
+            .push(second_ip, second.show(resolution.definition()));
+        if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
+            let second_text = second.show(resolution.definition());
+            vm_trace_instruction!(self.stack, second_ip, &second_text);
+        }
+
+        #[cfg(feature = "bench-instrumentation")]
+        self.stack
+            .shared
+            .metrics
+            .record_opcode_dispatch(opcode_category_for(&second));
+
+        consumed += 1;
+        let second_res = {
+            let mut ctx = self.ves_context(gc);
+            InstructionRegistry::dispatch(&mut ctx, &second)
+        };
+        let result = match second_res {
+            StepResult::Continue => {
+                self.stack.increment_ip();
+                StepResult::Continue
+            }
+            StepResult::Jump(target) => {
+                self.stack.branch(target);
+                StepResult::Continue
+            }
+            StepResult::Yield => StepResult::Yield,
+            StepResult::Exception => StepResult::Exception,
+            StepResult::Return => {
+                let res = self.ves_context(gc).handle_return();
+                tracing::debug!("step_super: second handle_return result={:?}", res);
+                res
+            }
+            _ => second_res,
+        };
+
+        Some((result, consumed))
+    }
+
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
         loop {
@@ -169,17 +347,26 @@ impl<'gc> ExecutionEngine<'gc> {
                     // without checking exception mode every time, relying on instructions
                     // to return StepResult::Exception if they throw.
                     let mut last_res = StepResult::Continue;
+                    let poll_interval = dispatch_safe_point_poll_interval();
+                    let mut executed_in_batch = 0usize;
+                    let mut since_poll = 0usize;
                     // Batch multiple instructions to reduce dispatch overhead.
                     // Safe because any state-changing instruction must return a non-Continue result
                     // (e.g., Jump/Return/Exception), which breaks out of this loop.
-                    for i in 0..128 {
-                        last_res = self.step_normal(gc);
+                    while executed_in_batch < DISPATCH_BATCH_SIZE {
+                        let remaining = DISPATCH_BATCH_SIZE - executed_in_batch;
+                        let (res, consumed) = self.step_batch_instruction(gc, remaining);
+                        last_res = res;
+                        let consumed = consumed.min(remaining);
+                        executed_in_batch += consumed;
+
                         if last_res != StepResult::Continue {
                             break;
                         }
 
-                        // Check abort/safe-point every 32 instructions within a batch
-                        if i % 32 == 31 {
+                        since_poll += consumed;
+                        // Check abort/safe-point every N instructions within a batch.
+                        if since_poll >= poll_interval {
                             if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
                                 last_res = StepResult::Yield;
                                 break;
@@ -188,6 +375,7 @@ impl<'gc> ExecutionEngine<'gc> {
                                 last_res = StepResult::Yield;
                                 break;
                             }
+                            since_poll = 0;
                         }
                     }
 

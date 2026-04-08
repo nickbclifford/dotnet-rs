@@ -1,9 +1,10 @@
 use dotnet_macros_core::{
     InstructionMapping, ParsedFieldSignature, ParsedInstruction, ParsedSignature,
 };
+use dotnetdll::prelude::Instruction;
 use std::{
     borrow::Cow,
-    collections::hash_map::DefaultHasher,
+    collections::{HashSet, hash_map::DefaultHasher},
     env, fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
@@ -313,9 +314,26 @@ fn process_fn(item_fn: &ItemFn, mod_path: &str, entries: &mut Vec<InstructionEnt
     }
 }
 
+fn to_snake_case_ident(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 8);
+    for (i, ch) in input.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionEntry]) {
     let dest_path = Path::new(out_dir).join("instruction_dispatch.rs");
     let mut table_code = String::new();
+    let mut seen_variants = HashSet::new();
+    let mut jump_table_entries = Vec::new();
 
     // New monomorphic dispatcher
     table_code.push_str("pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
@@ -325,6 +343,13 @@ fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionE
     table_code.push_str("    match instr {\n");
 
     for entry in entries {
+        if !seen_variants.insert(entry.variant_name.clone()) {
+            panic!(
+                "Duplicate instruction handler registration for opcode `{}`",
+                entry.variant_name
+            );
+        }
+
         let handler_path: syn::Path = syn::parse_str(&format!(
             "{}::{}",
             entry.mod_path, entry.parsed.handler_name
@@ -343,10 +368,64 @@ fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionE
             .mapping
             .to_match_arm_path(&handler_path, &extra_arg_info);
         table_code.push_str(&format!("        {},\n", arm));
+
+        let wrapper_name = format!(
+            "dispatch_opcode_{}",
+            to_snake_case_ident(&entry.variant_name)
+        );
+        let opcode = Instruction::opcode_from_name(&entry.variant_name).unwrap_or_else(|| {
+            panic!(
+                "Could not resolve opcode index for instruction variant `{}`",
+                entry.variant_name
+            )
+        });
+        jump_table_entries.push((opcode, wrapper_name, arm.to_string()));
     }
 
     table_code.push_str("        _ => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr))))\n");
     table_code.push_str("    }\n");
+    table_code.push_str("}\n");
+
+    jump_table_entries.sort_by_key(|(opcode, _, _)| *opcode);
+
+    table_code.push('\n');
+    table_code
+        .push_str("type DispatchFn<'gc, T> = fn(&mut T, &Instruction) -> crate::StepResult;\n\n");
+    table_code.push_str("#[inline(always)]\n");
+    table_code.push_str("fn dispatch_unimplemented<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
+    table_code.push_str("    _ctx: &mut T,\n");
+    table_code.push_str("    instr: &Instruction,\n");
+    table_code.push_str(") -> crate::StepResult {\n");
+    table_code.push_str("    crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr))))\n");
+    table_code.push_str("}\n\n");
+
+    for (_, wrapper_name, arm) in &jump_table_entries {
+        table_code.push_str("#[inline(always)]\n");
+        table_code.push_str(&format!(
+            "fn {}<'gc, T: crate::stack::ops::VesOps<'gc>>(\n",
+            wrapper_name
+        ));
+        table_code.push_str("    ctx: &mut T,\n");
+        table_code.push_str("    instr: &Instruction,\n");
+        table_code.push_str(") -> crate::StepResult {\n");
+        table_code.push_str("    match instr {\n");
+        table_code.push_str(&format!("        {},\n", arm));
+        table_code.push_str("        _ => dispatch_unimplemented(ctx, instr),\n");
+        table_code.push_str("    }\n");
+        table_code.push_str("}\n\n");
+    }
+
+    table_code.push_str("pub fn dispatch_jump_table<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
+    table_code.push_str("    ctx: &mut T,\n");
+    table_code.push_str("    instr: &Instruction,\n");
+    table_code.push_str(") -> crate::StepResult {\n");
+    table_code.push_str("    let handler: DispatchFn<'gc, T> = match instr.opcode() {\n");
+    for (opcode, wrapper_name, _) in &jump_table_entries {
+        table_code.push_str(&format!("        {} => {}::<T>,\n", opcode, wrapper_name));
+    }
+    table_code.push_str("        _ => dispatch_unimplemented::<T>,\n");
+    table_code.push_str("    };\n");
+    table_code.push_str("    handler(ctx, instr)\n");
     table_code.push_str("}\n");
 
     fs::write(dest_path, table_code).unwrap();

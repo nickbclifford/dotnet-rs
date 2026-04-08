@@ -20,6 +20,10 @@ validation-all = [
 ]
 fuzzing = ["dotnet-vm/fuzzing"]
 bench-instrumentation = ["dotnet-vm/bench-instrumentation"]
+heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
+segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
+instruction-dispatch-jump-table = ["dotnet-vm/instruction-dispatch-jump-table"]
+dispatch-super-instruction-prototype = ["dotnet-vm/dispatch-super-instruction-prototype"]
 
 [dependencies]
 dotnet-assemblies = { workspace = true }

@@ -1,6 +1,6 @@
-use crate::{ArenaId, ptr_common::PointerLike};
 #[cfg(any(feature = "memory-validation", debug_assertions, test))]
 use crate::ValidationTag;
+use crate::{ArenaId, ptr_common::PointerLike};
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
@@ -382,10 +382,7 @@ impl<'gc> ObjectRef<'gc> {
             gc.record_allocation(size);
         }
 
-        let h = Gc::new(
-            &gc,
-            ThreadSafeLock::new(ObjectInner::new(value, owner_id)),
-        );
+        let h = Gc::new(&gc, ThreadSafeLock::new(ObjectInner::new(value, owner_id)));
 
         #[cfg(feature = "fuzzing")]
         register_object_ptr(Gc::as_ptr(h) as usize);
@@ -805,8 +802,10 @@ mod tests {
             register_arena(arena_id, Arc::new(AtomicBool::new(false)));
 
             // We need a pointer to something that looks like an ObjectInner to pass magic check.
-            let inner =
-                ObjectInner::new(HeapStorage::Str(crate::string::CLRString::from("test")), arena_id);
+            let inner = ObjectInner::new(
+                HeapStorage::Str(crate::string::CLRString::from("test")),
+                arena_id,
+            );
             let lock = Gc::new(mc, ThreadSafeLock::new(inner));
             let lock_ptr = Gc::as_ptr(lock) as usize;
 

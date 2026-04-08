@@ -77,52 +77,65 @@
 ## Phase 2: Algorithm and Data Structure
 
 ### Step 2a: Evaluation stack reallocation elimination
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm-data/src/lib.rs, crates/dotnet-vm-data/src/stack.rs, crates/dotnet-vm/src/lib.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs
 - **Depends on**: 1a, 1b
 - **Risk**: high
 - **Tasks**:
-  - [ ] Add `max_stack` metadata to `MethodInfo` from IL header.
-  - [ ] Reserve evaluation stack capacity from `max_stack` at frame push time.
-  - [ ] Implement and benchmark a segmented stack prototype behind a feature flag.
-  - [ ] Remove or minimize eager full-stack pointer fixup on capacity growth.
-  - [ ] Verify: run deep-stack fixtures and confirm managed pointer semantics remain correct.
+  - [x] Add `max_stack` metadata to `MethodInfo` from IL header.
+  - [x] Reserve evaluation stack capacity from `max_stack` at frame push time.
+  - [x] Implement and benchmark a segmented stack prototype behind a feature flag.
+  - [x] Remove or minimize eager full-stack pointer fixup on capacity growth.
+  - [x] Verify: run deep-stack fixtures and confirm managed pointer semantics remain correct.
+
+### Step 2f: Segmented stack architecture integration
+- **Status**: [ ] Started but deliberately reverted
+- **Files**: crates/dotnet-vm-data/src/stack.rs, crates/dotnet-vm-data/src/lib.rs, crates/dotnet-vm/src/stack/mod.rs, crates/dotnet-vm/src/stack/context.rs, crates/dotnet-vm/src/stack/ops.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs, crates/dotnet-vm/src/stack/exception_ops_impl.rs
+- **Depends on**: 2a
+- **Risk**: high
+- **Tasks**:
+  - [ ] Replace prototype reserve-only behavior with a real segmented evaluation-stack backend that guarantees stable stack-slot addresses across growth.
+  - [ ] Introduce a clear stack-storage abstraction (backend trait or equivalent) so `VesContext` and stack ops do not depend on raw `Vec` internals.
+  - [ ] Remove full-stack pointer fixup from normal growth path in segmented mode; keep contiguous mode as fallback behind feature gate.
+  - [ ] Wire suspend/restore, truncate, `set_slot_at`, and exception unwind paths to segment-aware indexing and addressing.
+  - [ ] Run dispatch/deep-stack/byref benchmarks for contiguous vs segmented backends and record tradeoffs in `REVIEW.md`.
+  - [ ] Verify: run full default and no-default suites plus stack/byref fixtures for parity.
 
 ### Step 2b: HeapManager container modernization
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-runtime-memory/src/heap.rs, crates/dotnet-vm/src/state.rs, crates/dotnet-runtime-memory/Cargo.toml
 - **Depends on**: 0c
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Gate `_all_objs` behind a diagnostics feature and disable it by default for release performance runs.
-  - [ ] Replace `BTreeMap` object lookup path with an O(1) indexed structure or slab for production mode.
-  - [ ] Evaluate `SmallVec` for finalization queues and optimize pinned-object tracking for small cardinalities.
-  - [ ] Re-run allocation-pressure benchmark and compare GC pause and throughput.
-  - [ ] Verify: run GC fixture suite (`tests/fixtures/gc/*.cs`) and confirm behavior remains unchanged.
+  - [x] Gate `_all_objs` behind a diagnostics feature and disable it by default for release performance runs.
+  - [x] Replace `BTreeMap` object lookup path with an O(1) indexed structure or slab for production mode.
+  - [x] Evaluate `SmallVec` for finalization queues and optimize pinned-object tracking for small cardinalities.
+  - [x] Re-run allocation-pressure benchmark and compare GC pause and throughput.
+  - [x] Verify: run GC fixture suite (`tests/fixtures/gc/*.cs`) and confirm behavior remains unchanged.
 
 ### Step 2c: Cache capacity and contention optimization
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/src/state.rs, crates/dotnet-vm/src/resolver/mod.rs, crates/dotnet-runtime-resolver/src/layout.rs, crates/dotnet-runtime-resolver/src/methods.rs, crates/dotnet-metrics/src/lib.rs
 - **Depends on**: 0c
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Add optional bounded mode (size limits/eviction) for selected global caches.
-  - [ ] Add thread-local front-cache for hot resolver lookups (`method_info`, `vmt`, `hierarchy`).
-  - [ ] Add instrumentation counters for key clone count and cache memory footprint.
-  - [ ] Benchmark virtual dispatch and generics stress workloads with and without front-cache.
-  - [ ] Verify: ensure cache miss fallback preserves correctness by running full test suite.
+  - [x] Add optional bounded mode (size limits/eviction) for selected global caches.
+  - [x] Add thread-local front-cache for hot resolver lookups (`method_info`, `vmt`, `hierarchy`).
+  - [x] Add instrumentation counters for key clone count and cache memory footprint.
+  - [x] Benchmark virtual dispatch and generics stress workloads with and without front-cache.
+  - [x] Verify: ensure cache miss fallback preserves correctness by running full test suite.
 
 ### Step 2d: Instruction dispatch tuning
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/build.rs, crates/dotnet-vm/src/dispatch/mod.rs, crates/dotnet-vm/src/dispatch/registry.rs
 - **Depends on**: 0c, 2a
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Add a build-time option to generate function-pointer jump-table dispatch in parallel with current `match` dispatch.
-  - [ ] Add configurable safe-point polling interval for the batch loop (`32/64/128`).
-  - [ ] Prototype one super-instruction pair and gate it behind a feature flag.
-  - [ ] Benchmark arithmetic loop and virtual dispatch workloads for each dispatch variant.
-  - [ ] Verify: run instruction dispatch tests and confirm opcode behavior parity.
+  - [x] Add a build-time option to generate function-pointer jump-table dispatch in parallel with current `match` dispatch.
+  - [x] Add configurable safe-point polling interval for the batch loop (`32/64/128`).
+  - [x] Prototype one super-instruction pair and gate it behind a feature flag.
+  - [x] Benchmark arithmetic loop and virtual dispatch workloads for each dispatch variant.
+  - [x] Verify: run instruction dispatch tests and confirm opcode behavior parity.
 
 ### Step 2e: Intrinsic dispatch fast path
 - **Status**: [ ] Not started

@@ -2,18 +2,30 @@ use crate::host::MemorySharedStateHost;
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use gc_arena::{Collect, Gc, collect::Trace};
+use slab::Slab;
+use smallvec::SmallVec;
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashSet},
+    collections::{HashMap, HashSet},
 };
+
+#[cfg(feature = "heap-diagnostics")]
+use std::collections::BTreeMap;
 
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 
+const SMALL_QUEUE_CAPACITY: usize = 8;
+#[cfg(not(feature = "heap-diagnostics"))]
+const REGISTRY_BUCKET_SHIFT: usize = 6;
+
+type FinalizationQueue<'gc> = SmallVec<[ObjectRef<'gc>; SMALL_QUEUE_CAPACITY]>;
+type PinnedObjects<'gc> = SmallVec<[ObjectRef<'gc>; SMALL_QUEUE_CAPACITY]>;
+
 pub struct HeapManager<'gc> {
-    pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pinned_objects: RefCell<HashSet<ObjectRef<'gc>>>,
+    pub finalization_queue: RefCell<FinalizationQueue<'gc>>,
+    pub pending_finalization: RefCell<FinalizationQueue<'gc>>,
+    pub pinned_objects: RefCell<PinnedObjects<'gc>>,
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
     pub processing_finalizer: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
@@ -21,28 +33,106 @@ pub struct HeapManager<'gc> {
     /// This is populated during the coordinated GC marking phase.
     #[cfg(feature = "multithreading")]
     pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
-    /// Untraced handles to every heap object in this arena.
+    /// Untraced handles to every heap object in this arena (diagnostics mode).
     /// Used by the tracer during debugging and for conservative stack scanning.
+    #[cfg(feature = "heap-diagnostics")]
     pub _all_objs: RefCell<BTreeMap<usize, ObjectRef<'gc>>>,
+    #[cfg(not(feature = "heap-diagnostics"))]
+    object_registry: RefCell<ObjectRegistry<'gc>>,
 }
 
 impl<'gc> HeapManager<'gc> {
-    pub fn find_object(&self, ptr: usize) -> Option<ObjectRef<'gc>> {
-        let all_objs = self._all_objs.borrow();
-        let (&start, &obj) = all_objs.range(..=ptr).next_back()?;
+    pub fn new() -> Self {
+        Self {
+            finalization_queue: RefCell::new(SmallVec::new()),
+            pending_finalization: RefCell::new(SmallVec::new()),
+            pinned_objects: RefCell::new(SmallVec::new()),
+            gchandles: RefCell::new(Vec::new()),
+            processing_finalizer: Cell::new(false),
+            needs_full_collect: Cell::new(false),
+            #[cfg(feature = "multithreading")]
+            cross_arena_roots: RefCell::new(HashSet::new()),
+            #[cfg(feature = "heap-diagnostics")]
+            _all_objs: RefCell::new(BTreeMap::new()),
+            #[cfg(not(feature = "heap-diagnostics"))]
+            object_registry: RefCell::new(ObjectRegistry::new()),
+        }
+    }
 
-        let size = {
-            let inner_gc = obj.0.unwrap();
-            let inner = inner_gc.borrow();
-            match &inner.storage {
-                HeapStorage::Obj(o) => o.size_bytes(),
-                HeapStorage::Vec(v) => v.size_bytes(),
-                HeapStorage::Str(s) => s.size_bytes(),
-                HeapStorage::Boxed(b) => b.size_bytes(),
-            }
+    #[inline]
+    pub fn register_object(&self, instance: ObjectRef<'gc>) {
+        let Some(ptr) = instance.0 else {
+            return;
         };
+        let addr = Gc::as_ptr(ptr) as usize;
 
-        if ptr < start + size { Some(obj) } else { None }
+        #[cfg(feature = "heap-diagnostics")]
+        {
+            self._all_objs.borrow_mut().insert(addr, instance);
+        }
+        #[cfg(not(feature = "heap-diagnostics"))]
+        {
+            if let Some(size) = object_size(instance) {
+                self.object_registry
+                    .borrow_mut()
+                    .insert(addr, size, instance);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn pin_object(&self, object: ObjectRef<'gc>) {
+        let mut pinned = self.pinned_objects.borrow_mut();
+        if !pinned.contains(&object) {
+            pinned.push(object);
+        }
+    }
+
+    #[inline]
+    pub fn unpin_object(&self, object: ObjectRef<'gc>) {
+        let mut pinned = self.pinned_objects.borrow_mut();
+        if let Some(i) = pinned.iter().position(|o| *o == object) {
+            pinned.swap_remove(i);
+        }
+    }
+
+    #[inline]
+    pub fn live_object_count(&self) -> usize {
+        #[cfg(feature = "heap-diagnostics")]
+        {
+            self._all_objs.borrow().len()
+        }
+        #[cfg(not(feature = "heap-diagnostics"))]
+        {
+            self.object_registry.borrow().len()
+        }
+    }
+
+    #[inline]
+    pub fn snapshot_objects(&self) -> Vec<ObjectRef<'gc>> {
+        #[cfg(feature = "heap-diagnostics")]
+        {
+            self._all_objs.borrow().values().copied().collect()
+        }
+        #[cfg(not(feature = "heap-diagnostics"))]
+        {
+            Vec::new()
+        }
+    }
+
+    pub fn find_object(&self, ptr: usize) -> Option<ObjectRef<'gc>> {
+        #[cfg(feature = "heap-diagnostics")]
+        {
+            let all_objs = self._all_objs.borrow();
+            let (&start, &obj) = all_objs.range(..=ptr).next_back()?;
+            let size = object_size(obj)?;
+
+            if ptr < start + size { Some(obj) } else { None }
+        }
+        #[cfg(not(feature = "heap-diagnostics"))]
+        {
+            self.object_registry.borrow().find(ptr)
+        }
     }
 
     pub fn has_pending_finalizers(&self) -> bool {
@@ -171,11 +261,148 @@ impl<'gc> HeapManager<'gc> {
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
 
         // 3. Prune dead objects from the debugging harness
+        #[cfg(feature = "heap-diagnostics")]
         self._all_objs.borrow_mut().retain(|addr, obj| match obj.0 {
             Some(ptr) => !Gc::is_dead(fc, ptr) || resurrected.contains(addr),
             None => false,
         });
+        #[cfg(not(feature = "heap-diagnostics"))]
+        self.object_registry
+            .borrow_mut()
+            .prune_dead(fc, &resurrected);
     }
+}
+
+impl<'gc> Default for HeapManager<'gc> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn object_size<'gc>(obj: ObjectRef<'gc>) -> Option<usize> {
+    let inner_gc = obj.0?;
+    let inner = inner_gc.borrow();
+    Some(match &inner.storage {
+        HeapStorage::Obj(o) => o.size_bytes(),
+        HeapStorage::Vec(v) => v.size_bytes(),
+        HeapStorage::Str(s) => s.size_bytes(),
+        HeapStorage::Boxed(b) => b.size_bytes(),
+    })
+}
+
+#[cfg(not(feature = "heap-diagnostics"))]
+struct RegistryEntry<'gc> {
+    start: usize,
+    size: usize,
+    obj: ObjectRef<'gc>,
+}
+
+#[cfg(not(feature = "heap-diagnostics"))]
+struct ObjectRegistry<'gc> {
+    entries: Slab<RegistryEntry<'gc>>,
+    start_to_id: HashMap<usize, usize>,
+    buckets: HashMap<usize, SmallVec<[usize; 2]>>,
+}
+
+#[cfg(not(feature = "heap-diagnostics"))]
+impl<'gc> ObjectRegistry<'gc> {
+    fn new() -> Self {
+        Self {
+            entries: Slab::new(),
+            start_to_id: HashMap::new(),
+            buckets: HashMap::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn insert(&mut self, start: usize, size: usize, obj: ObjectRef<'gc>) {
+        if size == 0 {
+            return;
+        }
+
+        if let Some(existing) = self.start_to_id.remove(&start) {
+            self.remove_entry(existing);
+        }
+
+        let id = self.entries.insert(RegistryEntry { start, size, obj });
+        self.start_to_id.insert(start, id);
+
+        for bucket in bucket_range(start, size) {
+            let ids = self.buckets.entry(bucket).or_default();
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+
+    fn find(&self, ptr: usize) -> Option<ObjectRef<'gc>> {
+        if let Some(id) = self.start_to_id.get(&ptr).copied()
+            && let Some(entry) = self.entries.get(id)
+        {
+            return Some(entry.obj);
+        }
+
+        let bucket = ptr >> REGISTRY_BUCKET_SHIFT;
+        let ids = self.buckets.get(&bucket)?;
+        for id in ids {
+            let Some(entry) = self.entries.get(*id) else {
+                continue;
+            };
+            if ptr >= entry.start && ptr < entry.start.saturating_add(entry.size) {
+                return Some(entry.obj);
+            }
+        }
+
+        None
+    }
+
+    fn prune_dead(&mut self, fc: &'gc gc_arena::Finalization<'gc>, resurrected: &HashSet<usize>) {
+        let mut to_remove = Vec::new();
+        for (id, entry) in &self.entries {
+            let remove = match entry.obj.0 {
+                Some(ptr) => Gc::is_dead(fc, ptr) && !resurrected.contains(&entry.start),
+                None => true,
+            };
+            if remove {
+                to_remove.push(id);
+            }
+        }
+
+        for id in to_remove {
+            self.remove_entry(id);
+        }
+    }
+
+    fn remove_entry(&mut self, id: usize) {
+        if !self.entries.contains(id) {
+            return;
+        }
+
+        let entry = self.entries.remove(id);
+        self.start_to_id.remove(&entry.start);
+
+        for bucket in bucket_range(entry.start, entry.size) {
+            let mut clear_bucket = false;
+            if let Some(ids) = self.buckets.get_mut(&bucket) {
+                if let Some(pos) = ids.iter().position(|existing| *existing == id) {
+                    ids.swap_remove(pos);
+                }
+                clear_bucket = ids.is_empty();
+            }
+            if clear_bucket {
+                self.buckets.remove(&bucket);
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "heap-diagnostics"))]
+fn bucket_range(start: usize, size: usize) -> std::ops::RangeInclusive<usize> {
+    let end = start.saturating_add(size.saturating_sub(1));
+    (start >> REGISTRY_BUCKET_SHIFT)..=(end >> REGISTRY_BUCKET_SHIFT)
 }
 
 // SAFETY: `HeapManager::trace` correctly traces GC-managed object references based on their

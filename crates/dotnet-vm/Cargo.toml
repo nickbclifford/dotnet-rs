@@ -73,6 +73,10 @@ bench-instrumentation = [
     "dotnet-metrics/bench-instrumentation",
     "dotnet-vm-ops/bench-instrumentation",
 ]
+heap-diagnostics = ["dotnet-runtime-memory/heap-diagnostics"]
+segmented-eval-stack-prototype = ["dotnet-vm-ops/segmented-eval-stack-prototype"]
+instruction-dispatch-jump-table = []
+dispatch-super-instruction-prototype = []
 
 [build-dependencies]
 dotnet-macros-core = { workspace = true }

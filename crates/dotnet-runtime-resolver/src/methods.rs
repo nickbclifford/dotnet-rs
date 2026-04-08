@@ -117,8 +117,10 @@ where
         generics: &GenericLookup,
         _ctx: &Ctx,
     ) -> Result<MethodDescription, TypeResolutionError> {
-        let key = (base_method.clone(), this_type.clone(), generics.clone());
-        if let Some(cached) = self.caches.get_vmt_cached(&key) {
+        if let Some(cached) = self
+            .caches
+            .get_vmt_cached(&base_method, &this_type, generics)
+        {
             return Ok(cached);
         }
 
@@ -129,7 +131,13 @@ where
             && matches!(method_name, "Invoke" | "BeginInvoke" | "EndInvoke")
             && self.is_delegate_type_in_hierarchy(&this_type)
         {
-            self.caches.set_vmt_cached(key, base_method.clone());
+            self.caches.record_vmt_key_clones(3);
+            self.caches.set_vmt_cached(
+                base_method.clone(),
+                this_type.clone(),
+                generics.clone(),
+                base_method.clone(),
+            );
             return Ok(base_method);
         }
 
@@ -138,9 +146,15 @@ where
 
         for (parent, _) in self.loader.ancestors(this_type.clone()) {
             if let Some(this_method) =
-                self.find_and_cache_method(parent, base_method.clone(), &key.2, is_interface)?
+                self.find_and_cache_method(parent, base_method.clone(), generics, is_interface)?
             {
-                self.caches.set_vmt_cached(key, this_method.clone());
+                self.caches.record_vmt_key_clones(3);
+                self.caches.set_vmt_cached(
+                    base_method.clone(),
+                    this_type.clone(),
+                    generics.clone(),
+                    this_method.clone(),
+                );
                 return Ok(this_method);
             }
         }
@@ -186,8 +200,11 @@ where
             };
 
             if let Some(impl_m) = overrides.get(&method) {
+                self.caches.record_vmt_key_clones(3);
                 self.caches.set_vmt_cached(
-                    (method.clone(), this_type.clone(), generics.clone()),
+                    method.clone(),
+                    this_type.clone(),
+                    generics.clone(),
                     impl_m.clone(),
                 );
                 return Ok(Some(impl_m.clone()));
@@ -202,8 +219,9 @@ where
             generics,
             allow_variance,
         ) {
+            self.caches.record_vmt_key_clones(3);
             self.caches
-                .set_vmt_cached((method, this_type, generics.clone()), this_method.clone());
+                .set_vmt_cached(method, this_type, generics.clone(), this_method.clone());
             return Ok(Some(this_method));
         }
 
