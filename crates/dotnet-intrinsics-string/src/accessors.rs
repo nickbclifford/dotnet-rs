@@ -1,3 +1,4 @@
+use crate::NULL_REF_MSG;
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -12,8 +13,6 @@ use dotnet_vm_ops::{
     },
 };
 use std::sync::Arc;
-
-use crate::NULL_REF_MSG;
 
 /// System.String::get_Chars(int)
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]

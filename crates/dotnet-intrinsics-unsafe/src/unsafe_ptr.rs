@@ -1,4 +1,4 @@
-use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info, vm_try};
+use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, marshal::offset_ptr, ptr_info, vm_try};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
@@ -14,8 +14,6 @@ use dotnet_vm_ops::{
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::{self, NonNull};
-
-use super::marshal::offset_ptr;
 
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]

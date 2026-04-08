@@ -70,10 +70,7 @@ pub fn delegate_get_target<'gc, T: DelegateEqualsHost<'gc>>(
 }
 
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
-pub fn delegate_get_method<
-    'gc,
-    T: DelegateEqualsHost<'gc> + DelegateInvokeHost<'gc>,
->(
+pub fn delegate_get_method<'gc, T: DelegateEqualsHost<'gc> + DelegateInvokeHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

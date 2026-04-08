@@ -42,7 +42,9 @@ where
         let t = self.normalize_type(t.clone())?;
 
         // ECMA-335 §I.8.2.4: Boxing Nullable<T> produces null if HasValue=false, or boxed T if HasValue=true.
-        if t.is_nullable(self.loader.as_ref()) && let StackValue::ValueType(obj) = &data {
+        if t.is_nullable(self.loader.as_ref())
+            && let StackValue::ValueType(obj) = &data
+        {
             let layout = obj.instance_storage.layout();
             let has_value_field = layout
                 .fields
@@ -338,10 +340,8 @@ where
                 }
 
                 if let StackValue::ValueType(mut o) = data {
-                    let expected_layout = self.instance_field_layout_cached_with_lookup(
-                        td.clone(),
-                        &new_lookup,
-                    )?;
+                    let expected_layout =
+                        self.instance_field_layout_cached_with_lookup(td.clone(), &new_lookup)?;
 
                     let needs_canonicalization = o.description != td
                         || o.generics != new_lookup
@@ -651,27 +651,20 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
                 any::type_name::<T>()
             ))
         }),
-        StackValue::UnmanagedPtr(p) => {
-            p.0.as_ptr()
-                .expose_addr()
-                .try_into()
-                .map_err(|_| {
-                    TypeResolutionError::InvalidLayout(format!(
-                        "failed to convert unmanaged pointer into {}",
-                        any::type_name::<T>()
-                    ))
-                })
-        }
+        StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_addr().try_into().map_err(|_| {
+            TypeResolutionError::InvalidLayout(format!(
+                "failed to convert unmanaged pointer into {}",
+                any::type_name::<T>()
+            ))
+        }),
         StackValue::ManagedPtr(p) => {
             let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-            ptr.expose_addr()
-                .try_into()
-                .map_err(|_| {
-                    TypeResolutionError::InvalidLayout(format!(
-                        "failed to convert managed pointer into {}",
-                        any::type_name::<T>()
-                    ))
-                })
+            ptr.expose_addr().try_into().map_err(|_| {
+                TypeResolutionError::InvalidLayout(format!(
+                    "failed to convert managed pointer into {}",
+                    any::type_name::<T>()
+                ))
+            })
         }
         other => Err(TypeResolutionError::InvalidLayout(format!(
             "invalid stack value {:?} for conversion into {}",

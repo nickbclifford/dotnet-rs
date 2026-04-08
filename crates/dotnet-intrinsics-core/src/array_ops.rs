@@ -79,7 +79,8 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
             let heap = indices_handle.borrow();
             let HeapStorage::Vec(v) = &heap.storage else {
-                return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
             if v.layout.length == 0 {
                 return ctx.throw_by_name_with_message(
@@ -142,7 +143,8 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
             let heap = indices_handle.borrow();
             let HeapStorage::Vec(v) = &heap.storage else {
-                return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
             if v.layout.length == 0 {
                 return ctx.throw_by_name_with_message(

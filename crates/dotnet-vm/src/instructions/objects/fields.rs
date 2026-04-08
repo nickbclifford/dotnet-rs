@@ -1,7 +1,9 @@
 use crate::{
     StepResult,
-    instructions::NULL_REF_MSG,
-    instructions::objects::{get_ptr_context, get_ptr_info},
+    instructions::{
+        NULL_REF_MSG,
+        objects::{get_ptr_context, get_ptr_info},
+    },
     layout::LayoutFactory,
     resolution::ValueResolution,
     stack::ops::VesOps,

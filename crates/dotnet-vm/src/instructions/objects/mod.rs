@@ -5,6 +5,7 @@ use crate::{
     resolution::ValueResolution,
     stack::ops::{StackOps, VesOps},
 };
+
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;

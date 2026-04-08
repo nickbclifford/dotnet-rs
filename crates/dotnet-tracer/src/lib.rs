@@ -625,7 +625,6 @@ impl Tracer {
             Box::new(stats),
         ));
     }
-
 }
 
 impl Default for Tracer {

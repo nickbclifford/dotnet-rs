@@ -56,12 +56,10 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
     match method_name {
         "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" | "EndInvoke" => Some(
-            ctx.throw_by_name_with_message(
-                "System.NotSupportedException",
-                BEGIN_END_NOT_SUPPORTED_MSG,
-            ),
-        ),
+        "BeginInvoke" | "EndInvoke" => Some(ctx.throw_by_name_with_message(
+            "System.NotSupportedException",
+            BEGIN_END_NOT_SUPPORTED_MSG,
+        )),
         _ => None,
     }
 }

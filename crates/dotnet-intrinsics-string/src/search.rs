@@ -1,3 +1,4 @@
+use crate::NULL_REF_MSG;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::GcScopeGuard;
@@ -11,8 +12,6 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
-
-use crate::NULL_REF_MSG;
 
 /// System.String::IndexOf(char)
 /// System.String::IndexOf(char, int)

@@ -7,10 +7,7 @@ use gc_arena::{Collect, collect::Trace};
 use std::collections::HashSet;
 
 #[cfg(feature = "multithreading")]
-use crate::ArenaId;
-
-#[cfg(feature = "multithreading")]
-use crate::object::ObjectPtr;
+use crate::{ArenaId, object::ObjectPtr};
 #[cfg(feature = "multithreading")]
 use sptr::Strict;
 

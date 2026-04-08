@@ -764,8 +764,12 @@ pub fn find_dotnet_app_path() -> Option<PathBuf> {
             "/usr/local/share/dotnet/shared/Microsoft.NETCore.App",
         ));
     } else {
-        base_paths.push(PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
-        base_paths.push(PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App"));
+        base_paths.push(PathBuf::from(
+            "/usr/share/dotnet/shared/Microsoft.NETCore.App",
+        ));
+        base_paths.push(PathBuf::from(
+            "/usr/lib/dotnet/shared/Microsoft.NETCore.App",
+        ));
     }
 
     base_paths

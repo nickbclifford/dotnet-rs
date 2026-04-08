@@ -1,14 +1,12 @@
 #[cfg(test)]
 mod tests {
     use crate::object::{HeapStorage, ObjectRef};
-    #[cfg(feature = "multithreading")]
-    use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(feature = "memory-validation")]
     use dotnet_utils::sync::MANAGED_THREAD_ID;
-
+    #[cfg(feature = "multithreading")]
+    use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(feature = "multithreading")]
     static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(1);
-
     #[cfg(feature = "multithreading")]
     fn next_test_arena_id() -> dotnet_utils::ArenaId {
         dotnet_utils::ArenaId(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))

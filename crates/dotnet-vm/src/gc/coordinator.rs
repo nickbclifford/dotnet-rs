@@ -552,9 +552,9 @@ mod stubs {
 }
 
 #[cfg(not(feature = "multithreading"))]
-pub use stubs::{GCCommand, GCCoordinator};
-#[cfg(not(feature = "multithreading"))]
 pub(crate) use stubs::clear_tracing_state;
+#[cfg(not(feature = "multithreading"))]
+pub use stubs::{GCCommand, GCCoordinator};
 
 #[cfg(all(test, feature = "multithreading"))]
 mod tests {
