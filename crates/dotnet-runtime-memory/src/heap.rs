@@ -2,11 +2,14 @@ use crate::host::MemorySharedStateHost;
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use gc_arena::{Collect, Gc, collect::Trace};
+#[cfg(not(feature = "heap-diagnostics"))]
 use slab::Slab;
 use smallvec::SmallVec;
+#[cfg(not(feature = "heap-diagnostics"))]
+use std::collections::HashMap;
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashSet,
 };
 
 #[cfg(feature = "heap-diagnostics")]

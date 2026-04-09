@@ -21,10 +21,12 @@ multithreading = [
     "dotnet-value/multithreading",
     "dotnet-vm-ops/multithreading",
 ]
+# Keeps full object-registry structures for diagnostics; off by default for runtime performance.
 heap-diagnostics = []
 memory-validation = [
     "dotnet-utils/memory-validation",
     "dotnet-value/memory-validation",
     "dotnet-vm-ops/memory-validation",
 ]
+# Enables benchmark-only heap/memory instrumentation and metrics forwarding.
 bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumentation"]

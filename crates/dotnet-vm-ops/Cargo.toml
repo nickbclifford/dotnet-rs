@@ -26,5 +26,7 @@ fuzzing = [
     "dotnet-types/fuzzing",
     "dotnet-utils/fuzzing",
 ]
+# Forwards benchmark-only instrumentation support into vm-data.
 bench-instrumentation = ["dotnet-vm-data/bench-instrumentation"]
+# Forwards the eval-stack growth-policy prototype into vm-data.
 segmented-eval-stack-prototype = ["dotnet-vm-data/segmented-eval-stack-prototype"]

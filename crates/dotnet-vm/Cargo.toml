@@ -69,14 +69,19 @@ fuzzing = [
     "dotnet-utils/fuzzing",
     "dotnet-pinvoke/fuzzing",
 ]
+# Enables benchmark-only runtime instrumentation/counters in vm + memory + vm-data.
 bench-instrumentation = [
     "dotnet-metrics/bench-instrumentation",
     "dotnet-runtime-memory/bench-instrumentation",
     "dotnet-vm-ops/bench-instrumentation",
 ]
+# Enables heap object-registry diagnostics path in runtime-memory.
 heap-diagnostics = ["dotnet-runtime-memory/heap-diagnostics"]
+# Enables eval-stack reserve-growth prototype (kept intentionally as a toggle).
 segmented-eval-stack-prototype = ["dotnet-vm-ops/segmented-eval-stack-prototype"]
+# Selects generated function-pointer jump-table dispatch.
 instruction-dispatch-jump-table = []
+# Enables super-instruction prototype handlers in dispatch loop.
 dispatch-super-instruction-prototype = []
 
 [build-dependencies]

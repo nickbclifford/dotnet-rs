@@ -17,5 +17,7 @@ default = ["multithreading"]
 multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]
 memory-validation = ["dotnet-value/memory-validation"]
 fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]
+# Enables benchmark-only stack/runtime counters and snapshot payloads.
 bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumentation"]
+# Reserve-growth policy experiment; intentionally prototype-only and non-default.
 segmented-eval-stack-prototype = []

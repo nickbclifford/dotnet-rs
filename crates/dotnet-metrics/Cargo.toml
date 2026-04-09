@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = []
+# Enables additional runtime counters/snapshots used by benchmark harnesses.
 bench-instrumentation = []
 
 [dependencies]

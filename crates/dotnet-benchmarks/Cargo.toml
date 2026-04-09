@@ -19,10 +19,15 @@ validation-all = [
     "generic-constraint-validation",
 ]
 fuzzing = ["dotnet-vm/fuzzing"]
+# Enables benchmark harness access to runtime instrumentation snapshots/counters.
 bench-instrumentation = ["dotnet-vm/bench-instrumentation"]
+# Enables heap diagnostics in benchmark runs for analysis-only scenarios.
 heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
+# Enables eval-stack growth-policy prototype benchmarking.
 segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
+# Bench-only switch for vm jump-table dispatch variant.
 instruction-dispatch-jump-table = ["dotnet-vm/instruction-dispatch-jump-table"]
+# Bench-only switch for vm super-instruction prototype variant.
 dispatch-super-instruction-prototype = ["dotnet-vm/dispatch-super-instruction-prototype"]
 
 [dependencies]
