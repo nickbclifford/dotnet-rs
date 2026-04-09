@@ -203,27 +203,27 @@
 ## Phase 4: Compiler Optimization Enablement
 
 ### Step 4a: Hot-path inlining and monomorphization audit
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/src/dispatch/mod.rs, crates/dotnet-vm/src/stack/ops.rs, crates/dotnet-runtime-resolver/src/methods.rs, Cargo.toml
 - **Depends on**: 2d, 3c (2e optional; required only for intrinsic-specific call-path tuning)
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Capture profile-guided hot call graph and identify top generic call boundaries.
-  - [ ] Add targeted inline attributes for proven hot leaf functions only.
-  - [ ] Evaluate `lto = "thin"` and `lto = "fat"` on benchmark suite.
-  - [ ] Record binary size and runtime tradeoffs in `REVIEW.md`.
-  - [ ] Verify: run clippy/tests and ensure no codegen-only regressions.
+  - [x] Capture profile-guided hot call graph and identify top generic call boundaries.
+  - [x] Add targeted inline attributes for proven hot leaf functions only.
+  - [x] Evaluate `lto = "thin"` and `lto = "fat"` on benchmark suite.
+  - [x] Record binary size and runtime tradeoffs in `REVIEW.md`.
+  - [x] Verify: run clippy/tests and ensure no codegen-only regressions.
 
 ### Step 4b: Branch prediction and cold-path separation
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/src/dispatch/mod.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs, crates/dotnet-vm/src/intrinsics/mod.rs
 - **Depends on**: 4a
 - **Risk**: low
 - **Tasks**:
-  - [ ] Isolate panic/error formatting code into `#[cold]` helpers in dispatch and call paths.
-  - [ ] Add `likely`/`unlikely` hints only on branches proven skewed by benchmark instrumentation.
-  - [ ] Benchmark arithmetic and JSON workloads before/after branch-hint changes.
-  - [ ] Verify: run full tests to confirm no behavior changes.
+  - [x] Isolate panic/error formatting code into `#[cold]` helpers in dispatch and call paths.
+  - [x] Add `likely`/`unlikely` hints only on branches proven skewed by benchmark instrumentation.
+  - [x] Benchmark arithmetic and JSON workloads before/after branch-hint changes.
+  - [x] Verify: run full tests to confirm no behavior changes.
 
 ### Step 4c: SIMD and vectorization opportunities
 - **Status**: [ ] Not started

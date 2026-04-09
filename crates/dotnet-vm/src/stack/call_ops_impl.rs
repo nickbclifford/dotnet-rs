@@ -20,6 +20,33 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::{Instruction, MethodSource};
 
+vm_cold_panic!(
+    fn panic_not_enough_values_for_call(method: &MethodInfo<'static>, num_args: usize) =>
+        "not enough values on stack for call: args={} in {:?}",
+        num_args, method.source
+);
+vm_cold_panic!(
+    fn panic_expected_boxed_value_type_in_unbox_canonicalization() =>
+        "Expected boxed value type in unbox canonicalization"
+);
+vm_cold_panic!(
+    fn panic_stack_height_underflow_for_call(
+        frame_height: crate::StackSlotIndex,
+        num_args: usize,
+        source: &MethodDescription
+    ) =>
+        "Not enough values on stack for call: height={}, args={} in {:?}",
+        frame_height, num_args, source
+);
+vm_cold_panic!(
+    fn panic_no_body_in_executing_method(method: &MethodDescription) =>
+        "no body in executing method: {}.{}",
+        method.parent.type_name(),
+        method.method().name
+);
+vm_cold_panic!(fn panic_tail_call_requires_current_frame() => "tail call requires a current frame");
+vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current frame");
+
 impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
     fn constructor_frame(
         &mut self,
@@ -81,11 +108,9 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         }
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();
-        let argument_base = self
-            .evaluation_stack
-            .top_of_stack()
-            .checked_sub(num_args)
-            .expect("not enough values on stack for call");
+        let Some(argument_base) = self.evaluation_stack.top_of_stack().checked_sub(num_args) else {
+            panic_not_enough_values_for_call(&method, num_args);
+        };
 
         let locals_base = self.evaluation_stack.top_of_stack();
         let local_slot_count = method.locals.len();
@@ -112,7 +137,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                         HeapStorage::Boxed(o) | HeapStorage::Obj(o) => unsafe {
                             o.instance_storage.raw_data_ptr()
                         },
-                        _ => panic!("Expected boxed value type in unbox canonicalization"),
+                        _ => panic_expected_boxed_value_type_in_unbox_canonicalization(),
                     });
                     let managed_ptr = ManagedPtr::new(
                         std::ptr::NonNull::new(ptr),
@@ -129,9 +154,10 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
 
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             if frame.stack_height < crate::StackSlotIndex(num_args) {
-                panic!(
-                    "Not enough values on stack for call: height={}, args={} in {:?}",
-                    frame.stack_height, num_args, frame.state.info_handle.source
+                panic_stack_height_underflow_for_call(
+                    frame.stack_height,
+                    num_args,
+                    &frame.state.info_handle.source,
                 );
             }
             frame.stack_height -= num_args;
@@ -209,11 +235,14 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             }
         }
 
-        if let Some(metadata) = crate::intrinsics::classify_intrinsic(
+        let intrinsic_metadata = crate::intrinsics::classify_intrinsic(
             method.clone(),
             self.loader(),
             Some(&self.shared.caches.intrinsic_registry),
-        ) {
+        );
+        // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
+        if vm_unlikely!(intrinsic_metadata.is_some()) {
+            let metadata = intrinsic_metadata.unwrap();
             crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
         } else if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
@@ -228,11 +257,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                     return result;
                 }
 
-                panic!(
-                    "no body in executing method: {}.{}",
-                    method.parent.type_name(),
-                    method.method().name
-                );
+                panic_no_body_in_executing_method(&method);
             }
 
             let info =
@@ -448,7 +473,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let frame = self
             .frame_stack
             .pop()
-            .expect("tail call requires a current frame");
+            .unwrap_or_else(|| panic_tail_call_requires_current_frame());
         if self.tracer_enabled() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
             self.shared
@@ -557,7 +582,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let popped_frame = self
             .frame_stack
             .pop()
-            .expect("jmp requires a current frame");
+            .unwrap_or_else(|| panic_jmp_requires_current_frame());
         if self.tracer_enabled() {
             let method_name = format!("{:?}", popped_frame.state.info_handle.source);
             self.shared

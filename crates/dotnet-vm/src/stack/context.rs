@@ -24,9 +24,7 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
 
-pub use dotnet_vm_ops::{
-    BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals,
-};
+pub use dotnet_vm_ops::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
 
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,

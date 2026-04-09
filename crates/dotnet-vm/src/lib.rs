@@ -19,6 +19,7 @@ use std::sync::Arc;
 #[macro_use]
 mod macros;
 
+pub(crate) mod branch_hint;
 pub mod context;
 pub mod dispatch;
 pub mod error;

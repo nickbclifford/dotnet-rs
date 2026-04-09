@@ -198,3 +198,33 @@ macro_rules! vm_try {
         }
     };
 }
+
+/// Branch prediction hint wrappers for stable toolchains.
+///
+/// These call through `branch_hint` shims that keep the uncommon side in a
+/// `#[cold]` function while preserving the original boolean value.
+#[macro_export]
+macro_rules! vm_likely {
+    ($expr:expr) => {
+        $crate::branch_hint::likely($expr)
+    };
+}
+
+#[macro_export]
+macro_rules! vm_unlikely {
+    ($expr:expr) => {
+        $crate::branch_hint::unlikely($expr)
+    };
+}
+
+/// Define a cold panic helper in one line.
+#[macro_export]
+macro_rules! vm_cold_panic {
+    (fn $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) => $($panic_args:tt)+) => {
+        #[cold]
+        #[inline(never)]
+        fn $name($($arg: $ty),*) -> ! {
+            panic!($($panic_args)+);
+        }
+    };
+}

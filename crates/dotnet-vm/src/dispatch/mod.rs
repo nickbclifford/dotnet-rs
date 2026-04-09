@@ -23,6 +23,7 @@ pub mod ring_buffer;
 pub struct InstructionRegistry;
 
 impl InstructionRegistry {
+    #[inline(always)]
     pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
         #[cfg(feature = "instruction-dispatch-jump-table")]
         {
@@ -35,6 +36,22 @@ impl InstructionRegistry {
 
 const DISPATCH_BATCH_SIZE: usize = 128;
 const DEFAULT_SAFE_POINT_POLL_INTERVAL: usize = 32;
+
+#[cold]
+#[inline(never)]
+fn invalid_ip_step_result(ip: usize) -> StepResult {
+    StepResult::Error(crate::error::VmError::Execution(
+        crate::error::ExecutionError::InvalidIP(ip),
+    ))
+}
+
+vm_cold_panic!(fn panic_intrinsic_not_found(method: &MethodDescription) => "intrinsic not found: {:?}", method);
+vm_cold_panic!(
+    fn panic_no_body_in_method(method: &MethodDescription) =>
+        "no body in executing method: {}.{}",
+        method.parent.type_name(),
+        method.method().name
+);
 
 fn dispatch_safe_point_poll_interval() -> usize {
     static POLL_INTERVAL: OnceLock<usize> = OnceLock::new();
@@ -121,10 +138,8 @@ impl<'gc> ExecutionEngine<'gc> {
 
         let ip = self.stack.state().ip;
         let instructions = self.stack.state().info_handle.instructions;
-        if ip >= instructions.len() {
-            return StepResult::Error(crate::error::VmError::Execution(
-                crate::error::ExecutionError::InvalidIP(ip),
-            ));
+        if vm_unlikely!(ip >= instructions.len()) {
+            return invalid_ip_step_result(ip);
         }
         let i = &instructions[ip];
 
@@ -180,7 +195,7 @@ impl<'gc> ExecutionEngine<'gc> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn step_batch_instruction(
         &mut self,
         gc: GCHandle<'gc>,
@@ -433,14 +448,16 @@ impl<'gc> ExecutionEngine<'gc> {
             method.method().pinvoke,
             method.method().internal_call
         );
-        if ctx.is_intrinsic_cached(method.clone()) {
+        // Instrumented benchmarks for current workloads report intrinsic_call_total=0, so this
+        // branch is expected to be cold on the measured hot path.
+        if vm_unlikely!(ctx.is_intrinsic_cached(method.clone())) {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method().pinvoke.is_some() {
             let shared = ctx.shared().clone();
             dotnet_pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
         } else {
             if method.method().internal_call {
-                panic!("intrinsic not found: {:?}", method);
+                panic_intrinsic_not_found(&method);
             }
 
             if method.method().body.is_none() {
@@ -452,11 +469,7 @@ impl<'gc> ExecutionEngine<'gc> {
                     return result;
                 }
 
-                panic!(
-                    "no body in executing method: {}.{}",
-                    method.parent.type_name(),
-                    method.method().name
-                );
+                panic_no_body_in_method(&method);
             }
 
             vm_try!(ctx.call_frame(

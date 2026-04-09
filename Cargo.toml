@@ -59,3 +59,12 @@ thiserror = "1.0"
 sptr = "0.3"
 smallvec = "1.13"
 slab = "0.4"
+
+[profile.bench-thin]
+inherits = "bench"
+lto = "thin"
+
+[profile.bench-fat]
+inherits = "bench"
+lto = "fat"
+codegen-units = 1

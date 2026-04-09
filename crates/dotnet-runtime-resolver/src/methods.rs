@@ -14,6 +14,7 @@ where
     C: crate::ResolverCacheAdapter,
     L: crate::ResolverLayoutAdapter,
 {
+    #[inline]
     fn is_delegate_type_in_hierarchy(&self, this_type: &TypeDescription) -> bool {
         self.loader.ancestors(this_type.clone()).any(|(parent, _)| {
             let raw_type_name = parent.type_name();
@@ -22,6 +23,7 @@ where
         })
     }
 
+    #[inline]
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         if let Some(cached) = self.caches.get_intrinsic_cached(&method) {
             return cached;
@@ -34,6 +36,7 @@ where
         result
     }
 
+    #[inline]
     pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
         if let Some(cached) = self.caches.get_intrinsic_field_cached(&field) {
             return cached;
@@ -228,6 +231,7 @@ where
         Ok(None)
     }
 
+    #[inline]
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
@@ -239,6 +243,7 @@ where
             .locate_method(resolution, handle, generic_inst, pre_resolved_parent)
     }
 
+    #[inline]
     pub fn locate_field(
         &self,
         resolution: ResolutionS,

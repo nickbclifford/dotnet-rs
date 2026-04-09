@@ -157,6 +157,13 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
+vm_cold_panic!(fn panic_unsupported_intrinsic(method: &MethodDescription) => "unsupported intrinsic {:?}", method);
+vm_cold_panic!(
+    fn panic_unsupported_intrinsic_field(field: &FieldDescription) =>
+        "unsupported load from intrinsic field: {:?}",
+        field
+);
+
 // ============================================================================
 // Intrinsic Registry Infrastructure
 // ============================================================================
@@ -385,18 +392,22 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
             .record_intrinsic_signature_call(signature);
     }
 
-    if let Some(metadata) = classify_intrinsic(
+    let metadata = classify_intrinsic(
         method.clone(),
         ctx.loader(),
         Some(&ctx.shared().caches.intrinsic_registry),
-    ) {
+    );
+    // `intrinsic_call` is entered from paths that already classify/cached the method as
+    // intrinsic, so this branch should almost always be taken.
+    if vm_likely!(metadata.is_some()) {
+        let metadata = metadata.unwrap();
         ctx.set_current_intrinsic(Some(method.clone()));
         let res = dispatch_method_intrinsic(metadata.handler, ctx, method, generics);
         ctx.set_current_intrinsic(None);
         return res;
     }
 
-    panic!("unsupported intrinsic {:?}", method);
+    panic_unsupported_intrinsic(&method);
 }
 
 pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
@@ -418,7 +429,7 @@ pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
     {
         dispatch_field_intrinsic(handler, ctx, field, type_generics, is_address)
     } else {
-        panic!("unsupported load from intrinsic field: {:?}", field);
+        panic_unsupported_intrinsic_field(&field);
     }
 }
 

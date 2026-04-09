@@ -706,23 +706,67 @@ Risk:
 
 ### 4a. Monomorphization and inlining
 
-Evidence:
+Implemented:
 
-- Hot APIs include layered generic trait calls across crates (`VesOps`, resolver adapters).
+1. Captured a hot call graph using callgrind on the dispatch workload:
+   - command: `valgrind --tool=callgrind target/release/deps/end_to_end-34bcb82a9827f24b dispatch --profile-time 3`
+   - top VM boundaries from `callgrind_annotate`:
+     - `dotnet_vm::dispatch::ExecutionEngine::step_normal` (`88.58%`)
+     - `dotnet_vm::dispatch::registry::dispatch_monomorphic` (`16.72%`)
+     - `dotnet_vm::stack::call_ops_impl::unified_dispatch` (`6.91%`)
+     - `dotnet_vm::stack::resolution_ops_impl::current_context` (`5.51%`)
+     - `dotnet_runtime_resolver::methods::find_generic_method` (`1.84%`)
+     - `dotnet_runtime_resolver::methods::resolve_virtual_method` (`1.20%`)
+2. Added targeted inline attributes on hot leaf wrappers only:
+   - `crates/dotnet-vm/src/dispatch/mod.rs`
+     - `InstructionRegistry::dispatch`: `#[inline(always)]`
+     - `ExecutionEngine::step_batch_instruction`: `#[inline(always)]`
+   - `crates/dotnet-runtime-resolver/src/methods.rs`
+     - `is_delegate_type_in_hierarchy`, `is_intrinsic_cached`, `is_intrinsic_field_cached`, `locate_method`, `locate_field`: `#[inline]`
+   - `crates/dotnet-vm/src/stack/ops.rs` was audited; no direct hot leaf methods in this file required annotation.
+3. Added reproducible LTO benchmark profiles in workspace `Cargo.toml`:
+   - `[profile.bench-thin]` (`lto = "thin"`)
+   - `[profile.bench-fat]` (`lto = "fat"`, `codegen-units = 1`)
 
-Proposed change:
+Benchmark results (`cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end`):
 
-1. Use profiling (`-Cprofile-generate/use`) to identify missing inline opportunities in dispatch/stack ops.
-2. Add targeted `#[inline(always)]` only on proven hot leaf calls.
-3. Measure LTO (`thin`/`fat`) impact on benchmark suite once Phase 0 harness exists.
+- Post-inline default profile:
+  - `dispatch`: `1.1169 s` (from `[1.1111, 1.1230]`)
+  - `generics`: `22.677 s` (from `[22.355, 22.998]`)
+- LTO comparison versus post-inline default:
+  - `bench-thin`:
+    - `dispatch`: `1.0531 s` (`-5.71%`)
+    - `generics`: `21.217 s` (`-6.44%`)
+  - `bench-fat`:
+    - `dispatch`: `1.0174 s` (`-8.91%`)
+    - `generics`: `21.302 s` (`-6.06%`)
+- Relative to Phase-0 instrumented baseline medians:
+  - default: `dispatch -6.98%`, `generics -2.38%`
+  - thin LTO: `dispatch -12.29%`, `generics -8.66%`
+  - fat LTO: `dispatch -15.27%`, `generics -8.30%`
 
-Expected impact:
+Binary size tradeoff (benchmark binary `end_to_end-*`):
 
-- Lower call overhead in tight interpreter loops.
+- default (`target/release/deps`): `8,327,424` bytes
+- thin (`target/bench-thin/deps`): `8,338,824` bytes (`+0.14%`)
+- fat (`target/bench-fat/deps`): `6,107,528` bytes (`-26.66%`)
+
+Build-time tradeoff (cold bench-profile compile from this run):
+
+- thin: `12.20s`
+- fat: `34.08s`
+
+Verification:
+
+- `cargo fmt`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test -- --nocapture`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `cargo test --no-default-features -- --nocapture --test-threads=1`
 
 Risk:
 
-- Medium: compile-time/binary-size increase.
+- Medium (reduced): leaf inlining is bounded and validated; LTO wins are clear on runtime but increase compile cost (especially fat). Default profile behavior is unchanged.
 
 ### 4b. Branch prediction and cold paths
 

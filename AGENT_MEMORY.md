@@ -977,3 +977,160 @@
 - Proceed to Step `4a` (hot-path inlining and monomorphization audit) using new `dispatch`/`generics` medians and frame-pool counters as the post-3c baseline.
 - If additional call-specific ROI is needed, add a dedicated micro fixture for direct call/ret chains and compare against current pooled-frame counters.
 ---
+## Session: 2026-04-08T23:55:00-05:00
+### Context
+- Phase/Step: Phase 4 / Step 4a (Hot-path inlining and monomorphization audit)
+- Goal: Identify hot generic call boundaries with profile data, apply targeted inlining on proven leaf wrappers, and measure `lto = thin/fat` runtime vs binary-size tradeoffs.
+### Actions Taken
+- Read required context before edits:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/BUILD_TIME_CODE_GENERATION.md`
+  - `docs/TYPE_RESOLUTION_AND_CACHING.md`
+  - `CHECKLIST.md`
+  - `REVIEW.md`
+  - Relevant files listed for Step `4a`
+- Captured profile-guided hot call graph:
+  - Ran callgrind on dispatch benchmark binary:
+    - `valgrind --tool=callgrind --callgrind-out-file=target/callgrind.dispatch.out target/release/deps/end_to_end-34bcb82a9827f24b dispatch --profile-time 3`
+  - Extracted hot symbols with `callgrind_annotate`.
+- Implemented Step `4a` code changes:
+  - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - Added `#[inline(always)]` to `InstructionRegistry::dispatch`.
+    - Added `#[inline(always)]` to `ExecutionEngine::step_batch_instruction`.
+  - `crates/dotnet-runtime-resolver/src/methods.rs`
+    - Added targeted `#[inline]` to hot leaf wrappers:
+      - `is_delegate_type_in_hierarchy`
+      - `is_intrinsic_cached`
+      - `is_intrinsic_field_cached`
+      - `locate_method`
+      - `locate_field`
+  - `Cargo.toml`
+    - Added reproducible LTO benchmark profiles:
+      - `[profile.bench-thin]` (`lto = "thin"`)
+      - `[profile.bench-fat]` (`lto = "fat"`, `codegen-units = 1`)
+- LTO/runtime audit benchmarks:
+  - Default (post-change):
+    - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - Thin LTO:
+    - `cargo bench --profile bench-thin -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `cargo bench --profile bench-thin -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - Fat LTO:
+    - `cargo bench --profile bench-fat -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+    - `cargo bench --profile bench-fat -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Captured binary-size tradeoffs via `stat` on benchmark binaries in:
+  - `target/release/deps/end_to_end-*`
+  - `target/bench-thin/deps/end_to_end-*`
+  - `target/bench-fat/deps/end_to_end-*`
+- Updated planning/docs:
+  - `CHECKLIST.md`: marked Step `4a` completed and all atomic tasks checked.
+  - `REVIEW.md`: replaced Step `4a` proposed section with implemented profiling evidence, inline decisions, LTO results, binary-size/runtime tradeoffs, and verification.
+- Ran verification matrix:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+### Findings
+- Callgrind hot call boundaries (dispatch workload):
+  - `dotnet_vm::dispatch::ExecutionEngine::step_normal`: `88.58%`
+  - `dotnet_vm::dispatch::registry::dispatch_monomorphic`: `16.72%`
+  - `dotnet_vm::stack::call_ops_impl::unified_dispatch`: `6.91%`
+  - `dotnet_vm::stack::resolution_ops_impl::current_context`: `5.51%`
+  - `dotnet_runtime_resolver::methods::find_generic_method`: `1.84%`
+  - `dotnet_runtime_resolver::methods::resolve_virtual_method`: `1.20%`
+- Post-change default benchmark medians:
+  - `dispatch`: `1.1169 s`
+  - `generics`: `22.677 s`
+- LTO vs post-change default:
+  - `thin`: `dispatch -5.71%`, `generics -6.44%`
+  - `fat`: `dispatch -8.91%`, `generics -6.06%`
+- Relative to Phase-0 instrumented baseline medians (`dispatch=1.2007179425 s`, `generics=23.2292185985 s`):
+  - default: `dispatch -6.98%`, `generics -2.38%`
+  - thin: `dispatch -12.29%`, `generics -8.66%`
+  - fat: `dispatch -15.27%`, `generics -8.30%`
+- Benchmark binary size (`end_to_end-*`):
+  - default: `8,327,424` bytes
+  - thin: `8,338,824` bytes (`+0.14%`)
+  - fat: `6,107,528` bytes (`-26.66%`)
+- Build-time tradeoff (cold profile compile observed):
+  - thin: `12.20s`
+  - fat: `34.08s`
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `4b` (branch prediction and cold-path separation):
+  - extract panic/error formatting into `#[cold]` helpers in dispatch/call paths,
+  - use bench counters and skewed branches from current data as eligibility criteria for `likely`/`unlikely` hints.
+- Keep LTO changes bench-profile-only for now; revisit default release LTO selection once Step `4b/4c` data is available to avoid confounding effects.
+---
+---
+## Session: 2026-04-08T19:42:25-05:00
+### Context
+- Phase/Step: Phase 4 / Step 4b (Branch prediction and cold-path separation)
+- Goal: Split cold panic/error formatting out of hot dispatch/call/intrinsic paths and apply branch-skew hints only where benchmark instrumentation indicates cold branches.
+### Actions Taken
+- Read required context before edits:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/BUILD_TIME_CODE_GENERATION.md`
+  - `CHECKLIST.md`
+  - `REVIEW.md`
+  - relevant step files:
+    - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - `crates/dotnet-vm/src/stack/call_ops_impl.rs`
+    - `crates/dotnet-vm/src/intrinsics/mod.rs`
+- Captured Step 4b pre-change benchmark runs:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Implemented Step 4b runtime changes:
+  - `crates/dotnet-vm/src/dispatch/mod.rs`
+    - extracted invalid-IP StepResult construction into `#[cold]` helper,
+    - extracted internal-call and missing-body panic formatting into `#[cold]` helpers,
+    - added local stable `unlikely(bool)` shim (cold side-call) and used it on measured-cold intrinsic-cache branch.
+  - `crates/dotnet-vm/src/stack/call_ops_impl.rs`
+    - extracted call-path panic formatting into `#[cold]` helpers:
+      - not-enough-args / stack-height-underflow,
+      - unexpected unbox canonicalization shape,
+      - missing managed body,
+      - missing current frame in tail/jmp replacement,
+    - replaced hot-path `expect`/inline panic formatting with helper calls,
+    - added local stable `unlikely(bool)` shim and used it on measured-cold intrinsic classification branch.
+  - `crates/dotnet-vm/src/intrinsics/mod.rs`
+    - extracted unsupported intrinsic method/field panic formatting into `#[cold]` helpers,
+    - added local stable `likely(bool)` shim and used it in intrinsic dispatch continuation branch.
+- Toolchain adjustment:
+  - attempted `std::hint::{likely, unlikely}` first, but current toolchain marks `likely_unlikely` as unstable (`E0658`), so switched to stable local hint shims.
+- Updated planning/docs:
+  - `CHECKLIST.md`: marked Step `4b` completed and checked all atomic tasks.
+- Ran verification:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+- Ran Step 4b post-change benchmark workloads:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- arithmetic --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Saved benchmark snapshots for audit:
+  - pre: `target/bench-step4b-pre/{arithmetic.instrumented.pre.json,json.instrumented.pre.json}`
+  - post: `target/bench-step4b-post/{arithmetic.instrumented.post.json,json.instrumented.post.json}`
+### Findings
+- Pre-change medians (Criterion `median.point_estimate`):
+  - `arithmetic`: `981,570,811.5 ns` (`981.57 ms`)
+  - `json`: `415,770,393.5 ns` (`415.77 ms`)
+- Post-change medians:
+  - `arithmetic`: `928,968,121.0 ns` (`928.97 ms`)
+  - `json`: `402,989,148.5 ns` (`402.99 ms`)
+- Step 4b before/after deltas:
+  - `arithmetic`: `-5.36%`
+  - `json`: `-3.07%`
+- Relative to Phase-0 instrumented baseline medians (`arithmetic=1034.82 ms`, `json=412.76 ms`):
+  - `arithmetic`: `-10.23%`
+  - `json`: `-2.37%`
+- Bench instrumentation counters (pre -> post):
+  - `arithmetic`: `intrinsic_call_total 0 -> 0`, `opcode_dispatch_total 8,400,022 -> 8,400,022`, `eval_stack_reallocations 1 -> 1`, `eval_stack_pointer_fixup_total_ns 160 -> 140`
+  - `json`: `intrinsic_call_total 0 -> 0`, `opcode_dispatch_total 1,676,145 -> 1,676,145`, `eval_stack_reallocations 3 -> 3`, `eval_stack_pointer_fixup_total_ns 591 -> 591`
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `4c` (SIMD/vectorization candidates) and keep Step `4b` branch/cold-path changes as the baseline for Phase 4 final comparisons.
