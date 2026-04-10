@@ -45,6 +45,8 @@ struct CachePolicy {
     front_cache_capacity: usize,
 }
 
+const FRONT_CACHE_DEFAULT_CAPACITY: usize = 128;
+
 impl Default for CachePolicy {
     fn default() -> Self {
         Self {
@@ -52,7 +54,8 @@ impl Default for CachePolicy {
             vmt_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_VMT"),
             hierarchy_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_HIERARCHY"),
             front_cache_enabled: parse_env_bool("DOTNET_FRONT_CACHE_ENABLED", false),
-            front_cache_capacity: parse_env_usize("DOTNET_FRONT_CACHE_CAPACITY").unwrap_or(128),
+            front_cache_capacity: parse_env_usize("DOTNET_FRONT_CACHE_CAPACITY")
+                .unwrap_or(FRONT_CACHE_DEFAULT_CAPACITY),
         }
     }
 }

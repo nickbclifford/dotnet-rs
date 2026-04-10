@@ -78,6 +78,8 @@ struct InternConfig {
     max_entries: usize,
 }
 
+const STRING_INTERN_DEFAULT_MAX_ENTRIES: usize = 4096;
+
 type StringInternerMap = HashMap<Arc<[u16]>, Arc<[u16]>>;
 
 static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
@@ -95,7 +97,7 @@ static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(4096);
+        .unwrap_or(STRING_INTERN_DEFAULT_MAX_ENTRIES);
 
     InternConfig {
         enabled,
