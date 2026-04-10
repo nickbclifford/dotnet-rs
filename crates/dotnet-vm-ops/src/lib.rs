@@ -5,6 +5,7 @@
 //! Runtime execution data types are hosted in `dotnet-vm-data` and re-exported
 //! here so that intrinsics crates only need a single dependency on this crate
 //! to access both the operation traits and the shared data types.
+mod macros;
 pub mod ops;
 
 pub use dotnet_vm_data::{

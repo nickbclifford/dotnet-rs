@@ -122,9 +122,10 @@ pub trait ArgumentOps<'gc> {
     fn get_argument_address(&self, index: ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 
-/// A combination trait for operations on local variables and arguments.
-pub trait VariableOps<'gc>: LocalOps<'gc> + ArgumentOps<'gc> {}
-impl<'gc, T: LocalOps<'gc> + ArgumentOps<'gc> + ?Sized> VariableOps<'gc> for T {}
+crate::trait_alias! {
+    /// A combination trait for operations on local variables and arguments.
+    pub trait VariableOps<'gc> = LocalOps<'gc> + ArgumentOps<'gc>;
+}
 
 /// A combination trait for all stack-related operations (evaluation stack, typed ops, and variables).
 pub trait AllStackOps<'gc>: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> {}
@@ -440,31 +441,17 @@ pub trait StaticsOps<'gc> {
 
 pub trait StackOps<'gc>: TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc> {}
 
-/// Host contract for string intrinsic handlers.
-///
-/// Required capabilities used by current handlers:
-/// - stack reads/writes (`push`, `pop`, `peek_stack_at`)
-/// - exception throws (`throw_by_name_with_message`)
-/// - raw/string memory access (`read_unaligned`, `write_unaligned`, `check_gc_safe_point`)
-/// - allocation/boxing helpers (`new_object`, `new_vector`, `box_value`)
-/// - method dispatch and type resolution (`return_frame`, `make_concrete`, `get_heap_description`)
-pub trait StringIntrinsicHost<'gc>:
-    EvalStackOps<'gc>
-    + TypedStackOps<'gc>
-    + ExceptionOps<'gc>
-    + RawMemoryOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + CallOps<'gc>
-    + ResolutionOps<'gc>
-    + ReflectionOps<'gc>
-    + StackOps<'gc>
-    + ThreadOps
-{
-}
-impl<
-    'gc,
-    T: EvalStackOps<'gc>
+crate::trait_alias! {
+    /// Host contract for string intrinsic handlers.
+    ///
+    /// Required capabilities used by current handlers:
+    /// - stack reads/writes (`push`, `pop`, `peek_stack_at`)
+    /// - exception throws (`throw_by_name_with_message`)
+    /// - raw/string memory access (`read_unaligned`, `write_unaligned`, `check_gc_safe_point`)
+    /// - allocation/boxing helpers (`new_object`, `new_vector`, `box_value`)
+    /// - method dispatch and type resolution (`return_frame`, `make_concrete`, `get_heap_description`)
+    pub trait StringIntrinsicHost<'gc> =
+        EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
@@ -474,10 +461,7 @@ impl<
         + ResolutionOps<'gc>
         + ReflectionOps<'gc>
         + StackOps<'gc>
-        + ThreadOps
-        + ?Sized,
-> StringIntrinsicHost<'gc> for T
-{
+        + ThreadOps;
 }
 
 /// Host contract for delegate intrinsic handlers.

@@ -338,16 +338,17 @@ pub trait VesInternals<'gc>: BaseVesInternals<'gc> {}
 
 pub trait VesBaseOps: BaseVesBaseOps {}
 
-pub trait ExceptionContext<'gc>:
-    BaseExceptionContext<'gc>
-    + TypedStackOps<'gc>
-    + ResolutionOps<'gc>
-    + ReflectionOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + VesInternals<'gc>
-    + VesBaseOps
-{
+dotnet_vm_ops::trait_alias! {
+    #[no_blanket_impl]
+    pub trait ExceptionContext<'gc> =
+        BaseExceptionContext<'gc>
+        + TypedStackOps<'gc>
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + VesInternals<'gc>
+        + VesBaseOps;
 }
 
 pub trait PInvokeContext<'gc>:
