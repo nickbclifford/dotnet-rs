@@ -104,10 +104,31 @@ where
                 let td = self.loader.find_concrete_type(t)?;
                 let obj_instance =
                     self.new_object_with_lookup(td, ctx.resolution().clone(), ctx.generics())?;
-                let size = v.size_bytes();
-                obj_instance.instance_storage.with_data_mut(|data| {
-                    CTSValue::Value(v).write(&mut data[..size]);
-                });
+                let dest_len = obj_instance.instance_storage.with_data(|data| data.len());
+                match v {
+                    ValueType::Struct(source) => {
+                        obj_instance.instance_storage.with_data_mut(|dest| {
+                            source.instance_storage.with_data(|src| {
+                                let copy_len = src.len().min(dest.len());
+                                dest[..copy_len].copy_from_slice(&src[..copy_len]);
+                            });
+                        });
+                    }
+                    scalar => {
+                        let scalar_size = scalar.size_bytes();
+                        if scalar_size != dest_len {
+                            return Err(TypeResolutionError::InvalidLayout(format!(
+                                "box_value size mismatch for {}: source={}, destination={}",
+                                obj_instance.description.type_name(),
+                                scalar_size,
+                                dest_len
+                            )));
+                        }
+                        obj_instance.instance_storage.with_data_mut(|dest| {
+                            CTSValue::Value(scalar).write(dest);
+                        });
+                    }
+                }
                 Ok(ObjectRef::new(gc, HeapStorage::Boxed(obj_instance)))
             }
             CTSValue::Ref(r) => Ok(r),

@@ -92,6 +92,14 @@ namespace System
              }
         }
 
+        public void Clear()
+        {
+            for (int i = 0; i < _length; i++)
+            {
+                this[i] = default!;
+            }
+        }
+
         public Span<T> Slice(int start)
         {
              if ((uint)start > (uint)_length)
@@ -104,6 +112,20 @@ namespace System
              if ((uint)start > (uint)_length || (uint)length > (uint)(_length - start))
                  throw new ArgumentOutOfRangeException();
              return new Span<T>(ref Unsafe.Add(ref _reference, start), length);
+        }
+
+        public T[] ToArray()
+        {
+            if (_length == 0)
+                return [];
+
+            T[] result = new T[_length];
+            for (int i = 0; i < _length; i++)
+            {
+                result[i] = this[i];
+            }
+
+            return result;
         }
 
         public ref T this[int index]
@@ -205,6 +227,20 @@ namespace System
              if ((uint)start > (uint)_length || (uint)length > (uint)(_length - start))
                  throw new ArgumentOutOfRangeException();
              return new ReadOnlySpan<T>(ref Unsafe.Add(ref _reference, start), length);
+        }
+
+        public T[] ToArray()
+        {
+            if (_length == 0)
+                return [];
+
+            T[] result = new T[_length];
+            for (int i = 0; i < _length; i++)
+            {
+                result[i] = this[i];
+            }
+
+            return result;
         }
 
         public ref readonly T this[int index]

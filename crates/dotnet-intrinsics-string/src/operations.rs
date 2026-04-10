@@ -114,13 +114,9 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let span2 = ctx.peek_stack().as_value_type();
-    let span1 = ctx.peek_stack_at(1).as_value_type();
-    let span0 = ctx.peek_stack_at(2).as_value_type();
-
-    let mut data0 = Vec::new();
-    let mut data1 = Vec::new();
-    let mut data2 = Vec::new();
+    let arg2 = ctx.peek_stack();
+    let arg1 = ctx.peek_stack_at(1);
+    let arg0 = ctx.peek_stack_at(2);
 
     let copy_span_chunked =
         |ctx: &mut T, span: Object, dest: &mut Vec<u16>| -> Result<(), IntrinsicError> {
@@ -147,9 +143,49 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
             Ok(())
         };
 
-    crate::vm_try!(copy_span_chunked(ctx, span0, &mut data0));
-    crate::vm_try!(copy_span_chunked(ctx, span1, &mut data1));
-    crate::vm_try!(copy_span_chunked(ctx, span2, &mut data2));
+    let extract_chars = |ctx: &mut T, arg: StackValue<'gc>| -> Result<Vec<u16>, StepResult> {
+        match arg {
+            StackValue::ValueType(span) => {
+                let mut chars = Vec::new();
+                copy_span_chunked(ctx, span, &mut chars)
+                    .map_err(|e| StepResult::Error(e.into()))?;
+                Ok(chars)
+            }
+            StackValue::ObjectRef(ObjectRef(None)) => Ok(Vec::new()),
+            StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+                let chars = {
+                    let inner = handle.borrow();
+                    match &inner.storage {
+                        HeapStorage::Str(s) => s.to_vec(),
+                        _ => {
+                            return Err(StepResult::type_error(
+                                "ReadOnlySpan<char> or string",
+                                "non-string object reference".to_string(),
+                            ));
+                        }
+                    }
+                };
+                Ok(chars)
+            }
+            other => Err(StepResult::type_error(
+                "ReadOnlySpan<char> or string",
+                format!("{:?}", other),
+            )),
+        }
+    };
+
+    let data0 = match extract_chars(ctx, arg0) {
+        Ok(chars) => chars,
+        Err(step) => return step,
+    };
+    let data1 = match extract_chars(ctx, arg1) {
+        Ok(chars) => chars,
+        Err(step) => return step,
+    };
+    let data2 = match extract_chars(ctx, arg2) {
+        Ok(chars) => chars,
+        Err(step) => return step,
+    };
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;

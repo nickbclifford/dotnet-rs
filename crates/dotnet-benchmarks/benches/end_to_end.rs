@@ -1,10 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-#[cfg(feature = "bench-instrumentation")]
-use dotnet_benchmarks::write_bench_metrics_snapshot;
 use dotnet_benchmarks::{
     ARITHMETIC_BENCHMARK, BenchHarness, DISPATCH_BENCHMARK, GC_BENCHMARK, GENERICS_BENCHMARK,
     JSON_BENCHMARK,
 };
+
+#[cfg(feature = "bench-instrumentation")]
+use dotnet_benchmarks::write_bench_metrics_snapshot;
 
 fn run_case(c: &mut Criterion, case: dotnet_benchmarks::BenchmarkCase) {
     let harness = BenchHarness::new();

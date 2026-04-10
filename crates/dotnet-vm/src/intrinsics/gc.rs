@@ -1,7 +1,8 @@
 use crate::{
     StepResult,
+    instructions::objects::get_ptr_info,
     stack::ops::{
-        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps, VesBaseOps,
+        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, StackOps, TypedStackOps, VesBaseOps,
         VesInternals,
     },
 };
@@ -9,6 +10,8 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::{
+    StackValue,
+    layout::{LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     with_string,
 };
@@ -47,6 +50,33 @@ pub fn intrinsic_environment_get_variable_core<
         Some(s) => ctx.push_string(s.into()),
         None => ctx.push_obj(ObjectRef(None)),
     }
+    StepResult::Continue
+}
+
+/// System.Environment::.cctor()
+///
+/// CoreLib's managed .cctor can invoke runtime-native entry points that are not
+/// available in dotnet-rs yet. Treat it as a no-op bootstrap so Environment
+/// APIs can still be used by higher-level libraries like System.Text.Json.
+#[dotnet_intrinsic("static void System.Environment::.cctor()")]
+pub fn intrinsic_environment_cctor<'gc, T: TypedStackOps<'gc>>(
+    _ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    StepResult::Continue
+}
+
+/// System.Environment::get_ProcessorCount()
+#[dotnet_intrinsic("static int System.Environment::get_ProcessorCount()")]
+pub fn intrinsic_environment_processor_count<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    // Provide a deterministic non-zero CPU count for libraries sizing
+    // pools/buffers from ProcessorCount.
+    ctx.push_i32(1);
     StepResult::Continue
 }
 
@@ -163,6 +193,30 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static void System.GC::GetMemoryInfo(System.GCMemoryInfoData, int)")]
+pub fn intrinsic_gc_get_memory_info<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _kind = ctx.pop_i32();
+    let _data = ctx.pop_obj();
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static void System.Gen2GcCallback::Register(System.Func<object, bool>, object)"
+)]
+pub fn intrinsic_gen2_gc_callback_register<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _target = ctx.pop_obj();
+    let _callback = ctx.pop_obj();
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)"
 )]
@@ -206,6 +260,23 @@ pub fn intrinsic_gchandle_internal_alloc<
     }
 
     ctx.push_isize((index + 1) as isize);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::CheckUninitialized(nint)")]
+pub fn intrinsic_gchandle_check_uninitialized<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let handle = ctx.pop_isize();
+    if handle == 0 {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidOperationException",
+            "Handle is not initialized.",
+        );
+    }
+
     StepResult::Continue
 }
 
@@ -331,5 +402,157 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
         }
     };
     ctx.push_isize(addr);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static IntPtr System.Runtime.DependentHandle::InternalAlloc(object, object)")]
+pub fn intrinsic_dependent_handle_internal_alloc<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let dependent = ctx.pop_obj();
+    let target = ctx.pop_obj();
+
+    let index = {
+        let mut handles = ctx.heap().dependent_handles.borrow_mut();
+        if let Some(i) = handles.iter().position(|h| h.is_none()) {
+            handles[i] = Some((target, dependent));
+            i
+        } else {
+            handles.push(Some((target, dependent)));
+            handles.len() - 1
+        }
+    };
+
+    ctx.push_isize((index + 1) as isize);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static object System.Runtime.DependentHandle::InternalGetDependent(IntPtr)")]
+pub fn intrinsic_dependent_handle_internal_get_dependent<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let handle = ctx.pop_isize();
+    let dependent = if handle == 0 {
+        ObjectRef(None)
+    } else {
+        let index = (handle - 1) as usize;
+        let handles = ctx.heap().dependent_handles.borrow();
+        match handles.get(index) {
+            Some(Some((_target, dependent))) => *dependent,
+            _ => ObjectRef(None),
+        }
+    };
+    ctx.push_obj(dependent);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static object System.Runtime.DependentHandle::InternalGetTargetAndDependent(IntPtr, object&)"
+)]
+pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
+    'gc,
+    T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let dependent_out_ptr = ctx.pop();
+    let handle = ctx.pop_isize();
+
+    let (target, dependent) = if handle == 0 {
+        (ObjectRef(None), ObjectRef(None))
+    } else {
+        let index = (handle - 1) as usize;
+        let handles = ctx.heap().dependent_handles.borrow();
+        match handles.get(index) {
+            Some(Some((target, dependent))) => (*target, *dependent),
+            _ => (ObjectRef(None), ObjectRef(None)),
+        }
+    };
+
+    let layout = LayoutManager::Scalar(Scalar::ObjectRef);
+    let (origin, offset) = match get_ptr_info(ctx, &dependent_out_ptr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    vm_try!(unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::ObjectRef(dependent), &layout)
+    });
+
+    ctx.push_obj(target);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static void System.Runtime.DependentHandle::InternalSetDependent(IntPtr, object)"
+)]
+pub fn intrinsic_dependent_handle_internal_set_dependent<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let dependent = ctx.pop_obj();
+    let handle = ctx.pop_isize();
+    if handle != 0 {
+        let index = (handle - 1) as usize;
+        let mut handles = ctx.heap().dependent_handles.borrow_mut();
+        if index < handles.len()
+            && let Some(entry) = &mut handles[index]
+        {
+            entry.1 = dependent;
+        }
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Runtime.DependentHandle::InternalSetTargetToNull(IntPtr)")]
+pub fn intrinsic_dependent_handle_internal_set_target_to_null<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let handle = ctx.pop_isize();
+    if handle != 0 {
+        let index = (handle - 1) as usize;
+        let mut handles = ctx.heap().dependent_handles.borrow_mut();
+        if index < handles.len()
+            && let Some(entry) = &mut handles[index]
+        {
+            entry.0 = ObjectRef(None);
+            entry.1 = ObjectRef(None);
+        }
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static bool System.Runtime.DependentHandle::InternalFree(IntPtr)")]
+pub fn intrinsic_dependent_handle_internal_free<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let handle = ctx.pop_isize();
+    if handle != 0 {
+        let index = (handle - 1) as usize;
+        let mut handles = ctx.heap().dependent_handles.borrow_mut();
+        if index < handles.len() {
+            handles[index] = None;
+        }
+    }
+    ctx.push_i32(1);
     StepResult::Continue
 }

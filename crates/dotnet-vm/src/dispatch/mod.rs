@@ -8,14 +8,15 @@ use crate::{
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
-#[cfg(feature = "bench-instrumentation")]
-use dotnet_metrics::OpcodeCategory;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
 use std::sync::OnceLock;
+
+#[cfg(feature = "bench-instrumentation")]
+use dotnet_metrics::OpcodeCategory;
 
 pub mod registry;
 pub mod ring_buffer;

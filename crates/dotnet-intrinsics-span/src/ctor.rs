@@ -7,7 +7,7 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     layout::LayoutManager,
-    object::ObjectRef,
+    object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, UnmanagedPtr},
 };
 use dotnet_vm_ops::StepResult;
@@ -88,6 +88,74 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
     let span_type = this_ptr.inner_type();
     let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
 
+    let LayoutManager::Field(f) = &*layout else {
+        return StepResult::not_implemented("Expected Field layout for Span");
+    };
+
+    if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, ctx) {
+        return StepResult::Error(e.into());
+    }
+
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("void System.Span<T>::.ctor(T[])")]
+#[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(T[])")]
+pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let array = ctx.pop();
+    let this_ptr = ctx.pop_managed_ptr();
+
+    let element_type = &generics.type_generics[0];
+    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+
+    let (managed, length) = match array {
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            (ManagedPtr::new(None, element_desc, None, false, None), 0)
+        }
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let (ptr, len) = {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Vec(v) => {
+                        // SAFETY: We only take the base pointer while holding `inner` borrow.
+                        // The owner handle is stored in `ManagedPtr`, so subsequent accesses are
+                        // validated against this vector's lifetime and bounds.
+                        (unsafe { v.raw_data_ptr() }, v.layout.length as i32)
+                    }
+                    _ => {
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentException",
+                            "Span<T>(T[]) requires an array argument.",
+                        );
+                    }
+                }
+            };
+
+            (
+                ManagedPtr::new(
+                    NonNull::new(ptr),
+                    element_desc,
+                    Some(ObjectRef(Some(handle))),
+                    false,
+                    None,
+                ),
+                len,
+            )
+        }
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Span<T>(T[]) requires an array argument.",
+            );
+        }
+    };
+
+    let span_type = this_ptr.inner_type();
+    let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::not_implemented("Expected Field layout for Span");
     };

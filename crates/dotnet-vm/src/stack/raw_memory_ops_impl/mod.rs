@@ -10,7 +10,11 @@ use crate::{
 use dotnet_runtime_memory::access::MemoryOwner;
 use dotnet_types::TypeDescription;
 use dotnet_utils::{BorrowScopeOps, GcScopeGuard};
-use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
+use dotnet_value::{
+    StackValue,
+    layout::{HasLayout, LayoutManager, Scalar},
+    pointer::PointerOrigin,
+};
 use sptr::Strict;
 use std::ptr::NonNull;
 
@@ -110,6 +114,23 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), MemoryAccessError> {
+        if let PointerOrigin::Stack(idx) = origin.clone()
+            && offset == ByteOffset(0)
+            && matches!(layout, LayoutManager::Scalar(Scalar::ObjectRef))
+            && matches!(
+                self.evaluation_stack.get_slot_ref(idx),
+                StackValue::ObjectRef(_)
+            )
+        {
+            if !matches!(value, StackValue::ObjectRef(_)) {
+                return Err(MemoryAccessError::TypeMismatch(
+                    "Expected ObjectRef".to_string(),
+                ));
+            }
+            self.evaluation_stack.set_slot(idx, value);
+            return Ok(());
+        }
+
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {

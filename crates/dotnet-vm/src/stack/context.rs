@@ -8,7 +8,6 @@ use crate::{
 use dotnet_tracer::Tracer;
 use dotnet_types::{
     TypeDescription,
-    comparer::decompose_type_source,
     error::{IntrinsicError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -127,16 +126,22 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                     ..
                 } => {
                     pinned_locals.push(*pinned);
-                    match ctx.make_concrete(var_type)?.get() {
-                        Type { source, .. } => {
-                            let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
-                            let desc = ctx.locate_type(ut)?;
-
+                    let concrete_local = ctx.make_concrete(var_type)?;
+                    match concrete_local.get() {
+                        Boolean | Char | Int8 | UInt8 | Int16 | UInt16 | Int32 | UInt32 => {
+                            StackValue::Int32(0)
+                        }
+                        Int64 | UInt64 => StackValue::Int64(0),
+                        Float32 | Float64 => StackValue::NativeFloat(0.0),
+                        IntPtr | UIntPtr | FunctionPointer(_) | ValuePointer(_, _) => {
+                            StackValue::NativeInt(0)
+                        }
+                        Object | String | Array(_, _) | Vector(_, _) => StackValue::null(),
+                        Type { .. } => {
+                            let desc = self.loader().find_concrete_type(concrete_local.clone())?;
                             if desc.is_value_type(&ctx)? {
-                                let new_lookup = GenericLookup {
-                                    type_generics: type_generics.into(),
-                                    method_generics: generics.method_generics.clone(),
-                                };
+                                let mut new_lookup = concrete_local.make_lookup();
+                                new_lookup.method_generics = generics.method_generics.clone();
                                 let new_ctx = ctx.with_generics(&new_lookup);
                                 let instance = new_ctx.new_object(desc)?;
                                 StackValue::ValueType(instance)
@@ -144,7 +149,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                                 StackValue::null()
                             }
                         }
-                        _ => StackValue::null(),
                     }
                 }
             };
@@ -721,7 +725,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
     #[inline]
     fn monitor_get_sync_block_for_object(&self, object: ObjectRef<'gc>) -> Option<Self::SyncBlock> {
         object
-            .as_object(|o| o.sync_block_index)
+            .sync_block_index()
             .and_then(|index| self.shared().sync_blocks.get_sync_block(index))
     }
 
@@ -732,11 +736,9 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         gc: GCHandle<'gc>,
     ) -> Self::SyncBlock {
         let (_index, sync_block) = self.shared().sync_blocks.get_or_create_sync_block(
-            || object.as_object(|o| o.sync_block_index),
+            || object.sync_block_index(),
             |new_index| {
-                object.as_object_mut(gc, |o| {
-                    o.sync_block_index = Some(new_index);
-                });
+                object.set_sync_block_index(gc, new_index);
             },
         );
         sync_block

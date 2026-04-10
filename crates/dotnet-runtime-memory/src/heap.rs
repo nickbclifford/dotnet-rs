@@ -2,15 +2,16 @@ use crate::host::MemorySharedStateHost;
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use gc_arena::{Collect, Gc, collect::Trace};
-#[cfg(not(feature = "heap-diagnostics"))]
-use slab::Slab;
 use smallvec::SmallVec;
-#[cfg(not(feature = "heap-diagnostics"))]
-use std::collections::HashMap;
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
 };
+
+#[cfg(not(feature = "heap-diagnostics"))]
+use slab::Slab;
+#[cfg(not(feature = "heap-diagnostics"))]
+use std::collections::HashMap;
 
 #[cfg(feature = "heap-diagnostics")]
 use std::collections::BTreeMap;
@@ -30,6 +31,7 @@ pub struct HeapManager<'gc> {
     pub pending_finalization: RefCell<FinalizationQueue<'gc>>,
     pub pinned_objects: RefCell<PinnedObjects<'gc>>,
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
+    pub dependent_handles: RefCell<Vec<Option<(ObjectRef<'gc>, ObjectRef<'gc>)>>>,
     pub processing_finalizer: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
     /// Roots for objects in this arena that are referenced by other arenas.
@@ -51,6 +53,7 @@ impl<'gc> HeapManager<'gc> {
             pending_finalization: RefCell::new(SmallVec::new()),
             pinned_objects: RefCell::new(SmallVec::new()),
             gchandles: RefCell::new(Vec::new()),
+            dependent_handles: RefCell::new(Vec::new()),
             processing_finalizer: Cell::new(false),
             needs_full_collect: Cell::new(false),
             #[cfg(feature = "multithreading")]

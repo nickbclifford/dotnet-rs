@@ -4,13 +4,13 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
-    layout::HasLayout,
+    layout::{HasLayout, LayoutManager, Scalar},
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnet_vm_ops::{
     StepResult,
-    ops::{EvalStackOps, ExceptionOps, RawMemoryOps, TypedStackOps},
+    ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps},
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::{self, NonNull};
@@ -40,6 +40,35 @@ pub fn intrinsic_unsafe_as_pointer<
         }
     };
     ctx.push_isize(ptr as isize);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::NullRef<T>()")]
+#[dotnet_intrinsic("static M0& System.Runtime.CompilerServices.Unsafe::NullRef<M0>()")]
+pub fn intrinsic_unsafe_null_ref<'gc, T: TypedStackOps<'gc> + LoaderOps>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let Some(target) = generics.method_generics.first().cloned() else {
+        return StepResult::not_implemented(
+            "Unsafe.NullRef<T> requires one generic argument".to_string(),
+        );
+    };
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target));
+    ctx.push_ptr(std::ptr::null_mut(), target_type, false, None, None);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::IsNullRef<T>(T&)")]
+#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::IsNullRef<M0>(M0&)")]
+pub fn intrinsic_unsafe_is_null_ref<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop();
+    ctx.push_i32(value.is_null() as i32);
     StepResult::Continue
 }
 
@@ -237,6 +266,190 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
             ));
         }
     }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static TTo System.Runtime.CompilerServices.Unsafe::BitCast<TFrom, TTo>(TFrom)")]
+pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    if generics.method_generics.len() < 2 {
+        return StepResult::not_implemented(
+            "Unsafe.BitCast<TFrom, TTo> requires two generic arguments".to_string(),
+        );
+    }
+
+    let src_layout = vm_try!(ctx.unsafe_type_layout(generics.method_generics[0].clone()));
+    let dst_layout = vm_try!(ctx.unsafe_type_layout(generics.method_generics[1].clone()));
+    let src_size = src_layout.size().as_usize();
+    let dst_size = dst_layout.size().as_usize();
+    if src_size != dst_size || src_size > 16 {
+        return StepResult::not_implemented(format!(
+            "Unsafe.BitCast<TFrom, TTo> unsupported size cast: {} -> {}",
+            src_size, dst_size
+        ));
+    }
+
+    let value = ctx.pop();
+    let mut bytes = [0u8; 16];
+    let src_slice = &mut bytes[..src_size];
+
+    let as_i32 = |v: &StackValue<'gc>| match v {
+        StackValue::Int32(i) => Some(*i),
+        StackValue::Int64(i) => Some(*i as i32),
+        StackValue::NativeInt(i) => Some(*i as i32),
+        _ => None,
+    };
+    let as_i64 = |v: &StackValue<'gc>| match v {
+        StackValue::Int32(i) => Some(*i as i64),
+        StackValue::Int64(i) => Some(*i),
+        StackValue::NativeInt(i) => Some(*i as i64),
+        _ => None,
+    };
+    let as_isize = |v: &StackValue<'gc>| match v {
+        StackValue::Int32(i) => Some(*i as isize),
+        StackValue::Int64(i) => Some(*i as isize),
+        StackValue::NativeInt(i) => Some(*i),
+        _ => None,
+    };
+
+    match src_layout.as_ref() {
+        LayoutManager::Scalar(Scalar::Int8 | Scalar::UInt8) => {
+            let Some(v) = as_i32(&value) else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected 1-byte integer, got {:?}",
+                    value
+                ));
+            };
+            src_slice[0] = v as u8;
+        }
+        LayoutManager::Scalar(Scalar::Int16 | Scalar::UInt16) => {
+            let Some(v) = as_i32(&value) else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected 2-byte integer, got {:?}",
+                    value
+                ));
+            };
+            src_slice.copy_from_slice(&(v as i16).to_ne_bytes());
+        }
+        LayoutManager::Scalar(Scalar::Int32) => {
+            let Some(v) = as_i32(&value) else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected Int32, got {:?}",
+                    value
+                ));
+            };
+            src_slice.copy_from_slice(&v.to_ne_bytes());
+        }
+        LayoutManager::Scalar(Scalar::Int64) => {
+            let Some(v) = as_i64(&value) else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected Int64, got {:?}",
+                    value
+                ));
+            };
+            src_slice.copy_from_slice(&v.to_ne_bytes());
+        }
+        LayoutManager::Scalar(Scalar::NativeInt) => {
+            let Some(v) = as_isize(&value) else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected NativeInt, got {:?}",
+                    value
+                ));
+            };
+            if std::mem::size_of::<isize>() == 8 {
+                src_slice.copy_from_slice(&(v as i64).to_ne_bytes());
+            } else {
+                src_slice.copy_from_slice(&(v as i32).to_ne_bytes());
+            }
+        }
+        LayoutManager::Scalar(Scalar::Float32) => {
+            let StackValue::NativeFloat(v) = value else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected Float32, got {:?}",
+                    value
+                ));
+            };
+            src_slice.copy_from_slice(&(v as f32).to_bits().to_ne_bytes());
+        }
+        LayoutManager::Scalar(Scalar::Float64) => {
+            let StackValue::NativeFloat(v) = value else {
+                return StepResult::not_implemented(format!(
+                    "Unsafe.BitCast source mismatch: expected Float64, got {:?}",
+                    value
+                ));
+            };
+            src_slice.copy_from_slice(&v.to_bits().to_ne_bytes());
+        }
+        _ => {
+            return StepResult::not_implemented(format!(
+                "Unsafe.BitCast unsupported source layout: {:?}",
+                src_layout
+            ));
+        }
+    }
+
+    let dst_slice = &bytes[..dst_size];
+    match dst_layout.as_ref() {
+        LayoutManager::Scalar(Scalar::Int8) => {
+            ctx.push_i32((dst_slice[0] as i8) as i32);
+        }
+        LayoutManager::Scalar(Scalar::UInt8) => {
+            ctx.push_i32(dst_slice[0] as i32);
+        }
+        LayoutManager::Scalar(Scalar::Int16) => {
+            let mut arr = [0u8; 2];
+            arr.copy_from_slice(dst_slice);
+            ctx.push_i32(i16::from_ne_bytes(arr) as i32);
+        }
+        LayoutManager::Scalar(Scalar::UInt16) => {
+            let mut arr = [0u8; 2];
+            arr.copy_from_slice(dst_slice);
+            ctx.push_i32(u16::from_ne_bytes(arr) as i32);
+        }
+        LayoutManager::Scalar(Scalar::Int32) => {
+            let mut arr = [0u8; 4];
+            arr.copy_from_slice(dst_slice);
+            ctx.push_i32(i32::from_ne_bytes(arr));
+        }
+        LayoutManager::Scalar(Scalar::Int64) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(dst_slice);
+            ctx.push_i64(i64::from_ne_bytes(arr));
+        }
+        LayoutManager::Scalar(Scalar::NativeInt) => {
+            if std::mem::size_of::<isize>() == 8 {
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(dst_slice);
+                ctx.push_isize(i64::from_ne_bytes(arr) as isize);
+            } else {
+                let mut arr = [0u8; 4];
+                arr.copy_from_slice(dst_slice);
+                ctx.push_isize(i32::from_ne_bytes(arr) as isize);
+            }
+        }
+        LayoutManager::Scalar(Scalar::Float32) => {
+            let mut arr = [0u8; 4];
+            arr.copy_from_slice(dst_slice);
+            let f = f32::from_bits(u32::from_ne_bytes(arr));
+            ctx.push_f64(f as f64);
+        }
+        LayoutManager::Scalar(Scalar::Float64) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(dst_slice);
+            let f = f64::from_bits(u64::from_ne_bytes(arr));
+            ctx.push_f64(f);
+        }
+        _ => {
+            return StepResult::not_implemented(format!(
+                "Unsafe.BitCast unsupported target layout: {:?}",
+                dst_layout
+            ));
+        }
+    }
+
     StepResult::Continue
 }
 

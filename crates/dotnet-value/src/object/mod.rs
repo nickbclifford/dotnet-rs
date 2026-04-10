@@ -1,5 +1,6 @@
 #[cfg(any(feature = "memory-validation", debug_assertions, test))]
 use crate::ValidationTag;
+
 use crate::{ArenaId, ptr_common::PointerLike};
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
@@ -60,6 +61,10 @@ pub struct ObjectInner<'gc> {
     /// Invariant: immutable after construction and safe for lock-free reads.
     #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     owner_id: ArenaId,
+    /// Sync block index for System.Threading.Monitor.
+    /// Stored on ObjectInner so every heap storage variant (Obj/Vec/Str/Boxed)
+    /// can participate in monitor locking.
+    sync_block_index: Option<usize>,
     pub storage: HeapStorage<'gc>,
 }
 
@@ -74,6 +79,7 @@ impl<'gc> ObjectInner<'gc> {
             magic: ValidationTag::new(OBJECT_MAGIC),
             #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
             owner_id,
+            sync_block_index: None,
             storage,
         }
     }
@@ -637,6 +643,30 @@ impl<'gc> ObjectRef<'gc> {
         inner.validate_magic();
         inner.validate_arena_id();
         op(&inner.storage)
+    }
+
+    pub fn sync_block_index(&self) -> Option<usize> {
+        let ObjectRef(Some(o)) = &self else {
+            panic!(
+                "NullReferenceException: called ObjectRef::sync_block_index on NULL object reference"
+            )
+        };
+        let inner = o.borrow();
+        inner.validate_magic();
+        inner.validate_arena_id();
+        inner.sync_block_index
+    }
+
+    pub fn set_sync_block_index(&self, gc: GCHandle<'gc>, new_index: usize) {
+        let ObjectRef(Some(o)) = &self else {
+            panic!(
+                "NullReferenceException: called ObjectRef::set_sync_block_index on NULL object reference"
+            )
+        };
+        let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
+        inner.validate_arena_id();
+        inner.sync_block_index = Some(new_index);
     }
 
     /// Safely accesses the object's data as a byte slice.

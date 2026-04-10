@@ -42,6 +42,66 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
     ));
 
     match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Byte => {
+            let is_signed = matches!(target_type.get(), dotnetdll::prelude::BaseType::Int8);
+            let comparand = ctx.pop_i32() as u8;
+            let value = ctx.pop_i32() as u8;
+            let target_ptr = ctx.pop_managed_ptr();
+
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width CAS.
+            let prev = match unsafe {
+                ctx.threading_compare_exchange_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    comparand as u64,
+                    value as u64,
+                    1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as u8,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
+            };
+
+            if is_signed {
+                ctx.push_i32((prev as i8) as i32);
+            } else {
+                ctx.push_i32(prev as i32);
+            }
+        }
+        InterlockedAtomicTypeDispatch::Int16 => {
+            let is_signed = matches!(target_type.get(), dotnetdll::prelude::BaseType::Int16);
+            let comparand = ctx.pop_i32() as u16;
+            let value = ctx.pop_i32() as u16;
+            let target_ptr = ctx.pop_managed_ptr();
+
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit CAS.
+            let prev = match unsafe {
+                ctx.threading_compare_exchange_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    comparand as u64,
+                    value as u64,
+                    2,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as u16,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
+            };
+
+            if is_signed {
+                ctx.push_i32((prev as i16) as i32);
+            } else {
+                ctx.push_i32(prev as i32);
+            }
+        }
         InterlockedAtomicTypeDispatch::Int32 => {
             let comparand = ctx.pop_i32();
             let value = ctx.pop_i32();
@@ -194,6 +254,52 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ));
 
     match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Byte => {
+            let is_signed = matches!(target_type.get(), dotnetdll::prelude::BaseType::Int8);
+            let value = ctx.pop_i32() as u8;
+            let target_ptr = ctx.pop_managed_ptr();
+
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width exchange.
+            let prev = unsafe {
+                ctx.threading_exchange_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    value as u64,
+                    1,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.Exchange failed")
+            } as u8;
+
+            if is_signed {
+                ctx.push_i32((prev as i8) as i32);
+            } else {
+                ctx.push_i32(prev as i32);
+            }
+        }
+        InterlockedAtomicTypeDispatch::Int16 => {
+            let is_signed = matches!(target_type.get(), dotnetdll::prelude::BaseType::Int16);
+            let value = ctx.pop_i32() as u16;
+            let target_ptr = ctx.pop_managed_ptr();
+
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit exchange.
+            let prev = unsafe {
+                ctx.threading_exchange_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    value as u64,
+                    2,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.Exchange failed")
+            } as u16;
+
+            if is_signed {
+                ctx.push_i32((prev as i16) as i32);
+            } else {
+                ctx.push_i32(prev as i32);
+            }
+        }
         InterlockedAtomicTypeDispatch::Int32 => {
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
@@ -312,6 +418,11 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ));
 
     match interlocked_atomic_dispatch(target_type.get()) {
+        InterlockedAtomicTypeDispatch::Byte | InterlockedAtomicTypeDispatch::Int16 => {
+            return StepResult::not_implemented(
+                "Interlocked.ExchangeAdd/Add is only supported for int and long.",
+            );
+        }
         InterlockedAtomicTypeDispatch::Int32 => {
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();

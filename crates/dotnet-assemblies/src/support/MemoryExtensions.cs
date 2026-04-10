@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using DotnetRs;
 
@@ -22,6 +23,12 @@ namespace System
 
         public static ReadOnlySpan<char> AsSpan(this string text, int start, int length) => new ReadOnlySpan<char>(text.ToCharArray(), start, length);
 
+        public static ReadOnlyMemory<char> AsMemory(this string text) => new ReadOnlyMemory<char>(text.ToCharArray());
+
+        public static ReadOnlyMemory<char> AsMemory(this string text, int start) => new ReadOnlyMemory<char>(text.ToCharArray(), start, text == null ? 0 : text.Length - start);
+
+        public static ReadOnlyMemory<char> AsMemory(this string text, int start, int length) => new ReadOnlyMemory<char>(text.ToCharArray(), start, length);
+
         internal static bool SequenceEqualSlowPath<T>(ReadOnlySpan<T> span, ReadOnlySpan<T> other)
         {
             // Note: length equality and non-zero length are already checked by the intrinsic
@@ -31,6 +38,28 @@ namespace System
                     return false;
             }
             return true;
+        }
+
+        public static int IndexOfAnyExcept<T>(ReadOnlySpan<T> span, SearchValues<T> values)
+            where T : IEquatable<T>
+        {
+            for (int i = 0; i < span.Length; i++)
+            {
+                if (!values.Contains(span[i]))
+                    return i;
+            }
+            return -1;
+        }
+
+        public static int IndexOfAny<T>(ReadOnlySpan<T> span, SearchValues<T> values)
+            where T : IEquatable<T>
+        {
+            for (int i = 0; i < span.Length; i++)
+            {
+                if (values.Contains(span[i]))
+                    return i;
+            }
+            return -1;
         }
     }
 }

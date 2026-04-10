@@ -13,9 +13,10 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
+use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
+
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
-use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
 
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::GcLifetime;

@@ -4,6 +4,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    TypeResolver,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -16,8 +17,79 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::{prelude::Kind, resolved::types::Accessibility as TypeAccessibility};
+use dotnetdll::{
+    prelude::{BaseType, Kind, MethodType, TypeSource},
+    resolved::types::Accessibility as TypeAccessibility,
+};
 use std::collections::{HashSet, VecDeque};
+
+fn runtime_type_from_concrete(
+    loader: &impl TypeResolver,
+    concrete: &ConcreteType,
+) -> Option<RuntimeType> {
+    match concrete.get() {
+        BaseType::Boolean => Some(RuntimeType::Boolean),
+        BaseType::Char => Some(RuntimeType::Char),
+        BaseType::Int8 => Some(RuntimeType::Int8),
+        BaseType::UInt8 => Some(RuntimeType::UInt8),
+        BaseType::Int16 => Some(RuntimeType::Int16),
+        BaseType::UInt16 => Some(RuntimeType::UInt16),
+        BaseType::Int32 => Some(RuntimeType::Int32),
+        BaseType::UInt32 => Some(RuntimeType::UInt32),
+        BaseType::Int64 => Some(RuntimeType::Int64),
+        BaseType::UInt64 => Some(RuntimeType::UInt64),
+        BaseType::Float32 => Some(RuntimeType::Float32),
+        BaseType::Float64 => Some(RuntimeType::Float64),
+        BaseType::IntPtr => Some(RuntimeType::IntPtr),
+        BaseType::UIntPtr => Some(RuntimeType::UIntPtr),
+        BaseType::Object => Some(RuntimeType::Object),
+        BaseType::String => Some(RuntimeType::String),
+        BaseType::Type {
+            source: TypeSource::User(user),
+            ..
+        } => loader
+            .locate_type(concrete.resolution(), *user)
+            .ok()
+            .map(RuntimeType::Type),
+        BaseType::Type {
+            source:
+                TypeSource::Generic {
+                    base: user,
+                    parameters,
+                },
+            ..
+        } => {
+            let td = loader.locate_type(concrete.resolution(), *user).ok()?;
+            let args = parameters
+                .iter()
+                .map(|p| runtime_type_from_concrete(loader, p))
+                .collect::<Option<Vec<_>>>()?;
+            Some(RuntimeType::Generic(td, args))
+        }
+        BaseType::Vector(_, inner) => {
+            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Vector(Box::new(t)))
+        }
+        BaseType::Array(inner, shape) => runtime_type_from_concrete(loader, inner)
+            .map(|t| RuntimeType::Array(Box::new(t), shape.rank as u32)),
+        BaseType::ValuePointer(_, Some(inner)) => {
+            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Pointer(Box::new(t)))
+        }
+        BaseType::ValuePointer(_, None) => Some(RuntimeType::IntPtr),
+        _ => None,
+    }
+}
+
+fn runtime_type_from_method_type(
+    loader: &impl TypeResolver,
+    source_resolution: dotnet_types::resolution::ResolutionS,
+    method_type: &MethodType,
+    lookup: &GenericLookup,
+) -> Option<RuntimeType> {
+    let concrete = lookup
+        .make_concrete(source_resolution, method_type.clone(), loader)
+        .ok()?;
+    runtime_type_from_concrete(loader, &concrete)
+}
 
 #[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
 pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
@@ -51,6 +123,92 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, T: TypedStackOps<'gc>>(
         .unwrap()
         .read();
     ctx.push_isize(target as isize);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Type System.Text.Json.Serialization.JsonConverter::get_Type()")]
+#[dotnet_intrinsic("System.Type System.Text.Json.Serialization.JsonConverter<T>::get_Type()")]
+pub fn intrinsic_json_converter_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let this_obj = ctx.pop_obj();
+
+    let target_type = generics
+        .type_generics
+        .first()
+        .or_else(|| method.parent_generics.type_generics.first());
+    if let Some(target_type) = target_type {
+        let runtime_type = runtime_type_from_concrete(ctx.loader().as_ref(), target_type);
+        if let Some(runtime_type) = runtime_type {
+            let runtime_type_obj = crate::common::get_runtime_type(ctx, runtime_type);
+            ctx.push_obj(runtime_type_obj);
+            return StepResult::Continue;
+        }
+    }
+
+    // Fast path: for converter implementations, the immediate generic base carries T.
+    let this_td = this_obj.as_object(|instance| instance.description.clone());
+    let this_rt = RuntimeType::Type(this_td.clone());
+    let this_lookup = build_generic_lookup_from_runtime_type(ctx, &this_rt);
+    if let Some(base_source) = &this_td.definition().extends {
+        let base_method_type = super::member_to_method_type(base_source);
+        if let MethodType::Base(base_ty) = &base_method_type
+            && let BaseType::Type {
+                source: TypeSource::Generic { parameters, .. },
+                ..
+            } = &**base_ty
+            && let Some(first_param) = parameters.first()
+        {
+            let runtime_type = runtime_type_from_method_type(
+                ctx.loader().as_ref(),
+                this_td.resolution.clone(),
+                first_param,
+                &this_lookup,
+            );
+            if let Some(runtime_type) = runtime_type {
+                let runtime_type_obj = crate::common::get_runtime_type(ctx, runtime_type);
+                ctx.push_obj(runtime_type_obj);
+                return StepResult::Continue;
+            }
+        }
+    }
+
+    // Fallback: infer T by walking this instance's base chain until JsonConverter`1.
+    let mut current_rt = this_rt;
+    while let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = &current_rt {
+        let (current_td, current_lookup) = (
+            td.clone(),
+            build_generic_lookup_from_runtime_type(ctx, &current_rt),
+        );
+
+        if current_td.type_name() == "System.Text.Json.Serialization.JsonConverter`1" {
+            if let RuntimeType::Generic(_, args) = &current_rt
+                && let Some(arg) = args.first()
+            {
+                let runtime_type_obj = crate::common::get_runtime_type(ctx, arg.clone());
+                ctx.push_obj(runtime_type_obj);
+                return StepResult::Continue;
+            }
+            break;
+        }
+
+        let Some(base_source) = &current_td.definition().extends else {
+            break;
+        };
+        let method_type = super::member_to_method_type(base_source);
+        let Some(next_rt) = runtime_type_from_method_type(
+            ctx.loader().as_ref(),
+            current_td.resolution.clone(),
+            &method_type,
+            &current_lookup,
+        ) else {
+            break;
+        };
+        current_rt = next_rt;
+    }
+    ctx.push(StackValue::null());
     StepResult::Continue
 }
 
@@ -110,6 +268,20 @@ pub fn intrinsic_type_get_is_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
         _ => false,
     };
     ctx.push_i32(value as i32);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("bool System.Type::get_IsByRefLike()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsByRefLike()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsByRefLike()")]
+pub fn intrinsic_type_get_is_by_ref_like<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _ = ctx.pop_obj();
+    // Conservative fallback until full metadata-based byref-like detection is wired up.
+    ctx.push_i32(0);
     StepResult::Continue
 }
 
@@ -238,6 +410,24 @@ pub fn handle_is_pointer_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+pub fn handle_has_element_type_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let has_element_type = matches!(
+        rt,
+        RuntimeType::Vector(_)
+            | RuntimeType::Array(_, _)
+            | RuntimeType::ByRef(_)
+            | RuntimeType::Pointer(_)
+            | RuntimeType::ValuePointer(_, _)
+    );
+    ctx.push_i32(if has_element_type { 1 } else { 0 });
+    StepResult::Continue
+}
+
 pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -270,8 +460,14 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
         while let Some((curr_td, curr_lookup)) = queue.pop_front() {
             for (_, interface_source) in &curr_td.definition().implements {
                 let method_type = super::member_to_method_type(interface_source);
-                let resolved_interface =
-                    ctx.reflection_make_runtime_type_with_lookup(&method_type, &curr_lookup);
+                let Some(resolved_interface) = runtime_type_from_method_type(
+                    ctx.loader().as_ref(),
+                    curr_td.resolution.clone(),
+                    &method_type,
+                    &curr_lookup,
+                ) else {
+                    continue;
+                };
 
                 if seen.insert(resolved_interface.clone()) {
                     interfaces.push(crate::common::get_runtime_type(ctx, resolved_interface));
@@ -280,8 +476,14 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             if let Some(base_source) = &curr_td.definition().extends {
                 let method_type = super::member_to_method_type(base_source);
-                let base_rt =
-                    ctx.reflection_make_runtime_type_with_lookup(&method_type, &curr_lookup);
+                let Some(base_rt) = runtime_type_from_method_type(
+                    ctx.loader().as_ref(),
+                    curr_td.resolution.clone(),
+                    &method_type,
+                    &curr_lookup,
+                ) else {
+                    continue;
+                };
                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = &base_rt {
                     let base_lookup = build_generic_lookup_from_runtime_type(ctx, &base_rt);
                     queue.push_back((base_td.clone(), base_lookup));
@@ -336,8 +538,14 @@ pub fn handle_get_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
         'outer: while let Some((curr_td, curr_lookup)) = queue.pop_front() {
             for (_, interface_source) in &curr_td.definition().implements {
                 let method_type = super::member_to_method_type(interface_source);
-                let resolved_interface =
-                    ctx.reflection_make_runtime_type_with_lookup(&method_type, &curr_lookup);
+                let Some(resolved_interface) = runtime_type_from_method_type(
+                    ctx.loader().as_ref(),
+                    curr_td.resolution.clone(),
+                    &method_type,
+                    &curr_lookup,
+                ) else {
+                    continue;
+                };
 
                 if seen.insert(resolved_interface.clone()) {
                     let itf_name = resolved_interface.get_name();
@@ -364,8 +572,14 @@ pub fn handle_get_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             if let Some(base_source) = &curr_td.definition().extends {
                 let method_type = super::member_to_method_type(base_source);
-                let base_rt =
-                    ctx.reflection_make_runtime_type_with_lookup(&method_type, &curr_lookup);
+                let Some(base_rt) = runtime_type_from_method_type(
+                    ctx.loader().as_ref(),
+                    curr_td.resolution.clone(),
+                    &method_type,
+                    &curr_lookup,
+                ) else {
+                    continue;
+                };
                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = &base_rt {
                     let base_lookup = build_generic_lookup_from_runtime_type(ctx, &base_rt);
                     queue.push_back((base_td.clone(), base_lookup));
@@ -514,7 +728,15 @@ pub fn handle_get_base_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
             if let Some(base) = &td.definition().extends {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let method_type = super::member_to_method_type(base);
-                let base_rt = ctx.reflection_make_runtime_type_with_lookup(&method_type, &lookup);
+                let Some(base_rt) = runtime_type_from_method_type(
+                    ctx.loader().as_ref(),
+                    td.resolution.clone(),
+                    &method_type,
+                    &lookup,
+                ) else {
+                    ctx.push(StackValue::null());
+                    return StepResult::Continue;
+                };
                 let rt_obj = crate::common::get_runtime_type(ctx, base_rt);
                 ctx.push_obj(rt_obj);
             } else {

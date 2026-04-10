@@ -15,6 +15,7 @@ use dotnet_value::{
 use gc_arena::{Collect, collect::Trace};
 use smallvec::SmallVec;
 use std::ptr::NonNull;
+
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
 

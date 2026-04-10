@@ -24,6 +24,7 @@ fn concrete_to_method_type(concrete: &ConcreteType) -> MethodType {
 
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
+#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
@@ -117,6 +118,48 @@ pub fn intrinsic_numeric_create_truncating<'gc, T: TypedStackOps<'gc>>(
         _ => panic!("unsupported CreateTruncating source type: {:?}", value),
     }
 
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static uint System.UInt32::CreateChecked<T>(T)")]
+pub fn intrinsic_uint32_create_checked<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop();
+    match value {
+        StackValue::Int32(v) => ctx.push_i32((v as u32) as i32),
+        StackValue::Int64(v) => ctx.push_i32((v as u32) as i32),
+        StackValue::NativeInt(v) => ctx.push_i32((v as u32) as i32),
+        other => {
+            return StepResult::not_implemented(format!(
+                "UInt32.CreateChecked<T> unsupported source type: {:?}",
+                other
+            ));
+        }
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Int32::CreateChecked<T>(T)")]
+pub fn intrinsic_int32_create_checked<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop();
+    match value {
+        StackValue::Int32(v) => ctx.push_i32(v),
+        StackValue::Int64(v) => ctx.push_i32(v as i32),
+        StackValue::NativeInt(v) => ctx.push_i32(v as i32),
+        other => {
+            return StepResult::not_implemented(format!(
+                "Int32.CreateChecked<T> unsupported source type: {:?}",
+                other
+            ));
+        }
+    }
     StepResult::Continue
 }
 
@@ -223,6 +266,18 @@ pub fn intrinsic_math_min_int<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static byte System.Math::Min(byte, byte)")]
+pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32() as u8;
+    let a = ctx.pop_i32() as u8;
+    ctx.push_i32(std::cmp::min(a, b) as i32);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static int System.Math::Max(int, int)")]
 pub fn intrinsic_math_max_int<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
@@ -232,6 +287,18 @@ pub fn intrinsic_math_max_int<'gc, T: TypedStackOps<'gc>>(
     let b = ctx.pop_i32();
     let a = ctx.pop_i32();
     ctx.push_i32(std::cmp::max(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static byte System.Math::Max(byte, byte)")]
+pub fn intrinsic_math_max_byte<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32() as u8;
+    let a = ctx.pop_i32() as u8;
+    ctx.push_i32(std::cmp::max(a, b) as i32);
     StepResult::Continue
 }
 
@@ -275,6 +342,184 @@ pub fn intrinsic_bitoperations_log2_ulong<'gc, T: TypedStackOps<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = ctx.pop_i64() as u64;
-    ctx.push_i32(val.leading_zeros() as i32);
+    let log2 = if val == 0 {
+        0
+    } else {
+        (u64::BITS - 1 - val.leading_zeros()) as i32
+    };
+    ctx.push_i32(log2);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static ulong System.UInt64::Log2(ulong)")]
+pub fn intrinsic_uint64_log2<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_i64() as u64;
+    let log2 = if val == 0 {
+        0
+    } else {
+        (u64::BITS - 1 - val.leading_zeros()) as u64
+    };
+    ctx.push_i64(log2 as i64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Numerics.BitOperations::Log2(uint)")]
+pub fn intrinsic_bitoperations_log2_uint<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_i32() as u32;
+    let log2 = if val == 0 {
+        0
+    } else {
+        (u32::BITS - 1 - val.leading_zeros()) as i32
+    };
+    ctx.push_i32(log2);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static uint System.Numerics.BitOperations::RotateLeft(uint, int)")]
+pub fn intrinsic_bitoperations_rotate_left_uint<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let offset = ctx.pop_i32() as u32;
+    let value = ctx.pop_i32() as u32;
+    ctx.push_i32(value.rotate_left(offset) as i32);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static uint System.Numerics.BitOperations::RotateRight(uint, int)")]
+pub fn intrinsic_bitoperations_rotate_right_uint<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let offset = ctx.pop_i32() as u32;
+    let value = ctx.pop_i32() as u32;
+    ctx.push_i32(value.rotate_right(offset) as i32);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static ulong System.Numerics.BitOperations::RotateLeft(ulong, int)")]
+pub fn intrinsic_bitoperations_rotate_left_ulong<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let offset = ctx.pop_i32() as u32;
+    let value = ctx.pop_i64() as u64;
+    ctx.push_i64(value.rotate_left(offset) as i64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static ulong System.Numerics.BitOperations::RotateRight(ulong, int)")]
+pub fn intrinsic_bitoperations_rotate_right_ulong<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let offset = ctx.pop_i32() as u32;
+    let value = ctx.pop_i64() as u64;
+    ctx.push_i64(value.rotate_right(offset) as i64);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static char* System.Diagnostics.Tracing.XplatEventLogger::EventSource_GetClrConfig(string)"
+)]
+pub fn intrinsic_eventsource_get_clr_config<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _ = ctx.pop();
+    ctx.push_isize(0);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Diagnostics.Debugger::LogInternal(int, string, string)")]
+pub fn intrinsic_debugger_log_internal<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.pop_multiple(3);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static string System.Exception::GetMessageFromNativeResources(System.Exception/ExceptionMessageKind)"
+)]
+pub fn intrinsic_exception_get_message_from_native_resources<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _ = ctx.pop();
+    ctx.push_obj(ObjectRef(None));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static void System.Environment::FailFast(System.Runtime.CompilerServices.StackCrawlMarkHandle, string, System.Runtime.CompilerServices.ObjectHandleOnStack, string)"
+)]
+pub fn intrinsic_environment_failfast<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.pop_multiple(4);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static bool System.Diagnostics.Tracing.EventSource::get_IsSupported()")]
+#[dotnet_intrinsic("bool System.Diagnostics.Tracing.EventSource::IsEnabled()")]
+pub fn intrinsic_eventsource_disabled<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    if !_method.method().signature.parameters.is_empty() {
+        // Instance overloads consume `this` plus explicit parameters.
+        ctx.pop_multiple(1 + _method.method().signature.parameters.len());
+    } else if _method.method().signature.instance {
+        ctx.pop();
+    }
+    ctx.push_i32(0);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static string System.SR::GetResourceString(string)")]
+#[dotnet_intrinsic("static string System.SR::GetResourceString(string, string)")]
+#[dotnet_intrinsic("static string System.SR::InternalGetResourceString(string)")]
+pub fn intrinsic_sr_get_resource_string<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let arity = method.method().signature.parameters.len();
+    let key = if arity == 2 {
+        let fallback = ctx.pop();
+        let key = ctx.pop();
+        if matches!(key, StackValue::ObjectRef(ObjectRef(Some(_)))) {
+            key
+        } else {
+            fallback
+        }
+    } else {
+        ctx.pop()
+    };
+
+    match key {
+        StackValue::ObjectRef(o) => ctx.push_obj(o),
+        _ => ctx.push_obj(ObjectRef(None)),
+    }
     StepResult::Continue
 }

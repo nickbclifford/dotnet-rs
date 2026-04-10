@@ -1,7 +1,7 @@
 use crate::{
     StepResult,
     instructions::objects::get_ptr_info,
-    stack::ops::{ExceptionOps, RawMemoryOps, StackOps, TypedStackOps},
+    stack::ops::{ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, StackOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -57,5 +57,46 @@ pub fn intrinsic_save_stack_traces_from_deep_copy<'gc, T: TypedStackOps<'gc>>(
     let _exception = ctx.pop_obj();
 
     // Stub: do nothing
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Exception/DispatchState System.Exception::CaptureDispatchState()")]
+pub fn intrinsic_exception_capture_dispatch_state<
+    'gc,
+    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _this = ctx.pop_obj();
+
+    let dispatch_state_type = vm_try!(
+        ctx.loader()
+            .corlib_type("System.Exception/DispatchState")
+            .or_else(|_| ctx.loader().corlib_type("System.Exception+DispatchState"))
+    );
+    let dispatch_state = vm_try!(ctx.new_object(dispatch_state_type));
+    ctx.push_value_type(dispatch_state);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static bool System.Exception::IsImmutableAgileException(System.Exception)")]
+pub fn intrinsic_exception_is_immutable_agile_exception<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _exception = ctx.pop_obj();
+    ctx.push_i32(0);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Exception::PrepareForForeignExceptionRaise()")]
+pub fn intrinsic_exception_prepare_for_foreign_exception_raise<'gc, T: TypedStackOps<'gc>>(
+    _ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
     StepResult::Continue
 }

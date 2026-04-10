@@ -306,7 +306,6 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     }
 
     let concrete_t = vm_try!(ctx.make_concrete(param0));
-
     let (origin, offset) = match get_ptr_context(ctx, &addr) {
         Ok(v) => v,
         Err(e) => return e,

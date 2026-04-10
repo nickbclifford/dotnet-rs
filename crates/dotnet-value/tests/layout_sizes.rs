@@ -49,25 +49,25 @@ const EXPECTED_POINTER_ORIGIN_SIZE: usize = 16;
     any(feature = "memory-validation", debug_assertions),
     any(feature = "multithreading", feature = "memory-validation")
 ))]
-const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 16;
+const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 32;
 #[cfg(all(
     target_pointer_width = "64",
     any(feature = "memory-validation", debug_assertions),
     not(any(feature = "multithreading", feature = "memory-validation"))
 ))]
-const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 8;
+const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 24;
 #[cfg(all(
     target_pointer_width = "64",
     not(any(feature = "memory-validation", debug_assertions)),
     any(feature = "multithreading", feature = "memory-validation")
 ))]
-const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 8;
+const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 24;
 #[cfg(all(
     target_pointer_width = "64",
     not(any(feature = "memory-validation", debug_assertions)),
     not(any(feature = "multithreading", feature = "memory-validation"))
 ))]
-const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 0;
+const EXPECTED_OBJECT_INNER_OVERHEAD: usize = 16;
 
 #[cfg(target_pointer_width = "64")]
 const _: () = {

@@ -114,6 +114,11 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("bool System.RuntimeType::IsArrayImpl()")]
 #[dotnet_intrinsic("bool System.RuntimeType::IsByRefImpl()")]
 #[dotnet_intrinsic("bool System.RuntimeType::IsPointerImpl()")]
+#[dotnet_intrinsic("bool System.RuntimeType::HasElementTypeImpl()")]
+#[dotnet_intrinsic("object[] System.RuntimeType::GetCustomAttributes(bool)")]
+#[dotnet_intrinsic("object[] System.RuntimeType::GetCustomAttributes(System.Type, bool)")]
+#[dotnet_intrinsic("object[] DotnetRs.RuntimeType::GetCustomAttributes(bool)")]
+#[dotnet_intrinsic("object[] DotnetRs.RuntimeType::GetCustomAttributes(System.Type, bool)")]
 #[dotnet_intrinsic("System.Type[] System.RuntimeType::GetInterfaces()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetInterface(string, bool)")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetElementType()")]
@@ -157,6 +162,9 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("IsArrayImpl", 0) => handle_is_array_impl(ctx, generics),
         ("IsByRefImpl", 0) => handle_is_by_ref_impl(ctx, generics),
         ("IsPointerImpl", 0) => handle_is_pointer_impl(ctx, generics),
+        ("HasElementTypeImpl", 0) => handle_has_element_type_impl(ctx, generics),
+        ("GetCustomAttributes", 1) => handle_get_custom_attributes_bool(ctx, generics),
+        ("GetCustomAttributes", 2) => handle_get_custom_attributes_typed(ctx, generics),
         ("GetInterfaces", 0) => handle_get_interfaces(ctx, generics),
         ("GetInterface", 2) => handle_get_interface(ctx, generics),
         ("GetElementType", 0) => handle_get_element_type(ctx, generics),

@@ -158,10 +158,23 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
         }
     }
 
-    StepResult::not_implemented(format!(
-        "could not find method to dispatch to for constrained call({:?}, {:?})",
-        constraint_type, method
-    ))
+    // Static abstract interface members (e.g., INumber<T>.Min) may be implemented
+    // directly on the constrained concrete type without an overrides entry.
+    if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
+        td,
+        &method.method().name,
+        &method.method().signature,
+        method.resolution(),
+        &lookup,
+        false,
+    ) {
+        return ctx.dispatch_method(impl_method, lookup);
+    }
+
+    // Generic-math style static interface members can have default bodies on the
+    // interface itself (no concrete override entry on the constrained type).
+    // In that case dispatch to the resolved interface method directly.
+    ctx.dispatch_method(method, lookup)
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]

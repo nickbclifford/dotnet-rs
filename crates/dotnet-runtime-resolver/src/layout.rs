@@ -240,9 +240,13 @@ impl LayoutFactory {
         let ancestors: Vec<_> = resolver.loader.ancestors(td.clone()).collect();
 
         let base_layout = if include_base && ancestors.len() > 1 {
-            let (base_td, base_generics) = &ancestors[1];
+            let (base_td, _) = &ancestors[1];
+            // The generic parameters used to instantiate the base type come from
+            // ancestors[0] (the current type's own extends clause), not from ancestors[1]
+            // (which holds the base type's extends params for ITS parent).
+            let (_, extends_generics) = &ancestors[0];
             let new_lookup = GenericLookup::new(
-                base_generics
+                extends_generics
                     .iter()
                     .map(|t| resolver.make_concrete(resolution.clone(), generics, *t))
                     .collect::<Result<Vec<_>, _>>()?,

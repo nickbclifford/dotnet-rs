@@ -284,7 +284,99 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
         .get_field(field.parent.clone(), name.as_ref())
         .unwrap();
     let mut val_bytes = vec![0u8; field_layout.layout.size().as_usize()];
-    vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
+    let mut wrote_direct = false;
+    if let LayoutManager::Scalar(scalar) = &*field_layout.layout {
+        match (scalar, &value) {
+            (Scalar::Int8, StackValue::Int32(v)) => {
+                val_bytes[0] = (*v as i8) as u8;
+                wrote_direct = true;
+            }
+            (Scalar::Int8, StackValue::NativeInt(v)) => {
+                val_bytes[0] = (*v as i8) as u8;
+                wrote_direct = true;
+            }
+            (Scalar::UInt8, StackValue::Int32(v)) => {
+                val_bytes[0] = *v as u8;
+                wrote_direct = true;
+            }
+            (Scalar::UInt8, StackValue::NativeInt(v)) => {
+                val_bytes[0] = *v as u8;
+                wrote_direct = true;
+            }
+            (Scalar::Int16, StackValue::Int32(v)) => {
+                val_bytes.copy_from_slice(&(*v as i16).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int16, StackValue::NativeInt(v)) => {
+                val_bytes.copy_from_slice(&(*v as i16).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::UInt16, StackValue::Int32(v)) => {
+                val_bytes.copy_from_slice(&(*v as u16).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::UInt16, StackValue::NativeInt(v)) => {
+                val_bytes.copy_from_slice(&(*v as u16).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int32, StackValue::Int32(v)) => {
+                val_bytes.copy_from_slice(&(*v).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int32, StackValue::NativeInt(v)) => {
+                val_bytes.copy_from_slice(&(*v as i32).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int64, StackValue::Int64(v)) => {
+                val_bytes.copy_from_slice(&v.to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int64, StackValue::Int32(v)) => {
+                val_bytes.copy_from_slice(&(*v as i64).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Int64, StackValue::NativeInt(v)) => {
+                val_bytes.copy_from_slice(&(*v as i64).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::NativeInt, StackValue::NativeInt(v)) => {
+                if std::mem::size_of::<isize>() == 8 {
+                    val_bytes.copy_from_slice(&(*v as i64).to_ne_bytes());
+                } else {
+                    val_bytes.copy_from_slice(&(*v as i32).to_ne_bytes());
+                }
+                wrote_direct = true;
+            }
+            (Scalar::NativeInt, StackValue::Int32(v)) => {
+                if std::mem::size_of::<isize>() == 8 {
+                    val_bytes.copy_from_slice(&(*v as i64).to_ne_bytes());
+                } else {
+                    val_bytes.copy_from_slice(&(*v).to_ne_bytes());
+                }
+                wrote_direct = true;
+            }
+            (Scalar::Float32, StackValue::NativeFloat(v)) => {
+                val_bytes.copy_from_slice(&(*v as f32).to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::Float64, StackValue::NativeFloat(v)) => {
+                val_bytes.copy_from_slice(&v.to_ne_bytes());
+                wrote_direct = true;
+            }
+            (Scalar::ObjectRef, StackValue::ObjectRef(r)) => {
+                r.write(&mut val_bytes);
+                wrote_direct = true;
+            }
+            (Scalar::ManagedPtr, StackValue::ManagedPtr(m)) => {
+                m.write(&mut val_bytes);
+                wrote_direct = true;
+            }
+            _ => {}
+        }
+    }
+    if !wrote_direct {
+        vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
+    }
 
     storage
         .storage

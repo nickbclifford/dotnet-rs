@@ -1,11 +1,12 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.Array")]
-public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable
+public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable, IEnumerable<Type>
 {
     // Sentinel for array constructors used by runtime
     [UsedImplicitly] internal void CtorArraySentinel() { }
@@ -18,11 +19,27 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public extern int Rank { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
-    public virtual int GetLength(int dimension) => throw new NotImplementedException();
+    public virtual int GetLength(int dimension)
+    {
+        if (dimension != 0) throw new IndexOutOfRangeException();
+        return Length;
+    }
 
     public long GetLongLength(int dimension) => GetLength(dimension);
 
-    public virtual int GetRank() => throw new NotImplementedException();
+    public virtual int GetRank() => Rank;
+
+    public virtual int GetLowerBound(int dimension)
+    {
+        if (dimension != 0) throw new IndexOutOfRangeException();
+        return 0;
+    }
+
+    public virtual int GetUpperBound(int dimension)
+    {
+        if (dimension != 0) throw new IndexOutOfRangeException();
+        return Length - 1;
+    }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public extern object? GetValue(int index);
@@ -66,6 +83,7 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     void IList.RemoveAt(int index) => throw new NotSupportedException();
 
     public IEnumerator GetEnumerator() => new ArrayEnumerator(this);
+    IEnumerator<Type> IEnumerable<Type>.GetEnumerator() => new TypeArrayEnumerator(this);
 
     public void CopyTo(System.Array array, int index)
     {
@@ -232,5 +250,26 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
         }
 
         public void Reset() => _index = -1;
+    }
+
+    private sealed class TypeArrayEnumerator(Array array) : IEnumerator<Type>
+    {
+        private int _index = -1;
+
+        object? IEnumerator.Current => Current;
+        public Type Current => (Type)array.GetValue(_index)!;
+
+        public bool MoveNext()
+        {
+            if (_index < array.Length - 1)
+            {
+                _index++;
+                return true;
+            }
+            return false;
+        }
+
+        public void Reset() => _index = -1;
+        public void Dispose() { }
     }
 }

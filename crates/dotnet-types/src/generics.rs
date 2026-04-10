@@ -373,18 +373,27 @@ impl GenericLookup {
                     Ok(concrete)
                 }
             }
-            MethodType::TypeGeneric(i) => self.type_generics.get(i).cloned().ok_or(
-                TypeResolutionError::GenericIndexOutOfBounds {
-                    index: i,
-                    length: self.type_generics.len(),
-                },
-            ),
-            MethodType::MethodGeneric(i) => self.method_generics.get(i).cloned().ok_or(
+            MethodType::TypeGeneric(i) => {
+                if let Some(ty) = self.type_generics.get(i).cloned() {
+                    Ok(ty)
+                } else if let Some(ty) = self.method_generics.get(i).cloned() {
+                    // Some runtime paths surface generic arguments for non-generic receiver
+                    // types through method generic context even when metadata uses TypeGeneric.
+                    // Accept the method-generic fallback to keep these canonicalized paths valid.
+                    Ok(ty)
+                } else {
+                    Err(TypeResolutionError::GenericIndexOutOfBounds {
+                        index: i,
+                        length: self.type_generics.len(),
+                    })
+                }
+            }
+            MethodType::MethodGeneric(i) => self.method_generics.get(i).cloned().ok_or_else(|| {
                 TypeResolutionError::GenericIndexOutOfBounds {
                     index: i,
                     length: self.method_generics.len(),
-                },
-            ),
+                }
+            }),
         }
     }
 

@@ -121,6 +121,27 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _inherit = ctx.pop();
+    let _obj = ctx.pop_obj();
+    let object_type = vm_try!(ctx.loader().corlib_type("System.Object"));
+    populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
+}
+
+pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _inherit = ctx.pop();
+    let _attribute_type = ctx.pop_obj();
+    let _obj = ctx.pop_obj();
+    let object_type = vm_try!(ctx.loader().corlib_type("System.Object"));
+    populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
+}
+
 pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,

@@ -8,6 +8,8 @@ use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterlockedAtomicTypeDispatch {
+    Byte,
+    Int16,
     Int32,
     Int64,
     PointerSized,
@@ -47,6 +49,8 @@ pub(crate) fn interlocked_atomic_dispatch<EnclosingType>(
     base_type: &BaseType<EnclosingType>,
 ) -> InterlockedAtomicTypeDispatch {
     match base_type {
+        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => InterlockedAtomicTypeDispatch::Byte,
+        BaseType::Int16 | BaseType::UInt16 => InterlockedAtomicTypeDispatch::Int16,
         BaseType::Int32 => InterlockedAtomicTypeDispatch::Int32,
         BaseType::Int64 => InterlockedAtomicTypeDispatch::Int64,
         BaseType::IntPtr | BaseType::UIntPtr => InterlockedAtomicTypeDispatch::PointerSized,

@@ -1,5 +1,4 @@
 #![allow(clippy::arc_with_non_send_sync)]
-
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult, state, sync::Arc};
 use dotnetdll::prelude::{EntryPoint, MethodMemberIndex};

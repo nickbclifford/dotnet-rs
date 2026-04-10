@@ -58,6 +58,62 @@ pub fn intrinsic_array_get_rank<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("int System.Array::GetLowerBound(int)")]
+pub fn intrinsic_array_get_lower_bound<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let dimension = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+    let ObjectRef(Some(handle)) = obj else {
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    };
+
+    let heap = handle.borrow();
+    match &heap.storage {
+        HeapStorage::Vec(_) => {
+            if dimension != 0 {
+                return ctx.throw_by_name_with_message(
+                    "System.IndexOutOfRangeException",
+                    INDEX_OUT_OF_RANGE_MSG,
+                );
+            }
+            ctx.push_i32(0);
+            StepResult::Continue
+        }
+        _ => ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG),
+    }
+}
+
+#[dotnet_intrinsic("int System.Array::GetUpperBound(int)")]
+pub fn intrinsic_array_get_upper_bound<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let dimension = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+    let ObjectRef(Some(handle)) = obj else {
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    };
+
+    let heap = handle.borrow();
+    match &heap.storage {
+        HeapStorage::Vec(v) => {
+            if dimension != 0 {
+                return ctx.throw_by_name_with_message(
+                    "System.IndexOutOfRangeException",
+                    INDEX_OUT_OF_RANGE_MSG,
+                );
+            }
+            ctx.push_i32(v.layout.length as i32 - 1);
+            StepResult::Continue
+        }
+        _ => ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG),
+    }
+}
+
 #[dotnet_intrinsic("object System.Array::GetValue(int)")]
 #[dotnet_intrinsic("object System.Array::GetValue(long)")]
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]

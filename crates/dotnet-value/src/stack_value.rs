@@ -142,6 +142,24 @@ unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
         }
     }
 }
+
+#[inline]
+fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
+    match v {
+        StackValue::Int32(_) => "Int32",
+        StackValue::Int64(_) => "Int64",
+        StackValue::NativeInt(_) => "NativeInt",
+        StackValue::NativeFloat(_) => "NativeFloat",
+        StackValue::ObjectRef(_) => "ObjectRef",
+        StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
+        StackValue::ManagedPtr(_) => "ManagedPtr",
+        StackValue::ValueType(_) => "ValueType",
+        StackValue::TypedRef(_, _) => "TypedRef",
+        #[cfg(feature = "multithreading")]
+        StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
+    }
+}
+
 macro_rules! checked_arithmetic_op {
     ($l:expr, $r:expr, $sgn:expr, $op:ident) => {
         match ($l, $r, $sgn) {
@@ -218,7 +236,11 @@ macro_rules! checked_arithmetic_op {
                     exception_type: "System.OverflowException",
                     message: "Arithmetic operation resulted in an overflow.",
                 }),
-            (l, r, _) => panic!("invalid types for checked operation: {:?}, {:?}", l, r),
+            (l, r, _) => panic!(
+                "invalid types for checked operation: {}, {}",
+                stack_value_kind(&l),
+                stack_value_kind(&r)
+            ),
         }
     };
 }
@@ -238,7 +260,11 @@ macro_rules! arithmetic_op {
             (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op ((r as u32) as usize)) as isize),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt((l as isize) $op r),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt((((l as u32) as usize) $op (r as usize)) as isize),
-            (l, r, _) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
+            (l, r, _) => panic!(
+                "invalid types for arithmetic operation: {}, {}",
+                stack_value_kind(&l),
+                stack_value_kind(&r)
+            ),
         }
     };
 }
@@ -252,7 +278,7 @@ macro_rules! shift_op {
             (StackValue::Int64(i), NumberSign::Unsigned) => StackValue::Int64(((i as u64) $op $amount) as i64),
             (StackValue::NativeInt(i), NumberSign::Signed) => StackValue::NativeInt(i $op $amount),
             (StackValue::NativeInt(i), NumberSign::Unsigned) => StackValue::NativeInt(((i as usize) $op $amount) as isize),
-            (v, _) => panic!("invalid shift target: {:?}", v),
+            (v, _) => panic!("invalid shift target: {}", stack_value_kind(&v)),
         }
     };
 }
@@ -267,7 +293,11 @@ macro_rules! bitwise_op {
             (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l $op (r as isize)),
             (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64) $op r),
             (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l $op r),
-            (l, r) => panic!("invalid types for bitwise operation: {:?}, {:?}", l, r),
+            (l, r) => panic!(
+                "invalid types for bitwise operation: {}, {}",
+                stack_value_kind(&l),
+                stack_value_kind(&r)
+            ),
         }
     };
 }
@@ -296,7 +326,11 @@ macro_rules! wrapping_arithmetic_op {
                  let ptr_r = r.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
                  StackValue::NativeInt(ptr_l.$op(ptr_r))
             },
-            (l, r) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
+            (l, r) => panic!(
+                "invalid types for arithmetic operation: {}, {}",
+                stack_value_kind(&l),
+                stack_value_kind(&r)
+            ),
         }
     };
 }
