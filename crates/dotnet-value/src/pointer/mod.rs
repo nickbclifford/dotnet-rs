@@ -92,8 +92,6 @@ impl<'a> Arbitrary<'a> for ManagedPtrStackInfo {
     }
 }
 
-pub use dotnet_types::error::PointerDeserializationError;
-
 /// Detailed information about a [`ManagedPtr`] read from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPtrInfo<'gc> {

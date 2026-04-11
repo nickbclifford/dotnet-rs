@@ -1,1 +1,1 @@
-pub use dotnet_types::error::AssemblyLoadError;
+pub(crate) use dotnet_types::error::AssemblyLoadError;

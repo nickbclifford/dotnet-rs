@@ -10,8 +10,8 @@ use crate::{
     sync::Ordering as AtomicOrdering,
 };
 use dotnet_types::generics::GenericLookup;
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ByteOffset,
     object::{CTSValue, ValueType},
     pointer::ManagedPtrInfo,
 };

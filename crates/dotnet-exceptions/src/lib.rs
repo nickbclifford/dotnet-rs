@@ -9,14 +9,13 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
-use dotnetdll::prelude::*;
-use std::{cmp::Reverse, collections::HashMap, ops::Range};
-
-pub use dotnet_vm_ops::{
+use dotnet_vm_ops::{
     ExceptionState, FilterState, Handler, HandlerAddress, HandlerKind, ManagedException,
     ProtectedSection, SearchState, StepResult, UnwindState, UnwindTarget,
     ops::{ExceptionContext, ResolutionOps},
 };
+use dotnetdll::prelude::*;
+use std::{cmp::Reverse, collections::HashMap, ops::Range};
 
 /// Extracts human-readable information from a managed exception object.
 pub fn extract_managed_exception<'gc>(

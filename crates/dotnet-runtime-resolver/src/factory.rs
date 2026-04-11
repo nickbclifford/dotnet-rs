@@ -7,9 +7,9 @@ use dotnet_types::{
     members::FieldDescription,
     resolution::ResolutionS,
 };
-use dotnet_utils::gc::GCHandle;
+use dotnet_utils::{ByteOffset, gc::GCHandle};
 use dotnet_value::{
-    ByteOffset, StackValue,
+    StackValue,
     layout::HasLayout,
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,

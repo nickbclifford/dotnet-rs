@@ -9,8 +9,9 @@ use crate::{
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::TypeDescription;
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ByteOffset, StackValue,
+    StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},

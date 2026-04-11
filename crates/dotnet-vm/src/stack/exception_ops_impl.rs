@@ -5,13 +5,13 @@ use crate::{
         ops::{BaseMemoryOps, ExceptionOps, StackOps},
     },
 };
-use dotnet_exceptions::{
-    ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
-};
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
+};
+use dotnet_vm_ops::{
+    ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
 };
 
 impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {

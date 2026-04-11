@@ -6,8 +6,8 @@ use dotnet_types::{
     members::FieldDescription,
     resolution::ResolutionS,
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ByteOffset,
     layout::{
         ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
         LayoutManager, Scalar, align_up,

@@ -12,8 +12,9 @@ use dotnet_types::{
     comparer::decompose_type_source,
     generics::{ConcreteType, GenericLookup},
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ByteOffset, StackValue,
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,

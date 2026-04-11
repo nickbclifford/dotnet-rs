@@ -6,7 +6,6 @@ pub mod ops;
 pub mod validation;
 
 pub use access::{MemoryOwner, RawMemoryAccess};
-pub use dotnet_utils::atomic::Atomic;
 pub use heap::HeapManager;
 pub use host::{MemoryOrderingHost, MemorySharedStateHost};
 pub use validation::{check_read_safety, has_ref_at};

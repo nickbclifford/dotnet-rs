@@ -10,7 +10,6 @@ use crate::{
     state::{ArenaLocalState, SharedGlobalState},
     threading::ThreadManagerOps,
 };
-use dotnet_exceptions::ManagedException;
 use dotnet_metrics::{CacheStats, RuntimeMetricsSnapshot};
 use dotnet_tracer::Tracer;
 use dotnet_types::members::MethodDescription;
@@ -20,6 +19,7 @@ use dotnet_utils::{
     sync::{Arc, Ordering},
 };
 use dotnet_value::StackValue;
+use dotnet_vm_ops::ManagedException;
 
 #[cfg(feature = "multithreading")]
 use crate::gc::arena::THREAD_ARENA;

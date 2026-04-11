@@ -15,16 +15,15 @@ use dotnet_value::{
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
+use dotnet_vm_ops::{
+    StepResult,
+    ops::{PInvokeContext, ResolutionOps},
+};
 use dotnetdll::prelude::*;
 use gc_arena::{Gc, static_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync::Arc};
-
-pub use dotnet_vm_ops::{
-    ManagedException, StepResult,
-    ops::{MemoryOps, PInvokeContext, ResolutionOps},
-};
 
 pub static mut LAST_ERROR: i32 = 0;
 

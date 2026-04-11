@@ -5,8 +5,9 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
-    ByteOffset, StackValue,
+    StackValue,
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},

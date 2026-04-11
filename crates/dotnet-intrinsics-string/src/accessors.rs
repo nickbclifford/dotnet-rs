@@ -4,7 +4,8 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_value::{ByteOffset, object::HeapStorage, string::CLRString, with_string};
+use dotnet_utils::ByteOffset;
+use dotnet_value::{object::HeapStorage, string::CLRString, with_string};
 use dotnet_vm_ops::{
     StepResult,
     ops::{
