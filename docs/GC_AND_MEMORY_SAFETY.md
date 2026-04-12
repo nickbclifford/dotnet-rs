@@ -103,6 +103,26 @@ sequenceDiagram
     C-->>T: Resume execution
 ```
 
+## Canonical GC/Threading Lock Order
+
+This GC document uses the same canonical lock contract as
+`docs/THREADING_AND_SYNCHRONIZATION.md`. The GC-critical chain is:
+
+| Order | Lock | Primary path |
+|------|------|--------------|
+| 1 | `GCCoordinator::collection_lock` | `Executor::perform_full_gc` → `GCCoordinator::begin_collection` |
+| 2 | `ThreadManager::gc_coordination` | `ThreadManager::request_stop_the_world` while collection session is alive |
+| 3 | `ThreadManager::threads` | STW thread-state accounting (`thread_count`, state warnings) |
+| 4 | `GCCoordinator::arenas` | Arena snapshot/routing inside `CollectionSession` |
+| 5 | `ArenaHandle::current_command` | Per-arena command enqueue/wait/finish |
+| 6 | `GCCoordinator::cross_arena_refs` | Fixed-point cross-arena mark table updates |
+
+Forbidden inversions (must never be introduced):
+- When both are needed, never acquire `ThreadManager::gc_coordination` before `GCCoordinator::collection_lock`.
+- Never hold `ThreadManager::threads` while trying to acquire `ThreadManager::gc_coordination`.
+- Never hold `ArenaHandle::current_command` while entering code that acquires `GCCoordinator::arenas`.
+- Never acquire `GCCoordinator::collection_lock` from a path already holding `GCCoordinator::arenas` or `ArenaHandle::current_command`.
+
 ## Cross-Arena Reference Tracking
 
 When an object in arena A stores a reference to an object in arena B, this must be tracked so arena B's collector doesn't reclaim the referenced object prematurely.

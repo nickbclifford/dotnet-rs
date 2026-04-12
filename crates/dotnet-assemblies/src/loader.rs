@@ -14,6 +14,7 @@ use gc_arena::static_collect;
 use std::{
     collections::HashMap,
     fs,
+    hash::Hash,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -76,6 +77,15 @@ pub fn parse_version(s: &str) -> Option<Version> {
     })
 }
 
+#[inline]
+fn cache_map_len<K, V>(map: &DashMap<K, V>) -> usize
+where
+    K: Eq + Hash,
+{
+    // `DashMap::len` locks all shards; centralize use for cache metrics call paths.
+    map.len()
+}
+
 pub struct AssemblyLoader {
     pub(crate) assembly_root: String,
     pub(crate) external: RwLock<HashMap<String, Option<ResolutionS>>>,
@@ -107,6 +117,13 @@ static_collect!(AssemblyLoader);
 // (at which point the fields themselves will be Sync/Send).
 
 impl AssemblyLoader {
+    #[inline]
+    fn redirects_snapshot(&self, name: &str) -> Option<Vec<BindingRedirect>> {
+        // Clone redirect rules so the DashMap guard is dropped before later cache operations.
+        let redirects = self.redirects.get(name)?;
+        Some(redirects.value().clone())
+    }
+
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
         let resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
             .map_err(|e| {
@@ -254,8 +271,8 @@ impl AssemblyLoader {
         let mut requested_version = requested_version;
 
         // Apply redirects
-        if let Some((version, redirects)) = requested_version.zip(self.redirects.get(name)) {
-            for redirect in redirects.value() {
+        if let Some((version, redirects)) = requested_version.zip(self.redirects_snapshot(name)) {
+            for redirect in &redirects {
                 if redirect.matches(&version) {
                     requested_version = Some(redirect.to_version);
                     break;
@@ -368,11 +385,11 @@ impl AssemblyLoader {
     }
 
     pub fn type_cache_size(&self) -> usize {
-        self.type_cache.len()
+        cache_map_len(&self.type_cache)
     }
 
     pub fn method_cache_size(&self) -> usize {
-        self.method_cache.len()
+        cache_map_len(&self.method_cache)
     }
 
     pub fn register_assembly(&self, resolution: ResolutionS) {

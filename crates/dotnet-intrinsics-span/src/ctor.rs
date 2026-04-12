@@ -116,6 +116,10 @@ pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
         StackValue::ObjectRef(ObjectRef(None)) => {
             (ManagedPtr::new(None, element_desc, None, false, None), 0)
         }
+        // Arity-based intrinsic lookup can route `Span<T>(ref T)` here because
+        // both `.ctor(T[])` and `.ctor(ref T)` are instance arity-2 overloads.
+        // Accept managed pointers and treat them as a single-element span.
+        StackValue::ManagedPtr(ptr) => (ptr.into_inner(), 1),
         StackValue::ObjectRef(ObjectRef(Some(handle))) => {
             let (ptr, len) = {
                 let inner = handle.borrow();

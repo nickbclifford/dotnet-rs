@@ -9,7 +9,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{
     DebugStr,
-    sync::{Arc, AtomicU8, AtomicU64, Condvar, Mutex, Ordering, RwLock},
+    sync::{Arc, AtomicU8, AtomicU64, Condvar, OrderedMutex, Ordering, RwLock, levels},
 };
 use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout},
@@ -41,7 +41,7 @@ pub struct StaticStorage {
     /// Condition variable to wait for initialization completion.
     pub(crate) init_cond: Arc<Condvar>,
     /// Mutex for use with init_cond.
-    pub(crate) init_mutex: Arc<Mutex<()>>,
+    pub(crate) init_mutex: Arc<OrderedMutex<levels::StaticInitMutex, ()>>,
 }
 
 impl StaticStorage {
@@ -96,7 +96,15 @@ pub struct StaticStorageManager {
     /// Tracks which thread is waiting for which other thread to complete type initialization.
     /// This is used to detect and avoid deadlocks in multi-threaded circular initialization.
     /// wait_graph[T1] = T2 means T1 is waiting for T2.
-    wait_graph: Mutex<HashMap<u64, u64>>,
+    ///
+    /// Lifecycle contract:
+    /// - `init()` inserts `wait_graph[waiter] = owner` before returning `StaticInitResult::Waiting`.
+    /// - `wait_for_init()` may refresh that edge while polling.
+    /// - `wait_for_init()` must remove `wait_graph[waiter]` on every return path.
+    ///
+    /// The remove-on-all-returns rule is required because stale edges feed
+    /// `causes_cycle()`, which can falsely report recursion/cycles for later unrelated init calls.
+    wait_graph: OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
 }
 
 const NUM_SHARDS: usize = 16;
@@ -178,7 +186,7 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
-            wait_graph: Mutex::new(HashMap::new()),
+            wait_graph: OrderedMutex::new(HashMap::new()),
         }
     }
 
@@ -299,7 +307,7 @@ impl StaticStorageManager {
                     initializing_thread: AtomicU64::new(0),
                     storage: FieldStorage::new(layout, vec![0; size.as_usize()]),
                     init_cond: Arc::new(Condvar::new()),
-                    init_mutex: Arc::new(Mutex::new(())),
+                    init_mutex: Arc::new(OrderedMutex::new(())),
                 })
             });
         }
@@ -341,7 +349,7 @@ impl StaticStorageManager {
 
         let cctor = cctor.unwrap();
 
-        let _lock = storage.init_mutex.lock();
+        let init_lock = storage.init_mutex.lock();
         match storage.init_state.load(Ordering::Acquire) {
             INIT_STATE_UNINITIALIZED => {
                 storage
@@ -358,7 +366,7 @@ impl StaticStorageManager {
                 // Another thread is currently initializing
                 let target_thread = storage.initializing_thread.load(Ordering::Acquire);
                 if target_thread != 0 {
-                    let mut wait_graph = self.wait_graph.lock();
+                    let mut wait_graph = self.wait_graph.lock_after(init_lock.held_level());
                     if self.causes_cycle(&wait_graph, thread_id.as_u64(), target_thread) {
                         return Ok(StaticInitResult::Recursive);
                     }
@@ -386,7 +394,12 @@ impl StaticStorageManager {
     }
 
     /// Wait for a type's initialization to complete if another thread is currently initializing it.
-    /// This method returns true if a GC safe point yield is requested, allowing the caller to restart the instruction.
+    ///
+    /// Returns `true` when the caller should yield to a GC safe point and retry later,
+    /// or `false` when initialization is no longer in progress.
+    ///
+    /// Wait-graph invariant: the caller's `thread_id` edge must be removed before any return
+    /// from this method, including early return paths (such as a GC-yield request).
     pub fn wait_for_init(
         &self,
         description: TypeDescription,
@@ -396,6 +409,7 @@ impl StaticStorageManager {
         _gc_coordinator: &GCCoordinator,
     ) -> bool {
         let storage = self.get(description, generics);
+        let mut should_yield = false;
 
         loop {
             // Check state before acquiring lock
@@ -413,7 +427,8 @@ impl StaticStorageManager {
 
             // Check for GC safe point before waiting
             if thread_manager.is_gc_stop_requested() {
-                return true; // Yield requested
+                should_yield = true;
+                break;
             }
 
             // Try to wait with a timeout
@@ -429,12 +444,12 @@ impl StaticStorageManager {
                     use std::time::Duration;
                     let _ = storage
                         .init_cond
-                        .wait_for(&mut lock, Duration::from_millis(10));
+                        .wait_for(lock.raw_mut(), Duration::from_millis(10));
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
                     // In single-threaded mode, just wait normally
-                    storage.init_cond.wait(&mut lock);
+                    storage.init_cond.wait(lock.raw_mut());
                 }
             }
         }
@@ -442,7 +457,7 @@ impl StaticStorageManager {
         // Remove from wait graph before exit
         let mut wait_graph = self.wait_graph.lock();
         wait_graph.remove(&thread_id.as_u64());
-        false
+        should_yield
     }
 
     /// Helper to detect if adding start -> target edge would cause a cycle.

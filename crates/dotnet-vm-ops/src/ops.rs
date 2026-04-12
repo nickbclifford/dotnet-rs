@@ -326,6 +326,13 @@ pub trait MemoryOps<'gc> {
         &self,
         td: TypeDescription,
     ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError>;
+    fn new_object_with_lookup(
+        &self,
+        td: TypeDescription,
+        _lookup: &dotnet_types::generics::GenericLookup,
+    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError> {
+        self.new_object(td)
+    }
     fn new_value_type(
         &self,
         t: &dotnet_types::generics::ConcreteType,

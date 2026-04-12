@@ -115,12 +115,8 @@ impl SyncBlockManager {
 impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
-    fn get_or_create_sync_block(
-        &self,
-        get_index: impl FnOnce() -> Option<usize>,
-        set_index: impl FnOnce(usize),
-    ) -> (usize, Arc<Self::Block>) {
-        if let Some(index) = get_index() {
+    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>) {
+        if let Some(index) = current_index {
             let blocks = self.blocks.lock();
             if let Some(block) = blocks.get(&index) {
                 return (index, block.clone());
@@ -133,7 +129,6 @@ impl super::SyncManagerOps for SyncBlockManager {
         let mut blocks = self.blocks.lock();
         blocks.insert(index, block.clone());
 
-        set_index(index);
         (index, block)
     }
 

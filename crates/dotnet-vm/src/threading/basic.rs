@@ -1,6 +1,7 @@
 use crate::{
     gc::coordinator::{
         CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,
+        debug_assert_collection_lock_held,
     },
     threading::{IS_PERFORMING_GC, STWGuardOps, ThreadState},
 };
@@ -12,17 +13,136 @@ use dotnet_utils::{
         try_acquire_lease,
     },
     sync::{
-        Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
-        Ordering, Weak, get_current_thread_id,
+        Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, OrderedMutex,
+        OrderedMutexGuard, Ordering, Weak, get_current_thread_id, levels,
     },
 };
 use dotnet_value::object::ObjectPtr;
+#[cfg(feature = "deadlock-diagnostics")]
+use parking_lot::deadlock;
 use std::{
     collections::HashMap,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
 use tracing::warn;
+
+#[cfg(debug_assertions)]
+macro_rules! debug_assert_top_level_gc_lock_order {
+    ($manager:expr, $context:expr) => {
+        if $manager.stw_in_progress.load(Ordering::Acquire) {
+            debug_assert_collection_lock_held($context);
+        }
+    };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! debug_assert_top_level_gc_lock_order {
+    ($manager:expr, $context:expr) => {
+        let _ = (&$manager, &$context);
+    };
+}
+
+#[cfg(feature = "deadlock-diagnostics")]
+fn deadlock_report_interval() -> Duration {
+    const ENV_NAME: &str = "DOTNET_DEADLOCK_DIAGNOSTICS_INTERVAL_MS";
+    const DEFAULT_MS: u64 = 10_000;
+
+    match std::env::var(ENV_NAME) {
+        Ok(raw) => match raw.parse::<u64>() {
+            Ok(0) => {
+                warn!("{}=0 is invalid, using default {} ms", ENV_NAME, DEFAULT_MS);
+                Duration::from_millis(DEFAULT_MS)
+            }
+            Ok(ms) => Duration::from_millis(ms),
+            Err(error) => {
+                warn!(
+                    "Invalid {} value {:?}: {}. Using default {} ms",
+                    ENV_NAME, raw, error, DEFAULT_MS
+                );
+                Duration::from_millis(DEFAULT_MS)
+            }
+        },
+        Err(_) => Duration::from_millis(DEFAULT_MS),
+    }
+}
+
+#[cfg(feature = "deadlock-diagnostics")]
+struct DeadlockReporter {
+    shutdown: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "deadlock-diagnostics")]
+impl DeadlockReporter {
+    fn start() -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_for_thread = Arc::clone(&shutdown);
+        let interval = deadlock_report_interval();
+
+        let thread = thread::Builder::new()
+            .name("dotnet-deadlock-reporter".to_string())
+            .spawn(move || {
+                while !shutdown_for_thread.load(Ordering::Acquire) {
+                    thread::park_timeout(interval);
+                    if shutdown_for_thread.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let deadlocks = deadlock::check_deadlock();
+                    if deadlocks.is_empty() {
+                        continue;
+                    }
+
+                    warn!(
+                        "[deadlock-diagnostics] detected {} deadlock cycle(s)",
+                        deadlocks.len()
+                    );
+                    for (cycle_index, cycle) in deadlocks.iter().enumerate() {
+                        warn!(
+                            "[deadlock-diagnostics] cycle {} has {} thread(s)",
+                            cycle_index + 1,
+                            cycle.len()
+                        );
+                        for thread in cycle {
+                            warn!(
+                                "[deadlock-diagnostics] cycle {} thread {:?}\n{:?}",
+                                cycle_index + 1,
+                                thread.thread_id(),
+                                thread.backtrace()
+                            );
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                warn!(
+                    "[deadlock-diagnostics] failed to start reporter thread: {}",
+                    error
+                );
+            })
+            .ok();
+
+        Self { shutdown, thread }
+    }
+
+    fn stop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(handle) = self.thread.take() {
+            handle.thread().unpark();
+            if handle.join().is_err() {
+                warn!("[deadlock-diagnostics] reporter thread panicked during shutdown");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "deadlock-diagnostics")]
+impl Drop for DeadlockReporter {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 /// Global counter for allocating managed thread IDs across all thread managers.
 /// This prevents ArenaId collisions when parallel tests each create their own ThreadManager.
@@ -59,7 +179,7 @@ impl ManagedThread {
 
 pub struct ThreadManager {
     /// Map from managed thread ID to thread info
-    pub(super) threads: Mutex<HashMap<ArenaId, Arc<ManagedThread>>>,
+    pub(super) threads: OrderedMutex<levels::ThreadRegistry, HashMap<ArenaId, Arc<ManagedThread>>>,
 
     gc_stop_requested: AtomicBool,
     /// Number of threads that have reached safe point during GC
@@ -67,24 +187,28 @@ pub struct ThreadManager {
     /// Condvar for notifying when all threads reach safe point
     all_threads_stopped: Condvar,
     /// Mutex for GC coordination
-    gc_coordination: Mutex<()>,
+    gc_coordination: OrderedMutex<levels::GcCoordination, ()>,
     /// Flag indicating if a stop-the-world pause is in progress
     stw_in_progress: Arc<AtomicBool>,
     /// Reference to the GC coordinator for resume signaling
     coordinator: Mutex<Option<Weak<GCCoordinator>>>,
+    #[cfg(feature = "deadlock-diagnostics")]
+    _deadlock_reporter: DeadlockReporter,
 }
 
 impl ThreadManager {
     pub fn new(stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
-            threads: Mutex::new(HashMap::new()),
+            threads: OrderedMutex::new(HashMap::new()),
 
             gc_stop_requested: AtomicBool::new(false),
             threads_at_safepoint: AtomicUsize::new(0),
             all_threads_stopped: Condvar::new(),
-            gc_coordination: Mutex::new(()),
+            gc_coordination: OrderedMutex::new(()),
             stw_in_progress,
             coordinator: Mutex::new(None),
+            #[cfg(feature = "deadlock-diagnostics")]
+            _deadlock_reporter: DeadlockReporter::start(),
         })
     }
 
@@ -289,6 +413,10 @@ impl super::ThreadManagerBackend for ThreadManager {
 
         let mut guard = loop {
             if let Some(g) = self.gc_coordination.try_lock() {
+                debug_assert_top_level_gc_lock_order!(
+                    self,
+                    "ThreadManager::request_stop_the_world"
+                );
                 break g;
             }
 
@@ -303,8 +431,20 @@ impl super::ThreadManagerBackend for ThreadManager {
         };
 
         loop {
-            let thread_count = self.thread_count();
-            let current_id = self.current_thread_id();
+            let (thread_count, current_id) = {
+                let native_id = thread::current().id();
+                let threads = self.threads.lock_after(guard.held_level());
+                let current_id = MANAGED_THREAD_ID.get().or_else(|| {
+                    threads
+                        .values()
+                        .find(|t| t.native_id == native_id)
+                        .map(|t| t.managed_id)
+                });
+                if current_id.is_some() {
+                    MANAGED_THREAD_ID.set(current_id);
+                }
+                (threads.len(), current_id)
+            };
             let target_stopped = if current_id.is_some() {
                 thread_count.saturating_sub(1)
             } else {
@@ -323,7 +463,7 @@ impl super::ThreadManagerBackend for ThreadManager {
                     self.threads_at_safepoint.load(Ordering::Acquire)
                 );
 
-                let threads = self.threads.lock();
+                let threads = self.threads.lock_after(guard.held_level());
                 warn!("  Threads not at safe point:");
                 for (tid, thread) in threads.iter() {
                     if thread.get_state() != Ok(ThreadState::AtSafePoint) {
@@ -345,11 +485,11 @@ impl super::ThreadManagerBackend for ThreadManager {
             #[cfg(feature = "multithreading")]
             {
                 self.all_threads_stopped
-                    .wait_for(&mut guard, WAIT_RECHECK_INTERVAL);
+                    .wait_for(guard.raw_mut(), WAIT_RECHECK_INTERVAL);
             }
             #[cfg(not(feature = "multithreading"))]
             {
-                self.all_threads_stopped.wait(&mut guard);
+                self.all_threads_stopped.wait(guard.raw_mut());
             }
         }
 
@@ -376,14 +516,14 @@ impl super::ThreadManagerBackend for ThreadManager {
 
 pub struct StopTheWorldGuard<'a> {
     manager: &'a ThreadManager,
-    _lock: MutexGuard<'a, ()>,
+    _lock: OrderedMutexGuard<'a, levels::GcCoordination, ()>,
     start_time: Instant,
 }
 
 impl<'a> StopTheWorldGuard<'a> {
     pub(super) fn new(
         manager: &'a ThreadManager,
-        lock: MutexGuard<'a, ()>,
+        lock: OrderedMutexGuard<'a, levels::GcCoordination, ()>,
         start_time: Instant,
     ) -> Self {
         IS_PERFORMING_GC.set(true);
@@ -429,6 +569,9 @@ impl Drop for StopTheWorldGuard<'_> {
 /// # Composition
 /// This guard intentionally mirrors the `disarm()`-before-handover discipline
 /// used by other panic-safe GC drop guards in the codebase.
+/// `Executor::perform_full_gc` composes this with
+/// `gc::coordinator::GcCycleGuard`, which guarantees `CollectionSession`
+/// cleanup runs before `StopTheWorldGuard` drop on unwind.
 pub(super) struct ResumeOnPanic<'m> {
     manager: &'m ThreadManager,
     /// `true` once [`Self::disarm`] has been called; `Drop` is a no-op when set.
@@ -668,6 +811,40 @@ mod tests {
             .expect("second request_stop_the_world did not acquire coordination lock after drop");
         release_tx.send(()).unwrap();
         join.join().unwrap();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn lock_order_request_stop_the_world_rejects_inverted_top_level_order() {
+        use std::panic;
+
+        // Simulate a caller requesting STW while the coordinator reports an
+        // active collection but the current thread does not hold
+        // GCCoordinator::collection_lock.
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(true)));
+
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = manager.request_stop_the_world();
+        }));
+
+        let panic_payload =
+            result.expect_err("inverted top-level lock order must panic in debug builds");
+        let message = if let Some(msg) = panic_payload.downcast_ref::<&str>() {
+            (*msg).to_string()
+        } else if let Some(msg) = panic_payload.downcast_ref::<String>() {
+            msg.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+
+        assert!(
+            message.contains("top-level lock order violation"),
+            "unexpected panic payload: {message}"
+        );
+        assert!(
+            !manager.is_gc_stop_requested(),
+            "panic guard must clear gc_stop_requested on unwind"
+        );
     }
 
     /// `resume_threads` is idempotent: calling it multiple times must not panic

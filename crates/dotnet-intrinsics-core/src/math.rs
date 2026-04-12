@@ -65,10 +65,13 @@ pub fn intrinsic_equality_comparer_get_default<
         ctx.loader().as_ref(),
     ));
     let comparer_closed_td = crate::vm_try!(ctx.loader().find_concrete_type(comparer_concrete));
+    let comparer_lookup = GenericLookup::new(vec![target_type]);
 
     let instance = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(crate::vm_try!(ctx.new_object(comparer_closed_td))),
+        HeapStorage::Obj(crate::vm_try!(
+            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
+        )),
     );
 
     ctx.push_obj(instance);

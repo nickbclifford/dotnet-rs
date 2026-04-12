@@ -10,6 +10,10 @@ FEATURES_COMBINATIONS=(
     "multithreading,validation-all"
     "fuzzing"
 )
+LOCK_ORDER_TESTS=(
+    "gc::coordinator::tests::stress_lock_order_gc_cycle_guard_with_live_safepoints"
+    "threading::basic::tests::lock_order_request_stop_the_world_rejects_inverted_top_level_order"
+)
 echo "Running checks for all feature combinations..."
 for features in "${FEATURES_COMBINATIONS[@]}"; do
     if [ -z "$features" ]; then
@@ -22,6 +26,12 @@ for features in "${FEATURES_COMBINATIONS[@]}"; do
         cargo clippy --all-targets --no-default-features --features "$features" -- -D warnings
         if [[ "$features" == *"multithreading"* ]]; then
             DOTNET_TEST_TIMEOUT_SECS=180 timeout 1200 cargo test --no-default-features --features "$features" -- --nocapture
+            echo "=== Lock-order harness: $features ==="
+            for TEST in "${LOCK_ORDER_TESTS[@]}"; do
+                DOTNET_TEST_TIMEOUT_SECS=120 timeout 300 \
+                    cargo test --no-default-features --features "$features" \
+                    -p dotnet-vm "$TEST" -- --test-threads=1 --nocapture
+            done
         else
             DOTNET_TEST_TIMEOUT_SECS=180 timeout 1200 cargo test --no-default-features --features "$features" -- --nocapture --test-threads=1
         fi

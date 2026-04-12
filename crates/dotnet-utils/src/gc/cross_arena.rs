@@ -49,6 +49,8 @@ use std::{
     collections::HashMap,
     mem,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+    thread,
+    time::{Duration, Instant},
 };
 
 // ---------------------------------------------------------------------------
@@ -173,6 +175,9 @@ static VALID_ARENAS: std::sync::LazyLock<RwLock<HashMap<ArenaId, Arc<ArenaState>
 /// every object read.
 static VALID_ARENAS_FAST: AtomicU64 = AtomicU64::new(0);
 
+const UNREGISTER_LEASE_SPIN_MAX_ITERS: usize = 1 << 10;
+const UNREGISTER_LEASE_WARN_INTERVAL: Duration = Duration::from_millis(100);
+
 // ---------------------------------------------------------------------------
 // Registry management
 // ---------------------------------------------------------------------------
@@ -213,8 +218,45 @@ pub fn unregister_arena(thread_id: ArenaId) {
     if let Some(state) = state {
         state.is_alive.store(false, AtomicOrdering::Release);
         // Drain all in-flight leases before returning.
-        while state.active_leases.load(AtomicOrdering::Acquire) > 0 {
-            std::hint::spin_loop();
+        // Back off from short bounded spinning to cooperative yielding to
+        // avoid burning CPU if a lease holder is preempted.
+        let wait_start = Instant::now();
+        let mut next_warn_at = UNREGISTER_LEASE_WARN_INTERVAL;
+        let mut spin_budget = 1usize;
+        let mut yield_count = 0u64;
+
+        loop {
+            if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+                break;
+            }
+
+            for _ in 0..spin_budget {
+                if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+            if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+                break;
+            }
+
+            thread::yield_now();
+            yield_count += 1;
+            spin_budget = (spin_budget.saturating_mul(2)).min(UNREGISTER_LEASE_SPIN_MAX_ITERS);
+
+            let elapsed = wait_start.elapsed();
+            if elapsed >= next_warn_at {
+                let active_leases = state.active_leases.load(AtomicOrdering::Acquire);
+                tracing::warn!(
+                    arena_id = thread_id.0,
+                    active_leases,
+                    waited_millis = elapsed.as_millis() as u64,
+                    yield_count,
+                    spin_budget,
+                    "unregister_arena is waiting for outstanding cross-arena leases"
+                );
+                next_warn_at = elapsed + UNREGISTER_LEASE_WARN_INTERVAL;
+            }
         }
     }
 }

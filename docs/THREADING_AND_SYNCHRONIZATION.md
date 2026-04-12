@@ -137,6 +137,24 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 - Objects are identified by their sync block index, stored in the object's header/layout.
 - `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and checks `thread_manager.is_gc_stop_requested()`. If a STW pause is pending, it returns `LockResult::Yield` without calling `safe_point()` directly — the caller converts this to `StepResult::Yield`, and the executor's main loop drives the safe-point handshake on the next iteration. This prevents deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
 
+#### `get_or_create_sync_block` two-step contract
+
+`SyncBlockManager::get_or_create_sync_block` now takes `current_index: Option<usize>` and returns
+`(new_index, Arc<SyncBlock>)`.
+
+- The manager does all map/index allocation work internally while `SyncBlockManager::blocks` is
+  locked.
+- No external callbacks execute under `blocks`, so callers cannot accidentally re-enter sync-block
+  APIs from inside a lock-held closure.
+- Callers must publish `new_index` to object state only after `get_or_create_sync_block` returns
+  (that is, after the manager lock has been released).
+
+Current multithreaded call path:
+`VesContext::monitor_get_or_create_sync_block_for_object`
+(`crates/dotnet-vm/src/stack/context.rs`) reads the object's current index, calls
+`get_or_create_sync_block(current_index)`, then publishes the returned index with
+`object.set_sync_block_index(gc, new_index)` only after the call returns.
+
 ### Configuration
 
 #### Environment Variables
@@ -165,6 +183,27 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 2. Check if the initializing thread has completed
 This creates a three-way dependency: statics ↔ threading ↔ GC.
 
+#### Wait-graph lifecycle invariant (`StaticStorageManager::wait_graph`)
+
+The static-init deadlock detector is modeled as a per-thread edge map:
+- `wait_graph[waiter] = owner` means thread `waiter` is currently waiting on `owner` to finish `.cctor`.
+
+Lifecycle rules:
+- `StaticStorageManager::init` inserts the edge before returning `StaticInitResult::Waiting`.
+- `StaticStorageManager::wait_for_init` may refresh/update that edge as ownership changes while polling.
+- `StaticStorageManager::wait_for_init` must remove `wait_graph[waiter]` on **every** return path.
+
+The remove-on-all-returns rule is mandatory because `init` uses `causes_cycle()` over `wait_graph` before admitting another wait edge. A stale edge can create false-positive cycle detection and incorrectly force `StaticInitResult::Recursive`.
+
+Call path:
+- `VesContext::initialize_static_storage`
+- `StaticStorageManager::init` returns `Waiting`
+- `StaticStorageManager::wait_for_init` either:
+1. returns `true` (caller yields `StepResult::Yield` and retries), or
+2. returns `false` (caller re-checks final init state)
+
+In both branches, `wait_graph` cleanup must already be complete before control returns to `initialize_static_storage`.
+
 ### Threading ↔ Executor
 Each `Executor` owns a `GCArena` in thread-local storage. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
 
@@ -176,6 +215,33 @@ Monitor locks are keyed by a lazily allocated sync block index stored in the obj
 ### Feature Flag Interactions
 - `multithreading`: Full multi-threaded execution with per-thread arenas, monitor locking, and STW coordination across arenas.
 - The stub threading module compiles out ALL threading overhead, including atomic operations in some cases.
+
+## Canonical Lock Order (Multithreading)
+
+The lock order below is the canonical runtime contract for `feature = "multithreading"`.
+Acquire locks only in the listed direction. Any reverse acquisition is a lock-order bug.
+
+| Chain | Ordered locks | Observed call path(s) |
+|-------|---------------|-----------------------|
+| GC/STW top-level | `GCCoordinator::collection_lock` → `ThreadManager::gc_coordination` | `Executor::perform_full_gc` (`begin_collection` then `request_stop_the_world`) |
+| STW bookkeeping | `ThreadManager::gc_coordination` → `ThreadManager::threads` | `ThreadManager::request_stop_the_world` (thread counts, warning dump) |
+| GC command routing | `GCCoordinator::collection_lock` → `GCCoordinator::arenas` → `ArenaHandle::current_command` | `CollectionSession::{send_command_to_all_and_wait,wait_on_other_arenas,enqueue_command_for_arena}` |
+| GC cross-arena table | `GCCoordinator::collection_lock` → `GCCoordinator::cross_arena_refs` | `CollectionSession::collect_all_arenas` |
+| Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`INIT_STATE_INITIALIZING` branch) |
+| Monitor metadata allocation | `SyncBlockManager::blocks` → `SyncBlockManager::next_index` | `SyncBlockManager::get_or_create_sync_block` |
+| Per-monitor ownership | `SyncBlock::state` is a leaf lock | `SyncBlock::{enter,enter_safe,exit}` |
+
+### Forbidden Inversions
+
+- For any path that needs both locks, acquire `GCCoordinator::collection_lock` before `ThreadManager::gc_coordination` (never the reverse).
+- `ThreadManager::threads` must never be held while trying to acquire `ThreadManager::gc_coordination`.
+- `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
+- `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena`, `get_all_arenas`, `command_finished`).
+- `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
+- `StaticStorageManager::wait_for_init` must remove `wait_graph[thread_id]` before every return (including GC-yield returns) to prevent stale-edge cycle false positives.
+- `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
+- Callers of `SyncBlockManager::get_or_create_sync_block` must publish the returned sync-block index only after the call returns (after `blocks` is released).
+- `SyncBlock::state` must be dropped before any safe-point check (`is_gc_stop_requested` / `check_gc_safe_point`) to avoid blocking STW progress while waiting on monitor ownership.
 
 ## Subsystem Details
 

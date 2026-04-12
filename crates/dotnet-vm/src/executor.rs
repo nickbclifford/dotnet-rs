@@ -419,19 +419,22 @@ impl Executor {
                 });
             });
 
-            // 2. Request stop-the-world pause and wait for all threads to reach safe points
+            // 2. Request stop-the-world pause and bind it with the collection
+            //    session into a single guard that enforces drop order:
+            //    session cleanup before thread resume.
             let thread_manager = Arc::clone(&self.shared.thread_manager);
-            let _stw_guard = thread_manager.request_stop_the_world();
+            let stw_guard = thread_manager.request_stop_the_world();
+            let mut gc_cycle = GcCycleGuard::new(session, stw_guard);
 
             // 3. Perform coordinated GC across all arenas
-            session.collect_all_arenas(self.thread_id);
+            gc_cycle.collect_all_arenas(self.thread_id);
 
             // 4. Record metrics and log completion
             let duration = start_time.elapsed();
             self.shared.metrics.record_gc_pause(duration);
 
-            // Explicitly finish before recording the collection end event.
-            session.finish();
+            // Explicitly finish collection before recording the end event.
+            gc_cycle.finish_collection();
 
             vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
 

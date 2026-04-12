@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    sync::{Arc, Condvar, LockResult, Mutex, SyncBlockOps},
+    sync::{Arc, Condvar, LockResult, OrderedMutex, SyncBlockOps, levels},
     threading::ThreadManagerOps,
 };
 use dotnet_metrics::RuntimeMetrics;
@@ -18,14 +18,14 @@ struct SyncBlockState {
 /// Represents a synchronization block for Monitor operations on .NET objects.
 #[derive(Debug)]
 pub struct SyncBlock {
-    state: Mutex<SyncBlockState>,
+    state: OrderedMutex<levels::SyncState, SyncBlockState>,
     condvar: Condvar,
 }
 
 impl SyncBlock {
     pub(super) fn new() -> Self {
         Self {
-            state: Mutex::new(SyncBlockState {
+            state: OrderedMutex::new(SyncBlockState {
                 owner_thread_id: ArenaId::INVALID,
                 recursion_count: 0,
             }),
@@ -61,7 +61,7 @@ impl super::SyncBlockOps for SyncBlock {
         if state.owner_thread_id != ArenaId::INVALID {
             let start_wait = Instant::now();
             while state.owner_thread_id != ArenaId::INVALID {
-                self.condvar.wait(&mut state);
+                self.condvar.wait(state.raw_mut());
             }
             metrics.record_lock_contention(start_wait.elapsed());
         }
@@ -100,7 +100,10 @@ impl super::SyncBlockOps for SyncBlock {
                 }
 
                 let remaining = deadline - now;
-                let timed_out = self.condvar.wait_for(&mut state, remaining).timed_out();
+                let timed_out = self
+                    .condvar
+                    .wait_for(state.raw_mut(), remaining)
+                    .timed_out();
 
                 if timed_out && state.owner_thread_id != ArenaId::INVALID {
                     return false;
@@ -142,7 +145,7 @@ impl super::SyncBlockOps for SyncBlock {
 
             // Wait with timeout to allow periodic safe point checks
             let timeout = super::get_safe_point_yield_duration();
-            let _ = self.condvar.wait_for(&mut state, timeout);
+            let _ = self.condvar.wait_for(state.raw_mut(), timeout);
 
             if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
@@ -194,7 +197,7 @@ impl super::SyncBlockOps for SyncBlock {
             let wait_duration = remaining.min(super::get_safe_point_yield_duration());
 
             let start_wait = Instant::now();
-            let _ = self.condvar.wait_for(&mut state, wait_duration);
+            let _ = self.condvar.wait_for(state.raw_mut(), wait_duration);
 
             if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
@@ -248,15 +251,15 @@ impl super::SyncBlockOps for SyncBlock {
 }
 
 pub struct SyncBlockManager {
-    blocks: Mutex<HashMap<usize, Arc<SyncBlock>>>,
-    next_index: Mutex<usize>,
+    blocks: OrderedMutex<levels::SyncBlocks, HashMap<usize, Arc<SyncBlock>>>,
+    next_index: OrderedMutex<levels::SyncNextIndex, usize>,
 }
 
 impl SyncBlockManager {
     pub fn new() -> Self {
         Self {
-            blocks: Mutex::new(HashMap::new()),
-            next_index: Mutex::new(1),
+            blocks: OrderedMutex::new(HashMap::new()),
+            next_index: OrderedMutex::new(1),
         }
     }
 }
@@ -264,21 +267,17 @@ impl SyncBlockManager {
 impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
-    fn get_or_create_sync_block(
-        &self,
-        get_index: impl FnOnce() -> Option<usize>,
-        set_index: impl FnOnce(usize),
-    ) -> (usize, Arc<Self::Block>) {
+    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>) {
         let mut blocks = self.blocks.lock();
 
-        if let Some(index) = get_index()
+        if let Some(index) = current_index
             && let Some(block) = blocks.get(&index)
         {
             return (index, block.clone());
         }
 
         let index = {
-            let mut next = self.next_index.lock();
+            let mut next = self.next_index.lock_after(blocks.held_level());
             let idx = *next;
             *next += 1;
             idx
@@ -286,7 +285,6 @@ impl super::SyncManagerOps for SyncBlockManager {
 
         let block = Arc::new(SyncBlock::new());
         blocks.insert(index, block.clone());
-        set_index(index);
 
         (index, block)
     }

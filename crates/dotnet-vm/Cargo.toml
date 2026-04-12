@@ -77,6 +77,8 @@ bench-instrumentation = [
 ]
 # Enables heap object-registry diagnostics path in runtime-memory.
 heap-diagnostics = ["dotnet-runtime-memory/heap-diagnostics"]
+# Enables runtime parking_lot deadlock detection and background reporting.
+deadlock-diagnostics = ["multithreading", "parking_lot/deadlock_detection"]
 # Enables eval-stack reserve-growth prototype (kept intentionally as a toggle).
 segmented-eval-stack-prototype = ["dotnet-vm-ops/segmented-eval-stack-prototype"]
 # Selects generated function-pointer jump-table dispatch.

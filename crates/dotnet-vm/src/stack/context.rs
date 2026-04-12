@@ -518,6 +518,16 @@ impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    fn new_object_with_lookup(
+        &self,
+        td: TypeDescription,
+        lookup: &GenericLookup,
+    ) -> Result<dotnet_value::object::Object<'gc>, TypeResolutionError> {
+        let ctx = self.current_context().with_generics(lookup);
+        self.resolver().new_object(td, &ctx)
+    }
+
+    #[inline]
     fn new_value_type(
         &self,
         t: &ConcreteType,
@@ -735,13 +745,28 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         object: ObjectRef<'gc>,
         gc: GCHandle<'gc>,
     ) -> Self::SyncBlock {
-        let (_index, sync_block) = self.shared().sync_blocks.get_or_create_sync_block(
-            || object.sync_block_index(),
-            |new_index| {
+        let current_index = object.sync_block_index();
+        let (new_index, new_block) = self
+            .shared()
+            .sync_blocks
+            .get_or_create_sync_block(current_index);
+
+        match current_index {
+            Some(existing_index) if existing_index != new_index => {
+                if let Some(existing_block) =
+                    self.shared().sync_blocks.get_sync_block(existing_index)
+                {
+                    return existing_block;
+                }
                 object.set_sync_block_index(gc, new_index);
-            },
-        );
-        sync_block
+                new_block
+            }
+            None => {
+                object.set_sync_block_index(gc, new_index);
+                new_block
+            }
+            _ => new_block,
+        }
     }
 
     #[inline]

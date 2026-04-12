@@ -78,11 +78,41 @@ fn parse_env_bool(key: &str, default: bool) -> bool {
     }
 }
 
+#[inline]
+fn cache_map_len<K, V>(map: &DashMap<K, V>) -> usize
+where
+    K: Eq + Hash,
+{
+    // `DashMap::len` takes all shard locks; keep it behind one helper for cache call sites.
+    map.len()
+}
+
+#[inline]
+fn cache_map_get_cloned<K, V>(map: &DashMap<K, V>, key: &K) -> Option<V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    // Return an owned value so shard guards are dropped before callers perform follow-up work.
+    let entry = map.get(key)?;
+    Some(entry.value().clone())
+}
+
+#[inline]
+fn cache_map_first_key_clone<K, V>(map: &DashMap<K, V>) -> Option<K>
+where
+    K: Eq + Hash + Clone,
+{
+    // Clone the key out of the iterator entry so the shard guard does not escape.
+    let entry = map.iter().next()?;
+    Some(entry.key().clone())
+}
+
 fn estimated_dashmap_bytes<K, V>(map: &DashMap<K, V>) -> u64
 where
     K: Eq + Hash,
 {
-    (map.len() as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64)
+    (cache_map_len(map) as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64)
 }
 
 fn insert_with_optional_capacity<K, V>(
@@ -99,13 +129,11 @@ fn insert_with_optional_capacity<K, V>(
             return;
         }
 
-        while map.len() >= max_entries {
-            let victim = map.iter().next().map(|entry| entry.key().clone());
-            if let Some(victim_key) = victim {
-                map.remove(&victim_key);
-            } else {
+        while cache_map_len(map) >= max_entries {
+            let Some(victim_key) = cache_map_first_key_clone(map) else {
                 break;
-            }
+            };
+            map.remove(&victim_key);
         }
     }
 
@@ -317,10 +345,8 @@ impl GlobalCaches {
 
         shared.metrics.record_method_info_key_clones(2);
         let key = (method.clone(), generics.clone());
-        if let Some(entry) = self.method_info_cache.get(&key) {
+        if let Some(cached) = cache_map_get_cloned(&self.method_info_cache, &key) {
             shared.metrics.record_method_info_cache_hit();
-            let cached = Arc::clone(&entry);
-            drop(entry);
             if self.front_cache_enabled() {
                 let (method_key, generic_key) = key;
                 METHOD_INFO_FRONT_CACHE.with(|cache| {
@@ -427,31 +453,31 @@ impl SharedGlobalState {
 
     fn cache_sizes(&self) -> CacheSizes {
         CacheSizes {
-            layout_size: self.caches.layout_cache.len(),
+            layout_size: cache_map_len(&self.caches.layout_cache),
             layout_bytes: estimated_dashmap_bytes(&self.caches.layout_cache),
-            vmt_size: self.caches.vmt_cache.len(),
+            vmt_size: cache_map_len(&self.caches.vmt_cache),
             vmt_bytes: estimated_dashmap_bytes(&self.caches.vmt_cache),
-            intrinsic_size: self.caches.intrinsic_cache.len(),
+            intrinsic_size: cache_map_len(&self.caches.intrinsic_cache),
             intrinsic_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_cache),
-            intrinsic_field_size: self.caches.intrinsic_field_cache.len(),
+            intrinsic_field_size: cache_map_len(&self.caches.intrinsic_field_cache),
             intrinsic_field_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_field_cache),
-            hierarchy_size: self.caches.hierarchy_cache.len(),
+            hierarchy_size: cache_map_len(&self.caches.hierarchy_cache),
             hierarchy_bytes: estimated_dashmap_bytes(&self.caches.hierarchy_cache),
-            static_field_layout_size: self.caches.static_field_layout_cache.len(),
+            static_field_layout_size: cache_map_len(&self.caches.static_field_layout_cache),
             static_field_layout_bytes: estimated_dashmap_bytes(
                 &self.caches.static_field_layout_cache,
             ),
-            instance_field_layout_size: self.caches.instance_field_layout_cache.len(),
+            instance_field_layout_size: cache_map_len(&self.caches.instance_field_layout_cache),
             instance_field_layout_bytes: estimated_dashmap_bytes(
                 &self.caches.instance_field_layout_cache,
             ),
-            value_type_size: self.caches.value_type_cache.len(),
+            value_type_size: cache_map_len(&self.caches.value_type_cache),
             value_type_bytes: estimated_dashmap_bytes(&self.caches.value_type_cache),
-            has_finalizer_size: self.caches.has_finalizer_cache.len(),
+            has_finalizer_size: cache_map_len(&self.caches.has_finalizer_cache),
             has_finalizer_bytes: estimated_dashmap_bytes(&self.caches.has_finalizer_cache),
-            overrides_size: self.caches.overrides_cache.len(),
+            overrides_size: cache_map_len(&self.caches.overrides_cache),
             overrides_bytes: estimated_dashmap_bytes(&self.caches.overrides_cache),
-            method_info_size: self.caches.method_info_cache.len(),
+            method_info_size: cache_map_len(&self.caches.method_info_cache),
             method_info_bytes: estimated_dashmap_bytes(&self.caches.method_info_cache),
             assembly_type_info: (
                 self.loader.type_cache_hits.load(Ordering::Relaxed),
@@ -464,7 +490,7 @@ impl SharedGlobalState {
                 self.loader.method_cache_size(),
             ),
             #[cfg(feature = "multithreading")]
-            shared_runtime_types_size: self.shared_runtime_types.len(),
+            shared_runtime_types_size: cache_map_len(&self.shared_runtime_types),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_size: 0,
             #[cfg(feature = "multithreading")]
@@ -472,7 +498,7 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_bytes: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_methods_size: self.shared_runtime_methods.len(),
+            shared_runtime_methods_size: cache_map_len(&self.shared_runtime_methods),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_size: 0,
             #[cfg(feature = "multithreading")]
@@ -480,7 +506,7 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_bytes: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_fields_size: self.shared_runtime_fields.len(),
+            shared_runtime_fields_size: cache_map_len(&self.shared_runtime_fields),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_size: 0,
             #[cfg(feature = "multithreading")]

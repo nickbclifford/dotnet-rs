@@ -1,6 +1,6 @@
 #[cfg(feature = "multithreading")]
 use crate::{
-    sync::{Mutex, MutexGuard, Ordering},
+    sync::{HeldLockLevel, OrderedMutex, OrderedMutexGuard, Ordering, levels},
     threading::execute_gc_command_for_current_thread,
 };
 #[cfg(feature = "multithreading")]
@@ -9,6 +9,7 @@ use dotnet_utils::sync::{Arc, AtomicBool};
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
     marker::PhantomData,
     mem::ManuallyDrop,
@@ -25,30 +26,96 @@ pub use dotnet_utils::gc::{
 /// Coordinates stop-the-world collections across multiple thread-local arenas.
 pub struct GCCoordinator {
     /// thread_id -> arena metadata
-    arenas: Mutex<HashMap<dotnet_utils::ArenaId, ArenaHandle>>,
+    arenas: OrderedMutex<levels::CoordinatorArenas, HashMap<dotnet_utils::ArenaId, ArenaHandle>>,
     /// Global lock held during collection
-    collection_lock: Mutex<()>,
+    collection_lock: OrderedMutex<levels::CollectionLock, ()>,
     /// Flag indicating if a stop-the-world pause is in progress (shared with arenas)
     stw_in_progress: Arc<AtomicBool>,
     /// Cross-arena references found during marking
-    cross_arena_refs: Mutex<HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
+    cross_arena_refs:
+        OrderedMutex<levels::CrossArenaRefs, HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
+}
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+thread_local! {
+    static COLLECTION_LOCK_DEBUG_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+fn debug_mark_collection_lock_acquired() {
+    COLLECTION_LOCK_DEBUG_DEPTH.with(|depth| depth.set(depth.get() + 1));
+}
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+fn debug_mark_collection_lock_released() {
+    COLLECTION_LOCK_DEBUG_DEPTH.with(|depth| {
+        let current = depth.get();
+        assert!(
+            current > 0,
+            "debug_mark_collection_lock_released: lock-depth underflow"
+        );
+        depth.set(current - 1);
+    });
+}
+
+#[cfg(feature = "multithreading")]
+pub(crate) fn debug_assert_collection_lock_held(context: &str) {
+    #[cfg(debug_assertions)]
+    COLLECTION_LOCK_DEBUG_DEPTH.with(|depth| {
+        debug_assert!(
+            depth.get() > 0,
+            "{context}: top-level lock order violation: expected GCCoordinator::collection_lock before ThreadManager::gc_coordination",
+        );
+    });
+}
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+struct CollectionLockDebugGuard;
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+impl CollectionLockDebugGuard {
+    fn new() -> Self {
+        debug_mark_collection_lock_acquired();
+        Self
+    }
+}
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+impl Drop for CollectionLockDebugGuard {
+    fn drop(&mut self) {
+        debug_mark_collection_lock_released();
+    }
+}
+
+#[cfg(all(feature = "multithreading", not(debug_assertions)))]
+struct CollectionLockDebugGuard;
+
+#[cfg(all(feature = "multithreading", not(debug_assertions)))]
+impl CollectionLockDebugGuard {
+    fn new() -> Self {
+        Self
+    }
 }
 
 #[cfg(feature = "multithreading")]
 impl GCCoordinator {
     pub fn new(stw_in_progress: Arc<AtomicBool>) -> Self {
         Self {
-            arenas: Mutex::new(HashMap::new()),
-            collection_lock: Mutex::new(()),
+            arenas: OrderedMutex::new(HashMap::new()),
+            collection_lock: OrderedMutex::new(()),
             stw_in_progress,
-            cross_arena_refs: Mutex::new(HashMap::new()),
+            cross_arena_refs: OrderedMutex::new(HashMap::new()),
         }
     }
 
-    fn assert_no_pending_commands(&self, context: &str) {
-        let arenas = self.arenas.lock();
+    fn assert_no_pending_commands(
+        &self,
+        held: HeldLockLevel<levels::CollectionLock>,
+        context: &str,
+    ) {
+        let arenas = self.arenas.lock_after(held);
         for handle in arenas.values() {
-            let cmd = handle.current_command().lock();
+            let cmd = handle.current_command().lock_after(arenas.held_level());
             assert!(
                 cmd.is_none(),
                 "{context}: expected no pending GC command for arena {:?}, found {:?}",
@@ -70,7 +137,7 @@ impl GCCoordinator {
         if let Some(handle) = arenas.remove(&thread_id) {
             // Signal any threads waiting for this arena to finish a GC command.
             // This is critical if the thread is exiting during a stop-the-world pause.
-            let mut cmd = handle.current_command().lock();
+            let mut cmd = handle.current_command().lock_after(arenas.held_level());
             *cmd = None;
             handle.finish_signal().notify_all();
         }
@@ -91,34 +158,34 @@ impl GCCoordinator {
     /// setting `stw_in_progress`.
     pub fn begin_collection(&self) -> Option<CollectionSession<'_>> {
         let lock = self.collection_lock.try_lock()?;
-        self.enter_collecting_state("begin_collection");
+        self.enter_collecting_state(lock.held_level(), "begin_collection");
         Some(CollectionSession::new(self, lock))
     }
 
-    fn enter_collecting_state(&self, context: &str) {
+    fn enter_collecting_state(&self, held: HeldLockLevel<levels::CollectionLock>, context: &str) {
         let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
         assert!(
             !stw_in_progress,
             "{context}: expected idle coordinator before beginning collection, got stw_in_progress={stw_in_progress}",
         );
-        self.assert_no_pending_commands(&format!("{context} precondition"));
+        self.assert_no_pending_commands(held, &format!("{context} precondition"));
 
         self.stw_in_progress.store(true, Ordering::Release);
     }
 
-    fn finish_collection_inner(&self, context: &str) {
+    fn finish_collection_inner(&self, held: HeldLockLevel<levels::CollectionLock>, context: &str) {
         let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
         assert!(
             stw_in_progress,
             "{context}: expected active collection before finishing, got stw_in_progress={stw_in_progress}",
         );
-        self.assert_no_pending_commands(&format!("{context} precondition"));
+        self.assert_no_pending_commands(held, &format!("{context} precondition"));
 
         self.stw_in_progress.store(false, Ordering::Release);
 
         // Reset all collection flags
         {
-            let arenas = self.arenas.lock();
+            let arenas = self.arenas.lock_after(held);
             for handle in arenas.values() {
                 handle.needs_collection().store(false, Ordering::Release);
                 // We don't reset allocation_counter here as it might be useful for stats,
@@ -126,7 +193,7 @@ impl GCCoordinator {
             }
         }
 
-        self.assert_no_pending_commands(&format!("{context} postcondition"));
+        self.assert_no_pending_commands(held, &format!("{context} postcondition"));
         let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
         assert!(
             !stw_in_progress,
@@ -165,8 +232,19 @@ impl GCCoordinator {
         self.arenas.lock().get(&thread_id).cloned()
     }
 
-    fn get_all_arenas(&self) -> Vec<ArenaHandle> {
-        let arenas = self.arenas.lock();
+    fn get_arena_after_collection_lock(
+        &self,
+        held: HeldLockLevel<levels::CollectionLock>,
+        thread_id: dotnet_utils::ArenaId,
+    ) -> Option<ArenaHandle> {
+        self.arenas.lock_after(held).get(&thread_id).cloned()
+    }
+
+    fn get_all_arenas_after_collection_lock(
+        &self,
+        held: HeldLockLevel<levels::CollectionLock>,
+    ) -> Vec<ArenaHandle> {
+        let arenas = self.arenas.lock_after(held);
         arenas.values().cloned().collect()
     }
 
@@ -206,7 +284,7 @@ impl GCCoordinator {
                 if let Some(cmd) = cmd_guard.clone() {
                     return Some(cmd);
                 }
-                handle.command_signal().wait(&mut cmd_guard);
+                handle.command_signal().wait(cmd_guard.raw_mut());
             }
         }
         None
@@ -252,15 +330,20 @@ impl Default for GCCoordinator {
 pub struct CollectionSession<'coord> {
     coordinator: &'coord GCCoordinator,
     /// Holds the coordinator's `collection_lock` for the duration of the session.
-    lock: Option<MutexGuard<'coord, ()>>,
+    lock: Option<OrderedMutexGuard<'coord, levels::CollectionLock, ()>>,
+    _debug_lock_guard: CollectionLockDebugGuard,
 }
 
 #[cfg(feature = "multithreading")]
 impl<'coord> CollectionSession<'coord> {
-    fn new(coordinator: &'coord GCCoordinator, lock: MutexGuard<'coord, ()>) -> Self {
+    fn new(
+        coordinator: &'coord GCCoordinator,
+        lock: OrderedMutexGuard<'coord, levels::CollectionLock, ()>,
+    ) -> Self {
         Self {
             coordinator,
             lock: Some(lock),
+            _debug_lock_guard: CollectionLockDebugGuard::new(),
         }
     }
 
@@ -268,19 +351,30 @@ impl<'coord> CollectionSession<'coord> {
         let Some(lock) = self.lock.take() else {
             return;
         };
-        self.coordinator.finish_collection_inner(context);
+        self.coordinator
+            .finish_collection_inner(lock.held_level(), context);
         drop(lock);
     }
 }
 
 #[cfg(feature = "multithreading")]
 impl CollectionSession<'_> {
+    fn collection_lock_level(&self) -> HeldLockLevel<levels::CollectionLock> {
+        self.lock
+            .as_ref()
+            .expect("CollectionSession requires an active collection lock")
+            .held_level()
+    }
+
     fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
-        for handle in self.coordinator.get_all_arenas() {
+        for handle in self
+            .coordinator
+            .get_all_arenas_after_collection_lock(self.collection_lock_level())
+        {
             if handle.thread_id() != initiating_thread_id {
                 let mut cmd = handle.current_command().lock();
                 while cmd.is_some() {
-                    handle.finish_signal().wait(&mut cmd);
+                    handle.finish_signal().wait(cmd.raw_mut());
                 }
             }
         }
@@ -304,7 +398,10 @@ impl CollectionSession<'_> {
         initiating_thread_id: dotnet_utils::ArenaId,
         command: GCCommand,
     ) {
-        for handle in self.coordinator.get_all_arenas() {
+        for handle in self
+            .coordinator
+            .get_all_arenas_after_collection_lock(self.collection_lock_level())
+        {
             if handle.thread_id() != initiating_thread_id {
                 self.enqueue_command_for_arena(
                     &handle,
@@ -328,7 +425,9 @@ impl CollectionSession<'_> {
     /// Perform a coordinated collection across all registered arenas.
     pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
         assert!(
-            self.coordinator.get_arena(initiating_thread_id).is_some(),
+            self.coordinator
+                .get_arena_after_collection_lock(self.collection_lock_level(), initiating_thread_id)
+                .is_some(),
             "collect_all_arenas precondition: initiating thread {:?} must be registered",
             initiating_thread_id
         );
@@ -336,7 +435,10 @@ impl CollectionSession<'_> {
         // Initial marking: each arena marks its local roots.
         {
             // Clear any stale cross-arena references from previous collections
-            let mut refs = self.coordinator.cross_arena_refs.lock();
+            let mut refs = self
+                .coordinator
+                .cross_arena_refs
+                .lock_after(self.collection_lock_level());
             refs.clear();
         }
 
@@ -352,7 +454,10 @@ impl CollectionSession<'_> {
         let mut fixed_point_iterations = 0u64;
         loop {
             let cross_refs = {
-                let refs = self.coordinator.cross_arena_refs.lock();
+                let refs = self
+                    .coordinator
+                    .cross_arena_refs
+                    .lock_after(self.collection_lock_level());
                 if refs.is_empty() {
                     // No cross-arena references found, we're done
                     break;
@@ -375,7 +480,10 @@ impl CollectionSession<'_> {
 
             // Clear the global table for the next iteration
             {
-                let mut refs = self.coordinator.cross_arena_refs.lock();
+                let mut refs = self
+                    .coordinator
+                    .cross_arena_refs
+                    .lock_after(self.collection_lock_level());
                 refs.clear();
             }
 
@@ -389,7 +497,10 @@ impl CollectionSession<'_> {
                 if target_thread_id == initiating_thread_id {
                     // Save for direct execution by initiating thread
                     initiator_mark_objs = Some(ptrs_for_mark);
-                } else if let Some(handle) = self.coordinator.get_arena(target_thread_id) {
+                } else if let Some(handle) = self
+                    .coordinator
+                    .get_arena_after_collection_lock(self.collection_lock_level(), target_thread_id)
+                {
                     self.enqueue_command_for_arena(
                         &handle,
                         GCCommand::Mark(MarkPhaseCommand::Objects(ptrs_for_mark)),
@@ -416,7 +527,10 @@ impl CollectionSession<'_> {
 
             // Check if any new cross-arena references were discovered
             let has_new_refs = {
-                let refs = self.coordinator.cross_arena_refs.lock();
+                let refs = self
+                    .coordinator
+                    .cross_arena_refs
+                    .lock_after(self.collection_lock_level());
                 !refs.is_empty()
             };
 
@@ -460,6 +574,52 @@ impl CollectionSession<'_> {
 impl Drop for CollectionSession<'_> {
     fn drop(&mut self) {
         self.finish_inner("CollectionSession::drop");
+    }
+}
+
+/// Unified guard for a full GC cycle.
+///
+/// Owns the coordinator collection session and the STW guard in one RAII type
+/// with a fixed drop order:
+/// 1. [`CollectionSession`] cleanup (`stw_in_progress=false`, lock release)
+/// 2. STW guard drop (thread resume)
+///
+/// This ordering is enforced in [`Drop`] even during panic unwind.
+#[cfg(feature = "multithreading")]
+pub struct GcCycleGuard<'coord, StwGuard> {
+    session: Option<CollectionSession<'coord>>,
+    stw_guard: Option<StwGuard>,
+}
+
+#[cfg(feature = "multithreading")]
+impl<'coord, StwGuard> GcCycleGuard<'coord, StwGuard> {
+    pub fn new(session: CollectionSession<'coord>, stw_guard: StwGuard) -> Self {
+        Self {
+            session: Some(session),
+            stw_guard: Some(stw_guard),
+        }
+    }
+
+    pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
+        self.session
+            .as_ref()
+            .expect("GcCycleGuard::collect_all_arenas requires an active collection session")
+            .collect_all_arenas(initiating_thread_id);
+    }
+
+    pub fn finish_collection(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.finish();
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl<StwGuard> Drop for GcCycleGuard<'_, StwGuard> {
+    fn drop(&mut self) {
+        // Coordinator cleanup must happen before threads resume.
+        self.finish_collection();
+        drop(self.stw_guard.take());
     }
 }
 
@@ -576,6 +736,7 @@ pub use stubs::{GCCommand, GCCoordinator};
 mod tests {
     use super::*;
     use crate::sync::{Arc, AtomicBool, Ordering};
+    use crate::threading::{ThreadManager, ThreadManagerOps};
 
     #[test]
     fn test_coordinator_registration() {
@@ -865,6 +1026,87 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Lock-order stress harness: repeatedly exercise the canonical top-level
+    // acquisition order `collection_lock -> gc_coordination` while worker
+    // threads are live and polling safe points.
+    // ------------------------------------------------------------------
+    #[test]
+    fn stress_lock_order_gc_cycle_guard_with_live_safepoints() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        const WORKER_THREADS: usize = 2;
+        const CYCLES: usize = 10;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(Arc::clone(&stw_flag)));
+        let manager = ThreadManager::new(stw_flag);
+        manager.set_coordinator(Arc::downgrade(&coordinator));
+
+        let initiator_id = manager.register_thread();
+        coordinator.register_arena(ArenaHandle::new(initiator_id));
+
+        let done = Arc::new(AtomicBool::new(false));
+        let barrier = Arc::new(Barrier::new(WORKER_THREADS + 1));
+        let mut workers = vec![];
+
+        for _ in 0..WORKER_THREADS {
+            let manager = Arc::clone(&manager);
+            let coordinator = Arc::clone(&coordinator);
+            let done = Arc::clone(&done);
+            let barrier = Arc::clone(&barrier);
+            workers.push(thread::spawn(move || {
+                let managed_id = manager.register_thread();
+                coordinator.register_arena(ArenaHandle::new(managed_id));
+                barrier.wait();
+
+                while !done.load(Ordering::Acquire) {
+                    manager.safe_point(managed_id, &coordinator);
+                    thread::yield_now();
+                }
+
+                manager.safe_point(managed_id, &coordinator);
+                coordinator.unregister_arena(managed_id);
+                manager.unregister_thread(managed_id);
+            }));
+        }
+
+        barrier.wait();
+
+        for _ in 0..CYCLES {
+            let session = coordinator
+                .begin_collection()
+                .expect("collection session must start");
+            let stw_guard = manager.request_stop_the_world();
+            let gc_cycle = GcCycleGuard::new(session, stw_guard);
+            gc_cycle.collect_all_arenas(initiator_id);
+            drop(gc_cycle);
+
+            assert!(
+                !manager.is_gc_stop_requested(),
+                "gc_stop_requested must be cleared after each GC cycle"
+            );
+            assert!(
+                !coordinator.stw_in_progress.load(Ordering::Acquire),
+                "coordinator must be idle after each GC cycle"
+            );
+        }
+
+        done.store(true, Ordering::Release);
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        coordinator.unregister_arena(initiator_id);
+        manager.unregister_thread(initiator_id);
+        assert!(
+            !manager.is_gc_stop_requested(),
+            "gc_stop_requested must be clear after lock-order stress harness"
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Panic-injection: CollectionSession must restore Idle state
     // when the caller unwinds mid-collection.
     //
@@ -989,5 +1231,68 @@ mod tests {
         session.finish();
         coordinator.unregister_arena(initiator_id);
         coordinator.unregister_arena(worker_id);
+    }
+
+    // ------------------------------------------------------------------
+    // Panic-injection: when `GcCycleGuard` owns both collection session and
+    // STW guard, coordinator cleanup must complete before thread resume.
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_session_cleanup_precedes_stw_resume_on_unwind() {
+        use std::panic;
+
+        struct ProbeStwGuard<'a, InnerGuard> {
+            inner: Option<InnerGuard>,
+            coordinator: &'a GCCoordinator,
+            saw_collecting_before_resume: &'a AtomicBool,
+        }
+
+        impl<InnerGuard> Drop for ProbeStwGuard<'_, InnerGuard> {
+            fn drop(&mut self) {
+                // This observes coordinator state immediately before the wrapped
+                // STW guard resumes threads.
+                let collecting = self.coordinator.stw_in_progress.load(Ordering::Acquire);
+                self.saw_collecting_before_resume
+                    .store(collecting, Ordering::Release);
+                drop(self.inner.take());
+            }
+        }
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(Arc::clone(&stw_flag)));
+        let manager = ThreadManager::new(stw_flag);
+        manager.set_coordinator(Arc::downgrade(&coordinator));
+
+        let saw_collecting_before_resume = AtomicBool::new(false);
+        let coordinator_for_unwind = Arc::clone(&coordinator);
+        let manager_for_unwind = Arc::clone(&manager);
+
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let session = coordinator_for_unwind
+                .begin_collection()
+                .expect("collection session must start");
+            let stw_guard = manager_for_unwind.request_stop_the_world();
+            let probe_stw_guard = ProbeStwGuard {
+                inner: Some(stw_guard),
+                coordinator: coordinator_for_unwind.as_ref(),
+                saw_collecting_before_resume: &saw_collecting_before_resume,
+            };
+            let _gc_cycle = GcCycleGuard::new(session, probe_stw_guard);
+            panic!("simulated panic mid-GC");
+        }));
+
+        assert!(result.is_err(), "closure should panic");
+        assert!(
+            !saw_collecting_before_resume.load(Ordering::Acquire),
+            "collection session cleanup must complete before STW guard drop resumes threads"
+        );
+        assert!(
+            !manager.is_gc_stop_requested(),
+            "STW resume must clear gc_stop_requested on unwind"
+        );
+        assert!(
+            !coordinator.stw_in_progress.load(Ordering::Acquire),
+            "coordinator must be Idle after unwind cleanup"
+        );
     }
 }

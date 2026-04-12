@@ -1,6 +1,6 @@
 use crate::{
     gc::GCCommand,
-    sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering},
+    sync::{Arc, AtomicBool, AtomicUsize, Condvar, OrderedMutex, Ordering, levels},
 };
 
 /// Metadata about each thread's arena and its communication channel.
@@ -19,7 +19,7 @@ pub struct ArenaHandleInner {
     pub external_allocated_bytes: AtomicUsize,
     pub needs_collection: AtomicBool,
     /// Command currently being processed by this thread.
-    pub current_command: Mutex<Option<GCCommand>>,
+    pub current_command: OrderedMutex<levels::ArenaCurrentCommand, Option<GCCommand>>,
     /// Signal to wake up the thread when a command is available.
     pub command_signal: Condvar,
     /// Signal to the coordinator that the command is finished.
@@ -50,7 +50,7 @@ impl ArenaHandle {
                 gc_allocated_bytes: AtomicUsize::new(0),
                 external_allocated_bytes: AtomicUsize::new(0),
                 needs_collection: AtomicBool::new(false),
-                current_command: Mutex::new(None),
+                current_command: OrderedMutex::new(None),
                 command_signal: Condvar::new(),
                 finish_signal: Condvar::new(),
             }),
@@ -81,7 +81,7 @@ impl ArenaHandle {
         &self.inner.needs_collection
     }
 
-    pub fn current_command(&self) -> &Mutex<Option<GCCommand>> {
+    pub fn current_command(&self) -> &OrderedMutex<levels::ArenaCurrentCommand, Option<GCCommand>> {
         &self.inner.current_command
     }
 

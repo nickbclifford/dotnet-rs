@@ -69,11 +69,11 @@ pub trait SyncBlockOps {
 pub trait SyncManagerOps {
     type Block: SyncBlockOps;
 
-    fn get_or_create_sync_block(
-        &self,
-        get_index: impl FnOnce() -> Option<usize>,
-        set_index: impl FnOnce(usize),
-    ) -> (usize, Arc<Self::Block>);
+    /// Returns an existing sync block for `current_index` when available.
+    /// Otherwise creates a new sync block and returns its newly allocated index.
+    ///
+    /// Callers are responsible for publishing the returned index to object state.
+    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>);
 
     fn get_sync_block(&self, index: usize) -> Option<Arc<Self::Block>>;
 
