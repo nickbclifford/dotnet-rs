@@ -2,7 +2,6 @@
 //!
 //! These wrappers are additive over `dotnet_utils::sync::{Mutex, RwLock}` and are
 //! intended for runtime-owned locks where we want explicit lock-level metadata.
-
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},

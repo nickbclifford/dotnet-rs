@@ -18,14 +18,15 @@ use dotnet_utils::{
     },
 };
 use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "deadlock-diagnostics")]
-use parking_lot::deadlock;
 use std::{
     collections::HashMap,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
 use tracing::warn;
+
+#[cfg(feature = "deadlock-diagnostics")]
+use parking_lot::deadlock;
 
 #[cfg(debug_assertions)]
 macro_rules! debug_assert_top_level_gc_lock_order {

@@ -3,14 +3,6 @@
 //! This module provides a unified interface for synchronization primitives
 //! that works across both single-threaded and multi-threaded configurations.
 //! Low-level modules can depend on this without pulling in the entire VM subsystem.
-#[path = "sync/lock_order.rs"]
-pub mod lock_order;
-
-pub use lock_order::{
-    AcquireAfter, HeldLockLevel, LockLevel, OrderedMutex, OrderedMutexGuard, OrderedRwLock,
-    OrderedRwLockReadGuard, OrderedRwLockWriteGuard, levels, unlocked,
-};
-
 #[cfg(not(feature = "multithreading"))]
 pub mod compat {
     use std::cell::{Ref, RefCell, RefMut};
@@ -122,7 +114,13 @@ pub mod compat {
     pub type MappedRwLockReadGuard<'a, T> = Ref<'a, T>;
     pub type MappedRwLockWriteGuard<'a, T> = RefMut<'a, T>;
 }
+#[path = "sync/lock_order.rs"]
+pub mod lock_order;
 
+pub use lock_order::{
+    AcquireAfter, HeldLockLevel, LockLevel, OrderedMutex, OrderedMutexGuard, OrderedRwLock,
+    OrderedRwLockReadGuard, OrderedRwLockWriteGuard, levels, unlocked,
+};
 pub use std::sync::{
     Arc, Weak,
     atomic::{
