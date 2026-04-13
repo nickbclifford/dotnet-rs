@@ -45,22 +45,38 @@ fn main() {
     // 1. Instruction table generation
     let mut instruction_entries = Vec::new();
     let instruction_roots = instruction_source_roots();
+    let mut instruction_rs_files_scanned = 0usize;
     for root in &instruction_roots {
-        scan_rs_files(root, |path| {
+        instruction_rs_files_scanned += scan_rs_files(root, |path| {
             process_instruction_file(path, root, &mut instruction_entries)
         });
     }
+    assert_handler_discovery(
+        "instruction",
+        instruction_rs_files_scanned,
+        instruction_entries.len(),
+        &instruction_roots,
+        "#[dotnet_instruction(...)]",
+    );
     instruction_entries.sort_by(|a, b| a.variant_name.cmp(&b.variant_name));
     generate_instruction_table(&out_dir, &instruction_entries);
 
     // 2. Intrinsic table generation
     let mut intrinsic_entries = Vec::new();
     let intrinsic_roots = intrinsic_source_roots();
+    let mut intrinsic_rs_files_scanned = 0usize;
     for root in &intrinsic_roots {
-        scan_rs_files(root, |path| {
+        intrinsic_rs_files_scanned += scan_rs_files(root, |path| {
             process_intrinsic_file(path, root, &mut intrinsic_entries)
         });
     }
+    assert_handler_discovery(
+        "intrinsic",
+        intrinsic_rs_files_scanned,
+        intrinsic_entries.len(),
+        &intrinsic_roots,
+        "#[dotnet_intrinsic(...)] / #[dotnet_intrinsic_field(...)]",
+    );
     generate_intrinsic_phf(&out_dir, &intrinsic_entries);
 
     println!("cargo:rerun-if-changed=src/instructions");
@@ -171,17 +187,71 @@ fn parse_extra_roots(env_var: &str, default_prefix: &str) -> Vec<SourceScanRoot>
         .collect()
 }
 
-fn scan_rs_files(root: &SourceScanRoot, mut process_file: impl FnMut(&Path)) {
-    for entry in WalkDir::new(&root.directory) {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+fn scan_rs_files(root: &SourceScanRoot, mut process_file: impl FnMut(&Path)) -> usize {
+    let root_path = &root.directory;
+    if !root_path.exists() {
+        panic!(
+            "Configured source root `{}` does not exist",
+            root_path.display()
+        );
+    }
+    if !root_path.is_dir() {
+        panic!(
+            "Configured source root `{}` is not a directory",
+            root_path.display()
+        );
+    }
+
+    let mut rs_files_scanned = 0usize;
+    for entry in WalkDir::new(root_path) {
+        let entry = entry.unwrap_or_else(|error| {
+            let path = error
+                .path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown path>".to_string());
+            panic!(
+                "Failed while walking source root `{}` at `{}`: {error}",
+                root_path.display(),
+                path
+            )
+        });
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            rs_files_scanned += 1;
             process_file(path);
         }
     }
+    rs_files_scanned
+}
+
+fn assert_handler_discovery(
+    handler_kind: &str,
+    rs_files_scanned: usize,
+    handlers_discovered: usize,
+    roots: &[SourceScanRoot],
+    expected_attribute_hint: &str,
+) {
+    if rs_files_scanned == 0 {
+        panic!(
+            "No Rust source files were found while scanning {handler_kind} roots: {}",
+            format_roots_for_error(roots)
+        );
+    }
+    if handlers_discovered == 0 {
+        panic!(
+            "No {handler_kind} handlers were discovered while scanning roots: {}. \
+Expected to find at least one {expected_attribute_hint} annotation.",
+            format_roots_for_error(roots)
+        );
+    }
+}
+
+fn format_roots_for_error(roots: &[SourceScanRoot]) -> String {
+    roots
+        .iter()
+        .map(|root| format!("`{}`", root.directory.display()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn get_mod_path(path: &Path, root: &SourceScanRoot) -> String {
@@ -513,11 +583,19 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
         std::collections::HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
         let key = if entry.is_field {
-            format!("F:{}::{}", entry.type_name, entry.member_name)
+            format!(
+                "F:{}::{}:{}",
+                entry.type_name,
+                entry.member_name,
+                intrinsic_static_key_segment(entry.is_static)
+            )
         } else {
             format!(
-                "M:{}::{}#{}",
-                entry.type_name, entry.member_name, entry.arity
+                "M:{}::{}#{}:{}",
+                entry.type_name,
+                entry.member_name,
+                entry.arity,
+                intrinsic_static_key_segment(entry.is_static)
             )
         };
         groups.entry(key).or_default().push(i);
@@ -673,4 +751,8 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     table_code.push_str(";\n");
 
     fs::write(phf_path, table_code).unwrap();
+}
+
+fn intrinsic_static_key_segment(is_static: bool) -> &'static str {
+    if is_static { "S" } else { "I" }
 }

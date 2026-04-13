@@ -1,4 +1,4 @@
-use crate::{SpanIntrinsicHost, helpers::*, vm_try};
+use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
@@ -100,7 +100,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         return StepResult::Continue;
     }
 
-    let layout = vm_try!(ctx.span_type_layout(element_type.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
 
     let is_bitwise = match &*layout {
         LayoutManager::Scalar(s) => !matches!(
@@ -112,7 +112,8 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
 
     if is_bitwise {
         let element_size = layout.size().as_usize();
-        let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+        let element_desc =
+            dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
         let a_ptr_info = match read_span_reference(&a) {
             Ok(info) => info,
@@ -140,7 +141,8 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         // Slow path: dispatch to MemoryExtensions.SequenceEqualSlowPath<T>
         // Arguments (a, b) are already on the stack from the peek earlier
         let loader = ctx.loader();
-        let memory_extensions_type = vm_try!(loader.corlib_type("System.MemoryExtensions"));
+        let memory_extensions_type =
+            dotnet_vm_ops::vm_try!(loader.corlib_type("System.MemoryExtensions"));
         let def = memory_extensions_type.definition();
 
         let (method_idx, _) = match def
@@ -181,7 +183,7 @@ pub fn intrinsic_span_get_length<'gc, T: SpanIntrinsicHost<'gc>>(
         },
         StackValue::ManagedPtr(span_ptr) => {
             let span_concrete: ConcreteType = method.parent.clone().into();
-            let span_layout = vm_try!(ctx.span_type_layout(span_concrete));
+            let span_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(span_concrete));
             let field_layout = match &*span_layout {
                 LayoutManager::Field(f) => f,
                 _ => {
@@ -221,10 +223,10 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
     };
 
     let span_concrete: ConcreteType = method.parent.clone().into();
-    let span_layout = vm_try!(ctx.span_type_layout(span_concrete));
-    let element_layout = vm_try!(ctx.span_type_layout(element_type.clone()));
+    let span_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(span_concrete));
+    let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
     let element_size = element_layout.size().as_usize();
-    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
+    let element_desc = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type));
 
     let (base_ptr, len) = match this {
         StackValue::ValueType(span) => {

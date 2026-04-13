@@ -57,9 +57,9 @@ pub fn ldelem<
     }
 
     let res_ctx = ctx.current_context();
-    let load_type = vm_try!(res_ctx.make_concrete(param0));
-    let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
-    let target_type = vm_try!(ctx.loader().find_concrete_type(load_type));
+    let load_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
+    let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(load_type));
     let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
@@ -208,8 +208,8 @@ fn ldelema_internal<
     };
 
     let res_ctx = ctx.current_context();
-    let concrete_t = vm_try!(res_ctx.make_concrete(param0));
-    let element_layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
+    let concrete_t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
+    let element_layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     let element_offset = (element_layout.size() * index).as_usize();
     let result = obj.as_vector(|v| {
@@ -281,8 +281,8 @@ pub fn stelem<
     };
 
     let res_ctx = ctx.current_context();
-    let store_type = vm_try!(res_ctx.make_concrete(param0));
-    let layout = vm_try!(type_layout(store_type, &res_ctx));
+    let store_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(store_type, &res_ctx));
     let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
@@ -388,9 +388,11 @@ pub fn newarr<
     }
 
     let res_ctx = ctx.current_context();
-    let elem_type = vm_try!(res_ctx.normalize_type(vm_try!(res_ctx.make_concrete(param0))));
+    let elem_type = dotnet_vm_ops::vm_try!(
+        res_ctx.normalize_type(dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0)))
+    );
 
-    let v = vm_try!(ctx.new_vector(elem_type, length));
+    let v = dotnet_vm_ops::vm_try!(ctx.new_vector(elem_type, length));
     let o = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Vec(v),

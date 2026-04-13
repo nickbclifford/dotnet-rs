@@ -21,8 +21,7 @@ pub use exceptions::{
     UnwindState, UnwindTarget,
 };
 pub use stack::{
-    BasePointer, EvaluationStack, ExceptionStack, FrameStack, MulticastState, PinnedLocals,
-    StackFrame,
+    BasePointer, EvaluationStack, FrameStack, MulticastState, PinnedLocals, StackFrame,
 };
 
 // I.12.3.2

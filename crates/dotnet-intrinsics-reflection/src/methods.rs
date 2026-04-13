@@ -101,7 +101,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .loader()
                 .corlib_type("System.RuntimeMethodHandle")
                 .expect("System.RuntimeMethodHandle must exist");
-            let instance = vm_try!(ctx.new_object(rmh.clone()));
+            let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rmh.clone()));
             instance
                 .instance_storage
                 .field::<ObjectRef<'gc>>(rmh, "_value")
@@ -135,7 +135,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let mut pi_objs = Vec::with_capacity(param_count);
             for i in 0..param_count {
-                let pi_obj = vm_try!(ctx.new_object(pi_type.clone()));
+                let pi_obj = dotnet_vm_ops::vm_try!(ctx.new_object(pi_type.clone()));
                 let pi_ref = ObjectRef::new(gc, HeapStorage::Obj(pi_obj));
                 ctx.register_new_object(&pi_ref);
                 let pi_type_inner = pi_type.clone();
@@ -158,14 +158,16 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .loader()
                 .corlib_type("System.Reflection.ParameterInfo")
                 .expect("System.Reflection.ParameterInfo not found");
-            let array_obj = vm_try!(ctx.new_vector(array_element_type.into(), param_count));
+            let array_obj =
+                dotnet_vm_ops::vm_try!(ctx.new_vector(array_element_type.into(), param_count));
             let array_ref = ObjectRef::new(gc, HeapStorage::Vec(array_obj));
             ctx.register_new_object(&array_ref);
 
             for (i, pi_ref) in pi_objs.into_iter().enumerate() {
                 let elem_type = array_ref.as_vector(|v| v.element.clone());
-                let cts_val: CTSValue<'gc> =
-                    vm_try!(ctx.new_cts_value(&elem_type, StackValue::ObjectRef(pi_ref)));
+                let cts_val: CTSValue<'gc> = dotnet_vm_ops::vm_try!(
+                    ctx.new_cts_value(&elem_type, StackValue::ObjectRef(pi_ref))
+                );
                 array_ref.as_vector_mut(gc, |v| {
                     let elem_size = v.layout.element_layout.size();
                     let start = (elem_size * i).as_usize();
@@ -229,7 +231,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let (method, lookup) = crate::common::resolve_runtime_method(ctx, method_obj);
 
-            let instance = vm_try!(ctx.new_object(method.parent.clone()));
+            let instance = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
             let this_obj = ObjectRef::new(gc, HeapStorage::Obj(instance));
             ctx.register_new_object(&this_obj);
 

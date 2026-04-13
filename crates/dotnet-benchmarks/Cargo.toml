@@ -23,6 +23,8 @@ fuzzing = ["dotnet-vm/fuzzing"]
 bench-instrumentation = ["dotnet-vm/bench-instrumentation"]
 # Enables heap diagnostics in benchmark runs for analysis-only scenarios.
 heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
+# Enables lock-order/deadlock diagnostics for benchmark stress/debug sessions.
+deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
 # Enables eval-stack growth-policy prototype benchmarking.
 segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
 # Bench-only switch for vm jump-table dispatch variant.

@@ -1,4 +1,4 @@
-use crate::{UnsafeIntrinsicHost, vm_try};
+use crate::UnsafeIntrinsicHost;
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -64,7 +64,7 @@ pub fn intrinsic_marshal_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
         let type_obj = ctx.pop_obj();
         ctx.unsafe_resolve_runtime_type(type_obj)
     };
-    let layout = vm_try!(ctx.unsafe_type_layout(concrete_type));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(concrete_type));
     ctx.push_i32(layout.size().as_usize() as i32);
     StepResult::Continue
 }
@@ -87,7 +87,7 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
         let type_obj = ctx.pop_obj();
         ctx.unsafe_resolve_runtime_type(type_obj)
     };
-    let layout = vm_try!(ctx.unsafe_type_layout(concrete_type.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(concrete_type.clone()));
 
     if let LayoutManager::Field(flm) = &*layout {
         if let Some(field) = flm.get_field_by_name(&field_name) {
@@ -99,8 +99,8 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     }
 
     if concrete_type.is_class(ctx.loader().as_ref()) {
-        let td = vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
-        let flm = vm_try!(ctx.instance_field_layout(td));
+        let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
+        let flm = dotnet_vm_ops::vm_try!(ctx.instance_field_layout(td));
         if let Some(field) = flm.get_field_by_name(&field_name) {
             ctx.push_isize(field.position.as_usize() as isize);
             return StepResult::Continue;

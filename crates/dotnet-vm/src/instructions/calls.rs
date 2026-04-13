@@ -49,35 +49,33 @@ pub fn callvirt<
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for virtual calls
-    // Note: We still need to pop args to extract this_type before dispatch
+    // Only inspect `this` from the current stack state; avoid pop/push argument churn.
 
     // Determine number of arguments to extract this_type
-    let (base_method, _) = vm_try!(
+    let (base_method, _) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
     let num_args = 1 + base_method.method().signature.parameters.len();
-    let args = ctx.pop_multiple(num_args);
+    let this_value = ctx.peek_stack_at(num_args - 1);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
-    let this_value = args[0].clone();
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
+            // Preserve previous callvirt semantics: arguments are consumed before an early throw.
+            let _ = ctx.pop_multiple(num_args);
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => {
-            vm_try!(ctx.current_context().get_heap_description(o))
+            dotnet_vm_ops::vm_try!(ctx.current_context().get_heap_description(o))
         }
         StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
+            let _ = ctx.pop_multiple(num_args);
             return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
         }
     };
 
-    // Push arguments back and dispatch
-    for a in args {
-        ctx.push(a);
-    }
     ctx.unified_dispatch(param0, Some(this_type), None)
 }
 
@@ -96,30 +94,29 @@ pub fn callvirt_tail<
 ) -> StepResult {
     // Tail-prefixed callvirt: extract runtime this type (and perform null check), then request
     // tail dispatch.
-    let (base_method, _) = vm_try!(
+    let (base_method, _) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
     let num_args = 1 + base_method.method().signature.parameters.len();
-    let args = ctx.pop_multiple(num_args);
+    let this_value = ctx.peek_stack_at(num_args - 1);
 
-    let this_value = args[0].clone();
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
+            // Preserve previous callvirt semantics: arguments are consumed before an early throw.
+            let _ = ctx.pop_multiple(num_args);
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => {
-            vm_try!(ctx.current_context().get_heap_description(o))
+            dotnet_vm_ops::vm_try!(ctx.current_context().get_heap_description(o))
         }
         StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
+            let _ = ctx.pop_multiple(num_args);
             return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
         }
     };
 
-    for a in args {
-        ctx.push(a);
-    }
     ctx.unified_dispatch_tail(param0, Some(this_type), None)
 }
 
@@ -133,20 +130,22 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
     // because the constrained prefix should only be on callvirt
     // however, this appears to be used for static interface dispatch?
 
-    let constraint_type = vm_try!(ctx.current_context().make_concrete(constraint));
-    let (method, lookup) = vm_try!(
+    let constraint_type = dotnet_vm_ops::vm_try!(ctx.current_context().make_concrete(constraint));
+    let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(source, &ctx.current_context())
     );
 
-    let td: TypeDescription = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let td: TypeDescription =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
-        let target = vm_try!(
-            ctx.current_context()
-                .locate_method(o.implementation, &lookup, None)
-        );
-        let declaration = vm_try!(ctx.current_context().locate_method(
+        let target = dotnet_vm_ops::vm_try!(ctx.current_context().locate_method(
+            o.implementation,
+            &lookup,
+            None
+        ));
+        let declaration = dotnet_vm_ops::vm_try!(ctx.current_context().locate_method(
             o.declaration,
             &lookup,
             None
@@ -193,7 +192,7 @@ pub fn callvirt_constrained<
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    let (base_method, lookup) = vm_try!(
+    let (base_method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(source, &ctx.current_context())
     );
@@ -202,14 +201,14 @@ pub fn callvirt_constrained<
     let num_args = 1 + base_method.method().signature.parameters.len();
     let mut args = ctx.pop_multiple(num_args);
 
-    let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
-    let constraint_type: TypeDescription = vm_try!(
+    let constraint_type_source = dotnet_vm_ops::vm_try!(ctx.make_concrete(constraint));
+    let constraint_type: TypeDescription = dotnet_vm_ops::vm_try!(
         ctx.loader()
             .find_concrete_type(constraint_type_source.clone())
     );
 
     // Determine dispatch strategy based on constraint type
-    let method = if vm_try!(
+    let method = if dotnet_vm_ops::vm_try!(
         constraint_type
             .clone()
             .is_value_type(&ctx.current_context())
@@ -233,8 +232,8 @@ pub fn callvirt_constrained<
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
 
-            let constraint_concrete = vm_try!(ctx.make_concrete(constraint));
-            let layout = vm_try!(type_layout(
+            let constraint_concrete = dotnet_vm_ops::vm_try!(ctx.make_concrete(constraint));
+            let layout = dotnet_vm_ops::vm_try!(type_layout(
                 constraint_concrete.clone(),
                 &ctx.current_context()
             ));
@@ -256,9 +255,9 @@ pub fn callvirt_constrained<
                 }
             };
 
-            let boxed = vm_try!(ctx.box_value(&constraint_type_source, value));
+            let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&constraint_type_source, value));
             args[0] = StackValue::ObjectRef(boxed);
-            let this_type = vm_try!(ctx.get_heap_description(boxed));
+            let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(boxed));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
@@ -326,7 +325,7 @@ pub fn callvirt_constrained<
             Ok(impl_method)
         } else {
             // Fall back to normal virtual dispatch
-            let this_type = vm_try!(ctx.get_heap_description(obj_ref));
+            let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj_ref));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
@@ -336,7 +335,7 @@ pub fn callvirt_constrained<
         }
     };
 
-    let method = vm_try!(method);
+    let method = dotnet_vm_ops::vm_try!(method);
 
     for arg in args {
         ctx.push(arg);

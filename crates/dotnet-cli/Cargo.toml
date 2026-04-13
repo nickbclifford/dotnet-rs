@@ -21,6 +21,8 @@ validation-all = [
 fuzzing = ["dotnet-vm/fuzzing"]
 # Forwards heap diagnostics mode from vm/runtime-memory.
 heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
+# Forwards deadlock detection diagnostics from vm multithreading runtime.
+deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
 # Forwards eval-stack growth-policy prototype from vm-data stack backend.
 segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
 

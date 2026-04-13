@@ -3,7 +3,7 @@ use crate::{
     error::{CompareExchangeError, MemoryAccessError},
     stack::{
         context::VesContext,
-        ops::{BaseVesInternals, RawMemoryOps, StaticsOps},
+        ops::{RawMemoryOps, StaticsOps, VesInternals},
     },
     threading::ThreadManagerOps,
 };

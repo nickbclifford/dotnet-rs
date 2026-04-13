@@ -228,7 +228,9 @@ pub fn intrinsic_type_get_is_value_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .find_concrete_type(target_ct)
         .expect("Type must exist for get_IsValueType");
     let empty_lookup = ctx.reflection_empty_generics();
-    let value = vm_try!(ctx.reflection_is_value_type_with_lookup(target_desc, &empty_lookup));
+    let value = dotnet_vm_ops::vm_try!(
+        ctx.reflection_is_value_type_with_lookup(target_desc, &empty_lookup)
+    );
     ctx.push_i32(value as i32);
     StepResult::Continue
 }
@@ -317,8 +319,8 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(ctx.new_object(rth.clone()));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
     instance
         .instance_storage
         .field::<ObjectRef<'gc>>(rth, "_value")
@@ -445,7 +447,7 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
             match ctx.loader().find_concrete_type(ct) {
                 Ok(td) => RuntimeType::Type(td),
                 Err(_) => {
-                    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+                    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
                     return populate_reflection_array(ctx, vec![], type_type.into());
                 }
             }
@@ -492,7 +494,7 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     }
 
-    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
     populate_reflection_array(ctx, interfaces, type_type.into())
 }
 
@@ -802,9 +804,9 @@ pub fn handle_get_generic_arguments<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Yield;
     }
 
-    let type_type_td = vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
     let type_type = ConcreteType::from(type_type_td);
-    let mut vector = vm_try!(ctx.new_vector(type_type, args.len()));
+    let mut vector = dotnet_vm_ops::vm_try!(ctx.new_vector(type_type, args.len()));
     for (i, (arg, chunk)) in args
         .into_iter()
         .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
@@ -828,8 +830,8 @@ pub fn handle_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + MemoryOps
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(ctx.new_object(rth.clone()));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push(StackValue::ValueType(instance));

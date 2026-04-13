@@ -16,19 +16,15 @@ use dotnet_vm_ops::{
 
 impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn throw_by_name(&mut self, name: &str) -> StepResult {
-        self.throw_by_name_with_message(name, "")
-    }
-
-    #[inline]
     fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult {
         let gc = self.gc;
-        let exception_type = vm_try!(self.shared.loader.corlib_type(name));
-        let instance = vm_try!(self.new_object(exception_type));
+        let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
+        let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
 
-        let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
+        let base_exception_type =
+            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));
         if !message.is_empty() {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);
@@ -57,12 +53,13 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         inner: ObjectRef<'gc>,
     ) -> StepResult {
         let gc = self.gc;
-        let exception_type = vm_try!(self.shared.loader.corlib_type(name));
-        let instance = vm_try!(self.new_object(exception_type));
+        let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
+        let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
 
-        let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
+        let base_exception_type =
+            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));
         if !message.is_empty() {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);

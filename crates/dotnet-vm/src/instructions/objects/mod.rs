@@ -1,13 +1,14 @@
 use crate::{
     ExceptionOps, StepResult,
     instructions::NULL_REF_MSG,
-    layout::{LayoutFactory, type_layout},
+    layout::{VmLayoutFactory, type_layout},
     resolution::ValueResolution,
-    stack::ops::{StackOps, VesOps},
+    stack::ops::{EvalStackOps, ResolutionOps, StackOps, VesOps},
 };
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
+const OBJECT_IO_INLINE_BUFFER_SIZE: usize = 64;
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
@@ -65,7 +66,7 @@ pub(crate) fn get_ptr_context<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
 
 #[dotnet_instruction(NewObject(ctor))]
 pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepResult {
-    let (mut method, lookup) = vm_try!(
+    let (mut method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context())
     );
@@ -86,7 +87,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 )
             };
 
-            let concrete = vm_try!(concrete);
+            let concrete = dotnet_vm_ops::vm_try!(concrete);
             if let BaseType::Array(element, shape) = concrete.get() {
                 let rank = shape.rank;
                 let mut dims: Vec<usize> = Vec::with_capacity(rank);
@@ -108,9 +109,9 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 let total_len: usize = dims.iter().product();
 
                 let res_ctx = ctx.current_context();
-                let elem_type = vm_try!(res_ctx.normalize_type(element.clone()));
+                let elem_type = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(element.clone()));
 
-                let layout = vm_try!(LayoutFactory::create_array_layout(
+                let layout = dotnet_vm_ops::vm_try!(VmLayoutFactory::create_array_layout(
                     elem_type.clone(),
                     total_len,
                     &res_ctx
@@ -186,7 +187,8 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         StepResult::Continue
     } else {
         if ctx.is_intrinsic_cached(method.clone()) {
-            let is_value_type = vm_try!(ctx.resolver().is_value_type(method.parent.clone()));
+            let is_value_type =
+                dotnet_vm_ops::vm_try!(ctx.resolver().is_value_type(method.parent.clone()));
             if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
                 let arg_count = method.method().signature.parameters.len();
                 let args = ctx.pop_multiple(arg_count);
@@ -194,7 +196,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 let res_ctx = ctx
                     .current_context()
                     .for_type_with_generics(method.parent.clone(), &lookup);
-                let instance = vm_try!(res_ctx.new_object(method.parent.clone()));
+                let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(method.parent.clone()));
 
                 ctx.push_value_type(instance);
                 let this_slot = ctx.top_of_stack() - 1;
@@ -247,11 +249,11 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         let res_ctx = ctx
             .current_context()
             .for_type_with_generics(object_type.clone(), &lookup);
-        let instance = vm_try!(res_ctx.new_object(object_type));
+        let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(object_type));
 
-        vm_try!(ctx.constructor_frame(
+        dotnet_vm_ops::vm_try!(ctx.constructor_frame(
             instance,
-            vm_try!(ctx.shared().caches.get_method_info(
+            dotnet_vm_ops::vm_try!(ctx.shared().caches.get_method_info(
                 method,
                 &lookup,
                 ctx.shared().clone()
@@ -275,19 +277,28 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         Err(e) => return e,
     };
 
-    let load_type = vm_try!(ctx.make_concrete(param0));
+    let load_type = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
+    let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
+    let mut heap_buffer = Vec::new();
+    let size = layout.size().as_usize();
 
-    let mut source_vec = vec![0u8; layout.size().as_usize()];
-    if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, &mut source_vec) } {
+    let source_bytes: &mut [u8] = if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
+        &mut inline_buffer[..size]
+    } else {
+        heap_buffer.resize(size, 0);
+        heap_buffer.as_mut_slice()
+    };
+
+    if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
         return ctx
             .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
 
-    let value = vm_try!(res_ctx.read_cts_value(
+    let value = dotnet_vm_ops::vm_try!(res_ctx.read_cts_value(
         &load_type,
-        &source_vec,
+        source_bytes,
         ctx.gc_with_token(&ctx.no_active_borrows_token())
     ))
     .into_stack();
@@ -305,14 +316,14 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    let concrete_t = vm_try!(ctx.make_concrete(param0));
+    let concrete_t = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
     let (origin, offset) = match get_ptr_context(ctx, &addr) {
         Ok(v) => v,
         Err(e) => return e,
     };
 
     let res_ctx = ctx.current_context();
-    let layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     if layout.is_or_contains_refs() {
         if let Err(e) = unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
@@ -323,10 +334,18 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
             );
         }
     } else {
-        let mut bytes = vec![0u8; layout.size().as_usize()];
-        vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
+        let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
+        let mut heap_buffer = Vec::new();
+        let size = layout.size().as_usize();
+        let bytes: &mut [u8] = if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
+            &mut inline_buffer[..size]
+        } else {
+            heap_buffer.resize(size, 0);
+            heap_buffer.as_mut_slice()
+        };
+        dotnet_vm_ops::vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(bytes);
 
-        if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &bytes) } {
+        if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, bytes) } {
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",
                 ACCESS_VIOLATION_MSG,
@@ -349,12 +368,21 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
         Err(e) => return e,
     };
 
-    let ct = vm_try!(ctx.make_concrete(param0));
+    let ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = vm_try!(type_layout(ct.clone(), &res_ctx));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(ct.clone(), &res_ctx));
+    let inline_zeros = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
+    let mut heap_zeros = Vec::new();
+    let size = layout.size().as_usize();
 
-    let zero_bytes = vec![0u8; layout.size().as_usize()];
-    if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &zero_bytes) } {
+    let zero_bytes: &[u8] = if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
+        &inline_zeros[..size]
+    } else {
+        heap_zeros.resize(size, 0);
+        heap_zeros.as_slice()
+    };
+
+    if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, zero_bytes) } {
         return ctx
             .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
@@ -362,10 +390,13 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
 }
 
 #[dotnet_instruction(Sizeof(param0))]
-pub fn sizeof<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let target = vm_try!(ctx.make_concrete(param0));
+pub fn sizeof<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc>>(
+    ctx: &mut T,
+    param0: &MethodType,
+) -> StepResult {
+    let target = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = vm_try!(type_layout(target, &res_ctx));
+    let layout = dotnet_vm_ops::vm_try!(type_layout(target, &res_ctx));
     ctx.push(StackValue::Int32(layout.size().as_usize() as i32));
     StepResult::Continue
 }

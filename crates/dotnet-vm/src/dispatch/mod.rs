@@ -5,6 +5,7 @@
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
     ExceptionState, ResolutionContext, StackSlotIndex, StepResult,
+    error::ExecutionError,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
@@ -46,13 +47,26 @@ fn invalid_ip_step_result(ip: usize) -> StepResult {
     ))
 }
 
-vm_cold_panic!(fn panic_intrinsic_not_found(method: &MethodDescription) => "intrinsic not found: {:?}", method);
-vm_cold_panic!(
-    fn panic_no_body_in_method(method: &MethodDescription) =>
-        "no body in executing method: {}.{}",
-        method.parent.type_name(),
-        method.method().name
-);
+#[cold]
+#[inline(never)]
+fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
+    StepResult::Error(
+        ExecutionError::NotImplemented(format!("intrinsic not found: {:?}", method)).into(),
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn no_body_in_method_step_result(method: &MethodDescription) -> StepResult {
+    StepResult::Error(
+        ExecutionError::NotImplemented(format!(
+            "no body in executing method: {}.{}",
+            method.parent.type_name(),
+            method.method().name
+        ))
+        .into(),
+    )
+}
 
 fn dispatch_safe_point_poll_interval() -> usize {
     static POLL_INTERVAL: OnceLock<usize> = OnceLock::new();
@@ -458,7 +472,7 @@ impl<'gc> ExecutionEngine<'gc> {
             dotnet_pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
         } else {
             if method.method().internal_call {
-                panic_intrinsic_not_found(&method);
+                return intrinsic_not_found_step_result(&method);
             }
 
             if method.method().body.is_none() {
@@ -470,11 +484,15 @@ impl<'gc> ExecutionEngine<'gc> {
                     return result;
                 }
 
-                panic_no_body_in_method(&method);
+                return no_body_in_method_step_result(&method);
             }
 
-            vm_try!(ctx.call_frame(
-                vm_try!(ctx.shared().caches.get_method_info(method, &lookup, ctx.shared().clone())),
+            dotnet_vm_ops::vm_try!(ctx.call_frame(
+                dotnet_vm_ops::vm_try!(ctx.shared().caches.get_method_info(
+                    method,
+                    &lookup,
+                    ctx.shared().clone()
+                )),
                 lookup,
             ));
             StepResult::FramePushed

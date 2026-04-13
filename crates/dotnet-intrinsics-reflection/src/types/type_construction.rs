@@ -60,12 +60,14 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
         .expect("Type must exist for Activator.CreateInstance");
 
     let empty_lookup = ctx.reflection_empty_generics();
-    if vm_try!(ctx.reflection_is_value_type_with_lookup(target_td.clone(), &empty_lookup)) {
-        let instance = vm_try!(ctx.new_object(target_td));
+    if dotnet_vm_ops::vm_try!(
+        ctx.reflection_is_value_type_with_lookup(target_td.clone(), &empty_lookup)
+    ) {
+        let instance = dotnet_vm_ops::vm_try!(ctx.new_object(target_td));
         ctx.push_value_type(instance);
         StepResult::Continue
     } else {
-        let instance = vm_try!(ctx.new_object(target_td.clone()));
+        let instance = dotnet_vm_ops::vm_try!(ctx.new_object(target_td.clone()));
         let mut new_lookup = GenericLookup::default();
         if let dotnetdll::prelude::BaseType::Type {
             source: TypeSource::Generic { parameters, .. },
@@ -84,8 +86,10 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
                     MethodMemberIndex::Method(idx),
                 );
 
-                let info = vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-                vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
+                let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
+                dotnet_vm_ops::vm_try!(
+                    ctx.reflection_constructor_frame(instance, info, new_lookup)
+                );
                 return StepResult::FramePushed;
             }
         }
@@ -191,7 +195,8 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
         .collect();
     let new_lookup = GenericLookup::new(type_generics_concrete);
 
-    let instance = vm_try!(ctx.reflection_new_object_with_lookup(td.clone(), &new_lookup));
+    let instance =
+        dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(td.clone(), &new_lookup));
 
     for (idx, m) in td.definition().methods.iter().enumerate() {
         if m.runtime_special_name
@@ -206,8 +211,8 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
                 MethodMemberIndex::Method(idx),
             );
 
-            let info = vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-            vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
+            let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
+            dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
             return StepResult::FramePushed;
         }
     }

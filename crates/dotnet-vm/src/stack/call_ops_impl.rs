@@ -38,14 +38,21 @@ vm_cold_panic!(
         "Not enough values on stack for call: height={}, args={} in {:?}",
         frame_height, num_args, source
 );
-vm_cold_panic!(
-    fn panic_no_body_in_executing_method(method: &MethodDescription) =>
-        "no body in executing method: {}.{}",
-        method.parent.type_name(),
-        method.method().name
-);
 vm_cold_panic!(fn panic_tail_call_requires_current_frame() => "tail call requires a current frame");
 vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current frame");
+
+#[cold]
+#[inline(never)]
+fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepResult {
+    StepResult::Error(
+        crate::error::ExecutionError::NotImplemented(format!(
+            "no body in executing method: {}.{}",
+            method.parent.type_name(),
+            method.method().name
+        ))
+        .into(),
+    )
+}
 
 impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
     fn constructor_frame(
@@ -223,8 +230,9 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         // static method calls, instance calls for value types, and constructor calls.
         if !method.parent.before_field_init() {
             let is_static = !method.method().signature.instance;
-            let is_value_type =
-                vm_try!(method.parent.clone().is_value_type(&self.current_context()));
+            let is_value_type = dotnet_vm_ops::vm_try!(
+                method.parent.clone().is_value_type(&self.current_context())
+            );
             let is_constructor = method.method().name == ".ctor";
 
             if is_static || is_value_type || is_constructor {
@@ -257,7 +265,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                     return result;
                 }
 
-                panic_no_body_in_executing_method(&method);
+                return no_body_in_executing_method_step_result(&method);
             }
 
             let info =
@@ -269,7 +277,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                     Ok(v) => v,
                     Err(e) => return StepResult::Error(e.into()),
                 };
-            vm_try!(self.call_frame(info, lookup));
+            dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }
     }
@@ -453,7 +461,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let arg_count = info.signature.instance as usize + info.signature.parameters.len();
         if !self.should_honor_tail_call(arg_count) {
-            vm_try!(self.call_frame(info, lookup));
+            dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
             return StepResult::FramePushed;
         }
 
@@ -501,7 +509,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         *self.call_args_buffer = args;
 
-        vm_try!(self.call_frame(info, lookup));
+        dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
     }
 
@@ -613,7 +621,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             Err(e) => return StepResult::Error(e.into()),
         };
 
-        vm_try!(self.call_frame(info, lookup));
+        dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
     }
 }

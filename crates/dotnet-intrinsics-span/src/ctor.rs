@@ -1,4 +1,4 @@
-use crate::{SpanIntrinsicHost, helpers::*, vm_try};
+use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -29,9 +29,10 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
     }
 
     let element_type = &generics.type_generics[0];
-    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
-    let element_layout = vm_try!(ctx.span_type_layout(element_type.clone()));
+    let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
 
     // Span<T>(void*, int) is only valid for types that do not contain references
     if element_layout.is_or_contains_refs() {
@@ -86,7 +87,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
     };
 
     let span_type = this_ptr.inner_type();
-    let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
+    let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::not_implemented("Expected Field layout for Span");
@@ -110,7 +111,8 @@ pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
     let this_ptr = ctx.pop_managed_ptr();
 
     let element_type = &generics.type_generics[0];
-    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
     let (managed, length) = match array {
         StackValue::ObjectRef(ObjectRef(None)) => {
@@ -159,7 +161,7 @@ pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
     };
 
     let span_type = this_ptr.inner_type();
-    let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
+    let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::not_implemented("Expected Field layout for Span");
     };

@@ -1,4 +1,4 @@
-use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, marshal::offset_ptr, ptr_info, vm_try};
+use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, marshal::offset_ptr, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
@@ -55,7 +55,7 @@ pub fn intrinsic_unsafe_null_ref<'gc, T: TypedStackOps<'gc> + LoaderOps>(
             "Unsafe.NullRef<T> requires one generic argument".to_string(),
         );
     };
-    let target_type = vm_try!(ctx.loader().find_concrete_type(target));
+    let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target));
     ctx.push_ptr(std::ptr::null_mut(), target_type, false, None, None);
     StepResult::Continue
 }
@@ -82,7 +82,7 @@ pub fn intrinsic_unsafe_add<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -142,7 +142,7 @@ pub fn intrinsic_unsafe_subtract<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -227,14 +227,14 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let src_type_gen = generics.method_generics[0].clone();
     let dest_type_gen = generics.method_generics[1].clone();
 
-    let src_layout = vm_try!(ctx.unsafe_type_layout(src_type_gen));
-    let dest_layout = vm_try!(ctx.unsafe_type_layout(dest_type_gen));
+    let src_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(src_type_gen));
+    let dest_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(dest_type_gen));
 
     // Safety Check: Casting ref TFrom to ref TTo
     // TTo must be compatible with TFrom's memory layout regarding References
-    vm_try!(ctx.unsafe_check_read_safety(&dest_layout, Some(&src_layout), 0));
+    dotnet_vm_ops::vm_try!(ctx.unsafe_check_read_safety(&dest_layout, Some(&src_layout), 0));
 
-    let target_type = vm_try!(
+    let target_type = dotnet_vm_ops::vm_try!(
         ctx.loader()
             .find_concrete_type(generics.method_generics[1].clone())
     );
@@ -281,8 +281,10 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
         );
     }
 
-    let src_layout = vm_try!(ctx.unsafe_type_layout(generics.method_generics[0].clone()));
-    let dst_layout = vm_try!(ctx.unsafe_type_layout(generics.method_generics[1].clone()));
+    let src_layout =
+        dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(generics.method_generics[0].clone()));
+    let dst_layout =
+        dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(generics.method_generics[1].clone()));
     let src_size = src_layout.size().as_usize();
     let dst_size = dst_layout.size().as_usize();
     if src_size != dst_size || src_size > 16 {
@@ -481,9 +483,9 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type_gen = generics.method_generics[0].clone();
-    let dest_layout = vm_try!(ctx.unsafe_type_layout(target_type_gen.clone()));
+    let dest_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target_type_gen.clone()));
 
-    let target_type = vm_try!(ctx.loader().find_concrete_type(target_type_gen));
+    let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type_gen));
 
     let val = ctx.pop();
     let (ptr, pinned, origin, offset_base) = match val {
@@ -509,7 +511,11 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     if let Some(base_addr) = base_addr {
         let ptr_addr = ptr as usize;
         let offset = ptr_addr.wrapping_sub(base_addr);
-        vm_try!(ctx.unsafe_check_read_safety(&dest_layout, src_layout_obj.as_ref(), offset));
+        dotnet_vm_ops::vm_try!(ctx.unsafe_check_read_safety(
+            &dest_layout,
+            src_layout_obj.as_ref(),
+            offset
+        ));
     } else if dest_layout.is_or_contains_refs() {
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
@@ -544,7 +550,7 @@ pub fn intrinsic_unsafe_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
     ctx.push_i32(layout.size().as_usize() as i32);
     StepResult::Continue
 }
@@ -583,16 +589,17 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
     };
 
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
 
-    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
+    let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
     match unsafe { ctx.read_unaligned(origin, offset, &layout, Some(target_type)) } {
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
             // because read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(m) = v {
-                let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
+                let target_type =
+                    dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
                 let m = m.with_inner_type(target_type);
                 ctx.push(StackValue::ManagedPtr(m.into()));
             } else {
@@ -621,7 +628,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
     let value = ctx.pop();
 
     let dest = ctx.pop();

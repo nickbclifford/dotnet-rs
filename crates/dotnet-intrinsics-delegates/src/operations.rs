@@ -131,7 +131,10 @@ pub fn delegate_equals<'gc, T: DelegateEqualsHost<'gc>>(
     }
 
     // Check if other is a delegate
-    if !is_delegate_type(ctx, crate::vm_try!(ctx.get_heap_description(other_obj))) {
+    if !is_delegate_type(
+        ctx,
+        dotnet_vm_ops::vm_try!(ctx.get_heap_description(other_obj)),
+    ) {
         ctx.push_i32(0);
         return StepResult::Continue;
     }
@@ -249,9 +252,9 @@ pub fn delegate_combine<'gc, T: DelegateEqualsHost<'gc>>(
     let new_delegate = ctx.clone_object(a);
 
     // Create new array for targets
-    let delegate_type = crate::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+    let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
     let delegate_concrete = ConcreteType::from(delegate_type);
-    let array_v = crate::vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
+    let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
     let array_obj = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Vec(array_v),
@@ -265,7 +268,8 @@ pub fn delegate_combine<'gc, T: DelegateEqualsHost<'gc>>(
     });
 
     // Set 'targets' field on new_delegate
-    let multicast_type = crate::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
+    let multicast_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
     new_delegate.as_object_mut(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
         |instance| {
@@ -339,9 +343,9 @@ pub fn delegate_remove<'gc, T: DelegateEqualsHost<'gc>>(
         } else {
             // Create new MulticastDelegate
             let new_delegate = ctx.clone_object(source);
-            let delegate_type = crate::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+            let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
             let delegate_concrete = ConcreteType::from(delegate_type);
-            let array_v = crate::vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
+            let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
             let array_obj = ObjectRef::new(
                 ctx.gc_with_token(&ctx.no_active_borrows_token()),
                 HeapStorage::Vec(array_v),
@@ -355,7 +359,7 @@ pub fn delegate_remove<'gc, T: DelegateEqualsHost<'gc>>(
             });
 
             let multicast_type =
-                crate::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
+                dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
             new_delegate.as_object_mut(
                 ctx.gc_with_token(&ctx.no_active_borrows_token()),
                 |instance| {

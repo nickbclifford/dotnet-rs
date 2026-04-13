@@ -49,13 +49,6 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn dup(&mut self) {
-        let val = self.pop();
-        self.push(val.clone());
-        self.push(val);
-    }
-
-    #[inline]
     fn peek(&self) -> Option<StackValue<'gc>> {
         self.evaluation_stack.stack.last().cloned()
     }
@@ -101,13 +94,6 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
         }
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.locals + index, value);
-    }
-
-    #[inline]
-    fn get_local_address(&self, index: crate::LocalIndex) -> std::ptr::NonNull<u8> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.locals + index)
     }
 
     #[inline]

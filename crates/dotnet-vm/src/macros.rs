@@ -189,16 +189,6 @@ macro_rules! vm_trace_heap_snapshot {
     };
 }
 
-#[macro_export]
-macro_rules! vm_try {
-    ($expr:expr) => {
-        match $expr {
-            Ok(v) => v,
-            Err(e) => return $crate::StepResult::Error($crate::error::VmError::from(e)),
-        }
-    };
-}
-
 /// Branch prediction hint wrappers for stable toolchains.
 ///
 /// These call through `branch_hint` shims that keep the uncommon side in a

@@ -32,13 +32,17 @@ pub fn intrinsic_get_stack_traces_deep_copy<
         Ok(v) => v,
         Err(e) => return e,
     };
-    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout) });
+    dotnet_vm_ops::vm_try!(unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
+    });
 
     let (origin, offset) = match get_ptr_info(ctx, &dynamic_method_array_ptr) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout) });
+    dotnet_vm_ops::vm_try!(unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
+    });
 
     StepResult::Continue
 }
@@ -71,12 +75,12 @@ pub fn intrinsic_exception_capture_dispatch_state<
 ) -> StepResult {
     let _this = ctx.pop_obj();
 
-    let dispatch_state_type = vm_try!(
+    let dispatch_state_type = dotnet_vm_ops::vm_try!(
         ctx.loader()
             .corlib_type("System.Exception/DispatchState")
             .or_else(|_| ctx.loader().corlib_type("System.Exception+DispatchState"))
     );
-    let dispatch_state = vm_try!(ctx.new_object(dispatch_state_type));
+    let dispatch_state = dotnet_vm_ops::vm_try!(ctx.new_object(dispatch_state_type));
     ctx.push_value_type(dispatch_state);
     StepResult::Continue
 }

@@ -32,7 +32,6 @@ pub trait EvalStackOps<'gc> {
     fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError>;
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
-    fn dup(&mut self);
     fn peek(&self) -> Option<StackValue<'gc>>;
     fn peek_stack(&self) -> StackValue<'gc>;
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
@@ -112,7 +111,6 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
 pub trait LocalOps<'gc> {
     fn get_local(&self, index: LocalIndex) -> StackValue<'gc>;
     fn set_local(&mut self, index: LocalIndex, value: StackValue<'gc>);
-    fn get_local_address(&self, index: LocalIndex) -> std::ptr::NonNull<u8>;
     fn get_local_info_for_managed_ptr(&self, index: LocalIndex) -> (std::ptr::NonNull<u8>, bool);
 }
 
@@ -135,7 +133,6 @@ impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized>
 }
 
 pub trait ExceptionOps<'gc> {
-    fn throw_by_name(&mut self, name: &str) -> StepResult;
     fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult;
     fn throw_by_name_with_inner(
         &mut self,
@@ -432,7 +429,6 @@ pub trait VesInternals<'gc> {
 
     fn unwind_frame(&mut self);
 
-    fn evaluation_stack(&self) -> &crate::EvaluationStack<'gc>;
     fn evaluation_stack_mut(&mut self) -> &mut crate::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &crate::FrameStack<'gc>;
     fn frame_stack_mut(&mut self) -> &mut crate::FrameStack<'gc>;

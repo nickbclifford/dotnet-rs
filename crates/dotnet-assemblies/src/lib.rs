@@ -15,6 +15,5 @@ mod validation_tests;
 #[cfg(test)]
 mod version_tests;
 
-pub use ancestors::Ancestor;
 pub use loader::{AssemblyLoader, SUPPORT_ASSEMBLY};
 pub use resolution::{find_dotnet_app_path, find_dotnet_sdk_path};

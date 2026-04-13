@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext,
-    resolver::{ResolverService, VmResolverCaches, VmResolverLayout},
+    resolver::{VmResolverCaches, VmResolverLayout, VmResolverService},
 };
 
 pub use dotnet_runtime_resolver::resolution::{TypeResolutionExt, ValueResolution};
@@ -22,7 +22,7 @@ impl dotnet_runtime_resolver::ResolverProvider for ResolutionContext<'_> {
     fn resolver_service(
         &self,
     ) -> &dotnet_runtime_resolver::ResolverService<Self::Caches, Self::Layout> {
-        let resolver: &ResolverService = self.resolver();
+        let resolver: &VmResolverService = self.resolver();
         resolver
     }
 }

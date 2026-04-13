@@ -38,7 +38,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         std::mem::size_of::<usize>(),
         "ObjectRef must be pointer-sized for atomic pointer loads"
     );
-    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+    let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
         ctx,
         &method,
         generics,
@@ -184,7 +184,7 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
     );
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
-    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+    let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
         ctx,
         &method,
         generics,

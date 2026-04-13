@@ -14,7 +14,7 @@ pub fn ldftn<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + Typed
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
-    let (method, lookup) = vm_try!(
+    let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
@@ -41,15 +41,15 @@ pub fn ldvirtftn<
         );
     }
 
-    let (base_method, lookup) = vm_try!(
+    let (base_method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
 
-    let this_type = vm_try!(ctx.get_heap_description(obj));
+    let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj));
 
     // Virtual dispatch
-    let resolved_method = vm_try!(ctx.resolver().resolve_virtual_method(
+    let resolved_method = dotnet_vm_ops::vm_try!(ctx.resolver().resolve_virtual_method(
         base_method,
         this_type,
         &lookup,
@@ -77,8 +77,8 @@ pub fn ldtoken_type<
     let rt_obj = ctx.get_runtime_type(runtime_type);
 
     let res_ctx = ctx.current_context();
-    let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(res_ctx.new_object(rth.clone()));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rth.clone()));
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push(StackValue::ValueType(instance));
@@ -93,7 +93,7 @@ pub fn ldtoken_method<
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
-    let (method, lookup) = vm_try!(
+    let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
@@ -101,8 +101,8 @@ pub fn ldtoken_method<
     let method_obj = ctx.get_runtime_method_obj(method, lookup);
 
     let res_ctx = ctx.current_context();
-    let rmh = vm_try!(ctx.loader().corlib_type("System.RuntimeMethodHandle"));
-    let instance = vm_try!(res_ctx.new_object(rmh.clone()));
+    let rmh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeMethodHandle"));
+    let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rmh.clone()));
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
     ctx.push(StackValue::ValueType(instance));
@@ -117,13 +117,13 @@ pub fn ldtoken_field<
     ctx: &mut T,
     param0: &FieldSource,
 ) -> StepResult {
-    let (field, lookup) = vm_try!(ctx.locate_field(*param0));
+    let (field, lookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
 
     let field_obj = ctx.get_runtime_field_obj(field, lookup);
 
     let res_ctx = ctx.current_context();
-    let rfh = vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
-    let instance = vm_try!(res_ctx.new_object(rfh.clone()));
+    let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
+    let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rfh.clone()));
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
     ctx.push(StackValue::ValueType(instance));

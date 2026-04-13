@@ -1,4 +1,4 @@
-use crate::{SpanIntrinsicHost, helpers::*, vm_try};
+use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     error::ExecutionError,
@@ -110,7 +110,9 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
                     // the pointer to build a managed reference with validated bounds below.
                     unsafe { heap.storage.raw_data_ptr() },
                     s.len(),
-                    vm_try!(ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))),
+                    dotnet_vm_ops::vm_try!(
+                        ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))
+                    ),
                     2, // char is 2 bytes in .NET
                 ),
                 HeapStorage::Vec(a) => {
@@ -140,7 +142,9 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
             let element_type = if !generics.method_generics.is_empty() {
                 generics.method_generics[0].clone()
             } else {
-                vm_try!(ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char))))
+                dotnet_vm_ops::vm_try!(
+                    ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))
+                )
             };
             (std::ptr::null_mut::<u8>(), 0, element_type, 2)
         }
@@ -183,7 +187,11 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let span_type_concrete = match &method.method().signature.return_type.1 {
         Some(ParameterType::Value(t)) => {
-            vm_try!(generics.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()))
+            dotnet_vm_ops::vm_try!(generics.make_concrete(
+                method.resolution(),
+                t.clone(),
+                ctx.loader().as_ref()
+            ))
         }
         Some(_) => {
             return StepResult::Error(
@@ -200,9 +208,10 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
             );
         }
     };
-    let span_type = vm_try!(ctx.loader().find_concrete_type(span_type_concrete.clone()));
+    let span_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(span_type_concrete.clone()));
 
-    let layout = vm_try!(ctx.span_type_layout(span_type_concrete.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(span_type_concrete.clone()));
 
     let (_ref_offset_rel, _length_offset_rel) = match &*layout {
         LayoutManager::Field(f) => {
@@ -221,10 +230,11 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         }
     };
 
-    let span =
-        vm_try!(ctx.span_new_object_with_type_generics(span_type, vec![element_type.clone()],));
+    let span = dotnet_vm_ops::vm_try!(
+        ctx.span_new_object_with_type_generics(span_type, vec![element_type.clone()],)
+    );
 
-    let element_type_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
+    let element_type_desc = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type));
     let managed = ManagedPtr::new(
         NonNull::new(ptr),
         element_type_desc,
@@ -255,18 +265,23 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let element_type = &generics.method_generics[0];
-    let element_size = vm_try!(ctx.span_type_layout(element_type.clone())).size();
+    let element_size = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone())).size();
 
     let field_handle = ctx.pop_value_type();
 
-    let handle_layout =
-        vm_try!(ctx.span_type_layout(ConcreteType::from(field_handle.description.clone())));
+    let handle_layout = dotnet_vm_ops::vm_try!(
+        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
+    );
     let _value_offset = match &*handle_layout {
-        LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            ExecutionError::InternalError("RuntimeFieldHandle must have _value field".to_string())
-        }))
-        .position
-        .as_usize(),
+        LayoutManager::Field(f) => {
+            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
+                ExecutionError::InternalError(
+                    "RuntimeFieldHandle must have _value field".to_string(),
+                )
+            }))
+            .position
+            .as_usize()
+        }
         _ => {
             return StepResult::Error(
                 ExecutionError::InternalError(
@@ -287,12 +302,12 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
     };
     let field = field_desc.field();
     let field_resolution = field_desc.field_resolution;
-    let field_type = vm_try!(lookup.make_concrete(
+    let field_type = dotnet_vm_ops::vm_try!(lookup.make_concrete(
         field_resolution,
         field.return_type.clone(),
         ctx.loader().as_ref(),
     ));
-    let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
+    let field_desc = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
     let Some(initial_data) = &field.initial_value else {
         return ctx.throw_by_name_with_message(
@@ -309,27 +324,32 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         let prefix = "__StaticArrayInitTypeSize=";
         let size_str = &field_desc.definition().name[prefix.len()..];
         let size_end = size_str.find('_').unwrap_or(size_str.len());
-        let array_size = vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-            ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
-        }));
+        let array_size =
+            dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
+                ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
+            }));
         let data_slice = &initial_data[..array_size];
 
-        let span_type = vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
-        let span_instance = vm_try!(
+        let span_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
+        let span_instance = dotnet_vm_ops::vm_try!(
             ctx.span_new_object_with_type_generics(span_type.clone(), vec![element_type.clone()])
         );
 
-        let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
+        let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
         let (_ref_offset, _length_offset) = match &*layout {
             LayoutManager::Field(f) => {
-                let ref_off = vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
-                    ExecutionError::NotImplemented("Span must have _reference field".to_string())
-                }))
-                .position;
-                let len_off = vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
-                    ExecutionError::NotImplemented("Span must have _length field".to_string())
-                }))
-                .position;
+                let ref_off =
+                    dotnet_vm_ops::vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
+                        ExecutionError::NotImplemented(
+                            "Span must have _reference field".to_string(),
+                        )
+                    }))
+                    .position;
+                let len_off =
+                    dotnet_vm_ops::vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
+                        ExecutionError::NotImplemented("Span must have _length field".to_string())
+                    }))
+                    .position;
                 (ref_off, len_off)
             }
             _ => {
@@ -340,7 +360,8 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             }
         };
 
-        let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+        let element_desc =
+            dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
         let managed = ManagedPtr::new(
             NonNull::new(data_slice.as_ptr() as *mut u8),
             element_desc,
@@ -382,14 +403,19 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     let field_handle = ctx.pop_value_type();
 
     // Resolve field
-    let field_layout =
-        vm_try!(ctx.span_type_layout(ConcreteType::from(field_handle.description.clone())));
+    let field_layout = dotnet_vm_ops::vm_try!(
+        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
+    );
     let _field_value_offset = match &*field_layout {
-        LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            ExecutionError::NotImplemented("RuntimeFieldHandle must have _value field".to_string())
-        }))
-        .position
-        .as_usize(),
+        LayoutManager::Field(f) => {
+            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
+                ExecutionError::NotImplemented(
+                    "RuntimeFieldHandle must have _value field".to_string(),
+                )
+            }))
+            .position
+            .as_usize()
+        }
         _ => {
             return StepResult::Error(
                 ExecutionError::NotImplemented(
@@ -411,14 +437,19 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     let field = field_desc.field();
 
     // Resolve type
-    let runtime_type_layout =
-        vm_try!(ctx.span_type_layout(ConcreteType::from(type_handle.description.clone())));
+    let runtime_type_layout = dotnet_vm_ops::vm_try!(
+        ctx.span_type_layout(ConcreteType::from(type_handle.description.clone()))
+    );
     let _type_value_offset = match &*runtime_type_layout {
-        LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            ExecutionError::NotImplemented("RuntimeTypeHandle must have _value field".to_string())
-        }))
-        .position
-        .as_usize(),
+        LayoutManager::Field(f) => {
+            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
+                ExecutionError::NotImplemented(
+                    "RuntimeTypeHandle must have _value field".to_string(),
+                )
+            }))
+            .position
+            .as_usize()
+        }
         _ => {
             return StepResult::Error(
                 ExecutionError::NotImplemented(
@@ -440,7 +471,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
 
     let element_type: ConcreteType = element_type_runtime.to_concrete(ctx.loader().as_ref());
 
-    let element_size = vm_try!(ctx.span_type_layout(element_type.clone())).size();
+    let element_size = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone())).size();
 
     let Some(initial_data) = &field.initial_value else {
         ctx.push_isize(0);
@@ -451,12 +482,13 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         let prefix = "__StaticArrayInitTypeSize=";
         let size_str = &field.name[prefix.len()..];
         let size_end = size_str.find('_').unwrap_or(size_str.len());
-        let array_size = vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-            ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
-        }));
+        let array_size =
+            dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
+                ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
+            }));
 
         let element_count = (array_size / element_size.as_usize()) as i32;
-        vm_try!(
+        dotnet_vm_ops::vm_try!(
             // SAFETY: `length_ref` points to Span `_length` field and we write exactly 4 bytes
             // (`i32`) to that location.
             unsafe {
@@ -469,7 +501,8 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
             .map_err(|e| ExecutionError::InternalError(e.to_string()))
         );
 
-        let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+        let element_desc =
+            dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
         let managed = ManagedPtr::new(
             NonNull::new(initial_data.as_ptr() as *mut u8),
             element_desc,
@@ -505,7 +538,7 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
         );
     };
 
-    let element_type_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
+    let element_type_desc = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type));
 
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
@@ -553,9 +586,11 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
     let span = ctx.pop_managed_ptr();
 
     let element_type = &generics.type_generics[0];
-    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
-    let layout = vm_try!(ctx.span_type_layout(ConcreteType::from(span.inner_type())));
+    let layout =
+        dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(span.inner_type())));
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::Error(

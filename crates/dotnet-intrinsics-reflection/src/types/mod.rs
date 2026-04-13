@@ -279,7 +279,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let val = StackValue::NativeInt(0);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
             unsafe {
-                vm_try!(ctx.write_unaligned(
+                dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     pfn_allocator.origin().clone(),
                     pfn_allocator.byte_offset(),
                     val,
@@ -289,7 +289,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let val = StackValue::NativeInt(0);
             unsafe {
-                vm_try!(ctx.write_unaligned(
+                dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     allocator_first_arg.origin().clone(),
                     allocator_first_arg.byte_offset(),
                     val,
@@ -324,7 +324,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     let method_val = StackValue::NativeInt(method_idx as isize);
                     let layout = LayoutManager::Scalar(Scalar::NativeInt);
                     unsafe {
-                        vm_try!(ctx.write_unaligned(
+                        dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                             pfn_ctor.origin().clone(),
                             pfn_ctor.byte_offset(),
                             method_val,
@@ -335,7 +335,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     let public_val = StackValue::Int32(1);
                     let byte_layout = LayoutManager::Scalar(Scalar::Int8);
                     unsafe {
-                        vm_try!(ctx.write_unaligned(
+                        dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                             ctor_is_public.origin().clone(),
                             ctor_is_public.byte_offset(),
                             public_val,
@@ -392,7 +392,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
         }
     };
 
-    let mt_ptr = vm_try!(object_type).definition() as *const _;
+    let mt_ptr = dotnet_vm_ops::vm_try!(object_type).definition() as *const _;
     ctx.push_isize(mt_ptr as isize);
     StepResult::Continue
 }
@@ -406,7 +406,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, T: ReflectionIntrinsi
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.reflection_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let value = match &*layout {
         LayoutManager::Scalar(Scalar::ObjectRef) => false,
         LayoutManager::Scalar(_) => true,
@@ -428,7 +428,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = vm_try!(ctx.reflection_type_layout(target.clone()));
+    let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let res = layout.is_or_contains_refs();
 
     ctx.push_i32(res as i32);

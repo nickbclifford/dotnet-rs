@@ -34,7 +34,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     // CompareExchange(ref T, T, T) -> T
     // First parameter is always `ref T`.
-    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+    let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
         ctx,
         &method,
         generics,
@@ -246,7 +246,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     // Exchange(ref T, T) -> T
     // First parameter is always `ref T`.
-    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+    let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
         ctx,
         &method,
         generics,
@@ -410,7 +410,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let target_type = crate::vm_try!(resolve_atomic_ref_target_type(
+    let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
         ctx,
         &method,
         generics,

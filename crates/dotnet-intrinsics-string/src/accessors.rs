@@ -72,7 +72,7 @@ pub fn intrinsic_string_get_raw_data<'gc, T: TypedStackOps<'gc> + ExceptionOps<'
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = ctx.pop();
-    let char_type = crate::vm_try!(ctx.loader().corlib_type("System.Char"));
+    let char_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Char"));
 
     let obj = val.as_object_ref();
     if let Some(handle) = obj.0 {

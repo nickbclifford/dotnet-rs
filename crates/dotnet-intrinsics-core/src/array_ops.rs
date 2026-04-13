@@ -171,7 +171,8 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     let elem_size = v.layout.element_layout.size();
     let start = (elem_size * index).as_usize();
     let end = (elem_size * (index + 1)).as_usize();
-    let val = crate::vm_try!(ctx.read_cts_value(&v.element, &v.get()[start..end])).into_stack();
+    let val =
+        dotnet_vm_ops::vm_try!(ctx.read_cts_value(&v.element, &v.get()[start..end])).into_stack();
 
     ctx.push(val);
     StepResult::Continue
@@ -243,7 +244,8 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     let elem_size = v.layout.element_layout.size();
     let start = (elem_size * index).as_usize();
     let end = (elem_size * (index + 1)).as_usize();
-    crate::vm_try!(ctx.new_cts_value(&v.element, value)).write(&mut v.get_mut()[start..end]);
+    dotnet_vm_ops::vm_try!(ctx.new_cts_value(&v.element, value))
+        .write(&mut v.get_mut()[start..end]);
 
     StepResult::Continue
 }

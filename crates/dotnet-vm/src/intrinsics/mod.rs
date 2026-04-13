@@ -157,12 +157,25 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
-vm_cold_panic!(fn panic_unsupported_intrinsic(method: &MethodDescription) => "unsupported intrinsic {:?}", method);
-vm_cold_panic!(
-    fn panic_unsupported_intrinsic_field(field: &FieldDescription) =>
-        "unsupported load from intrinsic field: {:?}",
-        field
-);
+#[cold]
+#[inline(never)]
+fn unsupported_intrinsic_step_result(method: &MethodDescription) -> StepResult {
+    StepResult::Error(
+        ExecutionError::NotImplemented(format!("unsupported intrinsic {:?}", method)).into(),
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn unsupported_intrinsic_field_step_result(field: &FieldDescription) -> StepResult {
+    StepResult::Error(
+        ExecutionError::NotImplemented(format!(
+            "unsupported load from intrinsic field: {:?}",
+            field
+        ))
+        .into(),
+    )
+}
 
 // ============================================================================
 // Intrinsic Registry Infrastructure
@@ -270,6 +283,7 @@ impl IntrinsicRegistry {
     ) -> Option<&'a str> {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
+        let is_static = !method.method().signature.instance;
         let arity = if method.method().signature.instance {
             method.method().signature.parameters.len() + 1
         } else {
@@ -280,10 +294,11 @@ impl IntrinsicRegistry {
         let normalized_name = canonical_name.replace('/', "+");
         write!(
             w,
-            "M:{}::{}#{}",
+            "M:{}::{}#{}:{}",
             normalized_name,
             &*method.method().name,
-            arity
+            arity,
+            if is_static { "S" } else { "I" }
         )
         .ok()?;
         let pos = w.pos;
@@ -301,7 +316,18 @@ impl IntrinsicRegistry {
         let raw_type_name = field.parent.type_name();
         let canonical_name = loader.canonical_type_name(&raw_type_name);
         let normalized_name = canonical_name.replace('/', "+");
-        write!(w, "F:{}::{}", normalized_name, &*field.field().name).ok()?;
+        write!(
+            w,
+            "F:{}::{}:{}",
+            normalized_name,
+            &*field.field().name,
+            if field.field().static_member {
+                "S"
+            } else {
+                "I"
+            }
+        )
+        .ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }
@@ -407,7 +433,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
         return res;
     }
 
-    panic_unsupported_intrinsic(&method);
+    unsupported_intrinsic_step_result(&method)
 }
 
 pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
@@ -429,7 +455,7 @@ pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
     {
         dispatch_field_intrinsic(handler, ctx, field, type_generics, is_address)
     } else {
-        panic_unsupported_intrinsic_field(&field);
+        unsupported_intrinsic_field_step_result(&field)
     }
 }
 

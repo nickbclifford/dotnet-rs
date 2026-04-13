@@ -1,4 +1,7 @@
-use crate::{StepResult, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    stack::ops::{EvalStackOps, ExceptionOps, ReflectionOps, ResolutionOps},
+};
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
@@ -7,19 +10,24 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(CastClass { param0 })]
-pub fn castclass<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn castclass<
+    'gc,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc>,
+>(
+    ctx: &mut T,
+    param0: &MethodType,
+) -> StepResult {
     let target_obj_val = vm_pop!(ctx);
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
-    if let ObjectRef(Some(o)) = target_obj {
-        let res_ctx = ctx.current_context();
-        let obj_type = vm_try!(res_ctx.get_heap_description(o));
-        let target_ct = vm_try!(res_ctx.make_concrete(param0));
+    if let ObjectRef(Some(_)) = target_obj {
+        let obj_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(target_obj));
+        let target_ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
 
-        if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
+        if dotnet_vm_ops::vm_try!(ctx.is_a(obj_type.into(), target_ct)) {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
             return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
@@ -32,19 +40,24 @@ pub fn castclass<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
 }
 
 #[dotnet_instruction(IsInstance(param0))]
-pub fn isinst<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn isinst<
+    'gc,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc>,
+>(
+    ctx: &mut T,
+    param0: &MethodType,
+) -> StepResult {
     let target_obj_val = vm_pop!(ctx);
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
-    if let ObjectRef(Some(o)) = target_obj {
-        let res_ctx = ctx.current_context();
-        let obj_type = vm_try!(res_ctx.get_heap_description(o));
-        let target_ct = vm_try!(res_ctx.make_concrete(param0));
+    if let ObjectRef(Some(_)) = target_obj {
+        let obj_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(target_obj));
+        let target_ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
 
-        if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
+        if dotnet_vm_ops::vm_try!(ctx.is_a(obj_type.into(), target_ct)) {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
             ctx.push(StackValue::ObjectRef(ObjectRef(None)));

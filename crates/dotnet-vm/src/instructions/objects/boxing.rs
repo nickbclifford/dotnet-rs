@@ -28,14 +28,14 @@ pub fn box_value<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc>
     param0: &MethodType,
 ) -> StepResult {
     let res_ctx = ctx.current_context();
-    let t = vm_try!(res_ctx.make_concrete(param0));
+    let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let value = vm_pop!(ctx);
 
     if let StackValue::ObjectRef(_) = value {
         // boxing is a noop for all reference types
         ctx.push(value);
     } else {
-        let obj = vm_try!(ctx.box_value(&t, value));
+        let obj = dotnet_vm_ops::vm_try!(ctx.box_value(&t, value));
         ctx.push(StackValue::ObjectRef(obj));
     }
     StepResult::Continue
@@ -56,12 +56,12 @@ pub fn unbox_any<
 ) -> StepResult {
     let val = ctx.pop();
     let res_ctx = ctx.current_context();
-    let target_ct = vm_try!(res_ctx.make_concrete(param0));
+    let target_ct = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
 
     let is_vt = match target_ct.get() {
         BaseType::Type { .. } => {
-            let td = vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
-            vm_try!(td.is_value_type(&res_ctx))
+            let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
+            dotnet_vm_ops::vm_try!(td.is_value_type(&res_ctx))
         }
         BaseType::Vector(_, _) | BaseType::Array(_, _) | BaseType::Object | BaseType::String => {
             false
@@ -79,14 +79,14 @@ pub fn unbox_any<
         if obj.0.is_none() {
             if is_nullable {
                 // ECMA-335 §III.4.33: unbox.any Nullable<T> on null produces a Nullable<T> with HasValue=false.
-                let td = vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
+                let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
                 let BaseType::Type { source, .. } = target_ct.get() else {
                     unreachable!("Nullable must be a type");
                 };
                 let (_, generics) = decompose_type_source(source);
                 let lookup = GenericLookup::new(generics.clone());
                 let ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
-                let instance = vm_try!(ctx_with_generics.new_object(td));
+                let instance = dotnet_vm_ops::vm_try!(ctx_with_generics.new_object(td));
 
                 ctx.push(StackValue::ValueType(instance));
                 return StepResult::Continue;
@@ -220,8 +220,8 @@ pub fn unbox_any<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         };
         if let ObjectRef(Some(o)) = target_obj {
-            let obj_type = vm_try!(res_ctx.get_heap_description(o));
-            if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
+            let obj_type = dotnet_vm_ops::vm_try!(res_ctx.get_heap_description(o));
+            if dotnet_vm_ops::vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
                 ctx.push(StackValue::ObjectRef(target_obj));
             } else {
                 return ctx
@@ -244,7 +244,7 @@ pub fn unbox<
 ) -> StepResult {
     let value = vm_pop!(ctx);
     let res_ctx = ctx.current_context();
-    let target_ct = vm_try!(res_ctx.make_concrete(param0));
+    let target_ct = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
 
     let StackValue::ObjectRef(obj) = value else {
         return ctx
@@ -259,7 +259,7 @@ pub fn unbox<
 
     if is_nullable {
         // ECMA-335 §III.4.32: Manufacture a new Nullable<T> on the heap.
-        let td = vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
+        let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
 
         let BaseType::Type { source, .. } = target_ct.get() else {
             unreachable!("Nullable must be a type");
@@ -268,19 +268,19 @@ pub fn unbox<
         let lookup = GenericLookup::new(generics.clone());
         let res_ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
 
-        let instance = vm_try!(res_ctx_with_generics.new_object(td));
+        let instance = dotnet_vm_ops::vm_try!(res_ctx_with_generics.new_object(td));
 
         if let Some(h) = obj.0 {
             // Boxed T exists.
             let inner_t: &ConcreteType = generics
                 .first()
                 .expect("Nullable must have generic parameter");
-            let concrete_inner_t = vm_try!(res_ctx.normalize_type(inner_t.clone()));
+            let concrete_inner_t = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(inner_t.clone()));
 
             // Check if obj is indeed a boxed T.
-            let obj_type = vm_try!(res_ctx.get_heap_description(h));
-            let obj_ct = vm_try!(res_ctx.normalize_type(obj_type.into()));
-            if !vm_try!(res_ctx.is_a(obj_ct, concrete_inner_t)) {
+            let obj_type = dotnet_vm_ops::vm_try!(res_ctx.get_heap_description(h));
+            let obj_ct = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(obj_type.into()));
+            if !dotnet_vm_ops::vm_try!(res_ctx.is_a(obj_ct, concrete_inner_t)) {
                 return ctx
                     .throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
             }
@@ -327,7 +327,7 @@ pub fn unbox<
 
         let h = boxed_nullable.0.unwrap();
         let ptr = unsafe { h.borrow().storage.raw_data_ptr() };
-        let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));
+        let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct));
         ctx.push(StackValue::ManagedPtr(
             ManagedPtr::new(
                 NonNull::new(ptr),
@@ -351,7 +351,7 @@ pub fn unbox<
         }
     };
 
-    let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));
+    let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct));
     ctx.push(StackValue::ManagedPtr(
         ManagedPtr::new(
             NonNull::new(ptr),

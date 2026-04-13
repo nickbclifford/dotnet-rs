@@ -1,4 +1,4 @@
-use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info, vm_try};
+use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::ByteOffset;
@@ -27,7 +27,7 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
         len as usize
     } else {
         let target = &generics.method_generics[0];
-        let layout = vm_try!(ctx.unsafe_type_layout(target.clone()));
+        let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
         (layout.size() * (len as usize)).as_usize()
     };
 
@@ -98,7 +98,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     };
 
     let target = generics.method_generics[0].clone();
-    let layout = vm_try!(ctx.unsafe_type_layout(target));
+    let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target));
     let elem_size = layout.size().as_usize();
 
     for i in 0..len {
@@ -148,7 +148,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
         .first()
         .cloned()
         .unwrap_or(fallback_element_type);
-    let element_type = vm_try!(ctx.loader().find_concrete_type(element_concrete));
+    let element_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_concrete));
     ctx.push_ptr(
         data_ptr,
         element_type,

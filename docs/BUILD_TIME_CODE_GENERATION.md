@@ -83,13 +83,14 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
 
 The intrinsic key is built from the type name, member name, arity, and static flag. The `IntrinsicRegistry::build_method_key` and `build_field_key` methods reconstruct this key at runtime to perform lookups.
 
-Methods use the format `M:{NormalizedType}::{MemberName}#{Arity}`.
+Methods use the format `M:{NormalizedType}::{MemberName}#{Arity}:{StaticFlag}`.
 - `NormalizedType`: The canonical type name where nested type separators (`/`) are replaced with `+`.
 - `Arity`: The number of parameters. If the method is an instance method, the arity includes the implicit `this` pointer (`parameters.len() + 1`).
-- Example: `M:System.Math::Abs#1`
+- `StaticFlag`: `S` for static methods, `I` for instance methods.
+- Example: `M:System.Math::Abs#1:S`
 
-Fields use the format `F:{NormalizedType}::{MemberName}`.
-- Example: `F:System.String::Empty`
+Fields use the format `F:{NormalizedType}::{MemberName}:{StaticFlag}`.
+- Example: `F:System.String::Empty:S`
 
 When searching, `IntrinsicRegistry` formats the appropriate key string into a stack-allocated buffer (`StackWrite`) to avoid heap allocations on the hot path. The PHF table (`INTRINSIC_LOOKUP`) maps this string to a `Range` indexing into a static array `INTRINSIC_ENTRIES`. Each entry in `INTRINSIC_ENTRIES` stores a handler ID (`MethodIntrinsicId` or `FieldIntrinsicId`) instead of a function pointer.
 
@@ -134,7 +135,7 @@ The build script uses `DefaultHasher` to deduplicate handler registrations — i
 
 If the runtime encounters an opcode that has no registered handler, the generated `dispatch_monomorphic` function returns a `VmError::Execution(ExecutionError::NotImplemented)`.
 
-Similarly, for methods explicitly marked as `internal_call` in their IL metadata, if no intrinsic is found during dispatch, the engine will panic with `panic!("intrinsic not found: {:?}", method)`.
+Similarly, for methods explicitly marked as `internal_call` in their IL metadata, if no intrinsic is found during dispatch, the engine returns `StepResult::Error(VmError::Execution(ExecutionError::NotImplemented(...)))`.
 
 ### Incremental Compilation (`cargo:rerun-if-changed`)
 

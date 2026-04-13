@@ -41,6 +41,7 @@ done
 echo "Running experimental feature smoke tests..."
 cargo test --features bench-instrumentation -- --nocapture
 cargo test --features heap-diagnostics -- --nocapture
+cargo test -p dotnet-vm --features deadlock-diagnostics -- --nocapture
 cargo test --features segmented-eval-stack-prototype -- --nocapture
 cargo test -p dotnet-vm --features instruction-dispatch-jump-table -- --nocapture
 cargo test -p dotnet-vm --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" -- --nocapture

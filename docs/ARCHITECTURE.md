@@ -109,7 +109,8 @@ See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state ma
 For more details on caching and resolution pipelines, see [Type Resolution and Caching](TYPE_RESOLUTION_AND_CACHING.md).
 
 - **Type Resolution**: Types are resolved lazily. `ResolutionContext` manages the scope of resolution, including generic parameters.
-- **Layout Calculation**: `LayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
+- **Layout Calculation**: `VmLayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
+- **VM Ownership Boundary**: `dotnet-vm` uses `VmResolverService` and `VmLayoutFactory` wrappers as VM-owned facades over resolver-owned resolution/layout engines.
 - **Generics**: Generic types and methods are instantiated on-demand, with metadata specialized for the specific type arguments.
 
 ### Descriptor Ownership Model
@@ -139,7 +140,7 @@ VM-specific extensions that add resolver, shared state, and reflection capabilit
 - `StackOps` (extends `BaseStackOps` with frame access and slot operations)
 - `ResolutionOps` (extends `BaseResolutionOps` with `ResolutionContext`)
 - `ReflectionOps` (extends `BaseReflectionOps` + `IntrinsicDispatchOps` + `ReflectionLookupOps`)
-- `LoaderOps` (extends `BaseLoaderOps` with `ResolverService` and `SharedGlobalState`)
+- `LoaderOps` (extends `BaseLoaderOps` with `VmResolverService` and `SharedGlobalState`)
 - `CallOps` (extends `BaseCallOps` with frame construction and method dispatch)
 - `StaticsOps` (extends `BaseStaticsOps` with `StaticStorageManager` access)
 - `VesOps`: The unified trait combining `ExceptionContext + PInvokeContext + StaticsOps + ThreadOps + CallOps`. Primary generic bound for instruction handlers.

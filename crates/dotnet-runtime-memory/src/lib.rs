@@ -8,4 +8,4 @@ pub mod validation;
 pub use access::{MemoryOwner, RawMemoryAccess};
 pub use heap::HeapManager;
 pub use host::{MemoryOrderingHost, MemorySharedStateHost};
-pub use validation::{check_read_safety, has_ref_at};
+pub use validation::check_read_safety;

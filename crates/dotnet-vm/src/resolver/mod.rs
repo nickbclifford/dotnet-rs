@@ -20,17 +20,17 @@ use std::{
 };
 
 #[derive(Clone)]
-pub struct ResolverService {
+pub struct VmResolverService {
     inner: dotnet_runtime_resolver::ResolverService<VmResolverCaches, VmResolverLayout>,
 }
 
-impl std::fmt::Debug for ResolverService {
+impl std::fmt::Debug for VmResolverService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolverService").finish_non_exhaustive()
+        f.debug_struct("VmResolverService").finish_non_exhaustive()
     }
 }
 
-impl Deref for ResolverService {
+impl Deref for VmResolverService {
     type Target = dotnet_runtime_resolver::ResolverService<VmResolverCaches, VmResolverLayout>;
 
     fn deref(&self) -> &Self::Target {
@@ -38,7 +38,7 @@ impl Deref for ResolverService {
     }
 }
 
-impl ResolverService {
+impl VmResolverService {
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         let caches = Arc::new(VmResolverCaches::new(
             shared.caches.clone(),

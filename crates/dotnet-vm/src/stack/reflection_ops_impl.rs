@@ -1,7 +1,7 @@
 use crate::{
     MethodInfo, MethodType, ResolutionContext, StepResult,
     layout::type_layout,
-    resolver::ResolverService,
+    resolver::VmResolverService,
     stack::{
         context::VesContext,
         ops::{
@@ -52,8 +52,8 @@ impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn resolver(&self) -> ResolverService {
-        ResolverService::new(self.shared.clone())
+    fn resolver(&self) -> VmResolverService {
+        VmResolverService::new(self.shared.clone())
     }
 
     #[inline]

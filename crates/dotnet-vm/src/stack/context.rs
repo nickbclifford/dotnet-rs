@@ -979,7 +979,7 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> BaseVesInternals<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn back_up_ip(&mut self) {
         self.frame_stack.current_frame_mut().state.ip = *self.original_ip;
@@ -1063,11 +1063,6 @@ impl<'a, 'gc> BaseVesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn evaluation_stack(&self) -> &EvaluationStack<'gc> {
-        self.evaluation_stack
-    }
-
-    #[inline]
     fn evaluation_stack_mut(&mut self) -> &mut EvaluationStack<'gc> {
         self.evaluation_stack
     }
@@ -1083,9 +1078,7 @@ impl<'a, 'gc> BaseVesInternals<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {}
-
-impl<'a, 'gc> BaseVesBaseOps for VesContext<'a, 'gc> {
+impl<'a, 'gc> VesBaseOps for VesContext<'a, 'gc> {
     #[inline]
     fn tracer_enabled(&self) -> bool {
         VesContext::tracer_enabled(self)
@@ -1101,8 +1094,6 @@ impl<'a, 'gc> BaseVesBaseOps for VesContext<'a, 'gc> {
         VesContext::indent(self)
     }
 }
-
-impl<'a, 'gc> VesBaseOps for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> BaseExceptionContext<'gc> for VesContext<'a, 'gc> {}
 
@@ -1263,7 +1254,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                 return StepResult::Continue;
             };
 
-            let method_info = vm_try!(self.shared.caches.get_method_info(
+            let method_info = dotnet_vm_ops::vm_try!(self.shared.caches.get_method_info(
                 finalizer,
                 &generics,
                 self.shared.clone()
@@ -1272,7 +1263,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));
 
-            vm_try!(self.call_frame(method_info, generics));
+            dotnet_vm_ops::vm_try!(self.call_frame(method_info, generics));
             self.current_frame_mut().is_finalizer = true;
             return StepResult::FramePushed;
         }
@@ -1297,7 +1288,6 @@ pub struct ThreadContext<'gc> {
 mod host_adapter_trait_tests {
     use super::VesContext;
     use crate::StepResult;
-    use crate::stack::ops as vm_stack_ops;
     use dotnet_types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -1327,57 +1317,51 @@ mod host_adapter_trait_tests {
     }
 
     #[test]
-    fn ves_context_implements_dotnet_vm_host_adapters() {
-        fn assert_impls()
-        where
-            for<'a, 'gc> VesContext<'a, 'gc>: vm_stack_ops::StringIntrinsicHost<'gc>
-                + vm_stack_ops::DelegateIntrinsicHost<'gc>
-                + vm_stack_ops::SpanIntrinsicHost<'gc>
-                + vm_stack_ops::UnsafeIntrinsicHost<'gc>
-                + vm_stack_ops::ThreadingIntrinsicHost<'gc>
-                + vm_stack_ops::ReflectionIntrinsicHost<'gc>,
-        {
-        }
-
-        assert_impls();
-    }
-
-    #[test]
-    fn host_adapters_cover_intrinsic_handler_bounds() {
-        fn assert_string_handler<'gc, T: vm_stack_ops::StringIntrinsicHost<'gc>>() {
+    fn vm_ops_hosts_cover_intrinsic_handler_bounds() {
+        fn assert_string_handler<'gc, T: vm_ops::StringIntrinsicHost<'gc>>() {
             let _handler: fn(&mut T, FieldDescription, Arc<[ConcreteType]>, bool) -> StepResult =
                 dotnet_intrinsics_string::accessors::intrinsic_field_string_empty::<T>;
         }
 
         fn assert_delegate_handler<
             'gc,
-            T: vm_stack_ops::DelegateIntrinsicHost<'gc>
+            T: vm_ops::DelegateIntrinsicHost<'gc>
                 + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>,
         >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> Option<StepResult> =
                 dotnet_intrinsics_delegates::helpers::try_delegate_dispatch::<T>;
         }
 
-        fn assert_span_handler<'gc, T: vm_stack_ops::SpanIntrinsicHost<'gc>>() {
+        fn assert_span_handler<
+            'gc,
+            T: vm_ops::SpanIntrinsicHost<'gc> + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>,
+        >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_span::equality::intrinsic_memory_extensions_sequence_equal::<T>;
         }
 
         fn assert_unsafe_handler<
             'gc,
-            T: vm_stack_ops::UnsafeIntrinsicHost<'gc>
-                + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>,
+            T: vm_ops::UnsafeIntrinsicHost<'gc> + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>,
         >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_unsafe::marshal::intrinsic_marshal_offset_of::<T>;
         }
 
-        fn assert_threading_handler<'gc, T: vm_stack_ops::ThreadingIntrinsicHost<'gc>>() {
+        fn assert_threading_handler<
+            'gc,
+            T: vm_ops::ThreadingIntrinsicHost<'gc>
+                + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>,
+        >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_threading::monitor::intrinsic_monitor_reliable_enter::<T>;
         }
 
-        fn assert_reflection_handler<'gc, T: vm_stack_ops::ReflectionIntrinsicHost<'gc>>() {
+        fn assert_reflection_handler<
+            'gc,
+            T: vm_ops::ReflectionIntrinsicHost<'gc>
+                + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>,
+        >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_reflection::methods::runtime_method_info_intrinsic_call::<T>;
         }

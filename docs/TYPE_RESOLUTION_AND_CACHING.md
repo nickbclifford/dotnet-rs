@@ -6,10 +6,11 @@ This document describes the type/method/field resolution pipeline, the multi-lev
 
 Resolution converts metadata tokens (from parsed .NET assemblies) into runtime descriptors used by the execution engine. This is a lazy, cached process that spans several modules:
 
-- **`dotnet-runtime-resolver/src/`**: `ResolverService` implementation with sub-modules for types, methods, layout, and factory
+- **`dotnet-runtime-resolver/src/`**: resolver engine implementation with sub-modules for types, methods, layout, and factory
+- **`dotnet-vm/src/resolver/mod.rs`**: `VmResolverService` VM-owned adapter wrapper around resolver-owned resolution logic
 - **`dotnet-vm/src/context.rs`**: `ResolutionContext` for scoped resolution with generic parameters
 - **`dotnet-vm/src/resolution.rs`**: Resolution traits and helpers
-- **`dotnet-vm/src/layout.rs`**: compatibility wrapper delegating to resolver-owned layout code
+- **`dotnet-vm/src/layout.rs`**: `VmLayoutFactory` compatibility wrapper delegating to resolver-owned layout code
 - **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager` (~497 lines)
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
@@ -31,14 +32,14 @@ This keeps metadata lifetime explicit while preserving stable, hashable descript
 
 1. Metadata token (`UserType`: `TypeDefOrRef`, `TypeSpec`, `TypeRef`) arrives from a CIL instruction.
 2. The `ResolutionContext` encapsulates the current assembly scope (`ResolutionS`) and generic parameters via `GenericLookup`.
-3. The context delegates to `ResolverService::locate_type()`, which uses the `AssemblyLoader` to resolve the token into a `TypeDescription`.
-4. For generic types or arrays/pointers, `ResolverService::make_concrete()` substitutes type parameters with concrete arguments using `GenericLookup::make_concrete()`.
+3. The context delegates to `VmResolverService::locate_type()`, which uses the `AssemblyLoader` to resolve the token into a `TypeDescription`.
+4. For generic types or arrays/pointers, `VmResolverService::make_concrete()` substitutes type parameters with concrete arguments using `GenericLookup::make_concrete()`.
 5. The result is a `ConcreteType` (representing a specialized type) or a `TypeDescription` (identifying a type definition in a specific assembly).
 
 ### Method Resolution (`dotnet-runtime-resolver/src/methods.rs`)
 
 Multi-phase process:
-1. **Token → descriptor**: `ResolverService::locate_method()` maps a metadata token (`UserMethod`) to a `MethodDescription`, applying generic substitutions.
+1. **Token → descriptor**: `VmResolverService::locate_method()` maps a metadata token (`UserMethod`) to a `MethodDescription`, applying generic substitutions.
 2. **Virtual dispatch**: For `callvirt`, `resolve_virtual_method()` finds the most-derived implementation. It first checks the `vmt_cache` in `GlobalCaches`. If missing, it iterates through ancestors (via `AssemblyLoader::ancestors`) and uses `find_and_cache_method()` to locate the implementation matching the base method's signature.
 3. **Generic instantiation**: `find_generic_method()` applies `GenericLookup` from the `ResolutionContext` to specialize the method and its parent type.
 4. **Intrinsic check**: `is_intrinsic_cached()` checks if the method has a native implementation by querying `GlobalCaches::intrinsic_cache` and `IntrinsicRegistry`.
@@ -49,12 +50,12 @@ Fields resolve to `FieldDescription` with computed byte offsets within their con
 
 ### Layout Computation (`dotnet-runtime-resolver/src/layout.rs`)
 
-`LayoutFactory` computes the physical memory layout of objects and value types:
+`VmLayoutFactory` computes the physical memory layout of objects and value types:
 - **Field offsets**: `create_field_layout()` computes offsets respecting alignment requirements of the host architecture. It recursively resolves field types and computes their sub-layouts.
 - **Total object size**: Sums field sizes + padding.
 - **`GcDesc` generation**: `populate_gc_desc()` creates a descriptor bitmap used by the Stop-The-World (STW) GC to identify which fields contain managed references (`ObjectRef`). It merges the GC descriptors of nested fields into the parent's descriptor based on their computed offsets.
 
-This is a recursive algorithm: computing a struct's layout requires `LayoutFactory::collect_fields()` to recursively compute the layouts of all its field types. Layouts are cached in `GlobalCaches::layout_cache` and `instance_field_layout_cache`.
+This is a recursive algorithm: computing a struct's layout requires `VmLayoutFactory::collect_fields()` to recursively compute the layouts of all its field types. Layouts are cached in `GlobalCaches::layout_cache` and `instance_field_layout_cache`.
 
 ## Caching Architecture (`state.rs` → `GlobalCaches`)
 
@@ -141,7 +142,7 @@ Layout computation produces `GcDesc` which the GC uses during tracing to know wh
 ### Layout Ownership
 Layout representation and layout computation are split:
 - `dotnet-value/src/layout.rs`: runtime layout data model (`LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager`)
-- `dotnet-runtime-resolver/src/layout.rs`: `LayoutFactory` and layout algorithms
-- `dotnet-vm/src/layout.rs`: compatibility surface that delegates to resolver-owned layout code
+- `dotnet-runtime-resolver/src/layout.rs`: resolver-owned layout algorithms used by `VmLayoutFactory`
+- `dotnet-vm/src/layout.rs`: `VmLayoutFactory` compatibility surface that delegates to resolver-owned layout code
 
 This split keeps layout algorithms reusable outside `dotnet-vm` while preserving existing VM call sites.

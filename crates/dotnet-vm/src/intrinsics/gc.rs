@@ -483,7 +483,7 @@ pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
         Ok(v) => v,
         Err(e) => return e,
     };
-    vm_try!(unsafe {
+    dotnet_vm_ops::vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::ObjectRef(dependent), &layout)
     });
 

@@ -22,7 +22,7 @@
 //! for testing or specialized execution.
 use crate::{
     MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
-    resolver::ResolverService,
+    resolver::VmResolverService,
     stack::StackFrame,
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
     sync::Arc,
@@ -42,17 +42,12 @@ use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    AllStackOps, ArgumentOps, CallOps as BaseCallOps,
-    DelegateIntrinsicHost as BaseDelegateIntrinsicHost, EvalStackOps,
+    AllStackOps, ArgumentOps, CallOps as BaseCallOps, EvalStackOps,
     ExceptionContext as BaseExceptionContext, ExceptionOps, LoaderOps as BaseLoaderOps, LocalOps,
     MemoryOps as BaseMemoryOps, PInvokeContext as BasePInvokeContext, RawMemoryOps,
-    ReflectionIntrinsicHost as BaseReflectionIntrinsicHost, ReflectionOps as BaseReflectionOps,
-    ResolutionOps as BaseResolutionOps, SpanIntrinsicHost as BaseSpanIntrinsicHost,
-    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps,
-    StringIntrinsicHost as BaseStringIntrinsicHost, ThreadOps,
-    ThreadingIntrinsicHost as BaseThreadingIntrinsicHost, TypedStackOps,
-    UnsafeIntrinsicHost as BaseUnsafeIntrinsicHost, VariableOps, VesBaseOps as BaseVesBaseOps,
-    VesInternals as BaseVesInternals,
+    ReflectionOps as BaseReflectionOps, ResolutionOps as BaseResolutionOps,
+    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps, ThreadOps, TypedStackOps, VariableOps,
+    VesBaseOps, VesInternals,
 };
 
 pub trait StackOps<'gc>: BaseStackOps<'gc> + AllStackOps<'gc> {
@@ -123,7 +118,7 @@ pub trait ReflectionOps<'gc>:
 
 pub trait LoaderOps: BaseLoaderOps {
     fn loader_arc(&self) -> Arc<dotnet_assemblies::AssemblyLoader>;
-    fn resolver(&self) -> ResolverService;
+    fn resolver(&self) -> VmResolverService;
     fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
@@ -174,169 +169,6 @@ pub trait CallOps<'gc>: BaseCallOps<'gc> {
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
 }
-
-/// `dotnet-vm` adapter for string intrinsics.
-///
-/// This preserves existing `stack::ops` extension methods (`resolver`, `shared`,
-/// reflection lookup helpers) while exposing the stable `dotnet-vm-ops` host seam.
-pub trait StringIntrinsicHost<'gc>:
-    BaseStringIntrinsicHost<'gc>
-    + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
-    + CallOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + ReflectionOps<'gc>
-    + ResolutionOps<'gc>
-    + StackOps<'gc>
-{
-}
-impl<
-    'gc,
-    T: BaseStringIntrinsicHost<'gc>
-        + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
-        + CallOps<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + StackOps<'gc>
-        + ?Sized,
-> StringIntrinsicHost<'gc> for T
-{
-}
-
-/// `dotnet-vm` adapter for delegate intrinsics.
-pub trait DelegateIntrinsicHost<'gc>:
-    BaseDelegateIntrinsicHost<'gc>
-    + CallOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + ReflectionOps<'gc>
-    + ResolutionOps<'gc>
-    + VesInternals<'gc>
-{
-}
-impl<
-    'gc,
-    T: BaseDelegateIntrinsicHost<'gc>
-        + CallOps<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + VesInternals<'gc>
-        + ?Sized,
-> DelegateIntrinsicHost<'gc> for T
-{
-}
-
-/// `dotnet-vm` adapter for span intrinsics.
-pub trait SpanIntrinsicHost<'gc>:
-    BaseSpanIntrinsicHost<'gc>
-    + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
-    + CallOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + ReflectionOps<'gc>
-    + ResolutionOps<'gc>
-    + StackOps<'gc>
-{
-}
-impl<
-    'gc,
-    T: BaseSpanIntrinsicHost<'gc>
-        + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
-        + CallOps<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + StackOps<'gc>
-        + ?Sized,
-> SpanIntrinsicHost<'gc> for T
-{
-}
-
-/// `dotnet-vm` adapter for unsafe intrinsics.
-pub trait UnsafeIntrinsicHost<'gc>:
-    BaseUnsafeIntrinsicHost<'gc>
-    + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + ReflectionOps<'gc>
-    + ResolutionOps<'gc>
-    + StackOps<'gc>
-{
-}
-impl<
-    'gc,
-    T: BaseUnsafeIntrinsicHost<'gc>
-        + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + StackOps<'gc>
-        + ?Sized,
-> UnsafeIntrinsicHost<'gc> for T
-{
-}
-
-/// `dotnet-vm` adapter for threading intrinsics.
-pub trait ThreadingIntrinsicHost<'gc>:
-    BaseThreadingIntrinsicHost<'gc>
-    + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + StackOps<'gc>
-    + ThreadOps
-{
-}
-impl<
-    'gc,
-    T: BaseThreadingIntrinsicHost<'gc>
-        + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + StackOps<'gc>
-        + ThreadOps
-        + ?Sized,
-> ThreadingIntrinsicHost<'gc> for T
-{
-}
-
-/// `dotnet-vm` adapter for reflection intrinsics.
-pub trait ReflectionIntrinsicHost<'gc>:
-    BaseReflectionIntrinsicHost<'gc>
-    + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
-    + CallOps<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + ReflectionOps<'gc>
-    + ResolutionOps<'gc>
-    + StaticsOps<'gc>
-    + VesInternals<'gc>
-{
-}
-impl<
-    'gc,
-    T: BaseReflectionIntrinsicHost<'gc>
-        + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
-        + CallOps<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + StaticsOps<'gc>
-        + VesInternals<'gc>
-        + ?Sized,
-> ReflectionIntrinsicHost<'gc> for T
-{
-}
-
-pub trait VesInternals<'gc>: BaseVesInternals<'gc> {}
-
-pub trait VesBaseOps: BaseVesBaseOps {}
 
 dotnet_vm_ops::trait_alias! {
     #[no_blanket_impl]

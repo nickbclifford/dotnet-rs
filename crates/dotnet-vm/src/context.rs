@@ -1,6 +1,6 @@
 use crate::{
     MethodType,
-    resolver::ResolverService,
+    resolver::VmResolverService,
     state::{GlobalCaches, SharedGlobalState},
     sync::{Arc, Weak},
 };
@@ -21,7 +21,7 @@ pub struct ResolutionShared {
     pub loader: Arc<AssemblyLoader>,
     pub caches: Arc<GlobalCaches>,
     pub shared: Option<Weak<SharedGlobalState>>,
-    pub(crate) resolver_cache: OnceLock<ResolverService>,
+    pub(crate) resolver_cache: OnceLock<VmResolverService>,
 }
 
 impl std::fmt::Debug for ResolutionShared {
@@ -46,14 +46,14 @@ impl ResolutionShared {
         }
     }
 
-    pub fn resolver(&self) -> &ResolverService {
+    pub fn resolver(&self) -> &VmResolverService {
         self.resolver_cache.get_or_init(|| {
             if let Some(shared_weak) = &self.shared
                 && let Some(shared) = shared_weak.upgrade()
             {
-                return ResolverService::new(shared);
+                return VmResolverService::new(shared);
             }
-            ResolverService::from_parts(self.loader.clone(), self.caches.clone())
+            VmResolverService::from_parts(self.loader.clone(), self.caches.clone())
         })
     }
 }
@@ -112,7 +112,7 @@ impl<'a> ResolutionContext<'a> {
         self.state.shared.as_ref().and_then(|w| w.upgrade())
     }
 
-    pub fn resolver(&self) -> &ResolverService {
+    pub fn resolver(&self) -> &VmResolverService {
         self.state.resolver()
     }
 

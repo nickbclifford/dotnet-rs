@@ -60,14 +60,14 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
 
     if let Some(targets_handle) = multicast_targets {
         // Push a dummy frame for the current Invoke method
-        let method_info = crate::vm_try!(ctx.delegate_method_info(invoke_method, _lookup));
+        let method_info = dotnet_vm_ops::vm_try!(ctx.delegate_method_info(invoke_method, _lookup));
 
         // Push arguments back onto stack so call_frame can consume them
         for arg in &args {
             ctx.push(arg.clone());
         }
 
-        crate::vm_try!(ctx.delegate_call_frame(method_info, _lookup.clone()));
+        dotnet_vm_ops::vm_try!(ctx.delegate_call_frame(method_info, _lookup.clone()));
 
         // Set multicast state
         ctx.frame_stack_mut().current_frame_mut().multicast_state = Some(MulticastState {

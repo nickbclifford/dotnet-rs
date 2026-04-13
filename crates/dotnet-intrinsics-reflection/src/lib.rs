@@ -1,24 +1,5 @@
 #![allow(clippy::mutable_key_type)]
-
 //! Reflection intrinsic handlers and runtime reflection host interfaces.
-
-macro_rules! vm_try {
-    ($expr:expr) => {
-        match $expr {
-            Ok(v) => v,
-            Err(e) => {
-                return dotnet_vm_ops::StepResult::Error(dotnet_types::error::VmError::from(e))
-            }
-        }
-    };
-}
-
-pub mod common;
-pub mod fields;
-pub mod methods;
-pub mod parameters;
-pub mod types;
-
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -34,6 +15,12 @@ use dotnet_value::{
 use dotnet_vm_ops::{MethodInfo, ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost};
 use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
+
+pub mod common;
+pub mod fields;
+pub mod methods;
+pub mod parameters;
+pub mod types;
 
 pub trait RuntimeTypeContext {
     fn reflection_locate_type(

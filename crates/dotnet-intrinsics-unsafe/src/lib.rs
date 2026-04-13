@@ -39,19 +39,6 @@ pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
     fn unsafe_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> ConcreteType;
 }
 
-macro_rules! vm_try {
-    ($expr:expr) => {
-        match $expr {
-            Ok(v) => v,
-            Err(e) => {
-                return dotnet_vm_ops::StepResult::Error(dotnet_types::error::VmError::from(e))
-            }
-        }
-    };
-}
-
-pub(crate) use vm_try;
-
 pub(crate) fn ptr_info<
     'gc,
     T: dotnet_vm_ops::ops::StackOps<'gc> + dotnet_vm_ops::ops::ExceptionOps<'gc>,

@@ -6,9 +6,9 @@ use dotnet_value::layout::{ArrayLayoutManager, FieldLayoutManager, LayoutManager
 #[cfg(test)]
 use dotnet_value::layout::GcDesc;
 
-pub struct LayoutFactory;
+pub struct VmLayoutFactory;
 
-impl LayoutFactory {
+impl VmLayoutFactory {
     pub fn instance_fields(
         td: TypeDescription,
         context: &ResolutionContext,
@@ -58,7 +58,7 @@ pub fn type_layout(
 
 #[cfg(test)]
 mod tests {
-    use super::LayoutFactory;
+    use super::VmLayoutFactory;
     use crate::{context::ResolutionContext, state::SharedGlobalState};
     use dotnet_assemblies::{AssemblyLoader, find_dotnet_app_path};
     use dotnet_types::generics::{ConcreteType, GenericLookup};
@@ -94,7 +94,7 @@ mod tests {
         let typed_ctx = ctx.for_type_with_generics(nullable_td.clone(), &lookup);
 
         let layout =
-            LayoutFactory::instance_field_layout_cached(nullable_td.clone(), &typed_ctx, None)
+            VmLayoutFactory::instance_field_layout_cached(nullable_td.clone(), &typed_ctx, None)
                 .unwrap();
 
         assert_eq!(layout.total_size, 8, "Nullable<int> should be 8 bytes");
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn gc_desc_tracks_unaligned_reference_offsets_without_word_rounding() {
         let mut desc = dotnet_value::layout::GcDesc::default();
-        LayoutFactory::populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
+        VmLayoutFactory::populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
 
         assert!(
             desc.bitmap.not_any(),
@@ -143,7 +143,7 @@ mod tests {
         });
 
         let mut outer = dotnet_value::layout::GcDesc::default();
-        LayoutFactory::populate_gc_desc(&nested_layout, 5, &mut outer);
+        VmLayoutFactory::populate_gc_desc(&nested_layout, 5, &mut outer);
         assert!(outer.unaligned_offsets.is_empty());
         assert!(outer.bitmap.get(1).is_some_and(|b| *b));
     }

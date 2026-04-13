@@ -40,8 +40,8 @@ pub fn intrinsic_assembly_get_custom_attributes<
         let _ = ctx.pop();
     }
 
-    let attribute_type = vm_try!(ctx.loader().corlib_type("System.Attribute"));
-    let array = vm_try!(ctx.new_vector(attribute_type.into(), 0));
+    let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
+    let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
@@ -71,8 +71,8 @@ pub fn intrinsic_attribute_get_custom_attributes<
         let _ = ctx.pop();
     }
 
-    let attribute_type = vm_try!(ctx.loader().corlib_type("System.Attribute"));
-    let array = vm_try!(ctx.new_vector(attribute_type.into(), 0));
+    let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
+    let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
@@ -107,7 +107,8 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .find(|(_, a): &(usize, &TypeDefinition)| a.type_name() == "DotnetRs.Assembly")
         .expect("could find DotnetRs.Assembly in support library");
     let type_index = support_res.type_definition_index(index).unwrap();
-    let asm_handle = vm_try!(ctx.new_object(TypeDescription::new(support_res, type_index)));
+    let asm_handle =
+        dotnet_vm_ops::vm_try!(ctx.new_object(TypeDescription::new(support_res, type_index)));
     asm_handle
         .instance_storage
         .field::<usize>(asm_handle.description.clone(), "resolution")
@@ -127,7 +128,7 @@ pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let _inherit = ctx.pop();
     let _obj = ctx.pop_obj();
-    let object_type = vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
 }
 
@@ -138,7 +139,7 @@ pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let _inherit = ctx.pop();
     let _attribute_type = ctx.pop_obj();
     let _obj = ctx.pop_obj();
-    let object_type = vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
 }
 
@@ -185,7 +186,8 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     }
 
-    let method_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
+    let method_info_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
@@ -326,7 +328,8 @@ pub fn handle_get_members<
 ) -> StepResult {
     let _flags = ctx.pop_i32();
     let _obj = ctx.pop_obj();
-    let member_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
+    let member_info_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
     populate_reflection_array(ctx, vec![], ConcreteType::from(member_info_type))
 }
 
@@ -339,7 +342,7 @@ pub fn handle_get_nested_types<
 ) -> StepResult {
     let _flags = ctx.pop_i32();
     let _obj = ctx.pop_obj();
-    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
     populate_reflection_array(ctx, vec![], type_type.into())
 }
 
@@ -405,7 +408,8 @@ pub fn handle_get_fields<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     }
 
-    let field_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.FieldInfo"));
+    let field_info_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.FieldInfo"));
     populate_reflection_array(ctx, fields_objs, ConcreteType::from(field_info_type))
 }
 
@@ -481,7 +485,8 @@ pub fn handle_get_properties<
 ) -> StepResult {
     let _flags = ctx.pop_i32();
     let _obj = ctx.pop_obj();
-    let property_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.PropertyInfo"));
+    let property_info_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.PropertyInfo"));
     populate_reflection_array(ctx, vec![], ConcreteType::from(property_info_type))
 }
 
@@ -546,7 +551,7 @@ pub fn handle_get_constructors<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     }
 
-    let constructor_info_type = vm_try!(
+    let constructor_info_type = dotnet_vm_ops::vm_try!(
         ctx.loader()
             .corlib_type("System.Reflection.ConstructorInfo")
     );
