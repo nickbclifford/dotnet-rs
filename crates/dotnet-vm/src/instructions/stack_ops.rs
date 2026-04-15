@@ -1,6 +1,6 @@
 use crate::{
     ArgumentIndex, ByteOffset, LocalIndex, StepResult,
-    stack::ops::{ArgumentOps, EvalStackOps, LocalOps, ResolutionOps, StackOps},
+    stack::ops::{ArgumentOps, EvalStackOps, LocalOps, ResolutionOps, VmStackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
@@ -67,7 +67,10 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
-pub fn ldarga<'gc, T: StackOps<'gc> + ArgumentOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
+pub fn ldarga<
+    'gc,
+    T: VmStackOps<'gc> + ArgumentOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>,
+>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {
@@ -100,7 +103,7 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
-pub fn ldloca<'gc, T: StackOps<'gc> + LocalOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
+pub fn ldloca<'gc, T: VmStackOps<'gc> + LocalOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {

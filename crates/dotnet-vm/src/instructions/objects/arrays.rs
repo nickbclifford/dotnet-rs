@@ -4,7 +4,7 @@ use crate::{
     layout::type_layout,
     stack::ops::{
         EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ResolutionOps,
-        TypedStackOps,
+        TypedStackOps, VmResolutionOps,
     },
 };
 use dotnet_macros::dotnet_instruction;
@@ -30,6 +30,7 @@ pub fn ldelem<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -84,6 +85,7 @@ pub fn ldelem_primitive<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -147,6 +149,7 @@ pub fn ldelema<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -165,6 +168,7 @@ pub fn ldelema_readonly<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -181,6 +185,7 @@ fn ldelema_internal<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -254,6 +259,7 @@ pub fn stelem<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -299,6 +305,7 @@ pub fn stelem_primitive<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -352,6 +359,7 @@ pub fn newarr<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
@@ -408,6 +416,7 @@ pub fn ldlen<
     T: EvalStackOps<'gc>
         + ExceptionOps<'gc>
         + ResolutionOps<'gc>
+        + VmResolutionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>

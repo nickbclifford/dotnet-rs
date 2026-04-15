@@ -1,6 +1,6 @@
 use crate::stack::{
     context::VesContext,
-    ops::{ArgumentOps, EvalStackOps, LocalOps, StackOps, TypedStackOps},
+    ops::{ArgumentOps, EvalStackOps, LocalOps, TypedStackOps, VmStackOps},
 };
 use dotnet_value::{
     CLRString, StackValue,
@@ -95,23 +95,6 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.locals + index, value);
     }
-
-    #[inline]
-    fn get_local_info_for_managed_ptr(
-        &self,
-        index: crate::LocalIndex,
-    ) -> (std::ptr::NonNull<u8>, bool) {
-        let frame = self.frame_stack.current_frame();
-        let addr = self
-            .evaluation_stack
-            .get_slot_address(frame.base.locals + index);
-        let is_pinned = frame
-            .pinned_locals
-            .get(index.as_usize())
-            .copied()
-            .unwrap_or(false);
-        (addr, is_pinned)
-    }
 }
 
 impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
@@ -130,16 +113,9 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.arguments + index, value);
     }
-
-    #[inline]
-    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.arguments + index)
-    }
 }
 
-impl<'a, 'gc> StackOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc> {
         self.frame_stack.current_frame()
@@ -172,5 +148,29 @@ impl<'a, 'gc> StackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_slot_address(&self, index: crate::StackSlotIndex) -> std::ptr::NonNull<u8> {
         self.evaluation_stack.get_slot_address(index)
+    }
+
+    #[inline]
+    fn get_local_info_for_managed_ptr(
+        &self,
+        index: crate::LocalIndex,
+    ) -> (std::ptr::NonNull<u8>, bool) {
+        let frame = self.frame_stack.current_frame();
+        let addr = self
+            .evaluation_stack
+            .get_slot_address(frame.base.locals + index);
+        let is_pinned = frame
+            .pinned_locals
+            .get(index.as_usize())
+            .copied()
+            .unwrap_or(false);
+        (addr, is_pinned)
+    }
+
+    #[inline]
+    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8> {
+        let frame = self.frame_stack.current_frame();
+        self.evaluation_stack
+            .get_slot_address(frame.base.arguments + index)
     }
 }

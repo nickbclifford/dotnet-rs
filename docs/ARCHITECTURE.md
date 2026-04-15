@@ -130,7 +130,7 @@ The VES trait system is split across two crates to avoid circular dependencies:
 
 ### Base Traits (`dotnet-vm-ops/src/ops.rs`)
 Foundational traits that instruction handlers and intrinsics can target without depending on `dotnet-vm`:
-- `EvalStackOps`, `TypedStackOps`, `LocalOps`, `ArgumentOps`, `VariableOps`, `AllStackOps`
+- `EvalStackOps`, `TypedStackOps`, `LocalOps`, `ArgumentOps`, `VariableOps`
 - `ExceptionOps`, `RawMemoryOps`, `ThreadOps`, `CallOps`, `LoaderOps`
 - `MemoryOps`, `ResolutionOps`, `ReflectionOps`, `StaticsOps`
 - `VesBaseOps`, `VesInternals`, `ExceptionContext`, `PInvokeContext`

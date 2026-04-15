@@ -1,19 +1,10 @@
-use crate::{
-    StepResult,
-    resolution::ValueResolution,
-    stack::ops::{
-        EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, TypedStackOps,
-    },
-};
+use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadMethodPointer(param0))]
-pub fn ldftn<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + TypedStackOps<'gc>>(
-    ctx: &mut T,
-    param0: &MethodSource,
-) -> StepResult {
+pub fn ldftn<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
@@ -25,10 +16,7 @@ pub fn ldftn<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + Typed
 }
 
 #[dotnet_instruction(LoadVirtualMethodPointer { param0, skip_null_check })]
-pub fn ldvirtftn<
-    'gc,
-    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + TypedStackOps<'gc> + ExceptionOps<'gc>,
->(
+pub fn ldvirtftn<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     param0: &MethodSource,
     skip_null_check: bool,
@@ -62,13 +50,7 @@ pub fn ldvirtftn<
 }
 
 #[dotnet_instruction(LoadTokenType(param0))]
-pub fn ldtoken_type<
-    'gc,
-    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn ldtoken_type<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let runtime_type = {
         let res_ctx = ctx.current_context();
         ctx.make_runtime_type(&res_ctx, param0)
@@ -86,13 +68,7 @@ pub fn ldtoken_type<
 }
 
 #[dotnet_instruction(LoadTokenMethod(param0))]
-pub fn ldtoken_method<
-    'gc,
-    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodSource,
-) -> StepResult {
+pub fn ldtoken_method<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
@@ -110,13 +86,7 @@ pub fn ldtoken_method<
 }
 
 #[dotnet_instruction(LoadTokenField(param0))]
-pub fn ldtoken_field<
-    'gc,
-    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &FieldSource,
-) -> StepResult {
+pub fn ldtoken_field<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
 
     let field_obj = ctx.get_runtime_field_obj(field, lookup);

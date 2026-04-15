@@ -4,7 +4,7 @@
 //! This crate contains the parsing and transformation logic for .NET signatures.
 use quote::quote;
 use syn::{
-    Ident, Result, Token, braced,
+    Attribute, GenericParam, Generics, Ident, Result, Token, TypeParamBound, Visibility, braced,
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
@@ -86,6 +86,106 @@ impl Parse for ParsedFieldSignature {
             field_name,
         })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitAliasDecl {
+    pub attrs: Vec<Attribute>,
+    pub vis: Visibility,
+    pub name: Ident,
+    pub generics: Generics,
+    pub bounds: Punctuated<TypeParamBound, Token![+]>,
+}
+
+impl Parse for TraitAliasDecl {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let vis = input.parse()?;
+        input.parse::<Token![trait]>()?;
+        let name = input.parse()?;
+        let generics = input.parse()?;
+        input.parse::<Token![=]>()?;
+        let mut bounds = Punctuated::new();
+        loop {
+            bounds.push_value(input.parse::<TypeParamBound>()?);
+            if input.peek(Token![;]) {
+                break;
+            }
+            bounds.push_punct(input.parse::<Token![+]>()?);
+        }
+        input.parse::<Token![;]>()?;
+
+        Ok(Self {
+            attrs,
+            vis,
+            name,
+            generics,
+            bounds,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TraitAliasDecls {
+    pub declarations: Vec<TraitAliasDecl>,
+}
+
+impl Parse for TraitAliasDecls {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut declarations = Vec::new();
+        while !input.is_empty() {
+            declarations.push(input.parse::<TraitAliasDecl>()?);
+        }
+        Ok(Self { declarations })
+    }
+}
+
+impl TraitAliasDecl {
+    pub fn expand(&self) -> proc_macro2::TokenStream {
+        let mut keep_attrs = Vec::new();
+        let mut no_blanket_impl = false;
+        for attr in &self.attrs {
+            if attr.path().is_ident("no_blanket_impl") {
+                no_blanket_impl = true;
+                continue;
+            }
+            keep_attrs.push(attr.clone());
+        }
+
+        let vis = &self.vis;
+        let name = &self.name;
+        let generics = &self.generics;
+        let bounds = &self.bounds;
+        let trait_def = quote! {
+            #(#keep_attrs)*
+            #vis trait #name #generics: #bounds {}
+        };
+
+        if no_blanket_impl {
+            return trait_def;
+        }
+
+        let mut impl_generics = self.generics.clone();
+        impl_generics
+            .params
+            .push(GenericParam::Type(syn::parse_quote!(T: #bounds + ?Sized)));
+        let (impl_generics, _, where_clause) = impl_generics.split_for_impl();
+        let (_, ty_generics, _) = self.generics.split_for_impl();
+
+        quote! {
+            #trait_def
+            impl #impl_generics #name #ty_generics for T #where_clause {}
+        }
+    }
+}
+
+pub fn expand_trait_aliases(input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
+    let aliases: TraitAliasDecls = syn::parse2(input)?;
+    let mut expanded = proc_macro2::TokenStream::new();
+    for alias in aliases.declarations {
+        expanded.extend(alias.expand());
+    }
+    Ok(expanded)
 }
 
 #[derive(Debug, Clone)]
@@ -500,6 +600,7 @@ pub fn parse_generic_args_count(input: ParseStream) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quote::quote;
     use syn::parse_str;
 
     #[test]
@@ -560,5 +661,81 @@ mod tests {
             parse_str("static bool System.SpanHelpers::SequenceEqual(ref byte, byte&, int*)")
                 .unwrap();
         assert_eq!(sig.parameters, vec!["UInt8&", "UInt8&", "Int32*"]);
+    }
+
+    #[test]
+    fn test_expand_trait_aliases_multi_decl() {
+        let expanded = expand_trait_aliases(quote! {
+            /// docs
+            pub trait VariableOps<'gc> = LocalOps<'gc> + ArgumentOps<'gc>;
+            #[no_blanket_impl]
+            pub trait StackOps<'gc> = TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc>;
+        })
+        .unwrap();
+
+        let file: syn::File = syn::parse2(expanded).unwrap();
+        let mut trait_count = 0;
+        let mut impl_count = 0;
+
+        for item in file.items {
+            match item {
+                syn::Item::Trait(item_trait) => {
+                    trait_count += 1;
+                    if item_trait.ident == "VariableOps" {
+                        assert!(
+                            item_trait
+                                .attrs
+                                .iter()
+                                .any(|attr| attr.path().is_ident("doc"))
+                        );
+                    }
+                    assert!(
+                        item_trait
+                            .attrs
+                            .iter()
+                            .all(|attr| !attr.path().is_ident("no_blanket_impl"))
+                    );
+                }
+                syn::Item::Impl(item_impl) => {
+                    impl_count += 1;
+                    let implemented_trait = item_impl.trait_.as_ref().unwrap().1.segments.last();
+                    let implemented_trait = implemented_trait.unwrap();
+                    assert_eq!(implemented_trait.ident, "VariableOps");
+                    let args_len = match &implemented_trait.arguments {
+                        syn::PathArguments::AngleBracketed(args) => args.args.len(),
+                        syn::PathArguments::None => 0,
+                        _ => panic!("unexpected trait path arguments"),
+                    };
+                    assert_eq!(args_len, 1);
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(trait_count, 2);
+        assert_eq!(impl_count, 1);
+    }
+
+    #[test]
+    fn test_expand_trait_alias_without_generics() {
+        let expanded = expand_trait_aliases(quote! {
+            pub trait Foo = Bar + Baz;
+        })
+        .unwrap();
+
+        let output = expanded.to_string();
+        assert!(output.contains("trait Foo : Bar + Baz { }"));
+        assert!(output.contains("impl < T : Bar + Baz + ? Sized > Foo for T { }"));
+    }
+
+    #[test]
+    fn test_parse_trait_alias_generics() {
+        let parsed: TraitAliasDecl =
+            syn::parse_str("pub trait VariableOps<'gc> = LocalOps<'gc> + ArgumentOps<'gc>;")
+                .unwrap();
+        assert_eq!(parsed.generics.params.len(), 1);
+
+        let expanded = parsed.expand().to_string();
+        assert!(expanded.contains("trait VariableOps < 'gc >"));
     }
 }

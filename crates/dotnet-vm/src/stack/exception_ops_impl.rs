@@ -2,9 +2,10 @@ use crate::{
     StepResult,
     stack::{
         context::VesContext,
-        ops::{BaseMemoryOps, ExceptionOps, StackOps},
+        ops::{ExceptionOps, VmStackOps},
     },
 };
+use dotnet_runtime_memory::ops::BaseMemoryOps;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},

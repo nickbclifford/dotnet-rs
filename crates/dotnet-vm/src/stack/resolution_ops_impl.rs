@@ -1,10 +1,10 @@
 use crate::{
     ResolutionContext,
-    stack::{context::VesContext, ops::ResolutionOps},
+    stack::{context::VesContext, ops::VmResolutionOps},
 };
 use dotnet_types::generics::GenericLookup;
 
-impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmResolutionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn current_context(&self) -> ResolutionContext<'_> {
         if !self.frame_stack.is_empty() {

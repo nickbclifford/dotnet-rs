@@ -8,12 +8,12 @@
 //!
 //! - [`VesOps`]: The unified trait that combines all other operational traits. This is the
 //!   primary trait used by instruction handlers.
-//! - [`StackOps`]: Operations for manipulating the evaluation stack (push, pop, peek, locals).
-//! - [`CallOps`]: Frame management and method dispatch operations.
+//! - [`VmStackOps`]: VM-local stack operations (frame and slot access helpers).
+//! - [`VmCallOps`]: VM-local frame management and method dispatch operations.
 //! - [`ExceptionOps`]: Exception throwing and flow control (leave, endfinally).
-//! - [`ResolutionOps`]: Type and method resolution services.
+//! - [`VmResolutionOps`]: VM-local type and method resolution services.
 //! - [`RawMemoryOps`]: Low-level, unsafe memory access for unaligned reads/writes.
-//! - [`ReflectionOps`]: Reflection-specific operations and runtime type information.
+//! - [`VmReflectionOps`]: VM-local reflection and runtime type lookup operations.
 //!
 //! # Usage
 //!
@@ -21,7 +21,7 @@
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
 use crate::{
-    MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
+    ByteOffset, MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
     resolver::VmResolverService,
     stack::StackFrame,
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
@@ -37,20 +37,18 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectRef},
+    pointer::PointerOrigin,
 };
 use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    AllStackOps, ArgumentOps, CallOps as BaseCallOps, EvalStackOps,
-    ExceptionContext as BaseExceptionContext, ExceptionOps, LoaderOps as BaseLoaderOps, LocalOps,
-    MemoryOps as BaseMemoryOps, PInvokeContext as BasePInvokeContext, RawMemoryOps,
-    ReflectionOps as BaseReflectionOps, ResolutionOps as BaseResolutionOps,
-    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps, ThreadOps, TypedStackOps, VariableOps,
-    VesBaseOps, VesInternals,
+    ArgumentOps, CallOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps,
+    PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps, StaticsOps, ThreadOps,
+    TypedStackOps, VariableOps, VesBaseOps, VesInternals,
 };
 
-pub trait StackOps<'gc>: BaseStackOps<'gc> + AllStackOps<'gc> {
+pub trait VmStackOps<'gc>: StackOps<'gc> {
     fn current_frame(&self) -> &StackFrame<'gc>;
     fn current_frame_mut(&mut self) -> &mut StackFrame<'gc>;
 
@@ -58,9 +56,24 @@ pub trait StackOps<'gc>: BaseStackOps<'gc> + AllStackOps<'gc> {
     fn get_slot_ref(&self, index: StackSlotIndex) -> &StackValue<'gc>;
     fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>);
     fn get_slot_address(&self, index: StackSlotIndex) -> std::ptr::NonNull<u8>;
+    fn get_local_info_for_managed_ptr(
+        &self,
+        index: crate::LocalIndex,
+    ) -> (std::ptr::NonNull<u8>, bool);
+    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 
-pub trait ResolutionOps<'gc>: BaseResolutionOps<'gc> {
+pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {
+    fn resolve_address(
+        &self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+    ) -> std::ptr::NonNull<u8>;
+
+    fn localloc(&mut self, size: usize) -> *mut u8;
+}
+
+pub trait VmResolutionOps<'gc>: ResolutionOps<'gc> {
     fn current_context(&self) -> ResolutionContext<'_>;
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b>;
 }
@@ -100,8 +113,8 @@ pub trait ReflectionLookupOps<'gc> {
     ) -> ObjectRef<'gc>;
 }
 
-pub trait ReflectionOps<'gc>:
-    BaseReflectionOps<'gc> + IntrinsicDispatchOps<'gc> + ReflectionLookupOps<'gc> + MemoryOps<'gc>
+pub trait VmReflectionOps<'gc>:
+    ReflectionOps<'gc> + IntrinsicDispatchOps<'gc> + ReflectionLookupOps<'gc> + MemoryOps<'gc>
 {
     fn pre_initialize_reflection(&mut self);
     fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType;
@@ -116,17 +129,18 @@ pub trait ReflectionOps<'gc>:
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc>;
 }
 
-pub trait LoaderOps: BaseLoaderOps {
-    fn loader_arc(&self) -> Arc<dotnet_assemblies::AssemblyLoader>;
+pub trait VmLoaderOps: LoaderOps {
     fn resolver(&self) -> VmResolverService;
     fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
-pub trait StaticsOps<'gc>: BaseStaticsOps<'gc> {
+pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
     fn statics(&self) -> &StaticStorageManager;
 }
 
-pub trait CallOps<'gc>: BaseCallOps<'gc> {
+pub trait VmCallOps<'gc>: CallOps<'gc> {
+    fn return_frame(&mut self) -> StepResult;
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
@@ -172,36 +186,34 @@ pub trait CallOps<'gc>: BaseCallOps<'gc> {
 
 dotnet_vm_ops::trait_alias! {
     #[no_blanket_impl]
-    pub trait ExceptionContext<'gc> =
-        BaseExceptionContext<'gc>
+    pub trait VmExceptionContext<'gc> =
+        ExceptionContext<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>
-        + LoaderOps
+        + VmResolutionOps<'gc>
+        + VmReflectionOps<'gc>
+        + VmLoaderOps
         + MemoryOps<'gc>
         + VesInternals<'gc>
         + VesBaseOps;
-}
-
-pub trait PInvokeContext<'gc>:
-    BasePInvokeContext<'gc>
-    + StackOps<'gc>
-    + RawMemoryOps<'gc>
-    + ExceptionOps<'gc>
-    + ResolutionOps<'gc>
-    + VesInternals<'gc>
-    + LoaderOps
-    + MemoryOps<'gc>
-    + VesBaseOps
-{
+    #[no_blanket_impl]
+    pub trait VmPInvokeContext<'gc> =
+        PInvokeContext<'gc>
+        + VmStackOps<'gc>
+        + VmRawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + VmResolutionOps<'gc>
+        + VesInternals<'gc>
+        + VmLoaderOps
+        + MemoryOps<'gc>
+        + VesBaseOps;
 }
 
 pub trait VesOps<'gc>:
-    ExceptionContext<'gc>
-    + PInvokeContext<'gc>
-    + StaticsOps<'gc>
+    VmExceptionContext<'gc>
+    + VmPInvokeContext<'gc>
+    + VmStaticsOps<'gc>
     + ThreadOps
-    + CallOps<'gc>
+    + VmCallOps<'gc>
     + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
     + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>
     + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>

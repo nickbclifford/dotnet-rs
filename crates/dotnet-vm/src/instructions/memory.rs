@@ -1,7 +1,7 @@
 use crate::{
     StepResult,
     instructions::NULL_REF_MSG,
-    ops::{ExceptionOps, RawMemoryOps, StackOps},
+    ops::{ExceptionOps, RawMemoryOps, StackOps, VmRawMemoryOps, VmStackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
@@ -79,7 +79,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
+pub fn localloc<'gc, T: StackOps<'gc> + VmRawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size_isize = vm_pop!(ctx).as_isize();
@@ -105,7 +105,7 @@ pub fn localloc<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 }
 
 #[dotnet_instruction(StoreIndirect { param0 })]
-pub fn stind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
@@ -169,7 +169,7 @@ pub fn stind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
-pub fn ldind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {

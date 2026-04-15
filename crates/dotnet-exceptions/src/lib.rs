@@ -82,10 +82,13 @@ pub fn extract_managed_exception<'gc>(
 }
 
 /// Parses exception handler metadata from an assembly into a structured format.
-pub fn parse<'a>(
+pub fn parse<'a, 'gc, T>(
     source: impl IntoIterator<Item = &'a body::Exception>,
-    ctx: &dyn ResolutionOps<'_>,
-) -> Result<Vec<ProtectedSection>, TypeResolutionError> {
+    ctx: &T,
+) -> Result<Vec<ProtectedSection>, TypeResolutionError>
+where
+    T: ResolutionOps<'gc> + ?Sized,
+{
     let mut sections: HashMap<Range<usize>, Vec<Handler>> = HashMap::new();
     for exc in source {
         use body::ExceptionKind::*;

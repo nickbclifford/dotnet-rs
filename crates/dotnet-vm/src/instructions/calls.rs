@@ -3,10 +3,7 @@ use crate::{
     instructions::NULL_REF_MSG,
     layout::type_layout,
     resolution::TypeResolutionExt,
-    stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, StackOps,
-    },
+    stack::ops::{VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
 };
 use dotnet_types::TypeDescription;
 use dotnet_value::pointer::PointerOrigin;
@@ -17,12 +14,12 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Jump(param0))]
-pub fn jmp<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
+pub fn jmp<'gc, T: VmCallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     ctx.unified_dispatch_jmp(param0, None)
 }
 
 #[dotnet_instruction(Call { param0, tail_call })]
-pub fn call<'gc, T: CallOps<'gc>>(
+pub fn call<'gc, T: VmCallOps<'gc>>(
     ctx: &mut T,
     param0: &MethodSource,
     tail_call: bool,
@@ -36,18 +33,7 @@ pub fn call<'gc, T: CallOps<'gc>>(
 }
 
 #[dotnet_instruction(CallVirtual { param0 })]
-pub fn callvirt<
-    'gc,
-    T: CallOps<'gc>
-        + ResolutionOps<'gc>
-        + ExceptionOps<'gc>
-        + EvalStackOps<'gc>
-        + LoaderOps
-        + ReflectionOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodSource,
-) -> StepResult {
+pub fn callvirt<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     // Use unified dispatch pipeline for virtual calls
     // Only inspect `this` from the current stack state; avoid pop/push argument churn.
 
@@ -80,18 +66,7 @@ pub fn callvirt<
 }
 
 #[dotnet_instruction(CallVirtualTail(param0))]
-pub fn callvirt_tail<
-    'gc,
-    T: CallOps<'gc>
-        + ResolutionOps<'gc>
-        + ExceptionOps<'gc>
-        + EvalStackOps<'gc>
-        + LoaderOps
-        + ReflectionOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodSource,
-) -> StepResult {
+pub fn callvirt_tail<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     // Tail-prefixed callvirt: extract runtime this type (and perform null check), then request
     // tail dispatch.
     let (base_method, _) = dotnet_vm_ops::vm_try!(
@@ -121,7 +96,7 @@ pub fn callvirt_tail<
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
-pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
+pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoaderOps>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,
@@ -177,17 +152,7 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
-pub fn callvirt_constrained<
-    'gc,
-    T: CallOps<'gc>
-        + ResolutionOps<'gc>
-        + ExceptionOps<'gc>
-        + StackOps<'gc>
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + LoaderOps
-        + ReflectionOps<'gc>,
->(
+pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,

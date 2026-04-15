@@ -4,7 +4,9 @@
 //! Includes `#[dotnet_intrinsic]` for BCL methods and `#[dotnet_instruction]` for CIL instructions.
 extern crate proc_macro;
 
-use dotnet_macros_core::{InstructionMapping, ParsedInstruction, ParsedSignature};
+use dotnet_macros_core::{
+    InstructionMapping, ParsedInstruction, ParsedSignature, expand_trait_aliases,
+};
 use proc_macro::TokenStream;
 use quote::quote;
 use std::{
@@ -144,6 +146,14 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+#[proc_macro]
+pub fn trait_alias(input: TokenStream) -> TokenStream {
+    match expand_trait_aliases(input.into()) {
+        Ok(expanded) => expanded.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
 
 #[cfg(test)]

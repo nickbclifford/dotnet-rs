@@ -20,26 +20,15 @@ use dotnet_vm_ops::{
     },
 };
 
-pub trait DelegateEqualsHost<'gc>:
-    EvalStackOps<'gc>
-    + TypedStackOps<'gc>
-    + ExceptionOps<'gc>
-    + LoaderOps
-    + ResolutionOps<'gc>
-    + ReflectionOps<'gc>
-    + MemoryOps<'gc>
-{
-}
-
-impl<'gc, T> DelegateEqualsHost<'gc> for T where
-    T: EvalStackOps<'gc>
+dotnet_vm_ops::trait_alias! {
+    pub trait DelegateEqualsHost<'gc> =
+        EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
         + ResolutionOps<'gc>
         + ReflectionOps<'gc>
-        + MemoryOps<'gc>
-{
+        + MemoryOps<'gc>;
 }
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]

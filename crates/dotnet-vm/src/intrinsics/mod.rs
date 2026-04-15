@@ -119,6 +119,7 @@ use crate::{
     error::ExecutionError,
     stack::ops::{
         EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps,
+        VmReflectionOps,
     },
 };
 use dotnet_assemblies::AssemblyLoader;
@@ -495,7 +496,7 @@ fn object_to_string<
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<
     'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + VmReflectionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

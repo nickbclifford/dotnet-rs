@@ -3,7 +3,7 @@ mod tests {
     use crate::{
         StepResult,
         dispatch::ExecutionEngine,
-        stack::{CallStack, GCArena, ops::CallOps},
+        stack::{CallStack, GCArena, ops::VmCallOps},
         state::{ArenaLocalState, SharedGlobalState},
         sync::Arc,
     };

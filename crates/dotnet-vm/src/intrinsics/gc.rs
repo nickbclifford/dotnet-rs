@@ -2,7 +2,7 @@ use crate::{
     StepResult,
     instructions::objects::get_ptr_info,
     stack::ops::{
-        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, StackOps, TypedStackOps, VesBaseOps,
+        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps, VesBaseOps,
         VesInternals,
     },
 };
@@ -458,7 +458,7 @@ pub fn intrinsic_dependent_handle_internal_get_dependent<
 )]
 pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
     'gc,
-    T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
+    T: ExceptionOps<'gc> + RawMemoryOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

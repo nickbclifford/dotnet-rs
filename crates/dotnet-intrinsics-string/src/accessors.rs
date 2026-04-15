@@ -8,10 +8,7 @@ use dotnet_utils::ByteOffset;
 use dotnet_value::{object::HeapStorage, string::CLRString, with_string};
 use dotnet_vm_ops::{
     StepResult,
-    ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, ThreadOps, TypedStackOps,
-    },
+    ops::{ExceptionOps, LoaderOps, RawMemoryOps, StringIntrinsicHost, TypedStackOps},
 };
 use std::sync::Arc;
 
@@ -101,19 +98,7 @@ pub fn intrinsic_string_get_raw_data<'gc, T: TypedStackOps<'gc> + ExceptionOps<'
 }
 
 #[dotnet_intrinsic_field("static string System.String::Empty")]
-pub fn intrinsic_field_string_empty<
-    'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
->(
+pub fn intrinsic_field_string_empty<'gc, T: StringIntrinsicHost<'gc>>(
     ctx: &mut T,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
@@ -124,19 +109,7 @@ pub fn intrinsic_field_string_empty<
 }
 
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
-pub fn intrinsic_field_string_length<
-    'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
->(
+pub fn intrinsic_field_string_length<'gc, T: StringIntrinsicHost<'gc>>(
     ctx: &mut T,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,

@@ -52,22 +52,11 @@ pub trait SpanRuntimeHost<'gc> {
     ) -> StepResult;
 }
 
-pub trait SpanIntrinsicHost<'gc>:
-    VmSpanIntrinsicHost<'gc>
-    + LayoutQueryHost
-    + SpanPointerIntrospectionHost<'gc>
-    + SpanObjectFactoryHost<'gc>
-    + SpanRuntimeHost<'gc>
-{
-}
-impl<
-    'gc,
-    T: VmSpanIntrinsicHost<'gc>
+dotnet_vm_ops::trait_alias! {
+    pub trait SpanIntrinsicHost<'gc> =
+        VmSpanIntrinsicHost<'gc>
         + LayoutQueryHost
         + SpanPointerIntrospectionHost<'gc>
         + SpanObjectFactoryHost<'gc>
-        + SpanRuntimeHost<'gc>
-        + ?Sized,
-> SpanIntrinsicHost<'gc> for T
-{
+        + SpanRuntimeHost<'gc>;
 }

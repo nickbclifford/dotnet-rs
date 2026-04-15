@@ -1,7 +1,7 @@
 use crate::{
     StepResult,
     instructions::objects::get_ptr_info,
-    stack::ops::{ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, StackOps, TypedStackOps},
+    stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -15,7 +15,7 @@ use dotnet_value::{
 )]
 pub fn intrinsic_get_stack_traces_deep_copy<
     'gc,
-    T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

@@ -135,17 +135,10 @@ pub trait StackSlotWriteHost<'gc> {
     );
 }
 
-pub trait ThreadingIntrinsicHost<'gc>:
-    VmThreadingIntrinsicHost<'gc> + MonitorHost<'gc> + AtomicMemoryHost<'gc> + StackSlotWriteHost<'gc>
-{
-}
-impl<
-    'gc,
-    T: VmThreadingIntrinsicHost<'gc>
+dotnet_vm_ops::trait_alias! {
+    pub trait ThreadingIntrinsicHost<'gc> =
+        VmThreadingIntrinsicHost<'gc>
         + MonitorHost<'gc>
         + AtomicMemoryHost<'gc>
-        + StackSlotWriteHost<'gc>
-        + ?Sized,
-> ThreadingIntrinsicHost<'gc> for T
-{
+        + StackSlotWriteHost<'gc>;
 }

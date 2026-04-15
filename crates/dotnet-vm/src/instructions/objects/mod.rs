@@ -3,7 +3,7 @@ use crate::{
     instructions::NULL_REF_MSG,
     layout::{VmLayoutFactory, type_layout},
     resolution::ValueResolution,
-    stack::ops::{EvalStackOps, ResolutionOps, StackOps, VesOps},
+    stack::ops::{EvalStackOps, ResolutionOps, TypedStackOps, VesOps, VmResolutionOps},
 };
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -26,7 +26,7 @@ pub mod casting;
 pub mod fields;
 pub mod typed_references;
 
-pub(crate) fn get_ptr_info<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
+pub(crate) fn get_ptr_info<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
     val: &StackValue<'gc>,
 ) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
@@ -57,7 +57,7 @@ pub(crate) fn get_ptr_info<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
     }
 }
 
-pub(crate) fn get_ptr_context<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
+pub(crate) fn get_ptr_context<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
     val: &StackValue<'gc>,
 ) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
@@ -390,7 +390,7 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
 }
 
 #[dotnet_instruction(Sizeof(param0))]
-pub fn sizeof<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc>>(
+pub fn sizeof<'gc, T: ResolutionOps<'gc> + VmResolutionOps<'gc> + EvalStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -402,7 +402,7 @@ pub fn sizeof<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc>>(
 }
 
 #[dotnet_instruction(LoadString(chars))]
-pub fn ldstr<'gc, T: StackOps<'gc>>(ctx: &mut T, chars: &[u16]) -> StepResult {
+pub fn ldstr<'gc, T: TypedStackOps<'gc>>(ctx: &mut T, chars: &[u16]) -> StepResult {
     ctx.push_string(CLRString::new(chars.to_owned()));
     StepResult::Continue
 }

@@ -5,7 +5,7 @@ use crate::{
     gc::coordinator::*,
     stack::{
         CallStack, GCArena,
-        ops::{CallOps, ReflectionOps, VesOps},
+        ops::{VesOps, VmCallOps, VmReflectionOps},
     },
     state::{ArenaLocalState, SharedGlobalState},
     threading::ThreadManagerOps,

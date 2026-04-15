@@ -1,8 +1,8 @@
 use crate::{
-    ExceptionOps, StepResult,
+    StepResult,
     instructions::NULL_REF_MSG,
     resolution::{TypeResolutionExt, ValueResolution},
-    stack::ops::{EvalStackOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps},
+    stack::ops::VesOps,
 };
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -23,10 +23,7 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(BoxValue(param0))]
-pub fn box_value<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn box_value<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let res_ctx = ctx.current_context();
     let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let value = vm_pop!(ctx);
@@ -42,18 +39,7 @@ pub fn box_value<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc>
 }
 
 #[dotnet_instruction(UnboxIntoValue(param0))]
-pub fn unbox_any<
-    'gc,
-    T: ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + EvalStackOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let val = ctx.pop();
     let res_ctx = ctx.current_context();
     let target_ct = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
@@ -235,13 +221,7 @@ pub fn unbox_any<
 }
 
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
-pub fn unbox<
-    'gc,
-    T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps + MemoryOps<'gc>,
->(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let value = vm_pop!(ctx);
     let res_ctx = ctx.current_context();
     let target_ct = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));

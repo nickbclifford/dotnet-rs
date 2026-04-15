@@ -8,6 +8,7 @@
 mod macros;
 pub mod ops;
 
+pub use dotnet_macros::trait_alias;
 pub use dotnet_vm_data::{
     CollectableMethodDescription, MethodInfo, MethodState, StepResult,
     exceptions::{
@@ -17,9 +18,9 @@ pub use dotnet_vm_data::{
     stack::{BasePointer, EvaluationStack, FrameStack, MulticastState, PinnedLocals, StackFrame},
 };
 pub use ops::{
-    AllStackOps, ArgumentOps, CallOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext,
-    ExceptionOps, LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps,
-    ReflectionIntrinsicHost, ReflectionOps, ResolutionOps, SpanIntrinsicHost, StackOps, StaticsOps,
-    StringIntrinsicHost, ThreadOps, ThreadingIntrinsicHost, TypedStackOps, UnsafeIntrinsicHost,
-    VariableOps, VesBaseOps, VesInternals,
+    ArgumentOps, CallOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext, ExceptionOps,
+    LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionIntrinsicHost,
+    ReflectionOps, ResolutionOps, SpanIntrinsicHost, StackOps, StaticsOps, StringIntrinsicHost,
+    ThreadOps, ThreadingIntrinsicHost, TypedStackOps, UnsafeIntrinsicHost, VariableOps, VesBaseOps,
+    VesInternals,
 };

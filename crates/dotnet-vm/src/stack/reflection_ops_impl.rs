@@ -5,14 +5,13 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            CallOps, IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ReflectionOps,
-            ResolutionOps, StaticsOps, ThreadOps,
+            IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ThreadOps, VmCallOps,
+            VmLoaderOps, VmReflectionOps, VmResolutionOps, VmStaticsOps,
         },
     },
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
     sync::Arc,
 };
-use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -45,12 +44,7 @@ impl<'a> dotnet_intrinsics_reflection::RuntimeTypeContext for ResolutionContext<
     }
 }
 
-impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
-    #[inline]
-    fn loader_arc(&self) -> Arc<AssemblyLoader> {
-        self.shared.loader.clone()
-    }
-
+impl<'a, 'gc> VmLoaderOps for VesContext<'a, 'gc> {
     #[inline]
     fn resolver(&self) -> VmResolverService {
         VmResolverService::new(self.shared.clone())
@@ -62,7 +56,7 @@ impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmStaticsOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn statics(&self) -> &StaticStorageManager {
         &self.shared.statics
@@ -446,7 +440,7 @@ impl<'a, 'gc> ReflectionLookupOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn pre_initialize_reflection(&mut self) {
         dotnet_intrinsics_reflection::common::pre_initialize_reflection(self)

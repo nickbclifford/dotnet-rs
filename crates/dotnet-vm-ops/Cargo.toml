@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 dotnet-assemblies = { workspace = true }
+dotnet-macros = { workspace = true }
 dotnet-tracer = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }

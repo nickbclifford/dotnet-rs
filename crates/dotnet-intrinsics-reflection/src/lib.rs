@@ -148,22 +148,12 @@ pub trait ReflectionRegistryHost<'gc> {
     );
 }
 
-pub trait ReflectionIntrinsicHost<'gc>:
-    VmReflectionIntrinsicHost<'gc>
-    + ResolutionContextHost<'gc>
-    + LayoutQueryHost
-    + ReflectionRegistryHost<'gc>
-{
-}
-impl<
-    'gc,
-    T: VmReflectionIntrinsicHost<'gc>
+dotnet_vm_ops::trait_alias! {
+    pub trait ReflectionIntrinsicHost<'gc> =
+        VmReflectionIntrinsicHost<'gc>
         + ResolutionContextHost<'gc>
         + LayoutQueryHost
-        + ReflectionRegistryHost<'gc>
-        + ?Sized,
-> ReflectionIntrinsicHost<'gc> for T
-{
+        + ReflectionRegistryHost<'gc>;
 }
 
 pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";

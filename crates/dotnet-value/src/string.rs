@@ -83,21 +83,24 @@ const STRING_INTERN_DEFAULT_MAX_ENTRIES: usize = 4096;
 type StringInternerMap = HashMap<Arc<[u16]>, Arc<[u16]>>;
 
 static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
-    let enabled = std::env::var("DOTNET_STRING_INTERN_EXPERIMENT")
-        .map(|raw| {
+    let enabled = match std::env::var("DOTNET_STRING_INTERN_EXPERIMENT") {
+        Ok(raw) => {
             let trimmed = raw.trim();
             trimmed.eq_ignore_ascii_case("1")
                 || trimmed.eq_ignore_ascii_case("true")
                 || trimmed.eq_ignore_ascii_case("yes")
                 || trimmed.eq_ignore_ascii_case("on")
-        })
-        .unwrap_or(false);
+        }
+        Err(_) => false,
+    };
 
-    let max_entries = std::env::var("DOTNET_STRING_INTERN_MAX_ENTRIES")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(STRING_INTERN_DEFAULT_MAX_ENTRIES);
+    let max_entries = match std::env::var("DOTNET_STRING_INTERN_MAX_ENTRIES") {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(v) if v > 0 => v,
+            _ => STRING_INTERN_DEFAULT_MAX_ENTRIES,
+        },
+        Err(_) => STRING_INTERN_DEFAULT_MAX_ENTRIES,
+    };
 
     InternConfig {
         enabled,

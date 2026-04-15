@@ -4,8 +4,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            BaseLoaderOps, BaseStaticsOps, CallOps, EvalStackOps, LoaderOps, RawMemoryOps,
-            ResolutionOps,
+            EvalStackOps, LoaderOps, RawMemoryOps, StaticsOps, VmCallOps, VmLoaderOps,
+            VmResolutionOps,
         },
     },
 };
@@ -54,7 +54,12 @@ fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepRe
     )
 }
 
-impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn return_frame(&mut self) -> StepResult {
+        VesContext::return_frame(self)
+    }
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,

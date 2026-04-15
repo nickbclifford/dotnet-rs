@@ -408,11 +408,14 @@ pub fn external_call<'gc>(
     res
 }
 
-fn resolve_parameter_base_type(
+fn resolve_parameter_base_type<'gc, T>(
     p_type: &ParameterType<MethodType>,
-    res_ctx: &dyn ResolutionOps<'_>,
+    res_ctx: &T,
     default: BaseType<ConcreteType>,
-) -> Result<BaseType<ConcreteType>, TypeResolutionError> {
+) -> Result<BaseType<ConcreteType>, TypeResolutionError>
+where
+    T: ResolutionOps<'gc> + ?Sized,
+{
     if let ParameterType::Value(t) = p_type {
         Ok(res_ctx.make_concrete(t)?.get().clone())
     } else {

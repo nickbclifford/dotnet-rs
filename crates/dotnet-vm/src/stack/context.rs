@@ -434,21 +434,16 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> BaseLoaderOps for VesContext<'a, 'gc> {
+impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     #[inline]
     fn loader(&self) -> &Arc<dotnet_assemblies::AssemblyLoader> {
         &self.shared.loader
     }
 }
 
-impl<'a, 'gc> BaseCallOps<'gc> for VesContext<'a, 'gc> {
-    #[inline]
-    fn return_frame(&mut self) -> StepResult {
-        VesContext::return_frame(self)
-    }
-}
+impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {}
 
-impl<'a, 'gc> BaseResolutionOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn stack_value_type(
         &self,
@@ -484,7 +479,7 @@ impl<'a, 'gc> BaseResolutionOps<'gc> for VesContext<'a, 'gc> {
 
 impl<'a, 'gc> dotnet_vm_ops::ops::StackOps<'gc> for VesContext<'a, 'gc> {}
 
-impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> dotnet_runtime_memory::ops::BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn no_active_borrows_token(&self) -> dotnet_utils::GcReadyToken<'_> {
         self.gc_ready_token()
@@ -589,7 +584,7 @@ impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> BaseReflectionOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_heap_description(
         &self,
@@ -894,7 +889,7 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
     }
 }
 
-impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn initialize_static_storage(
         &mut self,
@@ -1095,11 +1090,11 @@ impl<'a, 'gc> VesBaseOps for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> BaseExceptionContext<'gc> for VesContext<'a, 'gc> {}
-
 impl<'a, 'gc> ExceptionContext<'gc> for VesContext<'a, 'gc> {}
 
-impl<'a, 'gc> BasePInvokeContext<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> VmExceptionContext<'gc> for VesContext<'a, 'gc> {}
+
+impl<'a, 'gc> PInvokeContext<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn pin_object(&mut self, object: ObjectRef<'gc>) {
         VesContext::pin_object(self, object)
@@ -1111,7 +1106,7 @@ impl<'a, 'gc> BasePInvokeContext<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> PInvokeContext<'gc> for VesContext<'a, 'gc> {}
+impl<'a, 'gc> VmPInvokeContext<'gc> for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
     #[inline]

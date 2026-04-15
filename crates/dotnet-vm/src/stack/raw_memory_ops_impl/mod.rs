@@ -3,7 +3,7 @@ use crate::{
     error::{CompareExchangeError, MemoryAccessError},
     stack::{
         context::VesContext,
-        ops::{RawMemoryOps, StaticsOps, VesInternals},
+        ops::{RawMemoryOps, VesInternals, VmRawMemoryOps, VmStaticsOps},
     },
     threading::ThreadManagerOps,
 };
@@ -41,65 +41,6 @@ impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
 impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
         self
-    }
-
-    /// # Safety
-    ///
-    /// The returned pointer is valid for the duration of the current method frame.
-    /// It must not be stored in a way that outlives the frame.
-    #[inline]
-    fn localloc(&mut self, size: usize) -> *mut u8 {
-        let s = self.state_mut();
-        // Ensure 8-byte alignment for the allocated block
-        let current_len = s.memory_pool.len();
-        let aligned_len = (current_len + 7) & !7;
-        let padding = aligned_len - current_len;
-
-        if padding > 0 {
-            s.memory_pool.resize(aligned_len, 0);
-        }
-
-        let loc = s.memory_pool.len();
-        s.memory_pool.resize(loc + size, 0);
-        s.memory_pool[loc..].as_mut_ptr()
-    }
-
-    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
-        match origin {
-            PointerOrigin::Stack(idx) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
-            }
-            PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
-                storage.storage.with_data(|data| unsafe {
-                    NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
-                })
-            }
-            PointerOrigin::Heap(owner) => {
-                let handle = owner.0.expect("resolve_address: null owner handle");
-                let inner = handle.borrow();
-                let ptr = unsafe { inner.storage.raw_data_ptr() };
-                unsafe { NonNull::new_unchecked(ptr.add(offset.as_usize())) }
-            }
-            PointerOrigin::Unmanaged => {
-                NonNull::new(sptr::from_exposed_addr_mut::<u8>(offset.as_usize()))
-                    .expect("resolve_address: null unmanaged pointer (offset=0)")
-            }
-            #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { &*ptr.as_ptr() };
-                let guard = lock.borrow();
-                let storage = &guard.storage;
-                unsafe { NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
-            }
-            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| unsafe {
-                NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
-            }),
-        }
     }
 
     /// # Safety
@@ -900,5 +841,62 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         }
         let thread_manager = &self.shared.thread_manager;
         thread_manager.is_gc_stop_requested()
+    }
+}
+
+impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn localloc(&mut self, size: usize) -> *mut u8 {
+        let s = self.state_mut();
+        // Ensure 8-byte alignment for the allocated block
+        let current_len = s.memory_pool.len();
+        let aligned_len = (current_len + 7) & !7;
+        let padding = aligned_len - current_len;
+
+        if padding > 0 {
+            s.memory_pool.resize(aligned_len, 0);
+        }
+
+        let loc = s.memory_pool.len();
+        s.memory_pool.resize(loc + size, 0);
+        s.memory_pool[loc..].as_mut_ptr()
+    }
+
+    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
+        match origin {
+            PointerOrigin::Stack(idx) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
+            }
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
+                storage.storage.with_data(|data| unsafe {
+                    NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
+                })
+            }
+            PointerOrigin::Heap(owner) => {
+                let handle = owner.0.expect("resolve_address: null owner handle");
+                let inner = handle.borrow();
+                let ptr = unsafe { inner.storage.raw_data_ptr() };
+                unsafe { NonNull::new_unchecked(ptr.add(offset.as_usize())) }
+            }
+            PointerOrigin::Unmanaged => {
+                NonNull::new(sptr::from_exposed_addr_mut::<u8>(offset.as_usize()))
+                    .expect("resolve_address: null unmanaged pointer (offset=0)")
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { &*ptr.as_ptr() };
+                let guard = lock.borrow();
+                let storage = &guard.storage;
+                unsafe { NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
+            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| unsafe {
+                NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
+            }),
+        }
     }
 }

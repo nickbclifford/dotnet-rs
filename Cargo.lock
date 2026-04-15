@@ -655,6 +655,7 @@ name = "dotnet-vm-ops"
 version = "0.1.0"
 dependencies = [
  "dotnet-assemblies",
+ "dotnet-macros",
  "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",

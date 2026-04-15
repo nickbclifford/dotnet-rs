@@ -39,10 +39,7 @@ pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
     fn unsafe_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> ConcreteType;
 }
 
-pub(crate) fn ptr_info<
-    'gc,
-    T: dotnet_vm_ops::ops::StackOps<'gc> + dotnet_vm_ops::ops::ExceptionOps<'gc>,
->(
+pub(crate) fn ptr_info<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(
     ctx: &mut T,
     val: &dotnet_value::StackValue<'gc>,
 ) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
