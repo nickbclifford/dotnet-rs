@@ -812,7 +812,7 @@ pub fn handle_get_generic_arguments<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
         .enumerate()
     {
-        if i % 16 == 0 && ctx.check_gc_safe_point() {
+        if (i & 0x0f) == 0 && ctx.check_gc_safe_point() {
             return StepResult::Yield;
         }
         let arg_obj = crate::common::get_runtime_type(ctx, arg);

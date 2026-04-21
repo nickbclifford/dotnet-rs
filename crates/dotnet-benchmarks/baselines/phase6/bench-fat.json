@@ -1,0 +1,73 @@
+{
+  "captured_at_utc": "2026-04-17T23:42:59.192531+00:00",
+  "profile": "bench-fat",
+  "sample_size": 10,
+  "phase0_baseline": "crates/dotnet-benchmarks/baselines/phase0/baseline.json",
+  "workloads": {
+    "json": {
+      "median_ns": 281634002.25,
+      "phase0_median_ns": 312110069.0,
+      "phase0_delta_pct": -9.764525331606652
+    },
+    "arithmetic": {
+      "median_ns": 466455472.0,
+      "phase0_median_ns": 585056975.5,
+      "phase0_delta_pct": -20.271786931288368
+    },
+    "gc": {
+      "median_ns": 415076083.0,
+      "phase0_median_ns": 433049308.0,
+      "phase0_delta_pct": -4.150387650544404
+    },
+    "gc_cross_arena": {
+      "median_ns": 158148755.1888889,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "dispatch": {
+      "median_ns": 713900070.0,
+      "phase0_median_ns": 794170145.5,
+      "phase0_delta_pct": -10.107415388860144
+    },
+    "generics": {
+      "median_ns": 17489293213.5,
+      "phase0_median_ns": 18754463663.0,
+      "phase0_delta_pct": -6.745969771431047
+    },
+    "stack": {
+      "median_ns": 861957836.5,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "span": {
+      "median_ns": 489927393.0,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "span_equality": {
+      "median_ns": 592614927.5,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "memory": {
+      "median_ns": 1216015642.5,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "unsafe_buffer": {
+      "median_ns": 810343651.0,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "string": {
+      "median_ns": 580154363.0,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    },
+    "reflection": {
+      "median_ns": 352272350.0,
+      "phase0_median_ns": null,
+      "phase0_delta_pct": null
+    }
+  }
+}

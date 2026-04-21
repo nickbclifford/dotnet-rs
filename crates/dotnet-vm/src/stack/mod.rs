@@ -84,9 +84,15 @@ mod reflection_ops_impl;
 mod resolution_ops_impl;
 mod stack_ops_impl;
 
-pub use context::*;
+pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
 pub use dotnet_vm_ops::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
-pub use ops::*;
+pub use ops::{
+    ArgumentOps, CallOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps,
+    LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps,
+    ReflectionOps, ResolutionOps, StackOps, StaticsOps, ThreadOps, TypedStackOps, VariableOps,
+    VesBaseOps, VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext,
+    VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
+};
 
 pub struct CallStack<'gc> {
     pub execution: ThreadContext<'gc>,

@@ -12,7 +12,7 @@ use dotnet_types::{
 };
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,

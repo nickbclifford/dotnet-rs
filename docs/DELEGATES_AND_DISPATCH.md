@@ -34,7 +34,7 @@ The main dispatch loop in `step` / `step_normal`:
 
 ### `StepResult` Enum
 
-The `StepResult` enum (defined in `crates/dotnet-vm-data`, re-exported by `dotnet-vm-ops` and `dotnet-vm`) dictates how the dispatch loop proceeds after executing an instruction or intrinsic:
+The `StepResult` enum (defined in `crates/dotnet-vm-data`; canonical path: `dotnet_vm_data::StepResult`) dictates how the dispatch loop proceeds after executing an instruction or intrinsic:
 
 - `Continue`: Instruction executed successfully; advance IP to the next instruction.
 - `Jump(usize)`: Branch to the specified IP (used by `br`, `brtrue`, `brfalse`, etc.).

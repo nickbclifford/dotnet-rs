@@ -228,29 +228,50 @@ impl<T: ?Sized> DerefMut for ThreadSafeWriteGuard<'_, T> {
     }
 }
 
-// SAFETY: `ThreadSafeLock<T>` can be sent to another thread as long as `T`
-// itself can be sent.  Under both backends (parking_lot `RwLock` and
-// gc-arena `RefLock`) ownership transfer is safe when `T: Send`.
+// SAFETY: In multithreading mode this wrapper is backed by
+// `parking_lot::RwLock<T>`, which is `Send` when `T: Send`.
+#[cfg(feature = "multithreading")]
 unsafe impl<T: Send> Send for ThreadSafeLock<T> {}
 
 // SAFETY: `ThreadSafeLock<T>` allows `&ThreadSafeLock<T>` to be used from
 // multiple threads concurrently.  Read-borrows hand out `&T` references that
 // may be observed by many threads at once, so `T: Sync` is required.
 // Write-borrows hand out `&mut T` which may be sent across a thread boundary,
-// so `T: Send` is also required.  These bounds mirror the requirements of
-// `parking_lot::RwLock<T>` (the multithreading backend) and make the
-// single-threaded (`RefLock`) path equally strict, preventing `!Sync` types
-// from being incorrectly shared.
+// so `T: Send` is also required.  These bounds mirror
+// `parking_lot::RwLock<T>` exactly.
+#[cfg(feature = "multithreading")]
 unsafe impl<T: Send + Sync> Sync for ThreadSafeLock<T> {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use static_assertions::assert_impl_all;
+    use static_assertions::assert_not_impl_all;
+    use std::{cell::Cell, rc::Rc};
 
-    // Compile-time: ThreadSafeLock<i32> must be Send + Sync under every
-    // feature configuration (i32 satisfies the T: Send + Sync bound).
+    #[cfg(feature = "multithreading")]
     assert_impl_all!(ThreadSafeLock<i32>: Send, Sync);
+    #[cfg(feature = "multithreading")]
+    assert_impl_all!(ThreadSafeLock<Cell<u8>>: Send);
+    #[cfg(feature = "multithreading")]
+    assert_not_impl_all!(ThreadSafeLock<Cell<u8>>: Sync);
+    #[cfg(feature = "multithreading")]
+    assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Send);
+    #[cfg(feature = "multithreading")]
+    assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Sync);
+
+    #[cfg(not(feature = "multithreading"))]
+    assert_impl_all!(ThreadSafeLock<i32>: Send);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ThreadSafeLock<i32>: Sync);
+    #[cfg(not(feature = "multithreading"))]
+    assert_impl_all!(ThreadSafeLock<Cell<u8>>: Send);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ThreadSafeLock<Cell<u8>>: Sync);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Send);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Sync);
 
     #[test]
     fn test_basic_borrow() {

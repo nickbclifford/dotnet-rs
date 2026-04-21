@@ -8,9 +8,12 @@ dotnet-macros = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
+dotnet-simd = { workspace = true, default-features = false }
+dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 
 [features]
 default = []
+simd = ["dotnet-simd/simd"]

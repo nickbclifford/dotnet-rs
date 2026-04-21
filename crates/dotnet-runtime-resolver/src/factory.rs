@@ -194,10 +194,12 @@ where
         resolution: ResolutionS,
         generics: &GenericLookup,
     ) -> Result<Object<'gc>, TypeResolutionError> {
-        Ok(Object::new(
+        let has_finalizer = self.has_finalizer(td.clone())?;
+        Ok(Object::new_with_finalizer_flag(
             td.clone(),
             generics.clone(),
             self.new_instance_fields_with_lookup(td, resolution, generics)?,
+            has_finalizer,
         ))
     }
 

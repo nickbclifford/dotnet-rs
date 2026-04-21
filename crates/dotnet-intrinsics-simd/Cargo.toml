@@ -1,0 +1,15 @@
+[package]
+name = "dotnet-intrinsics-simd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-macros = { workspace = true }
+dotnet-simd = { workspace = true, default-features = false }
+dotnet-types = { workspace = true }
+dotnet-vm-data = { workspace = true, default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
+
+[features]
+default = []
+simd = ["dotnet-simd/simd"]

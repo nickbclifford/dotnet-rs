@@ -1,7 +1,7 @@
 use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use std::time::Duration;
 
 /// System.Threading.Thread::Sleep(int millisecondsTimeout)

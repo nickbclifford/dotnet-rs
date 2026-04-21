@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use dotnet_benchmarks::{
-    ARITHMETIC_BENCHMARK, BenchHarness, DISPATCH_BENCHMARK, GC_BENCHMARK, GENERICS_BENCHMARK,
-    JSON_BENCHMARK,
+    ARITHMETIC_BENCHMARK, BenchHarness, DISPATCH_BENCHMARK, GC_BENCHMARK, GC_CROSS_ARENA_BENCHMARK,
+    GENERICS_BENCHMARK, JSON_BENCHMARK, MEMORY_BENCHMARK, REFLECTION_BENCHMARK, SPAN_BENCHMARK,
+    SPAN_EQUALITY_BENCHMARK, STACK_BENCHMARK, STRING_BENCHMARK, UNSAFE_BUFFER_BENCHMARK,
 };
 
 #[cfg(feature = "bench-instrumentation")]
@@ -51,8 +52,16 @@ fn benchmarks(c: &mut Criterion) {
     run_case(c, JSON_BENCHMARK);
     run_case(c, ARITHMETIC_BENCHMARK);
     run_case(c, GC_BENCHMARK);
+    run_case(c, GC_CROSS_ARENA_BENCHMARK);
     run_case(c, DISPATCH_BENCHMARK);
     run_case(c, GENERICS_BENCHMARK);
+    run_case(c, STACK_BENCHMARK);
+    run_case(c, SPAN_BENCHMARK);
+    run_case(c, SPAN_EQUALITY_BENCHMARK);
+    run_case(c, MEMORY_BENCHMARK);
+    run_case(c, UNSAFE_BUFFER_BENCHMARK);
+    run_case(c, STRING_BENCHMARK);
+    run_case(c, REFLECTION_BENCHMARK);
 }
 
 criterion_group! {

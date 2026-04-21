@@ -406,6 +406,7 @@ dependencies = [
  "dotnet-macros",
  "dotnet-types",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
 ]
@@ -419,8 +420,20 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
+]
+
+[[package]]
+name = "dotnet-intrinsics-simd"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-simd",
+ "dotnet-types",
+ "dotnet-vm-data",
+ "dotnet-vm-ops",
 ]
 
 [[package]]
@@ -428,9 +441,11 @@ name = "dotnet-intrinsics-span"
 version = "0.1.0"
 dependencies = [
  "dotnet-macros",
+ "dotnet-simd",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
 ]
@@ -440,9 +455,11 @@ name = "dotnet-intrinsics-string"
 version = "0.1.0"
 dependencies = [
  "dotnet-macros",
+ "dotnet-simd",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
@@ -456,6 +473,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
@@ -466,9 +484,11 @@ name = "dotnet-intrinsics-unsafe"
 version = "0.1.0"
 dependencies = [
  "dotnet-macros",
+ "dotnet-simd",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
 ]
@@ -547,6 +567,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-simd"
+version = "0.1.0"
+
+[[package]]
 name = "dotnet-tracer"
 version = "0.1.0"
 dependencies = [
@@ -592,6 +616,7 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "sptr",
+ "static_assertions",
 ]
 
 [[package]]
@@ -606,6 +631,7 @@ dependencies = [
  "dotnet-intrinsics-core",
  "dotnet-intrinsics-delegates",
  "dotnet-intrinsics-reflection",
+ "dotnet-intrinsics-simd",
  "dotnet-intrinsics-span",
  "dotnet-intrinsics-string",
  "dotnet-intrinsics-threading",
@@ -620,6 +646,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",

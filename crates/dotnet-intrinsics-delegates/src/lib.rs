@@ -1,9 +1,12 @@
 //! Delegate intrinsic handlers and delegate-host execution seams.
+//!
+//! Inventory mapping for this host surface is tracked in
+//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     error::TypeResolutionError, generics::GenericLookup, members::MethodDescription,
 };
 use dotnet_value::object::ObjectRef;
-use dotnet_vm_ops::{MethodInfo, StepResult};
+use dotnet_vm_data::{MethodInfo, StepResult};
 
 pub mod helpers;
 pub mod invoke;

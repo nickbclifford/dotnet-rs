@@ -15,9 +15,11 @@ dotnet-intrinsics-span = { workspace = true, default-features = false }
 dotnet-intrinsics-string = { workspace = true, default-features = false }
 dotnet-intrinsics-threading = { workspace = true, default-features = false }
 dotnet-intrinsics-reflection = { workspace = true, default-features = false }
+dotnet-intrinsics-simd = { workspace = true, default-features = false }
 dotnet-intrinsics-unsafe = { workspace = true, default-features = false }
 dotnet-metrics = { workspace = true }
 dotnet-pinvoke = { path = "../dotnet-pinvoke", default-features = false }
+dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 dotnet-tracer = { workspace = true }
 dotnet-macros = { path = "../dotnet-macros" }
@@ -50,6 +52,10 @@ multithreading = [
     "dotnet-value/multithreading",
     "dotnet-tracer/multithreading",
     "dotnet-pinvoke/multithreading",
+]
+simd = [
+    "dotnet-intrinsics-simd/simd",
+    "dotnet-intrinsics-string/simd",
 ]
 memory-validation = [
     "dotnet-runtime-memory/memory-validation",

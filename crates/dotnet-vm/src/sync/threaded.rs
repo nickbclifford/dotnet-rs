@@ -5,7 +5,7 @@ use crate::{
 };
 use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, num::NonZeroUsize, time::Instant};
 
 #[derive(Debug)]
 struct SyncBlockState {
@@ -251,7 +251,7 @@ impl super::SyncBlockOps for SyncBlock {
 }
 
 pub struct SyncBlockManager {
-    blocks: OrderedMutex<levels::SyncBlocks, HashMap<usize, Arc<SyncBlock>>>,
+    blocks: OrderedMutex<levels::SyncBlocks, HashMap<NonZeroUsize, Arc<SyncBlock>>>,
     next_index: OrderedMutex<levels::SyncNextIndex, usize>,
 }
 
@@ -267,7 +267,10 @@ impl SyncBlockManager {
 impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
-    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>) {
+    fn get_or_create_sync_block(
+        &self,
+        current_index: Option<NonZeroUsize>,
+    ) -> (NonZeroUsize, Arc<Self::Block>) {
         let mut blocks = self.blocks.lock();
 
         if let Some(index) = current_index
@@ -279,8 +282,10 @@ impl super::SyncManagerOps for SyncBlockManager {
         let index = {
             let mut next = self.next_index.lock_after(blocks.held_level());
             let idx = *next;
-            *next += 1;
-            idx
+            *next = next
+                .checked_add(1)
+                .expect("SyncBlockManager index overflowed");
+            NonZeroUsize::new(idx).expect("SyncBlockManager index must never be zero")
         };
 
         let block = Arc::new(SyncBlock::new());
@@ -289,7 +294,7 @@ impl super::SyncManagerOps for SyncBlockManager {
         (index, block)
     }
 
-    fn get_sync_block(&self, index: usize) -> Option<Arc<SyncBlock>> {
+    fn get_sync_block(&self, index: NonZeroUsize) -> Option<Arc<SyncBlock>> {
         self.blocks.lock().get(&index).cloned()
     }
 
@@ -308,7 +313,7 @@ mod tests {
     use super::*;
     use crate::{
         gc::coordinator::{GCCommand, GCCoordinator},
-        sync::{LockResult, SyncBlockOps},
+        sync::{LockResult, SyncBlockOps, SyncManagerOps},
         threading::{STWGuardOps, ThreadManagerOps},
     };
     use dotnet_metrics::RuntimeMetrics;
@@ -544,6 +549,23 @@ mod tests {
         assert_eq!(result, LockResult::Success);
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn sync_block_manager_allocates_non_zero_indices() {
+        let manager = SyncBlockManager::new();
+        let (index, _block) = manager.get_or_create_sync_block(None);
+        assert_ne!(index.get(), 0);
+    }
+
+    #[test]
+    fn sync_block_manager_reuses_existing_sync_block() {
+        let manager = SyncBlockManager::new();
+        let (index, first) = manager.get_or_create_sync_block(None);
+        let (same_index, second) = manager.get_or_create_sync_block(Some(index));
+
+        assert_eq!(same_index, index);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }
 

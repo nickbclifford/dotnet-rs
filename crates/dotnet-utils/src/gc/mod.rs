@@ -11,12 +11,17 @@ pub mod arena;
 pub mod cross_arena;
 pub mod thread_safe_lock;
 
-pub use thread_safe_lock::*;
+pub use thread_safe_lock::{ThreadSafeLock, ThreadSafeReadGuard, ThreadSafeWriteGuard};
 
 #[cfg(feature = "multithreading")]
-pub use arena::*;
+pub use arena::{ALLOCATION_THRESHOLD, ArenaHandle, ArenaHandleInner};
 #[cfg(feature = "multithreading")]
-pub use cross_arena::*;
+pub use cross_arena::{
+    ArenaLease, ArenaState, clear_tracing_state, get_currently_tracing, is_stw_in_progress,
+    is_valid_cross_arena_ref, record_cross_arena_ref, register_arena, reset_arena_registry,
+    set_currently_tracing, set_stw_in_progress, take_found_cross_arena_refs_with_generation,
+    try_acquire_lease, unregister_arena,
+};
 
 /// A handle to the GC mutation context.
 #[derive(Copy, Clone)]
@@ -172,6 +177,10 @@ pub struct MarkObjectPointers(HashSet<OpaqueObjectPtr>);
 impl MarkObjectPointers {
     pub fn new() -> Self {
         Self(HashSet::new())
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(HashSet::with_capacity(capacity))
     }
 
     pub fn insert(&mut self, ptr: OpaqueObjectPtr) -> bool {

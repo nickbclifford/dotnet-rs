@@ -49,9 +49,20 @@ pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
-pub use dotnet_vm_ops::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
-pub use executor::*;
-pub use stack::*;
+pub use dotnet_vm_data::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
+#[cfg(feature = "multithreading")]
+pub use executor::ArenaGuard;
+pub use executor::{Executor, ExecutorResult};
+pub use stack::ops;
+pub use stack::{
+    ArgumentOps, BasePointer, CallOps, CallStack, EvalStackOps, EvaluationStack, ExceptionContext,
+    ExceptionOps, ExceptionState, FrameStack, GCArena, GCArenaRoot, IntrinsicDispatchOps,
+    LoaderOps, LocalOps, MemoryOps, PInvokeContext, PinnedLocals, RawMemoryOps,
+    ReflectionLookupOps, ReflectionOps, ResolutionOps, StackFrame, StackOps, StaticsOps,
+    ThreadContext, ThreadOps, TypedStackOps, VariableOps, VesBaseOps, VesContext, VesInternals,
+    VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext, VmRawMemoryOps,
+    VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
+};
 pub use state::ReflectionRegistry;
 
 use context::ResolutionContext;

@@ -15,47 +15,68 @@ pub trait LockLevel {
 /// Trait describing that a lock level can be acquired while `Prev` is held.
 pub trait AcquireAfter<Prev: LockLevel>: LockLevel {}
 
-/// Canonical lock levels for project-owned runtime locks.
-pub mod levels {
-    use super::LockLevel;
+macro_rules! define_lock_order_dag {
+    (
+        levels {
+            $(
+                $level:ident => $label:literal
+            ),+ $(,)?
+        }
+        edges {
+            $(
+                $next:ident after $prev:ident
+            ),* $(,)?
+        }
+    ) => {
+        /// Canonical lock levels for project-owned runtime locks.
+        pub mod levels {
+            use super::LockLevel;
 
-    macro_rules! define_level {
-        ($name:ident, $label:literal) => {
-            #[derive(Debug, Clone, Copy)]
-            pub enum $name {}
+            $(
+                #[derive(Debug, Clone, Copy)]
+                pub enum $level {}
 
-            impl LockLevel for $name {
-                const NAME: &'static str = $label;
-            }
-        };
-    }
+                impl LockLevel for $level {
+                    const NAME: &'static str = $label;
+                }
+            )+
+        }
 
-    define_level!(Unlocked, "Unlocked");
-    define_level!(CollectionLock, "GCCoordinator::collection_lock");
-    define_level!(GcCoordination, "ThreadManager::gc_coordination");
-    define_level!(ThreadRegistry, "ThreadManager::threads");
-    define_level!(CoordinatorArenas, "GCCoordinator::arenas");
-    define_level!(ArenaCurrentCommand, "ArenaHandle::current_command");
-    define_level!(CrossArenaRefs, "GCCoordinator::cross_arena_refs");
-    define_level!(StaticInitMutex, "StaticStorage::init_mutex");
-    define_level!(StaticWaitGraph, "StaticStorageManager::wait_graph");
-    define_level!(SyncBlocks, "SyncBlockManager::blocks");
-    define_level!(SyncNextIndex, "SyncBlockManager::next_index");
-    define_level!(SyncState, "SyncBlock::state");
+        // Any lock level may be acquired from the unlocked/root state.
+        impl<L: LockLevel> AcquireAfter<levels::Unlocked> for L {}
+
+        $(
+            impl AcquireAfter<levels::$prev> for levels::$next {}
+        )*
+    };
 }
 
-// Any lock level may be acquired from the unlocked/root state.
-impl<L: LockLevel> AcquireAfter<levels::Unlocked> for L {}
-
-// Explicit multi-lock chains from the canonical lock-order table.
-impl AcquireAfter<levels::CollectionLock> for levels::GcCoordination {}
-impl AcquireAfter<levels::GcCoordination> for levels::ThreadRegistry {}
-impl AcquireAfter<levels::CollectionLock> for levels::ThreadRegistry {}
-impl AcquireAfter<levels::CollectionLock> for levels::CoordinatorArenas {}
-impl AcquireAfter<levels::CoordinatorArenas> for levels::ArenaCurrentCommand {}
-impl AcquireAfter<levels::CollectionLock> for levels::CrossArenaRefs {}
-impl AcquireAfter<levels::StaticInitMutex> for levels::StaticWaitGraph {}
-impl AcquireAfter<levels::SyncBlocks> for levels::SyncNextIndex {}
+define_lock_order_dag! {
+    levels {
+        Unlocked => "Unlocked",
+        CollectionLock => "GCCoordinator::collection_lock",
+        GcCoordination => "ThreadManager::gc_coordination",
+        ThreadRegistry => "ThreadManager::threads",
+        CoordinatorArenas => "GCCoordinator::arenas",
+        ArenaCurrentCommand => "ArenaHandle::current_command",
+        CrossArenaRefs => "GCCoordinator::cross_arena_refs",
+        StaticInitMutex => "StaticStorage::init_mutex",
+        StaticWaitGraph => "StaticStorageManager::wait_graph",
+        SyncBlocks => "SyncBlockManager::blocks",
+        SyncNextIndex => "SyncBlockManager::next_index",
+        SyncState => "SyncBlock::state"
+    }
+    edges {
+        GcCoordination after CollectionLock,
+        ThreadRegistry after GcCoordination,
+        ThreadRegistry after CollectionLock,
+        CoordinatorArenas after CollectionLock,
+        ArenaCurrentCommand after CoordinatorArenas,
+        CrossArenaRefs after CollectionLock,
+        StaticWaitGraph after StaticInitMutex,
+        SyncNextIndex after SyncBlocks
+    }
+}
 
 /// Token proving a given lock level is currently held.
 #[derive(Debug, Clone, Copy, Default)]

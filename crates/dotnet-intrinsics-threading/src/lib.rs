@@ -1,4 +1,7 @@
 //! Threading/monitor/interlocked intrinsic handlers and host traits.
+//!
+//! Inventory mapping for this host surface is tracked in
+//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::error::{CompareExchangeError, MemoryAccessError};
 use dotnet_utils::{ArenaId, ByteOffset, gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, object::ObjectRef, pointer::PointerOrigin};

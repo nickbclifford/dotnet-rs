@@ -396,29 +396,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.local.heap.register_object(*instance);
 
             // Add to finalization queue if it has a finalizer.
-            // Note: We skip System.Object because it defines a virtual Finalize() method
-            // but we don't want every single object in the VM to be added to the
-            // finalization queue. Only objects that override it or have their own
-            // finalizers should be queued.
-            if let HeapStorage::Obj(o) = &ptr.borrow().storage {
-                let has_finalizer = o.description.static_initializer().is_some()
-                    || o.description
-                        .definition()
-                        .methods
-                        .iter()
-                        .any(|m| m.name == "Finalize");
-
-                if has_finalizer {
-                    let system_object = self.shared.loader.corlib_type("System.Object").ok();
-
-                    if Some(o.description.clone()) != system_object {
-                        self.local
-                            .heap
-                            .finalization_queue
-                            .borrow_mut()
-                            .push(*instance);
-                    }
-                }
+            if let HeapStorage::Obj(o) = &ptr.borrow().storage
+                && o.has_finalizer
+            {
+                self.local
+                    .heap
+                    .finalization_queue
+                    .borrow_mut()
+                    .push(*instance);
             }
         }
     }
@@ -438,6 +423,18 @@ impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     #[inline]
     fn loader(&self) -> &Arc<dotnet_assemblies::AssemblyLoader> {
         &self.shared.loader
+    }
+}
+
+impl<'a, 'gc> SimdCapabilityOps for VesContext<'a, 'gc> {
+    #[inline]
+    fn simd_vector128_is_hardware_accelerated(&self) -> bool {
+        dotnet_intrinsics_simd::vector128_is_hardware_accelerated()
+    }
+
+    #[inline]
+    fn simd_vector256_is_hardware_accelerated(&self) -> bool {
+        dotnet_intrinsics_simd::vector256_is_hardware_accelerated()
     }
 }
 
@@ -603,7 +600,7 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
         &self,
         method: MethodDescription,
         lookup: &GenericLookup,
-    ) -> Result<dotnet_vm_ops::MethodInfo<'static>, TypeResolutionError> {
+    ) -> Result<dotnet_vm_data::MethodInfo<'static>, TypeResolutionError> {
         self.shared
             .caches
             .get_method_info(method, lookup, self.shared.clone())
@@ -612,7 +609,7 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
     #[inline]
     fn delegate_call_frame(
         &mut self,
-        method: dotnet_vm_ops::MethodInfo<'static>,
+        method: dotnet_vm_data::MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         self.call_frame(method, generic_inst)
@@ -1142,9 +1139,12 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                             _ => break,
                         }
                     }
-                    // Periodic check for safe point after each instruction chunk
-                    let _ = self.check_gc_safe_point();
-                    last_res
+                    // Poll safe-point between instruction chunks and cooperatively yield.
+                    if last_res == StepResult::Continue && self.check_gc_safe_point() {
+                        StepResult::Yield
+                    } else {
+                        last_res
+                    }
                 }
                 _ => {
                     let res = self.handle_exception();
@@ -1299,6 +1299,8 @@ mod host_adapter_trait_tests {
                 + vm_ops::DelegateIntrinsicHost<'gc>
                 + vm_ops::SpanIntrinsicHost<'gc>
                 + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
+                + vm_ops::SimdIntrinsicHost<'gc>
+                + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>
                 + vm_ops::UnsafeIntrinsicHost<'gc>
                 + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
                 + vm_ops::ThreadingIntrinsicHost<'gc>
@@ -1335,6 +1337,14 @@ mod host_adapter_trait_tests {
                 dotnet_intrinsics_span::equality::intrinsic_memory_extensions_sequence_equal::<T>;
         }
 
+        fn assert_simd_handler<
+            'gc,
+            T: vm_ops::SimdIntrinsicHost<'gc> + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>,
+        >() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
+                dotnet_intrinsics_simd::handlers::intrinsic_vector128_is_hardware_accelerated::<T>;
+        }
+
         fn assert_unsafe_handler<
             'gc,
             T: vm_ops::UnsafeIntrinsicHost<'gc> + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>,
@@ -1365,6 +1375,7 @@ mod host_adapter_trait_tests {
         assert_string_handler::<'static, TestContext>();
         assert_delegate_handler::<'static, TestContext>();
         assert_span_handler::<'static, TestContext>();
+        assert_simd_handler::<'static, TestContext>();
         assert_unsafe_handler::<'static, TestContext>();
         assert_threading_handler::<'static, TestContext>();
         assert_reflection_handler::<'static, TestContext>();

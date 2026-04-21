@@ -151,10 +151,9 @@ pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
         }
     };
 
-    if index < targets.len() {
-        StepResult::Jump(targets[index])
-    } else {
-        StepResult::Continue
+    match targets.get(index).copied() {
+        Some(target) => StepResult::Jump(target),
+        None => StepResult::Continue,
     }
 }
 

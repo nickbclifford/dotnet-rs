@@ -7,9 +7,11 @@ use crate::{
 use dotnet_utils::sync::{Arc, AtomicBool};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
+#[cfg(all(feature = "multithreading", debug_assertions))]
+use std::cell::Cell;
 #[cfg(feature = "multithreading")]
 use std::{
-    cell::Cell,
+    cell::RefCell,
     collections::{HashMap, HashSet},
     marker::PhantomData,
     mem::ManuallyDrop,
@@ -58,9 +60,8 @@ fn debug_mark_collection_lock_released() {
     });
 }
 
-#[cfg(feature = "multithreading")]
+#[cfg(all(feature = "multithreading", debug_assertions))]
 pub(crate) fn debug_assert_collection_lock_held(context: &str) {
-    #[cfg(debug_assertions)]
     COLLECTION_LOCK_DEBUG_DEPTH.with(|depth| {
         debug_assert!(
             depth.get() > 0,
@@ -240,14 +241,6 @@ impl GCCoordinator {
         self.arenas.lock_after(held).get(&thread_id).cloned()
     }
 
-    fn get_all_arenas_after_collection_lock(
-        &self,
-        held: HeldLockLevel<levels::CollectionLock>,
-    ) -> Vec<ArenaHandle> {
-        let arenas = self.arenas.lock_after(held);
-        arenas.values().cloned().collect()
-    }
-
     /// Check if a thread has a pending GC command.
     pub(crate) fn has_command(&self, thread_id: dotnet_utils::ArenaId) -> bool {
         if let Some(handle) = self.get_arena(thread_id) {
@@ -331,6 +324,7 @@ pub struct CollectionSession<'coord> {
     coordinator: &'coord GCCoordinator,
     /// Holds the coordinator's `collection_lock` for the duration of the session.
     lock: Option<OrderedMutexGuard<'coord, levels::CollectionLock, ()>>,
+    arena_snapshot_scratch: RefCell<Vec<ArenaHandle>>,
     _debug_lock_guard: CollectionLockDebugGuard,
 }
 
@@ -343,6 +337,7 @@ impl<'coord> CollectionSession<'coord> {
         Self {
             coordinator,
             lock: Some(lock),
+            arena_snapshot_scratch: RefCell::new(Vec::new()),
             _debug_lock_guard: CollectionLockDebugGuard::new(),
         }
     }
@@ -366,16 +361,40 @@ impl CollectionSession<'_> {
             .held_level()
     }
 
-    fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
-        for handle in self
+    fn snapshot_other_arenas(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+    ) -> std::cell::RefMut<'_, Vec<ArenaHandle>> {
+        let mut scratch = self.arena_snapshot_scratch.borrow_mut();
+        scratch.clear();
+
+        let arenas = self
             .coordinator
-            .get_all_arenas_after_collection_lock(self.collection_lock_level())
-        {
-            if handle.thread_id() != initiating_thread_id {
-                let mut cmd = handle.current_command().lock();
-                while cmd.is_some() {
-                    handle.finish_signal().wait(cmd.raw_mut());
-                }
+            .arenas
+            .lock_after(self.collection_lock_level());
+        let additional = arenas
+            .len()
+            .saturating_sub(1)
+            .saturating_sub(scratch.capacity());
+        if additional > 0 {
+            scratch.reserve(additional);
+        }
+        scratch.extend(
+            arenas
+                .values()
+                .filter(|handle| handle.thread_id() != initiating_thread_id)
+                .cloned(),
+        );
+        drop(arenas);
+        scratch
+    }
+
+    fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
+        let handles = self.snapshot_other_arenas(initiating_thread_id);
+        for handle in handles.iter() {
+            let mut cmd = handle.current_command().lock();
+            while cmd.is_some() {
+                handle.finish_signal().wait(cmd.raw_mut());
             }
         }
     }
@@ -398,17 +417,9 @@ impl CollectionSession<'_> {
         initiating_thread_id: dotnet_utils::ArenaId,
         command: GCCommand,
     ) {
-        for handle in self
-            .coordinator
-            .get_all_arenas_after_collection_lock(self.collection_lock_level())
-        {
-            if handle.thread_id() != initiating_thread_id {
-                self.enqueue_command_for_arena(
-                    &handle,
-                    command.clone(),
-                    "send_command_to_other_arenas",
-                );
-            }
+        let handles = self.snapshot_other_arenas(initiating_thread_id);
+        for handle in handles.iter() {
+            self.enqueue_command_for_arena(handle, command.clone(), "send_command_to_other_arenas");
         }
     }
 
@@ -454,7 +465,7 @@ impl CollectionSession<'_> {
         let mut fixed_point_iterations = 0u64;
         loop {
             let cross_refs = {
-                let refs = self
+                let mut refs = self
                     .coordinator
                     .cross_arena_refs
                     .lock_after(self.collection_lock_level());
@@ -462,8 +473,8 @@ impl CollectionSession<'_> {
                     // No cross-arena references found, we're done
                     break;
                 }
-                // Take a snapshot of current cross-arena refs
-                refs.clone()
+                // Move the current references out without cloning so capacity can be reused.
+                std::mem::take(&mut *refs)
             };
             #[cfg(feature = "bench-instrumentation")]
             {
@@ -477,23 +488,13 @@ impl CollectionSession<'_> {
                     cross_arena_object_volume,
                 );
             }
-
-            // Clear the global table for the next iteration
-            {
-                let mut refs = self
-                    .coordinator
-                    .cross_arena_refs
-                    .lock_after(self.collection_lock_level());
-                refs.clear();
-            }
-
             // For each target arena, send MarkObjects command with the objects to resurrect
             let mut initiator_mark_objs = None;
             for (target_thread_id, ptrs) in cross_refs {
-                let ptrs_for_mark: MarkObjectPointers = ptrs
-                    .iter()
-                    .map(|p| OpaqueObjectPtr::from_raw(p.as_ptr() as *const ()))
-                    .collect();
+                let mut ptrs_for_mark = MarkObjectPointers::with_capacity(ptrs.len());
+                for ptr in ptrs {
+                    ptrs_for_mark.insert(OpaqueObjectPtr::from_raw(ptr.as_ptr() as *const ()));
+                }
                 if target_thread_id == initiating_thread_id {
                     // Save for direct execution by initiating thread
                     initiator_mark_objs = Some(ptrs_for_mark);

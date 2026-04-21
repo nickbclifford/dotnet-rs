@@ -6,7 +6,8 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnet_vm_ops::{StepResult, ops::TypedStackOps};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::TypedStackOps;
 use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
 #[dotnet_intrinsic(
@@ -77,21 +78,19 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             new_lookup.type_generics = parameters.clone().into();
         }
 
-        for (idx, m) in target_td.definition().methods.iter().enumerate() {
-            if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
-                let desc = MethodDescription::new(
-                    target_td.clone(),
-                    new_lookup.clone(),
-                    target_td.resolution.clone(),
-                    MethodMemberIndex::Method(idx),
-                );
+        if let Some(idx) = target_td.definition().methods.iter().position(|m| {
+            m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty()
+        }) {
+            let desc = MethodDescription::new(
+                target_td.clone(),
+                new_lookup.clone(),
+                target_td.resolution.clone(),
+                MethodMemberIndex::Method(idx),
+            );
 
-                let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-                dotnet_vm_ops::vm_try!(
-                    ctx.reflection_constructor_frame(instance, info, new_lookup)
-                );
-                return StepResult::FramePushed;
-            }
+            let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
+            dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
+            return StepResult::FramePushed;
         }
 
         panic!(
@@ -198,23 +197,22 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
     let instance =
         dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(td.clone(), &new_lookup));
 
-    for (idx, m) in td.definition().methods.iter().enumerate() {
-        if m.runtime_special_name
+    if let Some(idx) = td.definition().methods.iter().position(|m| {
+        m.runtime_special_name
             && m.name == ".ctor"
             && m.signature.instance
             && m.signature.parameters.is_empty()
-        {
-            let desc = MethodDescription::new(
-                td.clone(),
-                new_lookup.clone(),
-                td.resolution.clone(),
-                MethodMemberIndex::Method(idx),
-            );
+    }) {
+        let desc = MethodDescription::new(
+            td.clone(),
+            new_lookup.clone(),
+            td.resolution.clone(),
+            MethodMemberIndex::Method(idx),
+        );
 
-            let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
-            dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
-            return StepResult::FramePushed;
-        }
+        let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
+        dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
+        return StepResult::FramePushed;
     }
 
     panic!("could not find a parameterless constructor in {:?}", td)

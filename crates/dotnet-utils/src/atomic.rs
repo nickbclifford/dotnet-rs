@@ -269,11 +269,30 @@ impl AtomicAccess for StandardAtomicAccess {
 pub struct Atomic;
 
 impl Atomic {
+    #[inline]
+    fn is_atomic_field_access_supported(ptr: *const u8, size: usize) -> bool {
+        (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[inline]
+    fn ensure_atomic_field_access_supported(ptr: *const u8, size: usize, op: &str) {
+        assert!(
+            Self::is_atomic_field_access_supported(ptr, size),
+            "Unsupported atomic field {}: ptr={:p}, size={}. In multithreading mode, only aligned 1/2/4/8-byte atomic accesses are supported.",
+            op,
+            ptr,
+            size
+        );
+    }
+
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
-        {
+        #[cfg(feature = "multithreading")]
+        Self::ensure_atomic_field_access_supported(ptr, size, "load");
+
+        if Self::is_atomic_field_access_supported(ptr, size) {
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
                 1 => (val as u8).to_ne_bytes().to_vec(),
@@ -294,8 +313,10 @@ impl Atomic {
     /// Caller must ensure `ptr` is valid for `value.len()` bytes.
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
-        {
+        #[cfg(feature = "multithreading")]
+        Self::ensure_atomic_field_access_supported(ptr as *const u8, size, "store");
+
+        if Self::is_atomic_field_access_supported(ptr as *const u8, size) {
             let val = match size {
                 1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
                 2 => u16::from_ne_bytes(value.try_into().unwrap()) as u64,
@@ -418,5 +439,48 @@ mod tests {
         unsafe {
             StandardAtomicAccess::load_atomic(misaligned_ptr, 4, Ordering::SeqCst);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "multithreading")]
+    #[should_panic(expected = "Unsupported atomic field load")]
+    fn test_load_field_misaligned_panics_in_mt() {
+        let data = [0u64; 2];
+        let ptr = data.as_ptr() as *const u8;
+        let misaligned_ptr = unsafe { ptr.add(1) };
+        unsafe {
+            let _ = Atomic::load_field(misaligned_ptr, 8, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "multithreading")]
+    #[should_panic(expected = "Unsupported atomic field store")]
+    fn test_store_field_unsupported_size_panics_in_mt() {
+        let mut data = [0u8; 8];
+        unsafe {
+            Atomic::store_field(data.as_mut_ptr(), &[1, 2, 3], Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    #[cfg(not(feature = "multithreading"))]
+    fn test_load_field_misaligned_falls_back_non_mt() {
+        let mut data = [0u8; 8];
+        data[1..5].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        let ptr = data.as_ptr();
+        let misaligned_ptr = unsafe { ptr.add(1) };
+        let loaded = unsafe { Atomic::load_field(misaligned_ptr, 4, Ordering::SeqCst) };
+        assert_eq!(loaded, vec![0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "multithreading"))]
+    fn test_store_field_unsupported_size_falls_back_non_mt() {
+        let mut data = [0u8; 8];
+        unsafe {
+            Atomic::store_field(data.as_mut_ptr(), &[0xAA, 0xBB, 0xCC], Ordering::SeqCst);
+        }
+        assert_eq!(&data[..3], &[0xAA, 0xBB, 0xCC]);
     }
 }

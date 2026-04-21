@@ -13,6 +13,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     mem::size_of,
+    num::NonZeroUsize,
     ptr::NonNull,
 };
 
@@ -46,10 +47,10 @@ pub fn is_valid_object_ptr(ptr: usize) -> bool {
 }
 
 pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
+pub type SyncBlockIndex = NonZeroUsize;
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
-#[repr(C)]
 pub struct ObjectInner<'gc> {
     #[cfg(any(feature = "memory-validation", debug_assertions))]
     magic: ValidationTag,
@@ -61,10 +62,10 @@ pub struct ObjectInner<'gc> {
     /// Invariant: immutable after construction and safe for lock-free reads.
     #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     owner_id: ArenaId,
-    /// Sync block index for System.Threading.Monitor.
-    /// Stored on ObjectInner so every heap storage variant (Obj/Vec/Str/Boxed)
-    /// can participate in monitor locking.
-    sync_block_index: Option<usize>,
+    /// Encoded sync-block index for System.Threading.Monitor.
+    /// `0` is the sentinel for "no sync block yet", all non-zero values are valid
+    /// `SyncBlockIndex` values.
+    sync_block_index: usize,
     pub storage: HeapStorage<'gc>,
 }
 
@@ -79,9 +80,19 @@ impl<'gc> ObjectInner<'gc> {
             magic: ValidationTag::new(OBJECT_MAGIC),
             #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
             owner_id,
-            sync_block_index: None,
+            sync_block_index: 0,
             storage,
         }
+    }
+
+    #[inline(always)]
+    fn sync_block_index(&self) -> Option<SyncBlockIndex> {
+        SyncBlockIndex::new(self.sync_block_index)
+    }
+
+    #[inline(always)]
+    fn set_sync_block_index(&mut self, new_index: SyncBlockIndex) {
+        self.sync_block_index = new_index.get();
     }
 
     #[inline(always)]
@@ -178,6 +189,7 @@ impl<'a> Arbitrary<'a> for ObjectPtr {
 //   can also be sent — i.e. `ObjectInner<'static>: Send`.  The where-clause
 //   enforces this at compile time and automatically tightens if
 //   `ThreadSafeLock`'s own `Send` bound ever changes.
+#[cfg(feature = "multithreading")]
 unsafe impl Send for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Send {}
 
 // SAFETY: Sharing `&ObjectPtr` across threads gives concurrent read access to
@@ -186,10 +198,9 @@ unsafe impl Send for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Send 
 // `ObjectInner<'static>: Send + Sync` (Step 1.1 tightened this bound).
 // The where-clause propagates any future tightening automatically.
 //
-// This impl is gated on `multithreading` because under the single-threaded
+// These impls are gated on `multithreading` because under the single-threaded
 // backend `ThreadSafeLock` wraps `gc_arena::lock::RefLock` (a `RefCell`),
-// which is provably `!Sync`.  In single-threaded mode there is only one
-// thread, so `ObjectPtr: Sync` is neither needed nor sound.
+// which is `!Send + !Sync`.
 #[cfg(feature = "multithreading")]
 unsafe impl Sync for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Sync {}
 
@@ -297,6 +308,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
 // we assume this type is pointer-sized basically everywhere (for serialization/layout purposes)
 // dependency-wise everything guarantees it; this is just a sanity check for the implementation
 const _: () = assert!(ObjectRef::SIZE == size_of::<usize>());
+const _: () = assert!(size_of::<Option<SyncBlockIndex>>() == size_of::<usize>());
 
 impl PartialEq for ObjectRef<'_> {
     fn eq(&self, other: &Self) -> bool {
@@ -645,7 +657,7 @@ impl<'gc> ObjectRef<'gc> {
         op(&inner.storage)
     }
 
-    pub fn sync_block_index(&self) -> Option<usize> {
+    pub fn sync_block_index(&self) -> Option<SyncBlockIndex> {
         let ObjectRef(Some(o)) = &self else {
             panic!(
                 "NullReferenceException: called ObjectRef::sync_block_index on NULL object reference"
@@ -654,10 +666,10 @@ impl<'gc> ObjectRef<'gc> {
         let inner = o.borrow();
         inner.validate_magic();
         inner.validate_arena_id();
-        inner.sync_block_index
+        inner.sync_block_index()
     }
 
-    pub fn set_sync_block_index(&self, gc: GCHandle<'gc>, new_index: usize) {
+    pub fn set_sync_block_index(&self, gc: GCHandle<'gc>, new_index: SyncBlockIndex) {
         let ObjectRef(Some(o)) = &self else {
             panic!(
                 "NullReferenceException: called ObjectRef::set_sync_block_index on NULL object reference"
@@ -666,7 +678,7 @@ impl<'gc> ObjectRef<'gc> {
         let mut inner = o.borrow_mut(&gc);
         inner.validate_magic();
         inner.validate_arena_id();
-        inner.sync_block_index = Some(new_index);
+        inner.set_sync_block_index(new_index);
     }
 
     /// Safely accesses the object's data as a byte slice.
@@ -757,6 +769,10 @@ mod tests {
     #[cfg(feature = "multithreading")]
     use dotnet_utils::sync::MANAGED_THREAD_ID;
     #[cfg(feature = "multithreading")]
+    use static_assertions::assert_impl_all;
+    #[cfg(not(feature = "multithreading"))]
+    use static_assertions::assert_not_impl_all;
+    #[cfg(feature = "multithreading")]
     use std::sync::Arc;
     #[cfg(feature = "multithreading")]
     use std::sync::atomic::AtomicBool;
@@ -765,6 +781,31 @@ mod tests {
 
     #[cfg(feature = "multithreading")]
     static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(2000);
+
+    #[test]
+    fn sync_block_index_encoding_is_compact() {
+        assert_eq!(size_of::<Option<SyncBlockIndex>>(), size_of::<usize>());
+        assert_eq!(size_of::<SyncBlockIndex>(), size_of::<usize>());
+    }
+
+    #[test]
+    fn object_inner_sync_block_index_roundtrip() {
+        let mut inner = ObjectInner::new(
+            HeapStorage::Str(crate::string::CLRString::from("idx")),
+            ArenaId::INVALID,
+        );
+        assert_eq!(inner.sync_block_index(), None);
+        let index = SyncBlockIndex::new(17).expect("non-zero index");
+        inner.set_sync_block_index(index);
+        assert_eq!(inner.sync_block_index(), Some(index));
+    }
+
+    #[cfg(feature = "multithreading")]
+    assert_impl_all!(ObjectPtr: Send, Sync);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ObjectPtr: Send);
+    #[cfg(not(feature = "multithreading"))]
+    assert_not_impl_all!(ObjectPtr: Sync);
 
     #[cfg(feature = "multithreading")]
     fn next_test_arena_id() -> ArenaId {

@@ -111,12 +111,14 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: TypedStackOps<'gc> + RawMemoryOp
                     match &obj.storage {
                         HeapStorage::Vec(v) => {
                             let bytes = v.get();
-                            for i in 0..chunk_len {
-                                let c_idx = (offset + i) * 2;
-                                if c_idx + 1 < bytes.len() {
-                                    result
-                                        .push(u16::from_ne_bytes([bytes[c_idx], bytes[c_idx + 1]]));
-                                }
+                            let start = offset * 2;
+                            let end = start + (chunk_len * 2);
+                            if let Some(chunk_bytes) = bytes.get(start..end) {
+                                result.extend(
+                                    chunk_bytes
+                                        .chunks_exact(2)
+                                        .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
+                                );
                             }
                         }
                         _ => break,

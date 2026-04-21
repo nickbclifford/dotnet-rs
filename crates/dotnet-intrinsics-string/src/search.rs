@@ -1,4 +1,4 @@
-use crate::NULL_REF_MSG;
+use crate::{NULL_REF_MSG, simd::probe_all_ascii_whitespace, simd::probe_index_of_char};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::GcScopeGuard;
@@ -35,7 +35,15 @@ pub fn intrinsic_string_index_of<
     };
 
     let val = ctx.pop();
-    let index = with_string!(ctx, val, |s| s.iter().skip(start_at).position(|x| *x == c));
+    let index = with_string!(ctx, val, |s| {
+        if start_at >= s.len() {
+            None
+        } else {
+            let haystack = &s[start_at..];
+            probe_index_of_char(haystack, c)
+                .unwrap_or_else(|| haystack.iter().position(|x| *x == c))
+        }
+    });
 
     ctx.push_i32(match index {
         None => -1,
@@ -225,15 +233,17 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, T: TypedStackOps<'gc> + RawM
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
-                            for i in 0..current_chunk_size {
-                                let c = s[offset + i];
-                                if !char::from_u32(c as u32)
-                                    .map(|c| c.is_whitespace())
-                                    .unwrap_or(false)
-                                {
-                                    all_white = false;
-                                    break;
-                                }
+                            let chunk = &s[offset..offset + current_chunk_size];
+                            let chunk_all_white =
+                                probe_all_ascii_whitespace(chunk).unwrap_or_else(|| {
+                                    chunk.iter().all(|&c| {
+                                        char::from_u32(c as u32)
+                                            .map(|c| c.is_whitespace())
+                                            .unwrap_or(false)
+                                    })
+                                });
+                            if !chunk_all_white {
+                                all_white = false;
                             }
                         }
                         _ => break,

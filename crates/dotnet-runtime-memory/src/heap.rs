@@ -189,13 +189,7 @@ impl<'gc> HeapManager<'gc> {
                     let inner = ptr.borrow();
                     match &inner.storage {
                         HeapStorage::Obj(o) => {
-                            let has_finalizer = o.description.static_initializer().is_some()
-                                || o.description
-                                    .definition()
-                                    .methods
-                                    .iter()
-                                    .any(|m| m.name == "Finalize");
-                            if !has_finalizer {
+                            if !o.has_finalizer {
                                 panic!(
                                     "Object without finalizer in finalization queue: {:?}",
                                     o.description

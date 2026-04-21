@@ -344,10 +344,8 @@ pub struct Object<'gc> {
     pub description: TypeDescription,
     pub generics: GenericLookup,
     pub instance_storage: FieldStorage,
+    pub has_finalizer: bool,
     pub finalizer_suppressed: bool,
-    /// Sync block index for System.Threading.Monitor support.
-    /// None means no sync block allocated yet (lazy allocation).
-    pub sync_block_index: Option<usize>,
     pub _phantom: PhantomData<&'gc ()>,
 }
 
@@ -367,8 +365,8 @@ impl<'a, 'gc> Arbitrary<'a> for Object<'gc> {
                 }),
                 vec![],
             ),
+            has_finalizer: u.arbitrary()?,
             finalizer_suppressed: u.arbitrary()?,
-            sync_block_index: u.arbitrary()?,
             _phantom: PhantomData,
         })
     }
@@ -380,8 +378,8 @@ impl<'gc> Clone for Object<'gc> {
             description: self.description.clone(),
             generics: self.generics.clone(),
             instance_storage: self.instance_storage.clone(),
+            has_finalizer: self.has_finalizer,
             finalizer_suppressed: self.finalizer_suppressed,
-            sync_block_index: self.sync_block_index,
             _phantom: PhantomData,
         }
     }
@@ -392,8 +390,8 @@ impl<'gc> PartialEq for Object<'gc> {
         self.description == other.description
             && self.generics == other.generics
             && self.instance_storage == other.instance_storage
+            && self.has_finalizer == other.has_finalizer
             && self.finalizer_suppressed == other.finalizer_suppressed
-            && self.sync_block_index == other.sync_block_index
     }
 }
 
@@ -449,12 +447,21 @@ impl<'gc> Object<'gc> {
         generics: GenericLookup,
         instance_storage: FieldStorage,
     ) -> Self {
+        Self::new_with_finalizer_flag(description, generics, instance_storage, false)
+    }
+
+    pub fn new_with_finalizer_flag(
+        description: TypeDescription,
+        generics: GenericLookup,
+        instance_storage: FieldStorage,
+        has_finalizer: bool,
+    ) -> Self {
         Self {
             description,
             generics,
             instance_storage,
+            has_finalizer,
             finalizer_suppressed: false,
-            sync_block_index: None,
             _phantom: PhantomData,
         }
     }

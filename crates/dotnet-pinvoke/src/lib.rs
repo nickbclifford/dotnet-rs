@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
 use dotnet_value::{
     StackValue,
-    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    layout::{FieldLayoutManager, LayoutManager, Scalar},
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
@@ -23,7 +23,15 @@ use dotnetdll::prelude::*;
 use gc_arena::{Gc, static_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync::Arc};
+use std::{
+    alloc::{Layout, alloc_zeroed, dealloc},
+    ffi::c_void,
+    marker::PhantomPinned,
+    mem::{align_of, size_of},
+    path::PathBuf,
+    ptr::NonNull,
+    sync::Arc,
+};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -319,7 +327,7 @@ fn param_to_type(
 
 enum WriteBackSource<'gc> {
     Managed(PointerOrigin<'gc>, ByteOffset),
-    #[allow(dead_code)]
+    #[cfg(test)]
     Raw(NonNull<u8>),
 }
 
@@ -374,6 +382,172 @@ impl TempBuffer {
             _ => panic!("P/Invoke temp buffer type mismatch (bytes)"),
         }
     }
+}
+
+struct AlignedReturnBuffer {
+    ptr: NonNull<u8>,
+    len: usize,
+    layout: Layout,
+}
+
+impl AlignedReturnBuffer {
+    fn new_zeroed(len: usize, align: usize) -> Result<Self, ExecutionError> {
+        if align == 0 || !align.is_power_of_two() {
+            return Err(ExecutionError::InternalError(format!(
+                "P/Invoke return buffer alignment is invalid: {}",
+                align
+            )));
+        }
+
+        let layout = Layout::from_size_align(len.max(1), align).map_err(|e| {
+            ExecutionError::InternalError(format!(
+                "P/Invoke return buffer layout is invalid (size={}, align={}): {}",
+                len, align, e
+            ))
+        })?;
+
+        // SAFETY: `layout` is validated above. A null return is handled as OOM.
+        let ptr = unsafe { alloc_zeroed(layout) };
+        let ptr = NonNull::new(ptr).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "P/Invoke return buffer allocation failed (size={}, align={})",
+                len, align
+            ))
+        })?;
+
+        Ok(Self { ptr, len, layout })
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `ptr` points to `layout.size()` bytes for this allocation; callers only read
+        // up to `len`, which is <= `layout.size()`.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for AlignedReturnBuffer {
+    fn drop(&mut self) {
+        // SAFETY: `ptr` was allocated with `alloc_zeroed` using `layout` in `new_zeroed`.
+        unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
+    }
+}
+
+fn ffi_return_layout_from_raw(
+    raw: &libffi::raw::ffi_type,
+    unknown_align_fallback: usize,
+) -> Result<(usize, usize), ExecutionError> {
+    let size = raw.size;
+    let align = usize::from(raw.alignment);
+
+    let align = if align == 0 {
+        unknown_align_fallback
+    } else {
+        align
+    };
+
+    if align == 0 || !align.is_power_of_two() {
+        return Err(ExecutionError::InternalError(format!(
+            "P/Invoke return ffi_type alignment is invalid: {}",
+            align
+        )));
+    }
+
+    Ok((size, align))
+}
+
+fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), ExecutionError> {
+    // SAFETY: `Cif` owns a prepared `ffi_cif`; rtype is set by `ffi_prep_cif`.
+    let rtype = unsafe { (*cif.as_raw_ptr()).rtype };
+    if rtype.is_null() {
+        return Err(ExecutionError::InternalError(
+            "P/Invoke ffi_cif has null return type".to_string(),
+        ));
+    }
+
+    // Use a conservative fallback when libffi leaves alignment unset for aggregate metadata.
+    // This keeps return buffers safely over-aligned even when rtype alignment is unknown.
+    // SAFETY: null checked above.
+    let raw = unsafe { &*rtype };
+    ffi_return_layout_from_raw(raw, 64)
+}
+
+fn validate_typed_return_abi<T>(cif: &Cif) -> Result<(), ExecutionError> {
+    let (ffi_size, ffi_align) = ffi_cif_return_layout(cif)?;
+    let rust_size = size_of::<T>();
+    let rust_align = align_of::<T>();
+    if ffi_size != rust_size || ffi_align != rust_align {
+        return Err(ExecutionError::InternalError(format!(
+            "P/Invoke return ABI mismatch: ffi(size={}, align={}), rust(size={}, align={})",
+            ffi_size, ffi_align, rust_size, rust_align
+        )));
+    }
+    Ok(())
+}
+
+fn copy_value_type_return_data(dest: &mut [u8], src: &[u8]) {
+    let copy_len = std::cmp::min(dest.len(), src.len());
+    dest[..copy_len].copy_from_slice(&src[..copy_len]);
+}
+
+fn apply_write_backs_with<'gc, F>(
+    write_backs: &[(WriteBackSource<'gc>, usize, usize)],
+    temp_buffers: &[TempBuffer],
+    mut write_managed: F,
+) -> Result<(), dotnet_types::error::MemoryAccessError>
+where
+    F: FnMut(
+        &PointerOrigin<'gc>,
+        ByteOffset,
+        &[u8],
+    ) -> Result<(), dotnet_types::error::MemoryAccessError>,
+{
+    for (source, buf_idx, len) in write_backs {
+        let Some(temp) = temp_buffers.get(*buf_idx) else {
+            return Err(dotnet_types::error::MemoryAccessError::BoundsCheck {
+                offset: *buf_idx,
+                size: 1,
+                len: temp_buffers.len(),
+            });
+        };
+        let buf = temp.as_bytes();
+        if *len > buf.len() {
+            return Err(dotnet_types::error::MemoryAccessError::BoundsCheck {
+                offset: 0,
+                size: *len,
+                len: buf.len(),
+            });
+        }
+
+        match source {
+            WriteBackSource::Managed(origin, offset) => {
+                write_managed(origin, *offset, &buf[..*len])?;
+            }
+            #[cfg(test)]
+            // SAFETY: `dest_ptr` originates from validated argument marshalling for this call and
+            // we copy exactly `len` bytes from an owned temporary buffer.
+            WriteBackSource::Raw(dest_ptr) => unsafe {
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
+            },
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_write_backs<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    write_backs: &[(WriteBackSource<'gc>, usize, usize)],
+    temp_buffers: &[TempBuffer],
+) -> Result<(), dotnet_types::error::MemoryAccessError> {
+    apply_write_backs_with(write_backs, temp_buffers, |origin, offset, data| {
+        // SAFETY: `origin` and `offset` were captured from validated managed pointers and `data`
+        // references owned temporary storage.
+        unsafe { ctx.write_bytes(origin.clone(), offset, data) }
+    })
 }
 
 type ObjectReadGuard<'a, 'gc> = ThreadSafeReadGuard<'a, dotnet_value::object::ObjectInner<'gc>>;
@@ -784,28 +958,6 @@ fn external_call_impl<'gc>(
 
     let cif = Cif::new(args, return_type.clone());
 
-    let do_write_back = |ctx: &mut dyn PInvokeContext<'gc>| {
-        for (source, buf_idx, len) in &write_backs {
-            let buf = temp_buffers[*buf_idx].as_bytes();
-            debug_assert!(
-                *len <= buf.len(),
-                "write-back length exceeds temporary buffer length"
-            );
-            match source {
-                // SAFETY: `origin`/`offset` were captured from the original managed pointer before
-                // call-out, and `len` is bounded by the temporary buffer length.
-                WriteBackSource::Managed(origin, offset) => unsafe {
-                    let _ = ctx.write_bytes(origin.clone(), *offset, &buf[..*len]);
-                },
-                // SAFETY: `dest_ptr` was produced from a validated argument pointer for this call;
-                // we copy exactly `len` bytes from the owned write-back buffer.
-                WriteBackSource::Raw(dest_ptr) => unsafe {
-                    std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
-                },
-            }
-        }
-    };
-
     let target_fn = *target.as_fun();
 
     if ctx.tracer_enabled() {
@@ -816,90 +968,111 @@ fn external_call_impl<'gc>(
         );
     }
 
-    macro_rules! read_return {
-        ($t:ty) => {{
-            let mut ret = std::mem::MaybeUninit::<$t>::uninit();
-            unsafe {
-                libffi::raw::ffi_call(
-                    cif.as_raw_ptr(),
-                    Some(target_fn),
-                    ret.as_mut_ptr() as *mut c_void,
-                    arg_ptrs.as_mut_ptr(),
-                );
-            }
-            do_write_back(ctx);
-            unsafe { ret.assume_init() }
-        }};
-    }
-
-    match &method.method().signature.return_type.1 {
-        None => {
-            unsafe {
-                libffi::raw::ffi_call(
-                    cif.as_raw_ptr(),
-                    Some(target_fn),
-                    std::ptr::null_mut(),
-                    arg_ptrs.as_mut_ptr(),
-                );
-            }
-            do_write_back(ctx);
-            let _ = ctx.pop_multiple(arg_count);
-        }
-        Some(ParameterType::Value(t)) => {
-            macro_rules! read_into_i32 {
-                ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
-            }
-
-            let t = match ctx.make_concrete(t) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-            let v = match t.get() {
-                BaseType::Boolean => read_into_i32!(u8),
-                BaseType::Char => read_into_i32!(u16),
-                BaseType::Int8 => read_into_i32!(i8),
-                BaseType::UInt8 => read_into_i32!(u8),
-                BaseType::Int16 => read_into_i32!(i16),
-                BaseType::UInt16 => read_into_i32!(u16),
-                BaseType::Int32 => read_into_i32!(i32),
-                BaseType::UInt32 => read_into_i32!(u32),
-                BaseType::Int64 => StackValue::Int64(read_return!(i64)),
-                BaseType::UInt64 => StackValue::Int64(read_return!(u64) as i64),
-                BaseType::Float32 => StackValue::NativeFloat(read_return!(f32) as f64),
-                BaseType::Float64 => StackValue::NativeFloat(read_return!(f64)),
-                BaseType::IntPtr => StackValue::NativeInt(read_return!(isize)),
-                BaseType::UIntPtr => StackValue::NativeInt(read_return!(usize) as isize),
-                BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                    StackValue::unmanaged_ptr(read_return!(*mut u8))
+    let call_result = (|| -> StepResult {
+        macro_rules! read_return {
+            ($t:ty) => {{
+                if let Err(e) = validate_typed_return_abi::<$t>(&cif) {
+                    return StepResult::Error(e.into());
                 }
-                BaseType::Type {
-                    value_kind: Some(ValueKind::ValueType),
-                    source,
-                } => {
-                    let (_, _type_generics) = decompose_type_source::<ConcreteType>(source);
 
-                    let concrete = ConcreteType::new(
-                        t.resolution(),
-                        BaseType::Type {
-                            source: source.clone(),
-                            value_kind: Some(ValueKind::ValueType),
-                        },
+                let mut ret = std::mem::MaybeUninit::<$t>::uninit();
+                // SAFETY: The checked ABI contract above guarantees the return slot size/alignment
+                // matches `$t`; `arg_ptrs` points at marshalling-owned argument storage.
+                unsafe {
+                    libffi::raw::ffi_call(
+                        cif.as_raw_ptr(),
+                        Some(target_fn),
+                        ret.as_mut_ptr() as *mut c_void,
+                        arg_ptrs.as_mut_ptr(),
                     );
-                    let td = ctx
-                        .loader()
-                        .find_concrete_type(concrete)
-                        .expect("Failed to resolve type in pinvoke interop");
+                }
+                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
+                    return StepResult::Error(e.into());
+                }
+                // SAFETY: `ffi_call` initialized the full return slot for this ABI-checked type.
+                unsafe { ret.assume_init() }
+            }};
+        }
 
-                    let instance = match ctx.new_object(td) {
-                        Ok(inst) => inst,
-                        Err(e) => return StepResult::Error(e.into()),
-                    };
+        match &method.method().signature.return_type.1 {
+            None => {
+                // SAFETY: Void return requires a null return slot; argument pointers remain valid
+                // for the duration of the call.
+                unsafe {
+                    libffi::raw::ffi_call(
+                        cif.as_raw_ptr(),
+                        Some(target_fn),
+                        std::ptr::null_mut(),
+                        arg_ptrs.as_mut_ptr(),
+                    );
+                }
+                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
+                    return StepResult::Error(e.into());
+                }
+                let _ = ctx.pop_multiple(arg_count);
+            }
+            Some(ParameterType::Value(t)) => {
+                macro_rules! read_into_i32 {
+                    ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
+                }
 
-                    let allocated_size = instance.instance_storage.layout().size().as_usize();
-                    let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
+                let t = match ctx.make_concrete(t) {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
+                let v = match t.get() {
+                    BaseType::Boolean => read_into_i32!(u8),
+                    BaseType::Char => read_into_i32!(u16),
+                    BaseType::Int8 => read_into_i32!(i8),
+                    BaseType::UInt8 => read_into_i32!(u8),
+                    BaseType::Int16 => read_into_i32!(i16),
+                    BaseType::UInt16 => read_into_i32!(u16),
+                    BaseType::Int32 => read_into_i32!(i32),
+                    BaseType::UInt32 => read_into_i32!(u32),
+                    BaseType::Int64 => StackValue::Int64(read_return!(i64)),
+                    BaseType::UInt64 => StackValue::Int64(read_return!(u64) as i64),
+                    BaseType::Float32 => StackValue::NativeFloat(read_return!(f32) as f64),
+                    BaseType::Float64 => StackValue::NativeFloat(read_return!(f64)),
+                    BaseType::IntPtr => StackValue::NativeInt(read_return!(isize)),
+                    BaseType::UIntPtr => StackValue::NativeInt(read_return!(usize) as isize),
+                    BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                        StackValue::unmanaged_ptr(read_return!(*mut u8))
+                    }
+                    BaseType::Type {
+                        value_kind: Some(ValueKind::ValueType),
+                        source,
+                    } => {
+                        let (_, _type_generics) = decompose_type_source::<ConcreteType>(source);
 
-                    if ffi_size > allocated_size {
-                        let mut temp_buffer = Vec::with_capacity(ffi_size);
+                        let concrete = ConcreteType::new(
+                            t.resolution(),
+                            BaseType::Type {
+                                source: source.clone(),
+                                value_kind: Some(ValueKind::ValueType),
+                            },
+                        );
+                        let td = ctx
+                            .loader()
+                            .find_concrete_type(concrete)
+                            .expect("Failed to resolve type in pinvoke interop");
+
+                        let instance = match ctx.new_object(td) {
+                            Ok(inst) => inst,
+                            Err(e) => return StepResult::Error(e.into()),
+                        };
+
+                        let (ffi_size, ffi_align) = match ffi_cif_return_layout(&cif) {
+                            Ok(v) => v,
+                            Err(e) => return StepResult::Error(e.into()),
+                        };
+                        let mut temp_buffer =
+                            match AlignedReturnBuffer::new_zeroed(ffi_size, ffi_align) {
+                                Ok(v) => v,
+                                Err(e) => return StepResult::Error(e.into()),
+                            };
+
+                        // SAFETY: `temp_buffer` was allocated with ffi-reported size/alignment and
+                        // is valid for the full call; argument pointers are valid marshalling data.
                         unsafe {
                             libffi::raw::ffi_call(
                                 cif.as_raw_ptr(),
@@ -907,85 +1080,151 @@ fn external_call_impl<'gc>(
                                 temp_buffer.as_mut_ptr() as *mut c_void,
                                 arg_ptrs.as_mut_ptr(),
                             );
-                            temp_buffer.set_len(ffi_size);
                         }
-                        instance.instance_storage.with_data_mut(|guard| {
-                            guard.copy_from_slice(&temp_buffer[..allocated_size]);
-                        });
-                    } else {
-                        instance.instance_storage.with_data_mut(|guard| unsafe {
-                            libffi::raw::ffi_call(
-                                cif.as_raw_ptr(),
-                                Some(target_fn),
-                                guard.as_mut_ptr() as *mut c_void,
-                                arg_ptrs.as_mut_ptr(),
-                            );
-                        });
-                    }
-                    do_write_back(ctx);
+                        if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
+                            return StepResult::Error(e.into());
+                        }
 
-                    StackValue::ValueType(instance)
+                        instance.instance_storage.with_data_mut(|guard| {
+                            copy_value_type_return_data(guard, temp_buffer.as_bytes());
+                        });
+
+                        StackValue::ValueType(instance)
+                    }
+                    BaseType::Type { .. }
+                    | BaseType::Array { .. }
+                    | BaseType::Vector { .. }
+                    | BaseType::Object
+                    | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
+                };
+                let _ = ctx.pop_multiple(arg_count);
+                ctx.push(v);
+            }
+            Some(ParameterType::Ref(t)) => {
+                let ptr = read_return!(*mut u8);
+                let concrete = match ctx.make_concrete(t) {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
+                let td = ctx
+                    .loader()
+                    .find_concrete_type(concrete)
+                    .expect("failed to resolve return type");
+                let _ = ctx.pop_multiple(arg_count);
+                ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
+            }
+            Some(ParameterType::TypedReference) => {
+                if let Err(e) = validate_typed_return_abi::<[usize; 2]>(&cif) {
+                    return StepResult::Error(e.into());
                 }
-                BaseType::Type { .. }
-                | BaseType::Array { .. }
-                | BaseType::Vector { .. }
-                | BaseType::Object
-                | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
-            };
-            let _ = ctx.pop_multiple(arg_count);
-            ctx.push(v);
-        }
-        Some(ParameterType::Ref(t)) => {
-            let ptr = read_return!(*mut u8);
-            let concrete = match ctx.make_concrete(t) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-            let td = ctx
-                .loader()
-                .find_concrete_type(concrete)
-                .expect("failed to resolve return type");
-            let _ = ctx.pop_multiple(arg_count);
-            ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
-        }
-        Some(ParameterType::TypedReference) => {
-            let mut ret = std::mem::MaybeUninit::<[usize; 2]>::uninit();
-            unsafe {
-                libffi::raw::ffi_call(
-                    cif.as_raw_ptr(),
-                    Some(target_fn),
-                    ret.as_mut_ptr() as *mut c_void,
-                    arg_ptrs.as_mut_ptr(),
+                let mut ret = std::mem::MaybeUninit::<[usize; 2]>::uninit();
+                // SAFETY: ABI check above guarantees the return slot matches `[usize; 2]`.
+                unsafe {
+                    libffi::raw::ffi_call(
+                        cif.as_raw_ptr(),
+                        Some(target_fn),
+                        ret.as_mut_ptr() as *mut c_void,
+                        arg_ptrs.as_mut_ptr(),
+                    );
+                }
+                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
+                    return StepResult::Error(e.into());
+                }
+                // SAFETY: `ffi_call` initialized the full typed-reference return slot.
+                let ret = unsafe { ret.assume_init() };
+                let addr = ret[0];
+                let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
+                if type_ptr.is_null() {
+                    panic!("null type handle in returned TypedReference");
+                }
+                let type_desc = unsafe {
+                    let arc = Arc::from_raw(type_ptr);
+                    let clone = arc.clone();
+                    let _ = Arc::into_raw(arc);
+                    clone
+                };
+                let m = ManagedPtr::new(
+                    NonNull::new(addr as *mut u8),
+                    (*type_desc).clone(),
+                    None,
+                    false,
+                    Some(ByteOffset(0)),
                 );
+                let _ = ctx.pop_multiple(arg_count);
+                ctx.push(StackValue::TypedRef(m.into(), type_desc));
             }
-            do_write_back(ctx);
-            let ret = unsafe { ret.assume_init() };
-            let addr = ret[0];
-            let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
-            if type_ptr.is_null() {
-                panic!("null type handle in returned TypedReference");
-            }
-            let type_desc = unsafe {
-                let arc = Arc::from_raw(type_ptr);
-                let clone = arc.clone();
-                let _ = Arc::into_raw(arc);
-                clone
-            };
-            let m = ManagedPtr::new(
-                NonNull::new(addr as *mut u8),
-                (*type_desc).clone(),
-                None,
-                false,
-                Some(ByteOffset(0)),
-            );
-            let _ = ctx.pop_multiple(arg_count);
-            ctx.push(StackValue::TypedRef(m.into(), type_desc));
         }
-    }
+
+        StepResult::Continue
+    })();
 
     for obj in pinned_objects {
         ctx.unpin_object(obj);
     }
 
-    StepResult::Continue
+    call_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dotnet_types::error::MemoryAccessError;
+
+    #[test]
+    fn by_ref_write_back_propagates_managed_write_failures() {
+        let temp_buffers = vec![TempBuffer::Bytes(vec![1, 2, 3, 4])];
+        let write_backs = vec![(
+            WriteBackSource::Managed(PointerOrigin::Unmanaged, ByteOffset(0)),
+            0usize,
+            4usize,
+        )];
+
+        let err = apply_write_backs_with(&write_backs, &temp_buffers, |_origin, _offset, _data| {
+            Err(MemoryAccessError::InvalidOrigin)
+        })
+        .expect_err("managed write-back failure should be surfaced");
+
+        assert_eq!(err, MemoryAccessError::InvalidOrigin);
+    }
+
+    #[test]
+    fn by_ref_write_back_raw_destination_copies_bytes() {
+        let temp_buffers = vec![TempBuffer::Bytes(vec![9, 8, 7, 6])];
+        let mut destination = vec![0u8; 4];
+        let dest_ptr = NonNull::new(destination.as_mut_ptr()).expect("destination ptr is non-null");
+        let write_backs = vec![(WriteBackSource::Raw(dest_ptr), 0usize, 4usize)];
+
+        apply_write_backs_with(
+            &write_backs,
+            &temp_buffers,
+            |_origin, _offset, _data| Ok(()),
+        )
+        .expect("raw write-back copy should succeed");
+
+        assert_eq!(destination, vec![9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn value_type_return_buffer_honors_alignment_and_zero_init() {
+        let mut buffer =
+            AlignedReturnBuffer::new_zeroed(32, 16).expect("buffer allocation should succeed");
+        assert_eq!((buffer.as_mut_ptr() as usize) % 16, 0);
+        assert!(buffer.as_bytes().iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn value_type_return_copy_truncates_to_destination_size() {
+        let mut destination = [0u8; 4];
+        let source = [1u8, 2, 3, 4, 5, 6];
+        copy_value_type_return_data(&mut destination, &source);
+        assert_eq!(destination, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn typed_return_abi_mismatch_is_rejected() {
+        let cif = Cif::new(Vec::new(), Type::u64());
+        let err = validate_typed_return_abi::<u32>(&cif)
+            .expect_err("mismatched ffi/rust return ABI should fail");
+        assert!(matches!(err, ExecutionError::InternalError(_)));
+    }
 }

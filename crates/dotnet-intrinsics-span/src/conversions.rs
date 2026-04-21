@@ -12,7 +12,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},
 };
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::NonNull;
 

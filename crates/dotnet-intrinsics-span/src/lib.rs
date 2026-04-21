@@ -1,4 +1,7 @@
 //! Span and ReadOnlySpan intrinsic handlers plus span host abstractions.
+//!
+//! Inventory mapping for this host surface is tracked in
+//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -13,7 +16,8 @@ use dotnet_value::{
     object::{Object, ObjectRef},
     pointer::PointerOrigin,
 };
-use dotnet_vm_ops::{StepResult, ops::SpanIntrinsicHost as VmSpanIntrinsicHost};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::SpanIntrinsicHost as VmSpanIntrinsicHost;
 use std::sync::Arc;
 
 pub mod conversions;

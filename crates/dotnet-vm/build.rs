@@ -136,6 +136,11 @@ fn intrinsic_source_roots() -> Vec<SourceScanRoot> {
             directory: PathBuf::from("../dotnet-intrinsics-reflection/src"),
             module_prefix: "dotnet_intrinsics_reflection".to_string(),
         },
+        // Phase 5 extraction root for SIMD intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-simd/src"),
+            module_prefix: "dotnet_intrinsics_simd".to_string(),
+        },
         // Phase 3 extraction root for unsafe intrinsic handlers.
         SourceScanRoot {
             directory: PathBuf::from("../dotnet-intrinsics-unsafe/src"),

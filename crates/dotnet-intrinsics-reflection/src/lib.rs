@@ -1,5 +1,8 @@
 #![allow(clippy::mutable_key_type)]
 //! Reflection intrinsic handlers and runtime reflection host interfaces.
+//!
+//! Inventory mapping for this host surface is tracked in
+//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -12,7 +15,8 @@ use dotnet_value::{
     layout::LayoutManager,
     object::{Object, ObjectRef},
 };
-use dotnet_vm_ops::{MethodInfo, ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost};
+use dotnet_vm_data::MethodInfo;
+use dotnet_vm_ops::ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost;
 use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
 
@@ -71,7 +75,7 @@ pub trait ResolutionContextHost<'gc> {
         &mut self,
         method: MethodDescription,
         lookup: GenericLookup,
-    ) -> dotnet_vm_ops::StepResult;
+    ) -> dotnet_vm_data::StepResult;
 
     fn reflection_constructor_frame(
         &mut self,

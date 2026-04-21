@@ -1,7 +1,7 @@
 use crate::{gc::coordinator::GCCoordinator, threading::ThreadManagerOps};
 use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
-use std::{sync::OnceLock, time::Duration};
+use std::{num::NonZeroUsize, sync::OnceLock, time::Duration};
 
 pub const DEFAULT_SAFE_POINT_YIELD_MS: u64 = 10;
 
@@ -24,10 +24,10 @@ mod single_threaded;
 mod threaded;
 
 #[cfg(not(feature = "multithreading"))]
-pub use single_threaded::*;
+pub use single_threaded::{SyncBlock, SyncBlockManager};
 
 #[cfg(feature = "multithreading")]
-pub use threaded::*;
+pub use threaded::{SyncBlock, SyncBlockManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockResult {
@@ -73,9 +73,12 @@ pub trait SyncManagerOps {
     /// Otherwise creates a new sync block and returns its newly allocated index.
     ///
     /// Callers are responsible for publishing the returned index to object state.
-    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>);
+    fn get_or_create_sync_block(
+        &self,
+        current_index: Option<NonZeroUsize>,
+    ) -> (NonZeroUsize, Arc<Self::Block>);
 
-    fn get_sync_block(&self, index: usize) -> Option<Arc<Self::Block>>;
+    fn get_sync_block(&self, index: NonZeroUsize) -> Option<Arc<Self::Block>>;
 
     fn try_enter_block(
         &self,
@@ -85,9 +88,26 @@ pub trait SyncManagerOps {
     ) -> bool;
 }
 
-// Re-export basic sync primitives from utils::sync
+// Re-export basic sync primitives from utils::sync.
 // This allows existing code to continue using vm::sync::Arc, etc.
-pub use dotnet_utils::sync::*;
+pub use dotnet_utils::sync::{
+    AcquireAfter, Arc, AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize,
+    AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, HeldLockLevel, LockLevel, OrderedMutex,
+    OrderedMutexGuard, OrderedRwLock, OrderedRwLockReadGuard, OrderedRwLockWriteGuard, Ordering,
+    Weak, get_current_thread_id, levels, unlocked,
+};
+
+#[cfg(feature = "multithreading")]
+pub use dotnet_utils::sync::{
+    Condvar, MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, MutexGuard, RwLock,
+    RwLockReadGuard, RwLockWriteGuard,
+};
+
+#[cfg(not(feature = "multithreading"))]
+pub use dotnet_utils::sync::{
+    Condvar, MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, MutexGuard, RwLock,
+    RwLockReadGuard, RwLockWriteGuard,
+};
 
 #[cfg(test)]
 mod tests {

@@ -3,6 +3,8 @@ set -e
 FEATURES_COMBINATIONS=(
     ""
     "multithreading"
+    "simd"
+    "multithreading,simd"
     "generic-constraint-validation"
     "memory-validation"
     "metadata-validation"

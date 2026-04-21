@@ -3,10 +3,7 @@ use crate::{
     resolution::TypeResolutionExt,
     stack::{
         context::VesContext,
-        ops::{
-            EvalStackOps, LoaderOps, RawMemoryOps, StaticsOps, VmCallOps, VmLoaderOps,
-            VmResolutionOps,
-        },
+        ops::{EvalStackOps, LoaderOps, StaticsOps, VmCallOps, VmLoaderOps, VmResolutionOps},
     },
 };
 use dotnet_types::{
@@ -110,7 +107,6 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
-        let _ = self.check_gc_safe_point();
         let _gc = self.gc;
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
@@ -195,7 +191,6 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) -> Result<(), TypeResolutionError> {
-        let _ = self.check_gc_safe_point();
         let _gc = self.gc;
         let argument_base = self.evaluation_stack.top_of_stack();
         let arg_count = args.len();

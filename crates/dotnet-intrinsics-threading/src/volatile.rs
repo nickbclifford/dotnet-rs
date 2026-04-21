@@ -8,7 +8,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::BaseType;
 use gc_arena::Gc;
 

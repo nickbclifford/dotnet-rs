@@ -7,6 +7,7 @@ use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -99,7 +100,7 @@ impl super::SyncBlockOps for SyncBlock {
 }
 
 pub struct SyncBlockManager {
-    blocks: Mutex<HashMap<usize, Arc<SyncBlock>>>,
+    blocks: Mutex<HashMap<NonZeroUsize, Arc<SyncBlock>>>,
     next_index: AtomicUsize,
 }
 
@@ -115,7 +116,10 @@ impl SyncBlockManager {
 impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
-    fn get_or_create_sync_block(&self, current_index: Option<usize>) -> (usize, Arc<Self::Block>) {
+    fn get_or_create_sync_block(
+        &self,
+        current_index: Option<NonZeroUsize>,
+    ) -> (NonZeroUsize, Arc<Self::Block>) {
         if let Some(index) = current_index {
             let blocks = self.blocks.lock();
             if let Some(block) = blocks.get(&index) {
@@ -123,7 +127,8 @@ impl super::SyncManagerOps for SyncBlockManager {
             }
         }
 
-        let index = self.next_index.fetch_add(1, Ordering::Relaxed);
+        let index = NonZeroUsize::new(self.next_index.fetch_add(1, Ordering::Relaxed))
+            .expect("SyncBlockManager index overflowed into zero");
 
         let block = Arc::new(SyncBlock::new());
         let mut blocks = self.blocks.lock();
@@ -132,7 +137,7 @@ impl super::SyncManagerOps for SyncBlockManager {
         (index, block)
     }
 
-    fn get_sync_block(&self, index: usize) -> Option<Arc<SyncBlock>> {
+    fn get_sync_block(&self, index: NonZeroUsize) -> Option<Arc<SyncBlock>> {
         let blocks = self.blocks.lock();
         blocks.get(&index).cloned()
     }
@@ -157,7 +162,7 @@ impl Default for SyncBlockManager {
 mod tests {
     use super::*;
     use crate::gc::coordinator::GCCoordinator;
-    use crate::sync::{LockResult, SyncBlockOps};
+    use crate::sync::{LockResult, SyncBlockOps, SyncManagerOps};
     use crate::threading::ThreadManagerOps;
     use dotnet_metrics::RuntimeMetrics;
     use dotnet_utils::ArenaId;
@@ -242,5 +247,22 @@ mod tests {
         );
         assert_eq!(block.recursion_count.load(Ordering::Relaxed), 1);
         assert!(block.exit(THREAD_A));
+    }
+
+    #[test]
+    fn test_single_threaded_manager_allocates_non_zero_indices() {
+        let manager = SyncBlockManager::new();
+        let (index, _block) = manager.get_or_create_sync_block(None);
+        assert_ne!(index.get(), 0);
+    }
+
+    #[test]
+    fn test_single_threaded_manager_reuses_existing_sync_block() {
+        let manager = SyncBlockManager::new();
+        let (index, first) = manager.get_or_create_sync_block(None);
+        let (same_index, second) = manager.get_or_create_sync_block(Some(index));
+
+        assert_eq!(same_index, index);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }

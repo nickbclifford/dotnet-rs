@@ -33,6 +33,12 @@ pub const GC_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
+pub const GC_CROSS_ARENA_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "gc_cross_arena",
+    source: "fixtures/gc_cross_arena/CrossArenaGcPressure_0.cs",
+    expected_exit_code: 0,
+};
+
 pub const DISPATCH_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "dispatch",
     source: "fixtures/dispatch/VirtualDispatchStress_0.cs",
@@ -45,12 +51,62 @@ pub const GENERICS_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 5] = [
+pub const SPAN_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "span",
+    source: "fixtures/span/SpanEquality_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const SPAN_EQUALITY_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "span_equality",
+    source: "fixtures/span_equality/SpanEqualityFocused_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const MEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "memory",
+    source: "fixtures/memory/MemoryBulkOps_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const UNSAFE_BUFFER_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "unsafe_buffer",
+    source: "fixtures/unsafe_buffer/UnsafeBufferOps_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const STRING_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "string",
+    source: "fixtures/string/StringOpsSimd_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const STACK_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "stack",
+    source: "fixtures/stack/StackOpsStress_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const REFLECTION_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "reflection",
+    source: "fixtures/reflection/ReflectionEnumeration_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const BENCHMARK_CASES: [BenchmarkCase; 13] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
+    GC_CROSS_ARENA_BENCHMARK,
     DISPATCH_BENCHMARK,
     GENERICS_BENCHMARK,
+    SPAN_BENCHMARK,
+    SPAN_EQUALITY_BENCHMARK,
+    MEMORY_BENCHMARK,
+    UNSAFE_BUFFER_BENCHMARK,
+    STRING_BENCHMARK,
+    STACK_BENCHMARK,
+    REFLECTION_BENCHMARK,
 ];
 
 pub struct BenchHarness {

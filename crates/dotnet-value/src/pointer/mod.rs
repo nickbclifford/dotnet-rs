@@ -126,14 +126,13 @@ const MANAGED_PTR_FLAG_PINNED: u8 = 0b0000_0001;
 const MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET: u8 = 0b0000_0010;
 
 #[derive(Clone)]
-#[repr(C)]
 pub struct ManagedPtr<'gc> {
     pub(crate) magic: ValidationTag,
     pub(crate) _value: Option<NonNull<u8>>,
     pub(crate) origin: PointerOrigin<'gc>,
+    pub(crate) inner_type: TypeDescription,
     /// Compact byte offset for managed origins; unmanaged absolute addresses are read from `_value`.
     pub(crate) offset: ManagedByteOffset,
-    pub(crate) inner_type: TypeDescription,
     pub(crate) flags: u8,
     pub(crate) _marker: std::marker::PhantomData<&'gc ()>,
 }
@@ -152,9 +151,9 @@ impl<'a, 'gc> Arbitrary<'a> for ManagedPtr<'gc> {
         Ok(Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,
-            offset: packed_offset,
             origin,
             inner_type: u.arbitrary()?,
+            offset: packed_offset,
             flags: Self::with_unmanaged_inline_offset_flag(
                 Self::flags_from_pinned(pinned),
                 unmanaged_inline_offset,

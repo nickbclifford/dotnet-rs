@@ -12,7 +12,9 @@ members = [
     "crates/dotnet-intrinsics-string",
     "crates/dotnet-intrinsics-threading",
     "crates/dotnet-intrinsics-reflection",
+    "crates/dotnet-intrinsics-simd",
     "crates/dotnet-intrinsics-unsafe",
+    "crates/dotnet-simd",
     "crates/dotnet-metrics",
     "crates/dotnet-tracer",
     "crates/dotnet-vm-data",
@@ -40,7 +42,9 @@ dotnet-intrinsics-span = { path = "crates/dotnet-intrinsics-span", default-featu
 dotnet-intrinsics-string = { path = "crates/dotnet-intrinsics-string", default-features = false }
 dotnet-intrinsics-threading = { path = "crates/dotnet-intrinsics-threading", default-features = false }
 dotnet-intrinsics-reflection = { path = "crates/dotnet-intrinsics-reflection", default-features = false }
+dotnet-intrinsics-simd = { path = "crates/dotnet-intrinsics-simd", default-features = false }
 dotnet-intrinsics-unsafe = { path = "crates/dotnet-intrinsics-unsafe", default-features = false }
+dotnet-simd = { path = "crates/dotnet-simd", default-features = false }
 dotnet-macros = { path = "crates/dotnet-macros" }
 dotnet-macros-core = { path = "crates/dotnet-macros-core" }
 dotnet-metrics = { path = "crates/dotnet-metrics" }
@@ -60,6 +64,11 @@ sptr = "0.3"
 smallvec = "1.13"
 slab = "0.4"
 
+# Benchmark profile guidance:
+# - Use `bench-thin` for fast benchmark iteration.
+# - Use `bench-fat` for baseline comparison and final validation.
+# - Optional two-pass PGO workflow for benchmarks: `scripts/bench_pgo.sh`
+#   (runbook: `docs/BENCHMARK_WORKFLOW.md`).
 [profile.bench-thin]
 inherits = "bench"
 lto = "thin"

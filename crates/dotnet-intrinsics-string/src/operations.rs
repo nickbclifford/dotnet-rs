@@ -1,4 +1,4 @@
-use crate::{IntrinsicStringHost, NULL_REF_MSG};
+use crate::{IntrinsicStringHost, NULL_REF_MSG, simd::probe_sequence_equal_u16};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
@@ -14,6 +14,31 @@ use dotnet_vm_ops::{
     ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps},
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
+
+const SPAN_COPY_CHUNK_SIZE: usize = 1024;
+
+fn run_chunked_copy_with_safe_point<C, S>(
+    len: usize,
+    mut copy_chunk: C,
+    mut should_yield: S,
+) -> Result<(), StepResult>
+where
+    C: FnMut(usize, usize) -> Result<(), IntrinsicError>,
+    S: FnMut() -> bool,
+{
+    let mut offset = 0usize;
+    while offset < len {
+        let chunk_len = std::cmp::min(SPAN_COPY_CHUNK_SIZE, len - offset);
+        copy_chunk(offset, chunk_len).map_err(|e| StepResult::Error(e.into()))?;
+        offset += chunk_len;
+
+        if offset < len && should_yield() {
+            return Err(StepResult::Yield);
+        }
+    }
+
+    Ok(())
+}
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
@@ -76,8 +101,10 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
                             if let (HeapStorage::Str(a), HeapStorage::Str(b)) =
                                 (&a_heap.storage, &b_heap.storage)
                             {
-                                a[offset..offset + current_chunk]
-                                    == b[offset..offset + current_chunk]
+                                let a_chunk = &a[offset..offset + current_chunk];
+                                let b_chunk = &b[offset..offset + current_chunk];
+                                probe_sequence_equal_u16(a_chunk, b_chunk)
+                                    .unwrap_or(a_chunk == b_chunk)
                             } else {
                                 false
                             }
@@ -119,27 +146,31 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
     let arg0 = ctx.peek_stack_at(2);
 
     let copy_span_chunked =
-        |ctx: &mut T, span: Object, dest: &mut Vec<u16>| -> Result<(), IntrinsicError> {
-            let len =
-                ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+        |ctx: &mut T, span: Object, dest: &mut Vec<u16>| -> Result<(), StepResult> {
+            let len = ctx
+                .string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
                     slice.len() / 2
-                })?;
-            let mut offset = 0;
-            const CHUNK_SIZE: usize = 1024;
+                })
+                .map_err(|e| StepResult::Error(e.into()))?;
 
-            while offset < len {
-                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
-                ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                    for i in 0..chunk_len {
-                        let c_idx = (offset + i) * 2;
-                        dest.push(u16::from_ne_bytes([slice[c_idx], slice[c_idx + 1]]));
-                    }
-                })?;
-                offset += chunk_len;
-                if offset < len {
-                    let _ = ctx.check_gc_safe_point();
-                }
-            }
+            run_chunked_copy_with_safe_point(
+                len,
+                |offset, chunk_len| {
+                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                        let start = offset * 2;
+                        let end = start + (chunk_len * 2);
+                        if let Some(chunk_bytes) = slice.get(start..end) {
+                            dest.extend(
+                                chunk_bytes
+                                    .chunks_exact(2)
+                                    .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
+                            );
+                        }
+                    })
+                },
+                || ctx.check_gc_safe_point(),
+            )?;
+
             Ok(())
         };
 
@@ -147,8 +178,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
         match arg {
             StackValue::ValueType(span) => {
                 let mut chars = Vec::new();
-                copy_span_chunked(ctx, span, &mut chars)
-                    .map_err(|e| StepResult::Error(e.into()))?;
+                copy_span_chunked(ctx, span, &mut chars)?;
                 Ok(chars)
             }
             StackValue::ObjectRef(ObjectRef(None)) => Ok(Vec::new()),
@@ -359,4 +389,48 @@ pub fn intrinsic_string_implicit_to_span<'gc, T: IntrinsicStringHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     ctx.string_intrinsic_as_span(method, generics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_chunked_copy_with_safe_point_yields_for_large_copy() {
+        let len = SPAN_COPY_CHUNK_SIZE + 8;
+        let mut polls = 0usize;
+        let mut copied = 0usize;
+        let res = run_chunked_copy_with_safe_point(
+            len,
+            |_offset, chunk_len| {
+                copied += chunk_len;
+                Ok(())
+            },
+            || {
+                polls += 1;
+                polls == 1
+            },
+        );
+
+        assert_eq!(res, Err(StepResult::Yield));
+        assert_eq!(polls, 1);
+        assert_eq!(copied, SPAN_COPY_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn run_chunked_copy_with_safe_point_completes_when_stop_not_requested() {
+        let len = SPAN_COPY_CHUNK_SIZE * 2 + 8;
+        let mut copied = 0usize;
+        let res = run_chunked_copy_with_safe_point(
+            len,
+            |_offset, chunk_len| {
+                copied += chunk_len;
+                Ok(())
+            },
+            || false,
+        );
+
+        assert_eq!(res, Ok(()));
+        assert_eq!(copied, len);
+    }
 }

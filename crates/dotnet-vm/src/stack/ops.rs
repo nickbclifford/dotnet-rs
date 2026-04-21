@@ -20,6 +20,9 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
+//!
+//! For the P3.S1 trait/call-site inventory and hot-path mapping, see
+//! `docs/p3_s1_trait_inventory.md`.
 use crate::{
     ByteOffset, MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
     resolver::VmResolverService,
@@ -44,8 +47,9 @@ use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
     ArgumentOps, CallOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps,
-    PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps, StaticsOps, ThreadOps,
-    TypedStackOps, VariableOps, VesBaseOps, VesInternals,
+    PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
+    SimdIntrinsicHost as VmSimdIntrinsicHost, StackOps, StaticsOps, ThreadOps, TypedStackOps,
+    VariableOps, VesBaseOps, VesInternals,
 };
 
 pub trait VmStackOps<'gc>: StackOps<'gc> {
@@ -184,39 +188,45 @@ pub trait VmCallOps<'gc>: CallOps<'gc> {
     ) -> StepResult;
 }
 
-dotnet_vm_ops::trait_alias! {
-    #[no_blanket_impl]
-    pub trait VmExceptionContext<'gc> =
-        ExceptionContext<'gc>
-        + TypedStackOps<'gc>
-        + VmResolutionOps<'gc>
-        + VmReflectionOps<'gc>
-        + VmLoaderOps
-        + MemoryOps<'gc>
-        + VesInternals<'gc>
-        + VesBaseOps;
-    #[no_blanket_impl]
-    pub trait VmPInvokeContext<'gc> =
-        PInvokeContext<'gc>
-        + VmStackOps<'gc>
-        + VmRawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + VmResolutionOps<'gc>
-        + VesInternals<'gc>
-        + VmLoaderOps
-        + MemoryOps<'gc>
-        + VesBaseOps;
+pub trait VmExceptionContext<'gc>:
+    ExceptionContext<'gc>
+    + TypedStackOps<'gc>
+    + VmResolutionOps<'gc>
+    + VmReflectionOps<'gc>
+    + VmLoaderOps
+    + MemoryOps<'gc>
+    + VesInternals<'gc>
+    + VesBaseOps
+{
+}
+
+pub trait VmPInvokeContext<'gc>:
+    PInvokeContext<'gc>
+    + VmStackOps<'gc>
+    + VmRawMemoryOps<'gc>
+    + ExceptionOps<'gc>
+    + VmResolutionOps<'gc>
+    + VesInternals<'gc>
+    + VmLoaderOps
+    + MemoryOps<'gc>
+    + VesBaseOps
+{
 }
 
 pub trait VesOps<'gc>:
-    VmExceptionContext<'gc>
-    + VmPInvokeContext<'gc>
+    PInvokeContext<'gc>
+    + VmStackOps<'gc>
+    + VmRawMemoryOps<'gc>
+    + VmResolutionOps<'gc>
+    + VmReflectionOps<'gc>
+    + VmLoaderOps
     + VmStaticsOps<'gc>
     + ThreadOps
     + VmCallOps<'gc>
     + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
     + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>
     + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
+    + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>
     + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
     + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
     + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>

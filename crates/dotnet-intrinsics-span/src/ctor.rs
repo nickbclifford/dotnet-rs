@@ -10,7 +10,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, UnmanagedPtr},
 };
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use std::ptr::NonNull;
 
 #[dotnet_intrinsic("void System.Span<T>::.ctor(void*, int)")]

@@ -7,7 +7,7 @@ use dotnet_value::{
     layout::HasLayout,
     object::{CTSValue, HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::ParameterType;
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]

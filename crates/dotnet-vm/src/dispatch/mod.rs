@@ -94,6 +94,7 @@ fn dispatch_safe_point_poll_interval() -> usize {
 
 impl<'gc> CallStack<'gc> {
     #[inline]
+    #[must_use]
     pub fn check_gc_safe_point(&self) -> bool {
         let thread_manager = &self.shared.thread_manager;
         thread_manager.is_gc_stop_requested()
@@ -364,7 +365,7 @@ impl<'gc> ExecutionEngine<'gc> {
                 return StepResult::Yield;
             }
 
-            if self.stack.shared.thread_manager.is_gc_stop_requested() {
+            if self.stack.check_gc_safe_point() {
                 // Snapshot before yielding
                 *self.stack.shared.last_instructions.lock() = self.ring_buffer.clone();
                 return StepResult::Yield;
@@ -401,7 +402,7 @@ impl<'gc> ExecutionEngine<'gc> {
                                 last_res = StepResult::Yield;
                                 break;
                             }
-                            if self.stack.shared.thread_manager.is_gc_stop_requested() {
+                            if self.stack.check_gc_safe_point() {
                                 last_res = StepResult::Yield;
                                 break;
                             }

@@ -128,11 +128,20 @@ unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     }
 }
 
-#[derive(Collect)]
-#[collect(no_drop)]
 pub struct EvaluationStack<'gc> {
     pub stack: Vec<StackValue<'gc>>,
     pub suspended_stack: Vec<StackValue<'gc>>,
+    slot_locations_scratch: Vec<NonNull<u8>>,
+    suspended_locations_scratch: Vec<NonNull<u8>>,
+}
+
+// SAFETY: `EvaluationStack` traces all GC-managed fields (`stack` and `suspended_stack`).
+// Scratch pointer caches are raw addresses derived from stack values and contain no GC references.
+unsafe impl<'gc> Collect<'gc> for EvaluationStack<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        self.stack.trace(cc);
+        self.suspended_stack.trace(cc);
+    }
 }
 
 impl<'gc> Default for EvaluationStack<'gc> {
@@ -149,6 +158,8 @@ impl<'gc> EvaluationStack<'gc> {
         Self {
             stack: vec![],
             suspended_stack: vec![],
+            slot_locations_scratch: vec![],
+            suspended_locations_scratch: vec![],
         }
     }
 
@@ -208,23 +219,31 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     fn update_stack_pointers(&mut self) {
-        let slot_locations: Vec<NonNull<u8>> =
-            self.stack.iter().map(|v| v.data_location()).collect();
-        let suspended_locations: Vec<NonNull<u8>> = self
-            .suspended_stack
-            .iter()
-            .map(|v| v.data_location())
-            .collect();
+        self.slot_locations_scratch.clear();
+        self.slot_locations_scratch
+            .extend(self.stack.iter().map(|v| v.data_location()));
+        self.suspended_locations_scratch.clear();
+        self.suspended_locations_scratch
+            .extend(self.suspended_stack.iter().map(|v| v.data_location()));
+
+        let stack_len = self.slot_locations_scratch.len();
+        let slot_locations = self.slot_locations_scratch.as_slice();
+        let suspended_locations = self.suspended_locations_scratch.as_slice();
+
+        let resolve_slot_ptr = |idx: StackSlotIndex| {
+            let idx = idx.as_usize();
+            if idx < stack_len {
+                slot_locations[idx]
+            } else {
+                suspended_locations[idx - stack_len]
+            }
+        };
 
         let update_val = |val: &mut StackValue<'gc>| match val {
             StackValue::ManagedPtr(m) => {
                 if let PointerOrigin::Stack(idx) = m.origin() {
                     let off = m.byte_offset();
-                    let slot_ptr = if idx.as_usize() < slot_locations.len() {
-                        slot_locations[idx.as_usize()]
-                    } else {
-                        suspended_locations[idx.as_usize() - slot_locations.len()]
-                    };
+                    let slot_ptr = resolve_slot_ptr(*idx);
                     let new_ptr =
                         unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off.as_usize())) };
                     m.update_cached_ptr(new_ptr);
@@ -239,11 +258,7 @@ impl<'gc> EvaluationStack<'gc> {
                             let slice = &mut data[offset_val..offset_val + 16];
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
                             if let PointerOrigin::Stack(idx) = info.origin {
-                                let slot_ptr = if idx.as_usize() < slot_locations.len() {
-                                    slot_locations[idx.as_usize()]
-                                } else {
-                                    suspended_locations[idx.as_usize() - slot_locations.len()]
-                                };
+                                let slot_ptr = resolve_slot_ptr(idx);
                                 let new_ptr = unsafe {
                                     NonNull::new_unchecked(
                                         slot_ptr.as_ptr().add(info.offset.as_usize()),
@@ -364,10 +379,9 @@ impl<'gc> EvaluationStack<'gc> {
     pub fn pop_multiple_into(&mut self, count: usize, out: &mut Vec<StackValue<'gc>>) {
         out.clear();
         out.reserve(count);
-        for _ in 0..count {
-            out.push(self.stack.pop().expect("Evaluation stack underflow"));
-        }
-        out.reverse();
+        let len = self.stack.len();
+        let split_at = len.checked_sub(count).expect("Evaluation stack underflow");
+        out.extend(self.stack.drain(split_at..));
     }
 
     pub fn copy_slots_into(
@@ -377,20 +391,20 @@ impl<'gc> EvaluationStack<'gc> {
         out: &mut Vec<StackValue<'gc>>,
     ) {
         out.clear();
-        out.reserve(count);
         let start = start.as_usize();
-        for i in 0..count {
-            out.push(self.stack[start + i].clone());
-        }
+        let end = start.checked_add(count).expect("Stack slot range overflow");
+        let slice = self
+            .stack
+            .get(start..end)
+            .expect("Stack slot range out of bounds");
+        out.reserve(count);
+        out.extend_from_slice(slice);
     }
 
     pub fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
-        let mut values = Vec::with_capacity(count);
-        for i in 0..count {
-            values.push(self.stack[self.stack.len() - 1 - i].clone());
-        }
-        values.reverse();
-        values
+        let len = self.stack.len();
+        let start = len.checked_sub(count).expect("Evaluation stack underflow");
+        self.stack[start..].to_vec()
     }
 
     pub fn peek_stack(&self) -> StackValue<'gc> {
@@ -464,6 +478,130 @@ impl<'gc> EvaluationStack<'gc> {
             .last()
             .expect("Evaluation stack is empty")
             .data_location()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int_stack(values: &[i32]) -> EvaluationStack<'static> {
+        let mut stack = EvaluationStack::new();
+        for value in values {
+            stack.push_i32(*value);
+        }
+        stack
+    }
+
+    fn as_i32_values(values: &[StackValue<'static>]) -> Vec<i32> {
+        values.iter().map(StackValue::as_i32).collect()
+    }
+
+    #[test]
+    fn pop_multiple_into_keeps_original_order() {
+        let mut stack = int_stack(&[1, 2, 3, 4, 5]);
+        let mut out = vec![StackValue::Int32(99)];
+
+        stack.pop_multiple_into(3, &mut out);
+
+        assert_eq!(as_i32_values(&out), vec![3, 4, 5]);
+        assert_eq!(stack.stack.len(), 2);
+        assert_eq!(stack.peek_stack().as_i32(), 2);
+    }
+
+    #[test]
+    fn copy_slots_into_copies_requested_slice() {
+        let stack = int_stack(&[10, 20, 30, 40, 50]);
+        let mut out = Vec::new();
+
+        stack.copy_slots_into(StackSlotIndex(1), 3, &mut out);
+
+        assert_eq!(as_i32_values(&out), vec![20, 30, 40]);
+    }
+
+    #[test]
+    fn peek_multiple_returns_top_segment_in_stack_order() {
+        let stack = int_stack(&[5, 6, 7, 8]);
+
+        let values = stack.peek_multiple(2);
+
+        assert_eq!(as_i32_values(&values), vec![7, 8]);
+        assert_eq!(stack.top_of_stack().as_usize(), 4);
+    }
+
+    #[test]
+    fn multi_value_ops_reuse_output_allocation() {
+        let mut stack = int_stack(&[1, 2, 3, 4]);
+        let mut out = Vec::with_capacity(8);
+        out.push(StackValue::Int32(-1));
+        let initial_capacity = out.capacity();
+
+        stack.pop_multiple_into(2, &mut out);
+        assert_eq!(out.capacity(), initial_capacity);
+
+        stack.copy_slots_into(StackSlotIndex(0), 2, &mut out);
+        assert_eq!(out.capacity(), initial_capacity);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_updates_cached_ptr_on_reallocation() {
+        let mut stack = int_stack(&[11, 22]);
+        let slot0_ptr = stack.get_slot_address(StackSlotIndex(0)).as_ptr();
+        stack.push(StackValue::managed_stack_ptr(
+            StackSlotIndex(0),
+            ByteOffset(0),
+            slot0_ptr,
+            TypeDescription::NULL,
+            false,
+        ));
+
+        stack.reserve_slots(512);
+
+        let expected_ptr = stack.get_slot_address(StackSlotIndex(0)).as_ptr();
+        let actual_ptr = stack.peek_stack().as_ptr();
+        assert_eq!(actual_ptr, expected_ptr);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_tracks_suspended_slots() {
+        let mut stack = int_stack(&[1, 2]);
+        let slot1_ptr = stack.get_slot_address(StackSlotIndex(1)).as_ptr();
+        stack.push(StackValue::managed_stack_ptr(
+            StackSlotIndex(1),
+            ByteOffset(0),
+            slot1_ptr,
+            TypeDescription::NULL,
+            false,
+        ));
+
+        stack.suspend_above(StackSlotIndex(1));
+        let expected_suspended_ptr = stack.suspended_stack[0].data_location().as_ptr();
+        let actual_suspended_ptr = stack.suspended_stack[1].as_ptr();
+        assert_eq!(actual_suspended_ptr, expected_suspended_ptr);
+
+        stack.restore_suspended();
+        let expected_restored_ptr = stack.get_slot_address(StackSlotIndex(1)).as_ptr();
+        let actual_restored_ptr = stack.peek_stack().as_ptr();
+        assert_eq!(actual_restored_ptr, expected_restored_ptr);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_reuses_scratch_buffers() {
+        let mut stack = int_stack(&[3, 4, 5]);
+        stack.update_stack_pointers();
+        let initial_slot_capacity = stack.slot_locations_scratch.capacity();
+        let initial_suspended_capacity = stack.suspended_locations_scratch.capacity();
+
+        stack.update_stack_pointers();
+
+        assert_eq!(
+            stack.slot_locations_scratch.capacity(),
+            initial_slot_capacity
+        );
+        assert_eq!(
+            stack.suspended_locations_scratch.capacity(),
+            initial_suspended_capacity
+        );
     }
 }
 

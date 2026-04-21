@@ -158,6 +158,7 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut methods_objs = Vec::new();
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (idx, m) in td.definition().methods.iter().enumerate() {
             let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = !m.signature.instance;
@@ -174,14 +175,17 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let desc = MethodDescription::new(
                     td.clone(),
                     lookup.clone(),
                     td.resolution.clone(),
                     MethodMemberIndex::Method(idx),
                 );
-                methods_objs.push(crate::common::get_runtime_method_obj(ctx, desc, lookup));
+                methods_objs.push(crate::common::get_runtime_method_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
             }
         }
     }
@@ -219,6 +223,7 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut found_method = None;
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != name {
                 continue;
@@ -238,14 +243,17 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let desc = MethodDescription::new(
                     td.clone(),
                     lookup.clone(),
                     td.resolution.clone(),
                     MethodMemberIndex::Method(idx),
                 );
-                found_method = Some(crate::common::get_runtime_method_obj(ctx, desc, lookup));
+                found_method = Some(crate::common::get_runtime_method_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
                 break;
             }
         }
@@ -279,6 +287,7 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut found_constructor = None;
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != ".ctor" {
                 continue;
@@ -298,14 +307,17 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let desc = MethodDescription::new(
                     td.clone(),
                     lookup.clone(),
                     td.resolution.clone(),
                     MethodMemberIndex::Method(idx),
                 );
-                found_constructor = Some(crate::common::get_runtime_method_obj(ctx, desc, lookup));
+                found_constructor = Some(crate::common::get_runtime_method_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
                 break;
             }
         }
@@ -381,6 +393,7 @@ pub fn handle_get_fields<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut fields_objs = Vec::new();
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (index, f) in td.definition().fields.iter().enumerate() {
             let is_public = f.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = f.static_member;
@@ -402,8 +415,11 @@ pub fn handle_get_fields<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     td.resolution.clone(),
                     index,
                 );
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                fields_objs.push(crate::common::get_runtime_field_obj(ctx, desc, lookup));
+                fields_objs.push(crate::common::get_runtime_field_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
             }
         }
     }
@@ -437,6 +453,7 @@ pub fn handle_get_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut found_field = None;
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (index, f) in td.definition().fields.iter().enumerate() {
             if f.name != name {
                 continue;
@@ -461,8 +478,11 @@ pub fn handle_get_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     td.resolution.clone(),
                     index,
                 );
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                found_field = Some(crate::common::get_runtime_field_obj(ctx, desc, lookup));
+                found_field = Some(crate::common::get_runtime_field_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
                 break;
             }
         }
@@ -520,6 +540,7 @@ pub fn handle_get_constructors<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let mut constructors_objs = Vec::new();
     if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
         for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != ".ctor" {
                 continue;
@@ -539,14 +560,17 @@ pub fn handle_get_constructors<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let desc = MethodDescription::new(
                     td.clone(),
                     lookup.clone(),
                     td.resolution.clone(),
                     MethodMemberIndex::Method(idx),
                 );
-                constructors_objs.push(crate::common::get_runtime_method_obj(ctx, desc, lookup));
+                constructors_objs.push(crate::common::get_runtime_method_obj(
+                    ctx,
+                    desc,
+                    lookup.clone(),
+                ));
             }
         }
     }

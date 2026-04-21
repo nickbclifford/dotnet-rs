@@ -10,6 +10,7 @@ multithreading = [
     "dep:parking_lot",
     "dotnet-vm/multithreading",
 ]
+simd = ["dotnet-vm/simd"]
 memory-validation = ["dotnet-vm/memory-validation"]
 metadata-validation = ["dotnet-vm/metadata-validation"]
 validation-all = [

@@ -7,7 +7,9 @@
 //! Higher-level traits (`StackOps`, `ResolutionOps`, `ReflectionOps`, `LoaderOps`,
 //! `StaticsOps`, `CallOps`, `VesInternals`, `VesOps`) remain in `dotnet-vm` because
 //! they reference internal VM types (`StackFrame`, `ResolutionContext`, `SharedGlobalState`, etc.).
-use crate::StepResult;
+//!
+//! For the P3.S1 trait/call-site inventory and hot-path mapping, see
+//! `docs/p3_s1_trait_inventory.md`.
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_tracer::Tracer;
 use dotnet_types::{
@@ -24,6 +26,7 @@ use dotnet_value::{
     object::{CTSValue, ObjectRef, ValueType, Vector},
     pointer::{ManagedPtr, PointerOrigin},
 };
+use dotnet_vm_data::{MethodState, StepResult};
 use std::sync::Arc;
 
 pub trait EvalStackOps<'gc> {
@@ -270,6 +273,11 @@ pub trait ThreadOps {
     fn thread_id(&self) -> ArenaId;
 }
 
+pub trait SimdCapabilityOps {
+    fn simd_vector128_is_hardware_accelerated(&self) -> bool;
+    fn simd_vector256_is_hardware_accelerated(&self) -> bool;
+}
+
 pub trait VesBaseOps {
     fn tracer_enabled(&self) -> bool;
     fn tracer(&self) -> &Tracer;
@@ -346,7 +354,9 @@ pub trait ExceptionContext<'gc>:
 }
 
 pub trait PInvokeContext<'gc>:
-    StackOps<'gc>
+    TypedStackOps<'gc>
+    + LocalOps<'gc>
+    + ArgumentOps<'gc>
     + RawMemoryOps<'gc>
     + ExceptionOps<'gc>
     + ResolutionOps<'gc>
@@ -391,8 +401,8 @@ pub trait VesInternals<'gc> {
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
-    fn state(&self) -> &crate::MethodState;
-    fn state_mut(&mut self) -> &mut crate::MethodState;
+    fn state(&self) -> &MethodState;
+    fn state_mut(&mut self) -> &mut MethodState;
 
     fn exception_mode(&self) -> &crate::ExceptionState<'gc>;
     fn exception_mode_mut(&mut self) -> &mut crate::ExceptionState<'gc>;
@@ -433,12 +443,19 @@ crate::trait_alias! {
     /// - allocation/boxing helpers (`new_object`, `new_vector`, `box_value`)
     /// - method dispatch and type resolution (`return_frame`, `make_concrete`, `get_heap_description`)
     pub trait StringIntrinsicHost<'gc> =
-        EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+        TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + LoaderOps
         + MemoryOps<'gc>;
+    /// Host contract for `System.Runtime.Intrinsics` capability probe handlers.
+    ///
+    /// Required capabilities used by current handlers:
+    /// - typed stack result writes (`push_i32`)
+    /// - runtime SIMD capability probes (`Vector128`/`Vector256`)
+    pub trait SimdIntrinsicHost<'gc> =
+        TypedStackOps<'gc>
+        + SimdCapabilityOps;
     /// Host contract for delegate intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
@@ -461,8 +478,7 @@ crate::trait_alias! {
     /// - allocation and reflection helpers (`new_object`, `get_heap_description`)
     /// - element type/layout resolution (`make_concrete`, `instance_field_layout`)
     pub trait SpanIntrinsicHost<'gc> =
-        EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+        TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
         + MemoryOps<'gc>
@@ -476,8 +492,7 @@ crate::trait_alias! {
     /// - runtime type sizing/layout (`make_concrete`, `instance_field_layout`)
     /// - object/reference helpers (`new_object`, `get_heap_description`)
     pub trait UnsafeIntrinsicHost<'gc> =
-        EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+        TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
         + RawMemoryOps<'gc>
@@ -491,8 +506,7 @@ crate::trait_alias! {
     /// - atomic/raw memory operations (`compare_exchange_atomic`, `load_atomic`, `store_atomic`)
     /// - thread identity queries (`thread_id`)
     pub trait ThreadingIntrinsicHost<'gc> =
-        EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+        TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
         + MemoryOps<'gc>
@@ -506,11 +520,9 @@ crate::trait_alias! {
     /// - method construction/invocation (`return_frame`, frame state via `VesInternals`)
     /// - static storage initialization for constructed generic types
     pub trait ReflectionIntrinsicHost<'gc> =
-        EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+        TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
-        + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ReflectionOps<'gc>
         + ResolutionOps<'gc>

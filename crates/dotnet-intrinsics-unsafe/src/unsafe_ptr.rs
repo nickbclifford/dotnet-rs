@@ -15,6 +15,108 @@ use dotnet_vm_ops::{
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::{self, NonNull};
 
+const BULK_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+
+#[inline]
+fn ranges_overlap(src: *const u8, dst: *mut u8, len: usize) -> bool {
+    let src_start = src as usize;
+    let dst_start = dst as usize;
+    let src_end = src_start.saturating_add(len);
+    let dst_end = dst_start.saturating_add(len);
+    src_start < dst_end && dst_start < src_end
+}
+
+fn chunked_copy_with_safe_point<
+    'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    src: *const u8,
+    dest: *mut u8,
+    size: usize,
+) -> StepResult {
+    if size == 0 || src == dest {
+        return StepResult::Continue;
+    }
+
+    let overlap = ranges_overlap(src, dest, size);
+    let copy_backward = overlap && (dest as usize) > (src as usize);
+
+    if overlap {
+        if copy_backward {
+            let mut remaining = size;
+            while remaining > 0 {
+                let current_chunk = std::cmp::min(remaining, BULK_OP_CHUNK_SIZE);
+                let start = remaining - current_chunk;
+                unsafe {
+                    // SAFETY: Pointers are valid for `size` bytes, and backward chunking
+                    // preserves whole-range memmove semantics for overlapping ranges.
+                    ptr::copy(src.add(start), dest.add(start), current_chunk);
+                }
+                remaining = start;
+                if remaining > 0 && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
+            }
+            return StepResult::Continue;
+        }
+
+        let mut offset = 0usize;
+        while offset < size {
+            let current_chunk = std::cmp::min(size - offset, BULK_OP_CHUNK_SIZE);
+            unsafe {
+                // SAFETY: Overlapping ranges require memmove semantics.
+                ptr::copy(src.add(offset), dest.add(offset), current_chunk);
+            }
+            offset += current_chunk;
+            if offset < size && ctx.check_gc_safe_point() {
+                return StepResult::Yield;
+            }
+        }
+        return StepResult::Continue;
+    }
+
+    let mut offset = 0usize;
+    while offset < size {
+        let current_chunk = std::cmp::min(size - offset, BULK_OP_CHUNK_SIZE);
+        unsafe {
+            // SAFETY: Chunks are non-overlapping in this branch.
+            dotnet_simd::copy_nonoverlapping_raw(dest.add(offset), src.add(offset), current_chunk);
+        }
+        offset += current_chunk;
+        if offset < size && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
+        }
+    }
+
+    StepResult::Continue
+}
+
+fn chunked_fill_with_safe_point<
+    'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    addr: *mut u8,
+    size: usize,
+    val: u8,
+) -> StepResult {
+    let mut offset = 0usize;
+    while offset < size {
+        let current_chunk = std::cmp::min(size - offset, BULK_OP_CHUNK_SIZE);
+        unsafe {
+            // SAFETY: Destination pointer is valid for `size` bytes by intrinsic contract.
+            dotnet_simd::fill_raw(addr.add(offset), current_chunk, val);
+        }
+        offset += current_chunk;
+        if offset < size && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
+        }
+    }
+
+    StepResult::Continue
+}
+
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
 #[allow(unused_variables)]
@@ -673,22 +775,10 @@ pub fn intrinsic_unsafe_copy_block<
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    unsafe {
-        validate_atomic_access(src, false);
-        validate_atomic_access(dest, false);
+    validate_atomic_access(src, false);
+    validate_atomic_access(dest, false);
 
-        const COPY_BLOCK_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-        let mut offset = 0;
-        while offset < size {
-            let current_chunk = std::cmp::min(size - offset, COPY_BLOCK_CHUNK_SIZE);
-            ptr::copy(src.add(offset), dest.add(offset), current_chunk);
-            offset += current_chunk;
-            if offset < size && ctx.check_gc_safe_point() {
-                return StepResult::Yield;
-            }
-        }
-    }
-    StepResult::Continue
+    chunked_copy_with_safe_point(ctx, src, dest, size)
 }
 
 #[dotnet_intrinsic(
@@ -713,19 +803,7 @@ pub fn intrinsic_unsafe_init_block<
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    unsafe {
-        validate_atomic_access(addr, false);
+    validate_atomic_access(addr, false);
 
-        const INIT_BLOCK_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-        let mut offset = 0;
-        while offset < size {
-            let current_chunk = std::cmp::min(size - offset, INIT_BLOCK_CHUNK_SIZE);
-            ptr::write_bytes(addr.add(offset), val, current_chunk);
-            offset += current_chunk;
-            if offset < size && ctx.check_gc_safe_point() {
-                return StepResult::Yield;
-            }
-        }
-    }
-    StepResult::Continue
+    chunked_fill_with_safe_point(ctx, addr, size, val)
 }

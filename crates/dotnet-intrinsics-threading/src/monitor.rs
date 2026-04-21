@@ -3,7 +3,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{ArenaId, StackSlotIndex};
 use dotnet_value::{ManagedPtr, StackValue, pointer::PointerOrigin};
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use std::{
     cell::Cell,
     time::{Duration, Instant},

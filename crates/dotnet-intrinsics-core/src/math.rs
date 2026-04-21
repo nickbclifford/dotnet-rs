@@ -22,8 +22,6 @@ fn concrete_to_method_type(concrete: &ConcreteType) -> MethodType {
     MethodType::Base(Box::new(mapped))
 }
 
-#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
-#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, T: TypedStackOps<'gc>>(

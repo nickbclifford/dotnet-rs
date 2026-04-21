@@ -222,8 +222,11 @@ pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'
         Ok(v) => v,
         Err(e) => return StepResult::Error(e.into()),
     };
-    for (i, item) in items.into_iter().enumerate() {
-        item.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+    for (item, chunk) in items
+        .into_iter()
+        .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
+    {
+        item.write(chunk);
     }
     ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
     StepResult::Continue
@@ -297,62 +300,59 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 ));
             }
 
-            let mut found_ctor = false;
-            for (idx, m) in td.definition().methods.iter().enumerate() {
-                if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
-                    let lookup = if let RuntimeType::Generic(_, type_generics) = rt {
-                        GenericLookup::new(
-                            type_generics
-                                .iter()
-                                .map(|t| t.to_concrete(ctx.loader().as_ref()))
-                                .collect(),
-                        )
-                    } else {
-                        ctx.reflection_empty_generics()
-                    };
-                    let method_idx = crate::common::get_runtime_method_index(
-                        ctx,
-                        MethodDescription::new(
-                            td.clone(),
-                            lookup.clone(),
-                            td.resolution.clone(),
-                            MethodMemberIndex::Method(idx),
-                        ),
-                        lookup,
-                    );
+            let ctor_idx = td.definition().methods.iter().position(|m| {
+                m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty()
+            });
 
-                    let method_val = StackValue::NativeInt(method_idx as isize);
-                    let layout = LayoutManager::Scalar(Scalar::NativeInt);
-                    unsafe {
-                        dotnet_vm_ops::vm_try!(ctx.write_unaligned(
-                            pfn_ctor.origin().clone(),
-                            pfn_ctor.byte_offset(),
-                            method_val,
-                            &layout,
-                        ));
-                    }
-
-                    let public_val = StackValue::Int32(1);
-                    let byte_layout = LayoutManager::Scalar(Scalar::Int8);
-                    unsafe {
-                        dotnet_vm_ops::vm_try!(ctx.write_unaligned(
-                            ctor_is_public.origin().clone(),
-                            ctor_is_public.byte_offset(),
-                            public_val,
-                            &byte_layout,
-                        ));
-                    }
-                    found_ctor = true;
-                    break;
-                }
-            }
-
-            if !found_ctor {
+            let Some(ctor_idx) = ctor_idx else {
                 let message = format!(
                     "Could not find parameterless constructor for {}.",
                     td.type_name()
                 );
                 return ctx.throw_by_name_with_message("System.MissingMethodException", &message);
+            };
+
+            let lookup = if let RuntimeType::Generic(_, type_generics) = &rt {
+                GenericLookup::new(
+                    type_generics
+                        .iter()
+                        .map(|t| t.to_concrete(ctx.loader().as_ref()))
+                        .collect(),
+                )
+            } else {
+                ctx.reflection_empty_generics()
+            };
+            let method_idx = crate::common::get_runtime_method_index(
+                ctx,
+                MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(ctor_idx),
+                ),
+                lookup,
+            );
+
+            let method_val = StackValue::NativeInt(method_idx as isize);
+            let layout = LayoutManager::Scalar(Scalar::NativeInt);
+            unsafe {
+                dotnet_vm_ops::vm_try!(ctx.write_unaligned(
+                    pfn_ctor.origin().clone(),
+                    pfn_ctor.byte_offset(),
+                    method_val,
+                    &layout,
+                ));
+            }
+
+            let public_val = StackValue::Int32(1);
+            let byte_layout = LayoutManager::Scalar(Scalar::Int8);
+            unsafe {
+                dotnet_vm_ops::vm_try!(ctx.write_unaligned(
+                    ctor_is_public.origin().clone(),
+                    ctor_is_public.byte_offset(),
+                    public_val,
+                    &byte_layout,
+                ));
             }
 
             StepResult::Continue

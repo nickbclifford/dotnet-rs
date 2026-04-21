@@ -1,5 +1,6 @@
 use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
+use dotnet_simd::sequence_equal as simd_sequence_equal;
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -10,41 +11,58 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
 };
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::MethodMemberIndex;
+
+const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+
+fn run_chunked_compare<F, S>(
+    total_bytes: usize,
+    mut compare_chunk: F,
+    mut should_yield: S,
+) -> Result<bool, StepResult>
+where
+    F: FnMut(usize, usize) -> bool,
+    S: FnMut() -> bool,
+{
+    let mut offset = 0;
+    while offset < total_bytes {
+        let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
+        if !compare_chunk(offset, current_chunk) {
+            return Ok(false);
+        }
+
+        offset += current_chunk;
+        if offset < total_bytes && should_yield() {
+            return Err(StepResult::Yield);
+        }
+    }
+
+    Ok(true)
+}
 
 fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,
     a: &ManagedPtr<'gc>,
     b: &ManagedPtr<'gc>,
     total_bytes: usize,
-) -> bool {
-    let mut offset = 0;
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+) -> Result<bool, StepResult> {
+    run_chunked_compare(
+        total_bytes,
+        |offset, current_chunk| {
+            let a_chunk = unsafe { a.clone().offset(offset as isize) };
+            let b_chunk = unsafe { b.clone().offset(offset as isize) };
 
-    while offset < total_bytes {
-        let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
-
-        let a_chunk = unsafe { a.clone().offset(offset as isize) };
-        let b_chunk = unsafe { b.clone().offset(offset as isize) };
-
-        let res = unsafe {
-            a_chunk.with_data(current_chunk, |a_slice| {
-                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
-            })
-        };
-
-        if !res {
-            return false;
-        }
-
-        offset += current_chunk;
-        if offset < total_bytes {
-            let _ = ctx.check_gc_safe_point();
-        }
-    }
-
-    true
+            unsafe {
+                a_chunk.with_data(current_chunk, |a_slice| {
+                    b_chunk.with_data(current_chunk, |b_slice| {
+                        simd_sequence_equal(a_slice, b_slice)
+                    })
+                })
+            }
+        },
+        || ctx.check_gc_safe_point(),
+    )
 }
 
 #[dotnet_intrinsic(
@@ -132,7 +150,10 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         let b_mptr = ManagedPtr::from_info_full(b_ptr_info, element_desc, false);
 
         let total_bytes = a_len as usize * element_size;
-        let equal = chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes);
+        let equal = match chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes) {
+            Ok(v) => v,
+            Err(step) => return step,
+        };
 
         ctx.pop_multiple(2);
         ctx.push_i32(equal as i32);
@@ -334,7 +355,10 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, T: SpanIntrinsicHost<'g
     let b_mptr = ManagedPtr::from_info_full(b_ptr_info, TypeDescription::NULL, false);
 
     let total_bytes = a_len as usize * 2; // char is 2 bytes
-    let equal = chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes);
+    let equal = match chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes) {
+        Ok(v) => v,
+        Err(step) => return step,
+    };
 
     ctx.push_i32(equal as i32);
     StepResult::Continue
@@ -362,8 +386,50 @@ pub fn intrinsic_span_helpers_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
         return StepResult::Continue;
     }
 
-    let equal = chunked_sequence_equal(ctx, &a, &b, length);
+    let equal = match chunked_sequence_equal(ctx, &a, &b, length) {
+        Ok(v) => v,
+        Err(step) => return step,
+    };
 
     ctx.push_i32(equal as i32);
     StepResult::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_chunked_compare_yields_when_safe_point_requested_for_large_iteration() {
+        let total_bytes = CHUNK_SIZE + 16;
+        let mut safe_point_checks = 0usize;
+        let res = run_chunked_compare(
+            total_bytes,
+            |_offset, _chunk| true,
+            || {
+                safe_point_checks += 1;
+                safe_point_checks == 1
+            },
+        );
+
+        assert_eq!(res, Err(StepResult::Yield));
+        assert_eq!(safe_point_checks, 1);
+    }
+
+    #[test]
+    fn run_chunked_compare_finishes_when_safe_point_not_requested() {
+        let total_bytes = CHUNK_SIZE + 16;
+        let mut chunks = 0usize;
+        let res = run_chunked_compare(
+            total_bytes,
+            |_offset, _chunk| {
+                chunks += 1;
+                true
+            },
+            || false,
+        );
+
+        assert_eq!(res, Ok(true));
+        assert_eq!(chunks, 2);
+    }
 }

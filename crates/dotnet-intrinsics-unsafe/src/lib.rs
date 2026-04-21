@@ -1,10 +1,14 @@
 //! Unsafe and marshalling intrinsic handlers with explicit safety host seams.
+//!
+//! Inventory mapping for this host surface is tracked in
+//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     error::{MemoryAccessError, TypeResolutionError},
     generics::ConcreteType,
 };
 use dotnet_value::{layout::LayoutManager, object::ObjectRef, pointer::PointerOrigin};
-use dotnet_vm_ops::{StepResult, ops::UnsafeIntrinsicHost as VmUnsafeIntrinsicHost};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::UnsafeIntrinsicHost as VmUnsafeIntrinsicHost;
 use std::sync::Arc;
 
 pub mod buffer;

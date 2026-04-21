@@ -5,6 +5,11 @@
 //! This crate provides execution-step and call-frame data (`StepResult`, `MethodInfo`,
 //! `MethodState`) plus stack and exception state models. It intentionally contains no
 //! VM operation traits.
+//! P2.S4 decision: keep operation traits in `dotnet-vm-ops` to preserve a lighter
+//! dependency surface for data-only consumers.
+//!
+//! Canonical imports:
+//! `dotnet_vm_data::{MethodInfo, MethodState, StepResult, CollectableMethodDescription}`.
 use dotnet_types::{
     error::{ExecutionError, VmError},
     members::MethodDescription,

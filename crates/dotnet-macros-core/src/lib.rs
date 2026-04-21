@@ -717,6 +717,33 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_trait_alias_no_blanket_impl_generates_trait_only() {
+        let expanded = expand_trait_aliases(quote! {
+            #[no_blanket_impl]
+            pub trait VmExceptionContext<'gc> =
+                ExceptionContext<'gc>
+                + TypedStackOps<'gc>
+                + ResolutionOps<'gc>;
+        })
+        .unwrap();
+
+        let file: syn::File = syn::parse2(expanded).unwrap();
+        let trait_count = file
+            .items
+            .iter()
+            .filter(|item| matches!(item, syn::Item::Trait(_)))
+            .count();
+        let impl_count = file
+            .items
+            .iter()
+            .filter(|item| matches!(item, syn::Item::Impl(_)))
+            .count();
+
+        assert_eq!(trait_count, 1);
+        assert_eq!(impl_count, 0);
+    }
+
+    #[test]
     fn test_expand_trait_alias_without_generics() {
         let expanded = expand_trait_aliases(quote! {
             pub trait Foo = Bar + Baz;

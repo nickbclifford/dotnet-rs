@@ -149,12 +149,11 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 .loader()
                 .corlib_type(&type_name)
                 .expect("Failed to locate corlib base for delegate");
-            let (idx, _) = base
+            let idx = base
                 .definition()
                 .methods
                 .iter()
-                .enumerate()
-                .find(|(_, m)| m.name == ".ctor")
+                .position(|m| m.name == ".ctor")
                 .unwrap();
             method = MethodDescription::new(
                 base.clone(),

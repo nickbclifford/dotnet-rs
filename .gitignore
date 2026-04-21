@@ -28,3 +28,8 @@ __pycache__
 
 # Benchmark baseline artifacts (keep summary JSON tracked)
 crates/dotnet-benchmarks/baselines/phase0/criterion/
+
+# Refactor benchmark working outputs
+crates/dotnet-benchmarks/fixtures/**/bin/
+crates/dotnet-benchmarks/fixtures/**/obj/
+crates/dotnet-benchmarks/fixtures/**/BenchmarkDotNet.Artifacts/
