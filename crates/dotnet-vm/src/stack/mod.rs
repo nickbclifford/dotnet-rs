@@ -179,6 +179,7 @@ impl<'gc> CallStack<'gc> {
                 original_ip: 0,
                 original_stack_height: dotnet_utils::StackSlotIndex(0),
                 call_args_buffer: Vec::new(),
+                suspended_handler_unwinds: Vec::new(),
             },
             shared,
             local,
@@ -212,6 +213,7 @@ impl<'gc> CallStack<'gc> {
             original_ip: &mut self.execution.original_ip,
             original_stack_height: &mut self.execution.original_stack_height,
             call_args_buffer: &mut self.execution.call_args_buffer,
+            suspended_handler_unwinds: &mut self.execution.suspended_handler_unwinds,
         }
     }
 

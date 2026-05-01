@@ -907,7 +907,18 @@ mod lease_tests {
                         2 => {
                             // Lease checker: verifies STW visibility through lease
                             if let Some(lease) = try_acquire_lease(id) {
-                                assert!(lease.is_valid(), "lease must be valid while held");
+                                // A held lease may observe is_valid() == false if
+                                // unregister_arena started teardown (is_alive=false)
+                                // while waiting for active leases to drain.
+                                // This is allowed; the arena should no longer be
+                                // reported as valid in that case.
+                                let valid = lease.is_valid();
+                                if !valid {
+                                    assert!(
+                                        !is_valid_cross_arena_ref(id),
+                                        "invalid lease should only occur during teardown"
+                                    );
+                                }
                                 // If STW is in progress, the lease must reflect it.
                                 let stw_via_lease = lease.is_stw_in_progress();
                                 let stw_direct = is_stw_in_progress(id);
@@ -935,10 +946,17 @@ mod lease_tests {
                             for (target_id, _ptr, recorded_gen) in refs {
                                 if let Some(lease) = try_acquire_lease(target_id) {
                                     if lease.generation() == recorded_gen {
-                                        assert!(
-                                            lease.is_valid(),
-                                            "arena with matching generation must be alive"
-                                        );
+                                        // Matching generation means no re-registration
+                                        // happened, but teardown can still be in flight.
+                                        // Treat an invalid lease as acceptable only if
+                                        // the arena is no longer reported as valid.
+                                        let valid = lease.is_valid();
+                                        if !valid {
+                                            assert!(
+                                                !is_valid_cross_arena_ref(target_id),
+                                                "same-generation lease can be invalid only during teardown"
+                                            );
+                                        }
                                     }
                                     // Differing generation = arena was re-registered; stale
                                     // pointer is expected, no assertion needed.

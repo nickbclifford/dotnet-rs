@@ -10,12 +10,9 @@
 mod macros;
 pub mod ops;
 
-// Keep trait-alias macro re-export for non-hot-path alias use-cases.
-// High-traffic VM composition traits can use explicit trait definitions + explicit impls.
 pub use dotnet_macros::trait_alias;
-pub use dotnet_vm_data;
 pub use dotnet_vm_data::{
-    CollectableMethodDescription, MethodInfo, MethodState, StepResult,
+    self, CollectableMethodDescription, MethodInfo, MethodState, StepResult,
     exceptions::{
         ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection,
         SearchState, UnwindState, UnwindTarget, *,

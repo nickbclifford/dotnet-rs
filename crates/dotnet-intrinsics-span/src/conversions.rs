@@ -520,6 +520,91 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     StepResult::Continue
 }
 
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.RuntimeHelpers::InitializeArray(System.Array, System.RuntimeFieldHandle)"
+)]
+pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let field_handle = ctx.pop_value_type();
+    let array_ref = ctx.pop_obj();
+
+    let ObjectRef(Some(array_handle)) = array_ref else {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
+    };
+
+    let handle_layout = dotnet_vm_ops::vm_try!(
+        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
+    );
+    match &*handle_layout {
+        LayoutManager::Field(f) => {
+            if f.get_field_by_name("_value").is_none() {
+                return StepResult::Error(
+                    ExecutionError::InternalError(
+                        "RuntimeFieldHandle must have _value field".to_string(),
+                    )
+                    .into(),
+                );
+            }
+        }
+        _ => {
+            return StepResult::Error(
+                ExecutionError::InternalError(
+                    "Expected Field layout for RuntimeFieldHandle".to_string(),
+                )
+                .into(),
+            );
+        }
+    }
+
+    let field_obj_ref = dotnet_vm_ops::vm_try!(
+        field_handle
+            .instance_storage
+            .field::<ObjectRef<'gc>>(field_handle.description.clone(), "_value")
+            .ok_or_else(|| {
+                ExecutionError::InternalError("RuntimeFieldHandle missing _value slot".to_string())
+            })
+    )
+    .read();
+
+    if field_obj_ref.0.is_none() {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentException", "Invalid RuntimeFieldHandle.");
+    }
+
+    let (field_desc, _) = ctx.span_resolve_runtime_field(field_obj_ref);
+    let Some(initial_data) = &field_desc.field().initial_value else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The field does not have initial data.",
+        );
+    };
+
+    let mut array_heap =
+        array_handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
+    let HeapStorage::Vec(vector) = &mut array_heap.storage else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Object must be of type Array.",
+        );
+    };
+
+    let destination = vector.get_mut();
+    // RuntimeFieldHandle blobs can include trailing alignment padding.
+    // The runtime should only reject when the blob is too small for the destination array.
+    if initial_data.len() < destination.len() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Field data is smaller than destination array storage.",
+        );
+    }
+    destination.copy_from_slice(&initial_data[..destination.len()]);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,

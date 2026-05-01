@@ -113,8 +113,15 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn leave(&mut self, target_ip: usize) -> StepResult {
+        let frame_index = self.frame_stack.len() - 1;
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
+            && state.cursor.frame_index < frame_index
+        {
+            self.suspended_handler_unwinds.push(state);
+        }
+
         let cursor = HandlerAddress {
-            frame_index: self.frame_stack.len() - 1,
+            frame_index,
             section_index: 0,
             handler_index: 0,
         };

@@ -421,6 +421,7 @@ pub trait VesInternals<'gc> {
     fn evaluation_stack_mut(&mut self) -> &mut crate::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &crate::FrameStack<'gc>;
     fn frame_stack_mut(&mut self) -> &mut crate::FrameStack<'gc>;
+    fn suspended_handler_unwinds_mut(&mut self) -> &mut Vec<crate::UnwindState<'gc>>;
 }
 
 pub trait StaticsOps<'gc> {

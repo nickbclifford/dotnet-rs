@@ -144,13 +144,25 @@ where
             return Ok(base_method);
         }
 
-        // Standard virtual method resolution: search ancestors
+        // Standard virtual method resolution: search ancestors.
+        //
+        // Each ancestor must be searched with the type-generic lookup that is valid
+        // for that ancestor itself. Reusing the receiver lookup unchanged across the
+        // whole chain is incorrect for inherited generic bases (e.g.
+        // GroupByIterator<TSource,TKey> : Iterator<IGrouping<TKey,TSource>>), and can
+        // cause fields on the base to be read with the wrong runtime type.
         let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
 
-        for (parent, _) in self.loader.ancestors(this_type.clone()) {
-            if let Some(this_method) =
-                self.find_and_cache_method(parent, base_method.clone(), generics, is_interface)?
-            {
+        let ancestors: Vec<_> = self.loader.ancestors(this_type.clone()).collect();
+        let mut ancestor_lookup = generics.clone();
+
+        for (index, (parent, extends_generics)) in ancestors.iter().enumerate() {
+            if let Some(this_method) = self.find_and_cache_method(
+                parent.clone(),
+                base_method.clone(),
+                &ancestor_lookup,
+                is_interface,
+            )? {
                 self.caches.record_vmt_key_clones(3);
                 self.caches.set_vmt_cached(
                     base_method.clone(),
@@ -159,6 +171,17 @@ where
                     this_method.clone(),
                 );
                 return Ok(this_method);
+            }
+
+            if index + 1 < ancestors.len() {
+                let next_type_generics = extends_generics
+                    .iter()
+                    .map(|t| self.make_concrete(parent.resolution.clone(), &ancestor_lookup, *t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                ancestor_lookup = GenericLookup {
+                    type_generics: next_type_generics.into(),
+                    method_generics: generics.method_generics.clone(),
+                };
             }
         }
 
@@ -212,14 +235,65 @@ where
                 );
                 return Ok(Some(impl_m.clone()));
             }
+
+            // Bridge declaration identity across facade/CoreLib duplicates where
+            // `MethodDescription` equality can miss due differing parent/resolution
+            // identities despite equivalent canonical type + signature.
+            if let Some((_, impl_m)) = overrides.iter().find(|(decl, _)| {
+                let decl_parent_name = decl.parent.type_name();
+                let method_parent_name = method.parent.type_name();
+                let canonical_decl = self.loader.canonical_type_name(&decl_parent_name);
+                let canonical_method = self.loader.canonical_type_name(&method_parent_name);
+                if canonical_decl != canonical_method || decl.method().name != method.method().name
+                {
+                    return false;
+                }
+
+                let comparer = self.loader.comparer();
+                if allow_variance {
+                    comparer.signatures_compatible_with_variance(
+                        method.resolution(),
+                        &method.method().signature,
+                        Some(&method.parent_generics),
+                        decl.resolution(),
+                        &decl.method().signature,
+                        Some(&decl.parent_generics),
+                    )
+                } else {
+                    comparer.signatures_equal(
+                        method.resolution(),
+                        &method.method().signature,
+                        Some(&method.parent_generics),
+                        decl.resolution(),
+                        &decl.method().signature,
+                        Some(&decl.parent_generics),
+                    )
+                }
+            }) {
+                self.caches.record_vmt_key_clones(3);
+                self.caches.set_vmt_cached(
+                    method.clone(),
+                    this_type.clone(),
+                    generics.clone(),
+                    impl_m.clone(),
+                );
+                return Ok(Some(impl_m.clone()));
+            }
         }
 
-        if let Some(this_method) = self.loader.find_method_in_type_with_substitution(
+        // Signature-side generics must follow the base declaration's declaring type
+        // (e.g., Iterator<T>), while candidate-side generics follow the current
+        // runtime type being searched (e.g., IteratorSelectIterator<TSource,TResult>).
+        let mut signature_lookup = method.parent_generics.clone();
+        signature_lookup.method_generics = generics.method_generics.clone();
+
+        if let Some(this_method) = self.loader.find_method_in_type_internal(
             this_type.clone(),
             &method.method().name,
             &method.method().signature,
             method.resolution(),
-            generics,
+            Some(&signature_lookup),
+            Some(generics),
             allow_variance,
         ) {
             self.caches.record_vmt_key_clones(3);

@@ -1,4 +1,7 @@
-use crate::{NULL_REF_MSG, simd::probe_all_ascii_whitespace, simd::probe_index_of_char};
+use crate::{
+    NULL_REF_MSG,
+    simd::{probe_all_ascii_whitespace, probe_index_of_char},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::GcScopeGuard;

@@ -9,7 +9,7 @@ use crate::{
     stack::ops::VesOps,
     sync::Ordering as AtomicOrdering,
 };
-use dotnet_types::generics::GenericLookup;
+use dotnet_types::{generics::GenericLookup, members::FieldDescription};
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
     object::{CTSValue, ValueType},
@@ -26,6 +26,18 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
+
+fn canonical_static_lookup(field: &FieldDescription, lookup: &GenericLookup) -> GenericLookup {
+    let type_arity = field.parent.definition().generic_parameters.len();
+    GenericLookup::new(
+        lookup
+            .type_generics
+            .iter()
+            .take(type_arity)
+            .cloned()
+            .collect(),
+    )
+}
 
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: bool) -> StepResult {
@@ -86,7 +98,9 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         &res_ctx,
         Some(&ctx.shared().metrics),
     ));
-    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
+    let field_layout = layout
+        .get_field(field.parent.clone(), name.as_ref())
+        .unwrap();
 
     let offset = base_offset + field_layout.position;
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(t));
@@ -209,7 +223,7 @@ pub fn ldsfld<'gc, T: VesOps<'gc>>(
     volatile: bool,
 ) -> StepResult {
     let (field, lookup): (_, GenericLookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
-    let static_lookup = GenericLookup::new(lookup.type_generics.to_vec());
+    let static_lookup = canonical_static_lookup(&field, &lookup);
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field.clone()) {
@@ -256,7 +270,7 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
     volatile: bool,
 ) -> StepResult {
     let (field, lookup): (_, GenericLookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
-    let static_lookup = GenericLookup::new(lookup.type_generics.to_vec());
+    let static_lookup = canonical_static_lookup(&field, &lookup);
 
     let res = ctx.initialize_static_storage(field.parent.clone(), static_lookup.clone());
     if res != StepResult::Continue {
@@ -547,7 +561,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
 pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup): (_, GenericLookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
-    let static_lookup = GenericLookup::new(lookup.type_generics.to_vec());
+    let static_lookup = canonical_static_lookup(&field, &lookup);
 
     let res = ctx.initialize_static_storage(field.parent.clone(), static_lookup.clone());
     if res != StepResult::Continue {

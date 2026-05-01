@@ -479,6 +479,31 @@ impl AssemblyLoader {
         let result = match handle {
             UserMethod::Definition(d) => {
                 let parent_type = self.locate_type(resolution.clone(), d.parent_type().into())?;
+                let method = &resolution[d];
+
+                // Prefer support-stub `System.Array.Copy` implementations for definition-bound
+                // CoreLib calls (e.g., HashSet.Resize), but keep other definition dispatches
+                // on their original declaring type to avoid broad behavior changes.
+                let parent_type_name = parent_type.type_name();
+                let canonical_parent = self.canonical_type_name(&parent_type_name);
+                let should_redirect_array_copy = canonical_parent == "System.Array"
+                    && method.name == "Copy"
+                    && !method.signature.instance;
+
+                if should_redirect_array_copy
+                    && let Some(stub_type) = self.stubs.get(canonical_parent)
+                    && let Some(stub_method) = self.find_method_in_type_with_substitution(
+                        stub_type.clone(),
+                        &method.name,
+                        &method.signature,
+                        resolution.clone(),
+                        generic_inst,
+                        false,
+                    )
+                {
+                    return Ok(stub_method);
+                }
+
                 // `MethodIndex::member` is pub(crate) in dotnetdll with no public accessor.
                 // Use the ptr-scan helper to recover the correct `MethodMemberIndex` variant.
                 let member_index = Self::method_member_index_from_index(resolution.definition(), d);
@@ -524,21 +549,48 @@ impl AssemblyLoader {
                         let parent_type: TypeDescription =
                             self.find_concrete_type(concrete.clone())?;
                         let parent_generics = concrete.make_lookup();
+                        let mut lookup_for_substitution = parent_generics.clone();
+                        lookup_for_substitution.method_generics =
+                            generic_inst.method_generics.clone();
                         match self.find_method_in_type_with_substitution(
                             parent_type.clone(),
                             &method_ref.name,
                             &method_ref.signature,
                             resolution.clone(),
-                            &parent_generics,
+                            &lookup_for_substitution,
                             false,
                         ) {
-                            None => Err(TypeResolutionError::MethodNotFound(format!(
-                                "could not find {} in type {}",
-                                method_ref
-                                    .signature
-                                    .show_with_name(resolution.definition(), &method_ref.name),
-                                parent_type.type_name()
-                            ))),
+                            None => {
+                                // Some framework references resolve to facade assemblies where
+                                // the referenced type exists but method bodies/signatures are
+                                // forwarded to CoreLib. If lookup fails on the facade type, try
+                                // the CoreLib type with the same full name before reporting a
+                                // hard method-missing error.
+                                if let Ok(corelib_res) = self.get_assembly("System.Private.CoreLib")
+                                    && let Some(corelib_parent) = self
+                                        .try_find_in_assembly(corelib_res, &parent_type.type_name())
+                                    && let Some(mut method) = self
+                                        .find_method_in_type_with_substitution(
+                                            corelib_parent,
+                                            &method_ref.name,
+                                            &method_ref.signature,
+                                            resolution.clone(),
+                                            &lookup_for_substitution,
+                                            false,
+                                        )
+                                {
+                                    method.parent_generics = parent_generics;
+                                    return Ok(method);
+                                }
+
+                                Err(TypeResolutionError::MethodNotFound(format!(
+                                    "could not find {} in type {}",
+                                    method_ref
+                                        .signature
+                                        .show_with_name(resolution.definition(), &method_ref.name),
+                                    parent_type.type_name()
+                                )))
+                            }
                             Some(mut m) => {
                                 m.parent_generics = parent_generics;
                                 Ok(m)

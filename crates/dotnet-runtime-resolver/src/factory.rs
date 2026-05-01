@@ -91,7 +91,7 @@ where
                         inner_t,
                         value_data,
                         gc,
-                        ctx.resolution().clone(),
+                        inner_t.resolution(),
                         ctx.generics(),
                     )
                 })?;
@@ -99,7 +99,7 @@ where
             }
         }
 
-        match self.new_cts_value_with_lookup(&t, data, ctx.resolution().clone(), ctx.generics())? {
+        match self.new_cts_value_with_lookup(&t, data, t.resolution(), ctx.generics())? {
             CTSValue::Value(v) => {
                 let td = self.loader.find_concrete_type(t)?;
                 let obj_instance =
@@ -157,7 +157,7 @@ where
         data: StackValue<'gc>,
         ctx: &Ctx,
     ) -> Result<ValueType<'gc>, TypeResolutionError> {
-        self.new_value_type_with_lookup(t, data, ctx.resolution().clone(), ctx.generics())
+        self.new_value_type_with_lookup(t, data, t.resolution(), ctx.generics())
     }
 
     pub fn new_cts_value<'gc, Ctx: ResolverExecutionContext>(
@@ -166,7 +166,7 @@ where
         data: StackValue<'gc>,
         ctx: &Ctx,
     ) -> Result<CTSValue<'gc>, TypeResolutionError> {
-        self.new_cts_value_with_lookup(t, data, ctx.resolution().clone(), ctx.generics())
+        self.new_cts_value_with_lookup(t, data, t.resolution(), ctx.generics())
     }
 
     pub fn read_cts_value<'gc, Ctx: ResolverExecutionContext>(
@@ -176,7 +176,7 @@ where
         gc: GCHandle<'gc>,
         ctx: &Ctx,
     ) -> Result<CTSValue<'gc>, TypeResolutionError> {
-        self.read_cts_value_with_lookup(t, data, gc, ctx.resolution().clone(), ctx.generics())
+        self.read_cts_value_with_lookup(t, data, gc, t.resolution(), ctx.generics())
     }
 
     pub fn new_vector<'gc, Ctx: ResolverExecutionContext>(
@@ -185,7 +185,7 @@ where
         size: usize,
         ctx: &Ctx,
     ) -> Result<Vector<'gc>, TypeResolutionError> {
-        self.new_vector_with_lookup(element, size, ctx.resolution().clone(), ctx.generics())
+        self.new_vector_with_lookup(element.clone(), size, element.resolution(), ctx.generics())
     }
 
     fn new_object_with_lookup<'gc>(

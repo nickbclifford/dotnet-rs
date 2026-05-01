@@ -13,7 +13,7 @@ use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
     CLRString, StackValue,
-    layout::HasLayout,
+    layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef, Vector},
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
@@ -279,6 +279,25 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let load_type = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
     let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
+
+    if matches!(&*layout, LayoutManager::Scalar(Scalar::ObjectRef))
+        && offset == dotnet_utils::ByteOffset(0)
+        && let PointerOrigin::Stack(idx) = origin.clone()
+    {
+        match ctx.get_slot_ref(idx).clone() {
+            StackValue::ObjectRef(slot_ref) => {
+                ctx.push(StackValue::ObjectRef(slot_ref));
+                return StepResult::Continue;
+            }
+            #[cfg(feature = "multithreading")]
+            StackValue::CrossArenaObjectRef(ptr, tid) => {
+                ctx.push(StackValue::CrossArenaObjectRef(ptr, tid));
+                return StepResult::Continue;
+            }
+            _ => {}
+        }
+    }
+
     let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
     let mut heap_buffer = Vec::new();
     let size = layout.size().as_usize();

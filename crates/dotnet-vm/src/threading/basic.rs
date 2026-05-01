@@ -1,5 +1,6 @@
 #[cfg(debug_assertions)]
 use crate::gc::coordinator::debug_assert_collection_lock_held;
+
 use crate::{
     gc::coordinator::{
         CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,

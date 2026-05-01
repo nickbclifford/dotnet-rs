@@ -2,11 +2,9 @@
 //!
 //! This crate exposes byte-oriented operations that can transparently use an
 //! architecture-specific SIMD backend when the `simd` feature is enabled.
-
-mod scalar;
-
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 mod aarch64;
+mod scalar;
 #[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
 mod x86;
 

@@ -186,6 +186,18 @@ pub trait VmCallOps<'gc>: CallOps<'gc> {
         source: &MethodSource,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
+
+    /// After virtual resolution in `ldvirtftn`, enrich the lookup from the receiver object's
+    /// type generics (parallel to `merge_receiver_lookup_for_virtual_dispatch`) and rebind it
+    /// to the resolved method's declaring-type arity (parallel to `rebind_lookup_to_resolved_method`).
+    /// This ensures that when the stored delegate is later invoked, its frame has the full
+    /// generic context of the declaring type rather than the (potentially narrower) reference type.
+    fn rebind_lookup_for_ldftn(
+        &self,
+        lookup: &mut GenericLookup,
+        receiver: &ObjectRef<'gc>,
+        resolved: &MethodDescription,
+    );
 }
 
 pub trait VmExceptionContext<'gc>:

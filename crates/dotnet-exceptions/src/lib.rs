@@ -648,7 +648,19 @@ impl ExceptionHandlingSystem {
             return self.handle_exception(ctx, gc);
         }
 
-        *ctx.exception_mode_mut() = ExceptionState::None;
+        let mut resumed_handler_unwind = None;
+        if let UnwindTarget::Instruction(target_ip) = target
+            && target_ip != usize::MAX
+        {
+            resumed_handler_unwind = ctx.suspended_handler_unwinds_mut().pop();
+        }
+
+        if let Some(state) = resumed_handler_unwind {
+            *ctx.exception_mode_mut() = ExceptionState::ExecutingHandler(state);
+        } else {
+            *ctx.exception_mode_mut() = ExceptionState::None;
+        }
+
         match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {

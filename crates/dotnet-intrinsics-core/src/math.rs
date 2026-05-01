@@ -77,6 +77,46 @@ pub fn intrinsic_equality_comparer_get_default<
     StepResult::Continue
 }
 
+#[dotnet_intrinsic(
+    "static System.Collections.Generic.Comparer<T> System.Collections.Generic.Comparer<T>::get_Default()"
+)]
+pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let target_type = generics.type_generics[0].clone();
+    let comparer_type_name = "DotnetRs.Comparers.Ordering/FallbackComparer`1";
+    let comparer_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type(comparer_type_name));
+
+    let comparer_method_type = MethodType::Base(Box::new(BaseType::Type {
+        source: TypeSource::Generic {
+            base: UserType::Definition(comparer_td.index),
+            parameters: vec![concrete_to_method_type(&target_type)],
+        },
+        value_kind: None,
+    }));
+    // Resolve in comparer type resolution context (not caller frame resolution).
+    let comparer_concrete = dotnet_vm_ops::vm_try!(generics.make_concrete(
+        comparer_td.resolution.clone(),
+        comparer_method_type,
+        ctx.loader().as_ref(),
+    ));
+    let comparer_closed_td =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(comparer_concrete));
+    let comparer_lookup = GenericLookup::new(vec![target_type]);
+
+    let instance = ObjectRef::new(
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        HeapStorage::Obj(dotnet_vm_ops::vm_try!(
+            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
+        )),
+    );
+
+    ctx.push_obj(instance);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static byte System.Byte::CreateTruncating<T>(T)")]
 #[dotnet_intrinsic("static sbyte System.SByte::CreateTruncating<T>(T)")]
 #[dotnet_intrinsic("static ushort System.UInt16::CreateTruncating<T>(T)")]
@@ -162,6 +202,185 @@ pub fn intrinsic_int32_create_checked<'gc, T: TypedStackOps<'gc>>(
             ));
         }
     }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static M0 System.Numerics.INumberBase<M0>::get_Zero()")]
+#[dotnet_intrinsic("static M1 System.Numerics.IAdditiveIdentity<M0, M1>::get_AdditiveIdentity()")]
+pub fn intrinsic_numeric_zero<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let Some(target_type) = generics.type_generics.first() else {
+        return StepResult::not_implemented(
+            "numeric zero intrinsic called without type generic".to_string(),
+        );
+    };
+
+    match target_type.get() {
+        BaseType::Boolean
+        | BaseType::Char
+        | BaseType::UInt8
+        | BaseType::Int8
+        | BaseType::Int16
+        | BaseType::UInt16
+        | BaseType::Int32
+        | BaseType::UInt32 => ctx.push_i32(0),
+        BaseType::Int64 | BaseType::UInt64 => ctx.push_i64(0),
+        BaseType::IntPtr | BaseType::UIntPtr => ctx.push_isize(0),
+        BaseType::Float32 => ctx.push_f64(0.0),
+        BaseType::Float64 => ctx.push_f64(0.0),
+        other => {
+            return StepResult::not_implemented(format!(
+                "numeric zero intrinsic unsupported generic type: {:?}",
+                other
+            ));
+        }
+    }
+
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static M2 System.Numerics.IAdditionOperators<M0, M1, M2>::op_Addition(M0, M1)")]
+pub fn intrinsic_numeric_addition<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let rhs = ctx.pop();
+    let lhs = ctx.pop();
+
+    let Some(result_type) = generics.type_generics.get(2) else {
+        return StepResult::not_implemented(
+            "numeric addition intrinsic called without result generic".to_string(),
+        );
+    };
+
+    match result_type.get() {
+        BaseType::Int32 | BaseType::UInt32 | BaseType::Int16 | BaseType::UInt16 => {
+            match (lhs, rhs) {
+                (StackValue::Int32(a), StackValue::Int32(b)) => ctx.push_i32(a.wrapping_add(b)),
+                (a, b) => {
+                    return StepResult::not_implemented(format!(
+                        "numeric addition intrinsic unsupported operands for i32 result: {:?}, {:?}",
+                        a, b
+                    ));
+                }
+            }
+        }
+        BaseType::Int64 | BaseType::UInt64 => match (lhs, rhs) {
+            (StackValue::Int64(a), StackValue::Int64(b)) => ctx.push_i64(a.wrapping_add(b)),
+            (StackValue::Int32(a), StackValue::Int32(b)) => {
+                ctx.push_i64((a as i64).wrapping_add(b as i64))
+            }
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric addition intrinsic unsupported operands for i64 result: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::IntPtr | BaseType::UIntPtr => match (lhs, rhs) {
+            (StackValue::NativeInt(a), StackValue::NativeInt(b)) => {
+                ctx.push_isize(a.wrapping_add(b))
+            }
+            (StackValue::Int32(a), StackValue::Int32(b)) => {
+                ctx.push_isize((a as isize).wrapping_add(b as isize))
+            }
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric addition intrinsic unsupported operands for native int result: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::Float32 | BaseType::Float64 => match (lhs, rhs) {
+            (StackValue::NativeFloat(a), StackValue::NativeFloat(b)) => ctx.push_f64(a + b),
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric addition intrinsic unsupported operands for floating result: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        other => {
+            return StepResult::not_implemented(format!(
+                "numeric addition intrinsic unsupported result type: {:?}",
+                other
+            ));
+        }
+    }
+
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static M0 System.Numerics.IIncrementOperators<M0>::op_Increment(M0)")]
+pub fn intrinsic_numeric_increment<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop();
+
+    let Some(target_type) = generics.type_generics.first() else {
+        return StepResult::not_implemented(
+            "numeric increment intrinsic called without type generic".to_string(),
+        );
+    };
+
+    match target_type.get() {
+        BaseType::Int8
+        | BaseType::UInt8
+        | BaseType::Int16
+        | BaseType::UInt16
+        | BaseType::Int32
+        | BaseType::UInt32 => match value {
+            StackValue::Int32(v) => ctx.push_i32(v.wrapping_add(1)),
+            other => {
+                return StepResult::not_implemented(format!(
+                    "numeric increment intrinsic unsupported operand for i32 result: {:?}",
+                    other
+                ));
+            }
+        },
+        BaseType::Int64 | BaseType::UInt64 => match value {
+            StackValue::Int64(v) => ctx.push_i64(v.wrapping_add(1)),
+            StackValue::Int32(v) => ctx.push_i64((v as i64).wrapping_add(1)),
+            other => {
+                return StepResult::not_implemented(format!(
+                    "numeric increment intrinsic unsupported operand for i64 result: {:?}",
+                    other
+                ));
+            }
+        },
+        BaseType::IntPtr | BaseType::UIntPtr => match value {
+            StackValue::NativeInt(v) => ctx.push_isize(v.wrapping_add(1)),
+            StackValue::Int32(v) => ctx.push_isize((v as isize).wrapping_add(1)),
+            other => {
+                return StepResult::not_implemented(format!(
+                    "numeric increment intrinsic unsupported operand for native int result: {:?}",
+                    other
+                ));
+            }
+        },
+        BaseType::Float32 | BaseType::Float64 => match value {
+            StackValue::NativeFloat(v) => ctx.push_f64(v + 1.0),
+            other => {
+                return StepResult::not_implemented(format!(
+                    "numeric increment intrinsic unsupported operand for floating result: {:?}",
+                    other
+                ));
+            }
+        },
+        other => {
+            return StepResult::not_implemented(format!(
+                "numeric increment intrinsic unsupported result type: {:?}",
+                other
+            ));
+        }
+    }
+
     StepResult::Continue
 }
 

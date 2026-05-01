@@ -2,7 +2,7 @@ use crate::{
     StepResult,
     instructions::objects::get_ptr_info,
     stack::ops::{
-        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps, VesBaseOps,
+        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, ThreadOps, TypedStackOps, VesBaseOps,
         VesInternals,
     },
 };
@@ -26,9 +26,11 @@ pub fn intrinsic_argument_null_exception_throw_if_null<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _param_name_obj = ctx.pop_obj();
-    let target = ctx.pop_obj();
-    if target.0.is_none() {
+    let _param_name = ctx.pop();
+    let target = ctx.pop();
+    if let StackValue::ObjectRef(obj_ref) = target
+        && obj_ref.0.is_none()
+    {
         return ctx
             .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
     }
@@ -77,6 +79,19 @@ pub fn intrinsic_environment_processor_count<'gc, T: TypedStackOps<'gc>>(
     // Provide a deterministic non-zero CPU count for libraries sizing
     // pools/buffers from ProcessorCount.
     ctx.push_i32(1);
+    StepResult::Continue
+}
+
+/// System.Environment::get_CurrentManagedThreadId()
+#[dotnet_intrinsic("static int System.Environment::get_CurrentManagedThreadId()")]
+pub fn intrinsic_environment_current_managed_thread_id<'gc, T: TypedStackOps<'gc> + ThreadOps>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let managed_id = ctx.thread_id();
+    let managed_id_i32 = i32::try_from(managed_id.as_u64()).unwrap_or(i32::MAX);
+    ctx.push_i32(managed_id_i32);
     StepResult::Continue
 }
 

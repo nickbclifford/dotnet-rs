@@ -2,6 +2,7 @@
 use core::arch::x86::{
     __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8, _mm_storeu_si128,
 };
+
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
     __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8, _mm_storeu_si128,

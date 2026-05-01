@@ -113,18 +113,13 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
 
     let td: TypeDescription =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let type_context = ctx.current_context().for_type(td.clone());
 
     for o in td.definition().overrides.iter() {
-        let target = dotnet_vm_ops::vm_try!(ctx.current_context().locate_method(
-            o.implementation,
-            &lookup,
-            None
-        ));
-        let declaration = dotnet_vm_ops::vm_try!(ctx.current_context().locate_method(
-            o.declaration,
-            &lookup,
-            None
-        ));
+        let target =
+            dotnet_vm_ops::vm_try!(type_context.locate_method(o.implementation, &lookup, None));
+        let declaration =
+            dotnet_vm_ops::vm_try!(type_context.locate_method(o.declaration, &lookup, None));
         if method == declaration {
             // vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved

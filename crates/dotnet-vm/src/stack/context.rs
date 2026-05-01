@@ -37,6 +37,7 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
     pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
+    pub(crate) suspended_handler_unwinds: &'a mut Vec<dotnet_vm_ops::UnwindState<'gc>>,
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
@@ -236,9 +237,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         if frame.state.info_handle.is_cctor {
             let type_desc = frame.state.info_handle.source.parent.clone();
+            let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
             self.shared
                 .statics
-                .mark_initialized(type_desc, &frame.generic_inst);
+                .mark_initialized(type_desc, &cctor_generics);
         }
 
         if frame.is_finalizer {
@@ -310,9 +312,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         if frame.state.info_handle.is_cctor {
             let type_desc = frame.state.info_handle.source.parent.clone();
+            let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
             self.shared
                 .statics
-                .mark_failed(type_desc.clone(), &frame.generic_inst);
+                .mark_failed(type_desc.clone(), &cctor_generics);
 
             // Wrap exception in TypeInitializationException per ECMA-335 §II.10.5.3.3
             let current_exception = match *self.exception_mode {
@@ -893,9 +896,18 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
         description: TypeDescription,
         generics: GenericLookup,
     ) -> StepResult {
-        // Static storage is keyed per-type-instantiation, so only TYPE generics matter.
-        // Strip method generics to ensure consistent keying regardless of call context.
-        let type_generics = GenericLookup::new(generics.type_generics.to_vec());
+        // Static storage is keyed per-type-instantiation, so only parent type generics matter.
+        // Some call sites may carry extra generics from the invoking method context; trim to the
+        // declaring type arity to keep .cctor/stateful static storage keying stable.
+        let type_arity = description.definition().generic_parameters.len();
+        let type_generics = GenericLookup::new(
+            generics
+                .type_generics
+                .iter()
+                .take(type_arity)
+                .cloned()
+                .collect(),
+        );
         let thread_id = self.thread_id.get();
         // Use the type instantiation generics (not the calling frame's generics) so that
         // static field layouts for generic types like Task<T> resolve TypeGeneric(0) correctly.
@@ -1067,6 +1079,11 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc> {
         self.frame_stack
+    }
+
+    #[inline]
+    fn suspended_handler_unwinds_mut(&mut self) -> &mut Vec<dotnet_vm_ops::UnwindState<'gc>> {
+        self.suspended_handler_unwinds
     }
 }
 
@@ -1277,6 +1294,7 @@ pub struct ThreadContext<'gc> {
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
     pub call_args_buffer: Vec<StackValue<'gc>>,
+    pub suspended_handler_unwinds: Vec<dotnet_vm_ops::UnwindState<'gc>>,
 }
 
 #[cfg(test)]

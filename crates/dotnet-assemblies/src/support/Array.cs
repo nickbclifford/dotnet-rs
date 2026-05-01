@@ -17,6 +17,8 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public nuint NativeLength => (nuint)Length;
 
+    public static int MaxLength => int.MaxValue;
+
     public extern int Rank { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     public virtual int GetLength(int dimension)
@@ -232,6 +234,27 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     }
 
     public static T[] Empty<T>() => new T[0];
+
+    public static void Resize<T>(ref T[]? array, int newSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(newSize);
+
+        if (array == null)
+        {
+            array = new T[newSize];
+            return;
+        }
+
+        if (array.Length == newSize)
+        {
+            return;
+        }
+
+        T[] newArray = new T[newSize];
+        int copyLength = Math.Min(array.Length, newSize);
+        Copy((Array) (object) array, 0, (Array) (object) newArray, 0, copyLength);
+        array = newArray;
+    }
 
     private class ArrayEnumerator(Array array) : IEnumerator
     {

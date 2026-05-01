@@ -7,8 +7,6 @@ use crate::{
 use dotnet_utils::sync::{Arc, AtomicBool};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
-#[cfg(all(feature = "multithreading", debug_assertions))]
-use std::cell::Cell;
 #[cfg(feature = "multithreading")]
 use std::{
     cell::RefCell,
@@ -16,6 +14,9 @@ use std::{
     marker::PhantomData,
     mem::ManuallyDrop,
 };
+
+#[cfg(all(feature = "multithreading", debug_assertions))]
+use std::cell::Cell;
 
 #[cfg(feature = "multithreading")]
 pub use dotnet_utils::gc::{

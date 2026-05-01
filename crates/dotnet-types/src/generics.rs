@@ -376,24 +376,78 @@ impl GenericLookup {
             MethodType::TypeGeneric(i) => {
                 if let Some(ty) = self.type_generics.get(i).cloned() {
                     Ok(ty)
-                } else if let Some(ty) = self.method_generics.get(i).cloned() {
+                } else {
                     // Some runtime paths surface generic arguments for non-generic receiver
                     // types through method generic context even when metadata uses TypeGeneric.
-                    // Accept the method-generic fallback to keep these canonicalized paths valid.
-                    Ok(ty)
-                } else {
+                    // Mixed canonical forms observed in BCL paths can shift method indices by
+                    // type arity and/or one-based offsets, so probe the small set of known
+                    // encodings before failing.
+                    let type_arity = self.type_generics.len();
+                    let method_arity = self.method_generics.len();
+                    let method_candidate_indices = [
+                        Some(i),
+                        i.checked_sub(type_arity),
+                        i.checked_sub(type_arity + 1),
+                        i.checked_sub(method_arity),
+                        i.checked_sub(method_arity + 1),
+                        i.checked_sub(1),
+                    ];
+                    for method_index in method_candidate_indices.into_iter().flatten() {
+                        if let Some(ty) = self.method_generics.get(method_index).cloned() {
+                            return Ok(ty);
+                        }
+                    }
+
                     Err(TypeResolutionError::GenericIndexOutOfBounds {
                         index: i,
                         length: self.type_generics.len(),
                     })
                 }
             }
-            MethodType::MethodGeneric(i) => self.method_generics.get(i).cloned().ok_or_else(|| {
-                TypeResolutionError::GenericIndexOutOfBounds {
-                    index: i,
-                    length: self.method_generics.len(),
+            MethodType::MethodGeneric(i) => {
+                if let Some(ty) = self.method_generics.get(i).cloned() {
+                    Ok(ty)
+                } else {
+                    // Some BCL canonicalization paths encode method generic slots using
+                    // mixed type+method numbering schemes. Probe common offset variants
+                    // before failing hard.
+                    let type_arity = self.type_generics.len();
+                    let method_arity = self.method_generics.len();
+                    let method_candidate_indices = [
+                        Some(i),
+                        i.checked_sub(type_arity),
+                        i.checked_sub(type_arity + 1),
+                        i.checked_sub(method_arity),
+                        i.checked_sub(method_arity + 1),
+                        i.checked_sub(1),
+                    ];
+                    for method_index in method_candidate_indices.into_iter().flatten() {
+                        if let Some(ty) = self.method_generics.get(method_index).cloned() {
+                            return Ok(ty);
+                        }
+                    }
+
+                    // Some call paths carry type generic arguments while metadata reports
+                    // MethodGeneric slots. Allow a fallback into type_generics for those
+                    // mixed canonical forms.
+                    let type_candidate_indices = [
+                        Some(i),
+                        i.checked_sub(method_arity),
+                        i.checked_sub(method_arity + 1),
+                        i.checked_sub(1),
+                    ];
+                    for type_index in type_candidate_indices.into_iter().flatten() {
+                        if let Some(ty) = self.type_generics.get(type_index).cloned() {
+                            return Ok(ty);
+                        }
+                    }
+
+                    Err(TypeResolutionError::GenericIndexOutOfBounds {
+                        index: i,
+                        length: self.method_generics.len(),
+                    })
                 }
-            }),
+            }
         }
     }
 

@@ -32,6 +32,8 @@ pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
 #[cfg(test)]
+mod intrinsics_codegen_guard_tests;
+#[cfg(test)]
 mod jmp_tests;
 pub mod layout;
 pub mod resolution;
@@ -50,10 +52,7 @@ pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
 pub use dotnet_vm_data::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
-#[cfg(feature = "multithreading")]
-pub use executor::ArenaGuard;
 pub use executor::{Executor, ExecutorResult};
-pub use stack::ops;
 pub use stack::{
     ArgumentOps, BasePointer, CallOps, CallStack, EvalStackOps, EvaluationStack, ExceptionContext,
     ExceptionOps, ExceptionState, FrameStack, GCArena, GCArenaRoot, IntrinsicDispatchOps,
@@ -61,9 +60,12 @@ pub use stack::{
     ReflectionLookupOps, ReflectionOps, ResolutionOps, StackFrame, StackOps, StaticsOps,
     ThreadContext, ThreadOps, TypedStackOps, VariableOps, VesBaseOps, VesContext, VesInternals,
     VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext, VmRawMemoryOps,
-    VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
+    VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps, ops,
 };
 pub use state::ReflectionRegistry;
+
+#[cfg(feature = "multithreading")]
+pub use executor::ArenaGuard;
 
 use context::ResolutionContext;
 use state::SharedGlobalState;

@@ -29,7 +29,7 @@ pub fn ldvirtftn<'gc, T: VesOps<'gc>>(
         );
     }
 
-    let (base_method, lookup) = dotnet_vm_ops::vm_try!(
+    let (base_method, mut lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
@@ -43,6 +43,12 @@ pub fn ldvirtftn<'gc, T: VesOps<'gc>>(
         &lookup,
         &ctx.current_context()
     ));
+
+    // Enrich the stored lookup with the receiver's instantiated type generics and rebind to
+    // the resolved declaring-type arity. Without this, a method reference through a base-class
+    // type (e.g. EnumerableSorter`1) loses the subclass type arguments (e.g. TKey on
+    // EnumerableSorter`2), causing GenericIndexOutOfBounds when the delegate is later invoked.
+    ctx.rebind_lookup_for_ldftn(&mut lookup, &obj, &resolved_method);
 
     let index = ctx.get_runtime_method_index(resolved_method, lookup);
     ctx.push_isize(index as isize);

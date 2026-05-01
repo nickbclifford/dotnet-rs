@@ -21,6 +21,62 @@ use tracing::trace;
 pub struct LayoutFactory;
 
 impl LayoutFactory {
+    fn inline_array_length<C, L>(
+        resolver: &ResolverService<C, L>,
+        td: &TypeDescription,
+    ) -> Option<usize>
+    where
+        C: crate::ResolverCacheAdapter,
+        L: crate::ResolverLayoutAdapter,
+    {
+        fn integral_to_usize(
+            value: &dotnetdll::binary::signature::attribute::IntegralParam,
+        ) -> Option<usize> {
+            use dotnetdll::binary::signature::attribute::IntegralParam;
+            let signed = match value {
+                IntegralParam::Int8(v) => i64::from(*v),
+                IntegralParam::Int16(v) => i64::from(*v),
+                IntegralParam::Int32(v) => i64::from(*v),
+                IntegralParam::Int64(v) => *v,
+                IntegralParam::UInt8(v) => i64::from(*v),
+                IntegralParam::UInt16(v) => i64::from(*v),
+                IntegralParam::UInt32(v) => i64::from(*v),
+                IntegralParam::UInt64(v) => i64::try_from(*v).ok()?,
+            };
+            if signed <= 0 {
+                None
+            } else {
+                usize::try_from(signed).ok()
+            }
+        }
+
+        for attr in &td.definition().attributes {
+            let Ok(ctor) = resolver
+                .loader
+                .locate_attribute(td.resolution.clone(), attr)
+            else {
+                continue;
+            };
+            if ctor.parent.type_name() != "System.Runtime.CompilerServices.InlineArrayAttribute" {
+                continue;
+            }
+
+            let Ok(data) =
+                attr.instantiation_data(&resolver.loader.as_ref(), td.resolution.definition())
+            else {
+                continue;
+            };
+
+            if let Some(FixedArg::Integral(length)) = data.constructor_args.first()
+                && let Some(length) = integral_to_usize(length)
+            {
+                return Some(length);
+            }
+        }
+
+        None
+    }
+
     pub fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
         let ptr_size = ObjectRef::SIZE;
         match layout {
@@ -303,6 +359,40 @@ impl LayoutFactory {
             }
             result.gc_desc.merge(&base_layout.gc_desc);
             result.has_ref_fields |= base_layout.has_ref_fields;
+        }
+
+        if let Some(inline_len) = Self::inline_array_length(resolver, &td)
+            && inline_len > 1
+        {
+            let mut first_field: Option<&FieldLayout> = None;
+            for (key, field_layout) in &result.fields {
+                if key.owner == td {
+                    let is_earlier = match first_field {
+                        None => true,
+                        Some(current) => field_layout.position < current.position,
+                    };
+                    if is_earlier {
+                        first_field = Some(field_layout);
+                    }
+                }
+            }
+
+            if let Some(field_layout) = first_field {
+                let elem_size = field_layout.layout.size().as_usize();
+                let base_offset = field_layout.position.as_usize();
+                let inline_total = base_offset.saturating_add(elem_size.saturating_mul(inline_len));
+                result.total_size = align_up(inline_total, result.alignment.max(1));
+
+                if field_layout.layout.is_or_contains_refs() {
+                    let mut inline_gc_desc = GcDesc::default();
+                    for i in 0..inline_len {
+                        let offset = base_offset.saturating_add(elem_size.saturating_mul(i));
+                        Self::populate_gc_desc(&field_layout.layout, offset, &mut inline_gc_desc);
+                    }
+                    result.gc_desc = inline_gc_desc;
+                    result.has_ref_fields = true;
+                }
+            }
         }
 
         Ok(result)

@@ -305,6 +305,37 @@ pub fn intrinsic_unsafe_are_same<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>
     StepResult::Continue
 }
 
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.Unsafe::IsAddressLessThan<T>(T&, T&)"
+)]
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.Unsafe::IsAddressLessThan<M0>(M0&, M0&)"
+)]
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.Unsafe::IsAddressGreaterThan<T>(T&, T&)"
+)]
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.Unsafe::IsAddressGreaterThan<M0>(M0&, M0&)"
+)]
+pub fn intrinsic_unsafe_is_address_ordered<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let right = ctx.pop_ptr() as usize;
+    let left = ctx.pop_ptr() as usize;
+
+    let method_name = method.method().name.as_ref();
+    let is_true = match method_name {
+        "IsAddressLessThan" => left < right,
+        "IsAddressGreaterThan" => left > right,
+        _ => false,
+    };
+
+    ctx.push_i32(is_true as i32);
+    StepResult::Continue
+}
+
 // System.Runtime.CompilerServices.Unsafe::As<T>(object value)
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(ref T source)
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::As<T>(object)")]

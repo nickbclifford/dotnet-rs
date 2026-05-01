@@ -13,13 +13,13 @@ pub mod coordinator;
 
 #[cfg(feature = "multithreading")]
 pub use arena::THREAD_ARENA;
-
 #[cfg(feature = "multithreading")]
 pub use coordinator::{
     ALLOCATION_THRESHOLD, ArenaHandle, CollectionSession, GCCommand, GCCoordinator, GcCycleGuard,
     MarkObjectPointers, MarkPhaseCommand, OpaqueObjectPtr, SweepPhaseCommand, clear_tracing_state,
     get_currently_tracing, set_currently_tracing,
 };
+
 #[cfg(not(feature = "multithreading"))]
 pub use coordinator::{GCCommand, GCCoordinator};
 

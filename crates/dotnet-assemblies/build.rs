@@ -10,6 +10,7 @@ fn should_skip_dotnet_build() -> bool {
 
 fn main() {
     println!("cargo:rerun-if-changed=src/support/support.csproj");
+    println!("cargo:rerun-if-changed=src/support");
 
     fn watch_dir(dir: &Path) {
         for entry in std::fs::read_dir(dir).unwrap() {

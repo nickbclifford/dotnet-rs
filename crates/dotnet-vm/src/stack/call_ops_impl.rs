@@ -297,11 +297,16 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             this_type
         );
 
-        let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
+        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
             Ok(v) => v,
             Err(e) => return StepResult::Error(e.into()),
         };
 
+        if this_type.is_some() {
+            self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);
+        }
+
+        let had_receiver = this_type.is_some();
         let final_method = if let Some(this_type) = this_type {
             match self
                 .resolver()
@@ -313,6 +318,10 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         } else {
             resolved
         };
+
+        if had_receiver {
+            self.rebind_lookup_to_resolved_method(&mut lookup, &final_method);
+        }
 
         self.dispatch_method(final_method, lookup)
     }
@@ -332,11 +341,16 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             this_type
         );
 
-        let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
+        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
             Ok(v) => v,
             Err(e) => return StepResult::Error(e.into()),
         };
 
+        if this_type.is_some() {
+            self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);
+        }
+
+        let had_receiver = this_type.is_some();
         let final_method = if let Some(this_type) = this_type {
             match self
                 .resolver()
@@ -349,7 +363,35 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             resolved
         };
 
+        if had_receiver {
+            self.rebind_lookup_to_resolved_method(&mut lookup, &final_method);
+        }
+
         self.dispatch_method_tail(final_method, lookup)
+    }
+
+    fn rebind_lookup_for_ldftn(
+        &self,
+        lookup: &mut GenericLookup,
+        receiver: &ObjectRef<'gc>,
+        resolved: &MethodDescription,
+    ) {
+        // Enrich type generics from the receiver object's instantiated generics, mirroring
+        // the merge step done for callvirt in merge_receiver_lookup_for_virtual_dispatch.
+        let receiver_lookup = if receiver.0.is_some() {
+            receiver.as_heap_storage(|storage| match storage {
+                HeapStorage::Obj(instance) => instance.generics.clone(),
+                HeapStorage::Boxed(instance) => instance.generics.clone(),
+                HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
+            })
+        } else {
+            GenericLookup::default()
+        };
+        if receiver_lookup.type_generics.len() > lookup.type_generics.len() {
+            lookup.type_generics = receiver_lookup.type_generics;
+        }
+        // Rebind to the resolved declaring-type arity, mirroring rebind_lookup_to_resolved_method.
+        self.rebind_lookup_to_resolved_method(lookup, resolved);
     }
 
     #[inline]
@@ -373,6 +415,69 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    fn rebind_lookup_to_resolved_method(
+        &self,
+        lookup: &mut GenericLookup,
+        final_method: &MethodDescription,
+    ) {
+        let parent_arity = final_method.parent.definition().generic_parameters.len();
+        if parent_arity == 0 {
+            lookup.type_generics = Vec::new().into();
+            return;
+        }
+
+        if final_method.parent_generics.type_generics.len() == parent_arity {
+            lookup.type_generics = final_method.parent_generics.type_generics.clone();
+            return;
+        }
+
+        // Fallback for edge cases where virtual resolution returns the right method but
+        // an incomplete declaring-type lookup. Preserve receiver-instantiated generics,
+        // trimmed to the declaring type's arity.
+        lookup.type_generics = lookup
+            .type_generics
+            .iter()
+            .take(parent_arity)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into();
+    }
+
+    fn merge_receiver_lookup_for_virtual_dispatch(
+        &self,
+        resolved: &MethodDescription,
+        lookup: &mut GenericLookup,
+    ) {
+        // Virtual/interface calls can originate from non-generic call sites (e.g. IEnumerator)
+        // while the receiver object itself is a closed generic type. Preserve that receiver
+        // generic context for downstream field/type resolution when caller lookup is empty.
+        let num_args = 1 + resolved.method().signature.parameters.len();
+        let this_value = self.peek_stack_at(num_args - 1);
+
+        let receiver_lookup = match this_value {
+            StackValue::ObjectRef(ObjectRef(Some(obj))) => {
+                ObjectRef(Some(obj)).as_heap_storage(|storage| match storage {
+                    HeapStorage::Obj(instance) => instance.generics.clone(),
+                    HeapStorage::Boxed(instance) => instance.generics.clone(),
+                    HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
+                })
+            }
+            StackValue::ManagedPtr(ptr) => match ptr.origin().owner() {
+                Some(owner) => owner.as_heap_storage(|storage| match storage {
+                    HeapStorage::Obj(instance) => instance.generics.clone(),
+                    HeapStorage::Boxed(instance) => instance.generics.clone(),
+                    HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
+                }),
+                None => GenericLookup::default(),
+            },
+            _ => GenericLookup::default(),
+        };
+
+        if receiver_lookup.type_generics.len() > lookup.type_generics.len() {
+            lookup.type_generics = receiver_lookup.type_generics.clone();
+        }
+    }
+
     fn should_honor_tail_call(&self, arg_count: usize) -> bool {
         let frame = self.frame_stack.current_frame();
 
