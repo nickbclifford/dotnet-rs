@@ -1,16 +1,15 @@
+use dotnet_build_tools::{
+    find_repo_root, shared_msbuild_input_candidates, should_skip_dotnet_build,
+};
 use std::{path::Path, process::Command};
-
-/// Returns true when we should skip expensive dotnet build steps.
-/// This is the case during `cargo clippy` (detected via CARGO_CFG_CLIPPY) or
-/// when the user explicitly sets `DOTNET_SKIP_BUILD=1`.
-fn should_skip_dotnet_build() -> bool {
-    std::env::var("CARGO_CFG_CLIPPY").is_ok()
-        || std::env::var("DOTNET_SKIP_BUILD").is_ok_and(|v| v == "1")
-}
 
 fn main() {
     println!("cargo:rerun-if-changed=src/support/support.csproj");
     println!("cargo:rerun-if-changed=src/support");
+    println!("cargo:rerun-if-env-changed=DOTNET_SKIP_BUILD");
+    println!("cargo:rerun-if-env-changed=RUSTC_WORKSPACE_WRAPPER");
+    println!("cargo:rerun-if-env-changed=RUSTC_WRAPPER");
+    println!("cargo:rerun-if-env-changed=CLIPPY_ARGS");
 
     fn watch_dir(dir: &Path) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -21,14 +20,22 @@ fn main() {
                 if name != "bin" && name != "obj" {
                     watch_dir(&path);
                 }
-            } else if path.extension().map(|s| s == "cs").unwrap_or(false) {
+            } else {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
         }
     }
-    // Only watch if the directory exists (it might not be moved yet when I create this file, but it will be there when I run build)
-    if Path::new("src/support").exists() {
-        watch_dir(Path::new("src/support"));
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let support_dir = manifest_dir.join("src/support");
+    let repo_root = find_repo_root(manifest_dir);
+    for input in shared_msbuild_input_candidates(&support_dir, &repo_root) {
+        // Emit these even when missing so introducing one later retriggers build.rs.
+        println!("cargo:rerun-if-changed={}", input.display());
+    }
+
+    if support_dir.exists() {
+        watch_dir(&support_dir);
     }
 
     let out_dir = std::env::var("OUT_DIR").unwrap();

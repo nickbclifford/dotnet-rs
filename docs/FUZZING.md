@@ -44,7 +44,7 @@ dotnet-vm/fuzzing
 
 The fuzz crate Cargo.toml files (`crates/dotnet-vm/fuzz/Cargo.toml`, `crates/dotnet-value/fuzz/Cargo.toml`) depend on the respective library crates with `features = ["fuzzing"]` enabled.
 
-> **Note:** The `fuzzing` feature is **not** included in the standard `check.sh` test matrix. It is only activated when running fuzz targets directly.
+> **Note:** The standard `check.sh` matrix is resolved from `xtask` (`matrix test-features`) and currently includes a `fuzzing` feature leg. Running the dedicated fuzz targets still requires the nightly `cargo-fuzz` workflow described below.
 
 ## Fuzz Targets
 

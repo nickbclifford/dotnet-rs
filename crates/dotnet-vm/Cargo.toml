@@ -93,10 +93,10 @@ instruction-dispatch-jump-table = []
 dispatch-super-instruction-prototype = []
 
 [build-dependencies]
+dotnet-build-tools = { workspace = true }
 dotnet-macros-core = { workspace = true }
 phf_codegen = "0.13"
 syn = { version = "2", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-walkdir = "2"
 dotnetdll = { workspace = true }

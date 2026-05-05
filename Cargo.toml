@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "xtask",
+    "crates/dotnet-build-tools",
     "crates/dotnet-types",
     "crates/dotnet-utils",
     "crates/dotnet-value",
@@ -31,6 +33,7 @@ resolver = "2"
 
 [workspace.dependencies]
 dotnet-types = { path = "crates/dotnet-types" }
+dotnet-build-tools = { path = "crates/dotnet-build-tools" }
 dotnet-utils = { path = "crates/dotnet-utils", default-features = false }
 dotnet-value = { path = "crates/dotnet-value", default-features = false }
 dotnet-assemblies = { path = "crates/dotnet-assemblies" }

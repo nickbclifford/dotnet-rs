@@ -43,3 +43,6 @@ dotnet-utils = { workspace = true }
 dotnet-value = { workspace = true }
 dotnet-assemblies = { workspace = true }
 dotnet-vm = { workspace = true }
+
+[build-dependencies]
+dotnet-build-tools = { workspace = true }

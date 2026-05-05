@@ -14,3 +14,6 @@ tracing = { workspace = true }
 
 [features]
 metadata-validation = []
+
+[build-dependencies]
+dotnet-build-tools = { workspace = true }

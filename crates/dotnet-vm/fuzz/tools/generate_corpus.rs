@@ -48,14 +48,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn find_workspace_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut current = std::env::current_dir()?;
     loop {
+        if current.join("crates/dotnet-cli/tests/fixtures").exists() {
+            return Ok(current);
+        }
         if current.join("Cargo.toml").exists() {
             let cargo_toml = fs::read_to_string(current.join("Cargo.toml"))?;
-            if cargo_toml.contains("[workspace]") {
+            if cargo_toml.contains("[workspace]")
+                && current.join("crates/dotnet-vm").exists()
+                && current.join("crates/dotnet-value").exists()
+            {
                 return Ok(current);
             }
         }
         if !current.pop() {
-            return Err("Could not find workspace root".into());
+            return Err("Could not find repository workspace root".into());
         }
     }
 }
@@ -112,51 +118,56 @@ fn extract_method_bodies(
 
     // Parse with dotnetdll
     let resolution = Resolution::parse(&buf, ReadOptions::default())?;
-    let definition = &resolution.module;
-
     let mut extracted = 0;
 
-    // Iterate through method definitions
-    for (method_idx, method_def) in definition.method_defs.iter().enumerate() {
-        // Get method body if it exists
-        if let Some(rva) = method_def.rva {
-            if rva.0 == 0 {
-                continue; // Abstract or extern method
+    // Iterate through type/method definitions in the resolved model.
+    for (type_idx, type_def) in resolution.type_definitions.iter().enumerate() {
+        for (method_idx, method) in type_def.methods.iter().enumerate() {
+            let Some(body) = &method.body else {
+                continue;
+            };
+            if body.instructions.is_empty() {
+                continue;
             }
 
-            // Parse the method body
-            match resolution.get_method_body(rva) {
-                Ok(body) => {
-                    let il_bytes = &body.code;
-
-                    // Skip empty methods
-                    if il_bytes.is_empty() {
-                        continue;
-                    }
-
-                    // Create a descriptive seed file name
-                    let method_name = &method_def.name;
-
-                    let seed_file = corpus_dir.join(format!(
-                        "seed_{}_{:04}_{}",
-                        dll_path.file_stem().unwrap().to_str().unwrap(),
-                        method_idx,
-                        sanitize_filename(method_name)
-                    ));
-
-                    // Write IL bytes as seed
-                    let mut file = fs::File::create(&seed_file)?;
-                    file.write_all(il_bytes)?;
-
-                    extracted += 1;
-                    *seed_count += 1;
-                }
-                Err(_) => continue, // Skip methods we can't parse
+            let il_bytes = encode_seed_bytes(&body.instructions);
+            if il_bytes.is_empty() {
+                continue;
             }
+
+            let seed_file = corpus_dir.join(format!(
+                "seed_{}_{:03}_{:04}_{}",
+                dll_path.file_stem().unwrap().to_str().unwrap(),
+                type_idx,
+                method_idx,
+                sanitize_filename(&method.name)
+            ));
+
+            // Write deterministic binary seed bytes for this method.
+            let mut file = fs::File::create(&seed_file)?;
+            file.write_all(&il_bytes)?;
+
+            extracted += 1;
+            *seed_count += 1;
         }
     }
 
     Ok(extracted)
+}
+
+fn encode_seed_bytes(instructions: &[Instruction]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(instructions.len() * 6);
+    for instruction in instructions {
+        let repr = format!("{instruction:?}");
+        bytes.extend_from_slice(repr.as_bytes());
+        bytes.push(0x0a);
+        // Keep generated seeds in a practical fuzz-friendly range.
+        if bytes.len() >= 4096 {
+            bytes.truncate(4096);
+            break;
+        }
+    }
+    bytes
 }
 
 fn sanitize_filename(name: &str) -> String {

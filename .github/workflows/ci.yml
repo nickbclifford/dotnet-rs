@@ -40,21 +40,34 @@ jobs:
       - name: Rustfmt Check
         run: cargo fmt --all -- --check
 
+  matrix-definitions:
+    name: Resolve Feature Matrices
+    runs-on: ubuntu-latest
+    outputs:
+      clippy-features: ${{ steps.matrices.outputs.clippy-features }}
+      test-features: ${{ steps.matrices.outputs.test-features }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve clippy/test matrices from xtask
+        id: matrices
+        run: |
+          CLIPPY_FEATURES=$(cargo run --quiet -p xtask -- matrix clippy-features --format json)
+          TEST_FEATURES=$(cargo run --quiet -p xtask -- matrix test-features --format json)
+          echo "clippy-features=$CLIPPY_FEATURES" >> "$GITHUB_OUTPUT"
+          echo "test-features=$TEST_FEATURES" >> "$GITHUB_OUTPUT"
+
   clippy:
     name: Clippy Check
     runs-on: ubuntu-latest
+    needs: [matrix-definitions]
     timeout-minutes: 15
     strategy:
       matrix:
-        features:
-          - ""                                    # No features
-          - "multithreading"                      # Multithreading (full)
-          - "generic-constraint-validation"       # Generic constraint validation
-          - "memory-validation"                   # Memory validation (GC checks)
-          - "metadata-validation"                 # Metadata validation (Assembly checks)
-          - "multithreading,memory-validation"    # Combined multithreading + memory validation
-          - "multithreading,validation-all"       # Full validation suite
-          - "fuzzing"                             # Fuzzing instrumentation and traits
+        features: ${{ fromJson(needs.matrix-definitions.outputs.clippy-features) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,44 +97,86 @@ jobs:
             cargo clippy --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
           fi
 
-  build-fixtures:
-    name: Build .NET Fixtures
+  build-script-regression:
+    name: Build Script Regression Probes
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Run build-script regression probes
+        run: bash scripts/check_build_script_regressions.sh
+
+  build-fixtures:
+    name: Build .NET Fixtures
+    runs-on: ubuntu-latest
+    outputs:
+      fixtures-path: ${{ steps.fixture-output-dir.outputs.path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve fixture output directory
+        id: fixture-output-dir
+        run: |
+          OUTPUT_DIR=$(cargo run --quiet -p xtask -- fixtures output-dir --profile debug)
+          echo "path=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Compute fixture cache key
+        id: fixture-cache-key
+        run: |
+          CACHE_KEY=$(cargo run --quiet -p xtask -- fixtures cache-key --profile debug)
+          echo "key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+
       - name: Cache .NET fixtures
         id: cache-fixtures
         uses: actions/cache@v4
         with:
-          path: target/debug/dotnet-fixtures
-          key: ${{ runner.os }}-dotnet-fixtures-${{ hashFiles('crates/dotnet-cli/tests/fixtures/**/*.cs', 'crates/dotnet-cli/tests/*.csproj') }}
+          path: ${{ steps.fixture-output-dir.outputs.path }}
+          key: ${{ runner.os }}-dotnet-fixtures-${{ steps.fixture-cache-key.outputs.key }}
           restore-keys: |
             ${{ runner.os }}-dotnet-fixtures-
 
       - name: Build fixtures
         if: steps.cache-fixtures.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p target/debug/dotnet-fixtures
-          dotnet restore crates/dotnet-cli/tests/SingleFile.csproj -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ --nologo -v:q
-          dotnet build crates/dotnet-cli/tests/BatchFixtures.csproj -p:FixtureOutputBase=$(pwd)/target/debug/dotnet-fixtures/ -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ -m -v:q --nologo -clp:ErrorsOnly --no-restore
+        run: cargo run -p xtask -- fixtures build --output-dir "${{ steps.fixture-output-dir.outputs.path }}"
 
       - name: Upload fixtures
         uses: actions/upload-artifact@v4
         with:
           name: dotnet-fixtures
-          path: target/debug/dotnet-fixtures
+          path: ${{ steps.fixture-output-dir.outputs.path }}
           retention-days: 1
 
   test:
     name: Test Suite
     runs-on: ubuntu-latest
-    needs: [build-fixtures]
+    needs: [matrix-definitions, build-fixtures]
     timeout-minutes: 30
     env:
       RUST_TEST_THREADS: "1"
@@ -130,33 +185,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Single-threaded configurations
-          - name: "No features"
-            features: ""
-
-          # Multithreading configurations (full)
-          - name: "Multithreading"
-            features: "multithreading"
-
-          # Generic constraint validation configuration
-          - name: "Generic constraint validation"
-            features: "generic-constraint-validation"
-
-          # Memory validation configuration (GC checks)
-          - name: "Memory validation"
-            features: "memory-validation"
-
-          # Metadata validation configuration (Assembly checks)
-          - name: "Metadata validation"
-            features: "metadata-validation"
-
-          # Combined configurations
-          - name: "Multithreading + Memory validation"
-            features: "multithreading,memory-validation"
-
-          - name: "Full validation"
-            features: "multithreading,validation-all"
+        features: ${{ fromJson(needs.matrix-definitions.outputs.test-features) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -176,14 +205,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dotnet-fixtures
-          path: target/debug/dotnet-fixtures
+          path: ${{ needs.build-fixtures.outputs.fixtures-path }}
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
-      - name: Build (${{ matrix.name }})
+      - name: Build (${{ matrix.features || 'no features' }})
         run: |
           if [ -z "${{ matrix.features }}" ]; then
             cargo build --verbose --no-default-features
@@ -191,13 +220,13 @@ jobs:
             cargo build --verbose --no-default-features --features ${{ matrix.features }}
           fi
 
-      - name: Enable GC pointer-read trace (${{ matrix.name }})
+      - name: Enable GC pointer-read trace (${{ matrix.features || 'no features' }})
         if: ${{ matrix.features == '' || matrix.features == 'generic-constraint-validation' }}
         run: |
           echo "DOTNET_TRACE_GC_PTR_READ=1" >> "$GITHUB_ENV"
           echo "DOTNET_TRACE_CULTUREDATA_WRITES=1" >> "$GITHUB_ENV"
 
-      - name: Run tests (${{ matrix.name }})
+      - name: Run tests (${{ matrix.features || 'no features' }})
         timeout-minutes: 20
         run: |
           if [ -z "${{ matrix.features }}" ]; then
@@ -206,7 +235,7 @@ jobs:
             cargo test --verbose --no-default-features --features ${{ matrix.features }} -- --nocapture
           fi
 
-      - name: Hang-probe integration tests (${{ matrix.name }})
+      - name: Hang-probe integration tests (${{ matrix.features || 'no features' }})
         if: ${{ matrix.features == 'multithreading' }}
         timeout-minutes: 5
         env:

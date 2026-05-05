@@ -3,6 +3,7 @@
 //! Core logic for macro expansion used by `dotnet-macros`.
 //! This crate contains the parsing and transformation logic for .NET signatures.
 use quote::quote;
+use std::collections::HashSet;
 use syn::{
     Attribute, GenericParam, Generics, Ident, Result, Token, TypeParamBound, Visibility, braced,
     ext::IdentExt,
@@ -340,7 +341,17 @@ impl ParsedInstruction {
                         ),
                     ));
                 }
+                let mut seen_bindings = HashSet::new();
                 for (i, binding) in bindings.iter().enumerate() {
+                    if !seen_bindings.insert(binding.to_string()) {
+                        return Err(syn::Error::new(
+                            binding.span(),
+                            format!(
+                                "Duplicate binding name '{}' in instruction mapping for variant {}",
+                                binding, variant_name
+                            ),
+                        ));
+                    }
                     if binding != &extra_arg_names[i] {
                         return Err(syn::Error::new(
                             binding.span(),
@@ -364,7 +375,27 @@ impl ParsedInstruction {
                         ),
                     ));
                 }
+                let mut seen_field_names = HashSet::new();
+                let mut seen_binding_names = HashSet::new();
                 for field in fields {
+                    if !seen_field_names.insert(field.field_name.to_string()) {
+                        return Err(syn::Error::new(
+                            field.field_name.span(),
+                            format!(
+                                "Duplicate field mapping '{}' in instruction mapping for variant {}",
+                                field.field_name, variant_name
+                            ),
+                        ));
+                    }
+                    if !seen_binding_names.insert(field.binding_name.to_string()) {
+                        return Err(syn::Error::new(
+                            field.binding_name.span(),
+                            format!(
+                                "Duplicate binding name '{}' in instruction mapping for variant {}",
+                                field.binding_name, variant_name
+                            ),
+                        ));
+                    }
                     if !extra_arg_names.contains(&field.binding_name) {
                         return Err(syn::Error::new(
                             field.binding_name.span(),
@@ -764,5 +795,31 @@ mod tests {
 
         let expanded = parsed.expand().to_string();
         assert!(expanded.contains("trait VariableOps < 'gc >"));
+    }
+
+    #[test]
+    fn test_struct_mapping_rejects_duplicate_binding_names() {
+        let mapping: InstructionMapping =
+            syn::parse_str("Compare { lhs: value, rhs: value }").expect("mapping should parse");
+        let func: syn::ItemFn = syn::parse_quote! {
+            fn compare(ctx: &mut Ctx, value: u16, other: u16) {}
+        };
+
+        let err =
+            ParsedInstruction::parse(mapping, &func).expect_err("expected duplicate binding error");
+        assert!(err.to_string().contains("Duplicate binding name 'value'"));
+    }
+
+    #[test]
+    fn test_struct_mapping_rejects_duplicate_field_names() {
+        let mapping: InstructionMapping =
+            syn::parse_str("Compare { lhs: first, lhs: second }").expect("mapping should parse");
+        let func: syn::ItemFn = syn::parse_quote! {
+            fn compare(ctx: &mut Ctx, first: u16, second: u16) {}
+        };
+
+        let err =
+            ParsedInstruction::parse(mapping, &func).expect_err("expected duplicate field error");
+        assert!(err.to_string().contains("Duplicate field mapping 'lhs'"));
     }
 }

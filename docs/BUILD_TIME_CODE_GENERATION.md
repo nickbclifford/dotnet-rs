@@ -220,7 +220,19 @@ The build script applies feature-aware ignore policy during generation:
 - `monitor_try_enter_timeout_42` and `circular_init_mt_42` are ignored outside `multithreading`.
 - `generic_constraints_fail_0` is ignored unless `generic-constraint-validation` is enabled.
 
-Fixture binaries are built under Cargo's target tree (`DOTNET_FIXTURES_BASE`) and a fixture content hash is used to skip unnecessary rebuilds.
+Fixture binaries default to Cargo-derived output paths (`target/<profile>/dotnet-fixtures`, or
+`target/<triple>/<profile>/dotnet-fixtures` for explicit targets), unless overridden via
+`DOTNET_FIXTURES_BASE`. A fixture content hash is used to skip unnecessary rebuilds in normal mode.
+
+The fixture build contract is env-driven:
+
+- `DOTNET_SKIP_BUILD=1` skips dotnet restore/build work (analysis-focused mode).
+- `DOTNET_USE_PREBUILT_FIXTURES=1` requires prebuilt fixture artifacts and validates
+  `${DOTNET_FIXTURES_BASE}/.fixtures_hash` before test generation.
+- `DOTNET_FIXTURES_BASE=/path` overrides fixture artifact location for both build and prebuilt modes.
+
+When `DOTNET_USE_PREBUILT_FIXTURES=1` is active, prebuilt validation takes precedence and
+`build.rs` does not run dotnet restore/build.
 
 ## Notes for Future Documentation
 

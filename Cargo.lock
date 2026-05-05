@@ -338,6 +338,7 @@ name = "dotnet-assemblies"
 version = "0.1.0"
 dependencies = [
  "dashmap",
+ "dotnet-build-tools",
  "dotnet-types",
  "dotnet-utils",
  "dotnetdll",
@@ -360,11 +361,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-build-tools"
+version = "0.1.0"
+
+[[package]]
 name = "dotnet-cli"
 version = "0.2.0"
 dependencies = [
  "clap",
  "dotnet-assemblies",
+ "dotnet-build-tools",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
@@ -627,6 +633,7 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "dotnet-assemblies",
+ "dotnet-build-tools",
  "dotnet-exceptions",
  "dotnet-intrinsics-core",
  "dotnet-intrinsics-delegates",
@@ -661,7 +668,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]
@@ -1629,6 +1635,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "dotnet-build-tools",
 ]
 
 [[package]]

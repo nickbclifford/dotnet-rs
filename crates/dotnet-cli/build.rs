@@ -1,40 +1,17 @@
+use dotnet_build_tools::{
+    cargo_profile_target_dir_from_out_dir, collect_files_with_extension, find_repo_root,
+    fixture_cache_hash, shared_msbuild_input_candidates, should_skip_dotnet_build,
+};
 use std::{
-    collections::hash_map::DefaultHasher,
     fs::File,
-    hash::{Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
-/// Returns true when we should skip expensive dotnet build steps.
-/// This is the case during `cargo clippy` (detected via CARGO_CFG_CLIPPY) or
-/// when the user explicitly sets `DOTNET_SKIP_BUILD=1`.
-fn should_skip_dotnet_build() -> bool {
-    std::env::var("CARGO_CFG_CLIPPY").is_ok()
-        || std::env::var("DOTNET_SKIP_BUILD").is_ok_and(|v| v == "1")
-}
-
 /// Returns true when we should use prebuilt fixtures from `target/<profile>/dotnet-fixtures`.
 fn use_prebuilt_fixtures() -> bool {
     std::env::var("DOTNET_USE_PREBUILT_FIXTURES").is_ok_and(|v| v == "1")
-}
-
-fn cargo_profile_target_dir_from_out_dir(out_dir: &Path) -> PathBuf {
-    // `OUT_DIR` typically looks like:
-    //   <target>/<profile>/build/<pkg>-<hash>/out
-    // We want the `<target>/<profile>` directory so fixture builds live under Cargo's `target` tree
-    // but outside the per-build-script hash dir.
-    for ancestor in out_dir.ancestors() {
-        if ancestor.file_name().is_some_and(|n| n == "build")
-            && let Some(profile_dir) = ancestor.parent()
-        {
-            return profile_dir.to_path_buf();
-        }
-    }
-
-    // Fallback: keep everything under `OUT_DIR`.
-    out_dir.to_path_buf()
 }
 
 fn main() {
@@ -46,6 +23,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DOTNET_USE_PREBUILT_FIXTURES");
     println!("cargo:rerun-if-env-changed=DOTNET_FIXTURES_BASE");
     println!("cargo:rerun-if-env-changed=DOTNET_TEST_FILTER");
+    println!("cargo:rerun-if-env-changed=RUSTC_WORKSPACE_WRAPPER");
+    println!("cargo:rerun-if-env-changed=RUSTC_WRAPPER");
+    println!("cargo:rerun-if-env-changed=CLIPPY_ARGS");
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir_path = PathBuf::from(&out_dir);
@@ -55,6 +35,12 @@ fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let tests_dir = manifest_dir.join("tests");
     let fixtures_dir = tests_dir.join("fixtures");
+    let repo_root = find_repo_root(manifest_dir);
+    let shared_msbuild_inputs = shared_msbuild_input_candidates(&tests_dir, &repo_root);
+    for input in &shared_msbuild_inputs {
+        // Emit these even when missing so introducing one later retriggers build.rs.
+        println!("cargo:rerun-if-changed={}", input.display());
+    }
 
     let output_base = std::env::var("DOTNET_FIXTURES_BASE")
         .map(PathBuf::from)
@@ -68,8 +54,12 @@ fn main() {
         output_base.display()
     );
 
-    let mut fixtures = Vec::new();
-    find_fixtures(&fixtures_dir, &mut fixtures);
+    let mut fixtures = collect_files_with_extension(&fixtures_dir, "cs").unwrap_or_else(|error| {
+        panic!(
+            "Failed to recursively scan fixture files under `{}`: {error}",
+            fixtures_dir.display()
+        )
+    });
     fixtures.sort_by_key(|p| p.to_string_lossy().to_string());
 
     if let Ok(filter) = std::env::var("DOTNET_TEST_FILTER")
@@ -77,6 +67,10 @@ fn main() {
     {
         fixtures.retain(|p| p.to_string_lossy().contains(&filter));
     }
+
+    let hash = fixture_cache_hash(&fixtures, &tests_dir, &shared_msbuild_inputs)
+        .unwrap_or_else(|error| panic!("Failed to compute fixtures hash: {error}"));
+    let hash_file = output_base.join(".fixtures_hash");
 
     if use_prebuilt_fixtures() {
         // Validate prebuilt fixtures exist and directory is not empty.
@@ -99,9 +93,32 @@ fn main() {
             );
             panic!("Prebuilt fixtures directory empty");
         }
+
+        let prebuilt_hash = std::fs::read_to_string(&hash_file)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                println!(
+                    "cargo:warning=DOTNET_USE_PREBUILT_FIXTURES=1 but {} is missing/invalid",
+                    hash_file.display()
+                );
+                panic!(
+                    "Stale/incomplete artifact: missing or invalid prebuilt hash file. Run scripts/build_fixtures.sh to update."
+                );
+            });
+
+        if prebuilt_hash != hash {
+            println!(
+                "cargo:warning=Prebuilt fixtures hash mismatch at {} (expected {}, found {})",
+                hash_file.display(),
+                hash,
+                prebuilt_hash
+            );
+            panic!(
+                "Stale/incomplete artifact: prebuilt fixtures hash mismatch. Run scripts/build_fixtures.sh to update."
+            );
+        }
     } else {
-        let hash = compute_fixtures_hash(&fixtures, &tests_dir);
-        let hash_file = output_base.join(".fixtures_hash");
         let previous_hash: Option<u64> = std::fs::read_to_string(&hash_file)
             .ok()
             .and_then(|s| s.trim().parse().ok());
@@ -265,44 +282,4 @@ fn main() {
             missing_prebuilt_dlls.len()
         );
     }
-}
-
-fn find_fixtures(dir: &Path, fixtures: &mut Vec<PathBuf>) {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let path = entry.path();
-        if path.is_dir() {
-            find_fixtures(&path, fixtures);
-        } else if path.extension().map(|s| s == "cs").unwrap_or(false) {
-            fixtures.push(path);
-        }
-    }
-}
-
-fn compute_fixtures_hash(fixtures: &[PathBuf], tests_dir: &Path) -> u64 {
-    let mut hasher = DefaultHasher::new();
-
-    // Hash .csproj files
-    for csproj in &["SingleFile.csproj", "BatchFixtures.csproj"] {
-        let path = tests_dir.join(csproj);
-        if let Ok(content) = std::fs::read(&path) {
-            path.to_string_lossy().hash(&mut hasher);
-            content.hash(&mut hasher);
-        }
-    }
-
-    // Hash all fixture .cs files (sorted for determinism)
-    for fixture in fixtures {
-        if let Ok(content) = std::fs::read(fixture) {
-            fixture.to_string_lossy().hash(&mut hasher);
-            content.hash(&mut hasher);
-        }
-    }
-
-    hasher.finish()
 }

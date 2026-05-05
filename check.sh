@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 set -e
-FEATURES_COMBINATIONS=(
-    ""
-    "multithreading"
-    "simd"
-    "multithreading,simd"
-    "generic-constraint-validation"
-    "memory-validation"
-    "metadata-validation"
-    "multithreading,memory-validation"
-    "multithreading,validation-all"
-    "fuzzing"
+readarray -t FEATURES_COMBINATIONS < <(
+    cargo run --quiet -p xtask -- matrix test-features --format lines
 )
 LOCK_ORDER_TESTS=(
     "gc::coordinator::tests::stress_lock_order_gc_cycle_guard_with_live_safepoints"
     "threading::basic::tests::lock_order_request_stop_the_world_rejects_inverted_top_level_order"
 )
 echo "Running checks for all feature combinations..."
+
+echo "Running build-script regression probes..."
+bash scripts/check_build_script_regressions.sh
+
 for features in "${FEATURES_COMBINATIONS[@]}"; do
     if [ -z "$features" ]; then
         echo "=== Combination: No features ==="
