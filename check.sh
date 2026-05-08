@@ -35,7 +35,9 @@ for features in "${FEATURES_COMBINATIONS[@]}"; do
     fi
 done
 
-echo "Running experimental feature smoke tests..."
+# Prototype feature runs are compile/regression guards only; they do not yet
+# include feature-specific behavioral assertions.
+echo "Running prototype compilation guards..."
 cargo test --features bench-instrumentation -- --nocapture
 cargo test --features heap-diagnostics -- --nocapture
 cargo test -p dotnet-vm --features deadlock-diagnostics -- --nocapture

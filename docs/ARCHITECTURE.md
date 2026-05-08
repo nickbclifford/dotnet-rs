@@ -21,19 +21,24 @@ The project is divided into several crates, each with a focused responsibility:
 - **dotnet-intrinsics-threading**: Monitor/interlocked/threading intrinsic handlers and host seams.
 - **dotnet-intrinsics-reflection**: Reflection intrinsic handlers and reflection host seams.
 - **dotnet-intrinsics-unsafe**: Unsafe/marshalling intrinsic handlers and host seams.
+- **dotnet-simd**: Shared SIMD byte-operation helpers with scalar fallback, used by intrinsic crates.
 - **dotnet-metrics**: Standalone crate for `RuntimeMetrics` with per-cache hit/miss tracking (`CacheStats`, `CacheStat`), serializable via `serde`.
 - **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides structured logging via the `tracing` crate with configurable levels (`DOTNET_LOG` env), a `LogEntry` enum for structured trace events, and an async flusher thread via `crossbeam-channel`.
 - **dotnet-assemblies**: Handles loading and resolving .NET assemblies. It also includes a support library of C# stubs for core types.
 - **dotnet-value**: Defines the representation of all .NET values at runtime, including stack values, managed/unmanaged pointers, heap objects, and field storage layouts.
 - **dotnet-types**: Implements the .NET type system, including type descriptors, method/field info, generics, and type comparison logic.
 - **dotnet-utils**: Contains shared utilities like synchronization primitives, atomic access, GC-related helper types, and strongly-typed newtypes.
+- **dotnet-build-tools**: Shared helpers used by crate build scripts (`build.rs`) for deterministic input scanning/caching.
+- **dotnet-benchmarks**: Criterion benchmark harness and fixture pipeline for end-to-end runtime performance measurement.
 - **dotnet-macros** & **dotnet-macros-core**: Procedural macros used to define instructions and intrinsics concisely.
 
 ### Crate Dependency Hierarchy
 
 ```
 dotnet-cli
+  ├── dotnet-build-tools (build dependency)
   └── dotnet-vm
+      ├── dotnet-build-tools (build dependency)
       ├── dotnet-vm-ops
       │   └── dotnet-vm-data
       ├── dotnet-exceptions
@@ -53,8 +58,12 @@ dotnet-cli
       ├── dotnet-utils
       ├── dotnet-metrics
       ├── dotnet-tracer
+      ├── dotnet-simd
       ├── dotnet-macros
       └── dotnet-macros-core
+
+dotnet-benchmarks
+  └── dotnet-vm
 ```
 
 ## Data Flow

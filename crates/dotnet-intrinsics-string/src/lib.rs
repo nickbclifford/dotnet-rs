@@ -1,7 +1,5 @@
 //! String intrinsic handlers and span-backed string host hooks.
 //!
-//! Inventory mapping for this host surface is tracked in
-//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
 };

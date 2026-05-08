@@ -70,6 +70,7 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
    - `../dotnet-intrinsics-string/src`
    - `../dotnet-intrinsics-threading/src`
    - `../dotnet-intrinsics-reflection/src`
+   - `../dotnet-intrinsics-simd/src`
    - `../dotnet-intrinsics-unsafe/src`
    - Optional extras from `DOTNET_VM_EXTRA_INTRINSIC_SOURCES`
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
@@ -121,6 +122,30 @@ When searching, `IntrinsicRegistry` formats the appropriate key string into a st
 - `ParsedFieldSignature`: Parses field signatures
 
 ## Non-Obvious Connections
+
+### External Source Root Env Vars (Untested Extension Points)
+
+`build_support/scanner.rs` supports external source roots through:
+
+- `DOTNET_VM_EXTRA_INSTRUCTION_SOURCES`
+- `DOTNET_VM_EXTRA_INTRINSIC_SOURCES`
+
+Both env vars use the same parser:
+
+- Entries are separated by `;`
+- Each entry is either `<directory>` or `<directory>=<module_prefix>`
+- If `=<module_prefix>` is omitted, the default prefix is:
+  - `crate::instructions` for instruction extras
+  - `crate::intrinsics` for intrinsic extras
+
+Example:
+
+```bash
+DOTNET_VM_EXTRA_INSTRUCTION_SOURCES="../my-opcodes/src=my_opcode_crate;../more-instr"
+DOTNET_VM_EXTRA_INTRINSIC_SOURCES="../my-intrinsics/src=my_intrinsic_crate"
+```
+
+Current status: these hooks are available for local/experimental extension, but they are not covered by a dedicated CI regression test in this repository today.
 
 ### Build Script ↔ Proc Macros Share Code
 The build script and the proc macros both depend on `dotnet-macros-core` for signature parsing. This ensures the key format is consistent between compile-time table generation and runtime lookups.

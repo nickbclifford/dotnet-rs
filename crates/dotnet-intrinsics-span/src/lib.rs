@@ -1,7 +1,5 @@
 //! Span and ReadOnlySpan intrinsic handlers plus span host abstractions.
 //!
-//! Inventory mapping for this host surface is tracked in
-//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,

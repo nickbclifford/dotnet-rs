@@ -21,8 +21,6 @@
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
 //!
-//! For the P3.S1 trait/call-site inventory and hot-path mapping, see
-//! `docs/p3_s1_trait_inventory.md`.
 use crate::{
     ByteOffset, MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
     resolver::VmResolverService,

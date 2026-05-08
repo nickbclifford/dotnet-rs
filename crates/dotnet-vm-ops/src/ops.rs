@@ -8,8 +8,6 @@
 //! `StaticsOps`, `CallOps`, `VesInternals`, `VesOps`) remain in `dotnet-vm` because
 //! they reference internal VM types (`StackFrame`, `ResolutionContext`, `SharedGlobalState`, etc.).
 //!
-//! For the P3.S1 trait/call-site inventory and hot-path mapping, see
-//! `docs/p3_s1_trait_inventory.md`.
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_tracer::Tracer;
 use dotnet_types::{

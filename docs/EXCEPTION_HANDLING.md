@@ -83,8 +83,8 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 
 ## Notes for Future Documentation
 
-- [ ] Add sequence diagrams for the two-pass exception model
-- [ ] Document the relationship between `ExceptionState` transitions and `StepResult` variants
+- [ ] Add sequence diagrams for the two-pass exception model (throw/search/filter/unwind flow and where control returns to normal dispatch)
+- [ ] Document the relationship between `ExceptionState` transitions and `StepResult` variants (which states emit `Continue`, `Exception`, `MethodThrew`, or handler-jump control)
 - [x] Explain how `rethrow` preserves stack traces vs `throw` resetting them
-- [ ] Document edge cases: nested exceptions, exceptions in finally blocks, exceptions in filters
-- [ ] Detail the `parse` function that converts dotnetdll metadata to `ProtectedSection`/`Handler`
+- [ ] Document edge cases: nested exceptions, exceptions in finally blocks, exceptions in filters (expected state transitions and whether prior unwind/search state is preserved or replaced)
+- [ ] Detail the `parse` function that converts dotnetdll metadata to `ProtectedSection`/`Handler` (input metadata shape, normalization rules, and offset mapping assumptions)

@@ -1,8 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 //! Reflection intrinsic handlers and runtime reflection host interfaces.
 //!
-//! Inventory mapping for this host surface is tracked in
-//! `docs/p3_s1_trait_inventory.md` (P3.S1).
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
