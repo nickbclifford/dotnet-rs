@@ -76,6 +76,7 @@ use std::cell::Cell;
 
 mod call_ops_impl;
 pub mod context;
+mod context_ops;
 mod exception_ops_impl;
 mod memory_ops_impl;
 pub mod ops;

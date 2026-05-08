@@ -21,8 +21,8 @@ Each step is small enough for one agent session. References are stable anchors i
 - [x] 3.3 Fix `dotnet-vm` no-feature clippy regressions in `executor.rs` introduced by step 3.2 (`dead_code` + `collapsible_if`) so full matrix can pass — discovered during step 4.2 phase-gate run
 
 ## Phase 4: context.rs Trait-Impl Split
-- [ ] 4.1 Create `crates/dotnet-vm/src/stack/context_ops.rs`; move all `impl VesContext` blocks for external traits out of `context.rs` into it; update `stack/mod.rs` — refs REVIEW.md#F-OVER-001
-- [ ] 4.2 Run `check.sh` under all feature combinations to verify no regressions from the split — refs REVIEW.md#F-OVER-001
+- [x] 4.1 Create `crates/dotnet-vm/src/stack/context_ops.rs`; move all `impl VesContext` blocks for external traits out of `context.rs` into it; update `stack/mod.rs` — refs REVIEW.md#F-OVER-001
+- [x] 4.2 Run `check.sh` under all feature combinations to verify no regressions from the split — refs REVIEW.md#F-OVER-001
 
 ## Phase 5: TypeComparer — ResolutionS by Reference
 - [ ] 5.1 Change all `TypeComparer` method signatures in `comparer.rs` from `res1: ResolutionS` to `res1: &ResolutionS`; remove the 38 `.clone()` calls on `res1`/`res2` within the file — refs REVIEW.md#F-TYPES-001

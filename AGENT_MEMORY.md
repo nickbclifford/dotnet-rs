@@ -138,3 +138,10 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** The review note still matched current code locations before editing (`thread_arena_not_initialized_error` plus the two nested `if` sites in the non-multithread loop path). Keeping the multithread-only arena reset block under `if collection_requested { ... }` was necessary to preserve behavior while resolving clippy.
 **Follow-ups for future steps:** Resume step `4.2` by re-running `bash check.sh` phase gate.
 **Open questions:** None.
+
+## 2026-05-05 — Step 4.2 — gpt-5 — completed
+**Goal:** Run `check.sh` under all feature combinations to verify no regressions from the `context.rs` trait-impl split.
+**What changed:** Verified the split state still matched review context (`crates/dotnet-vm/src/stack/context.rs` retained core struct/inherent impls; trait impls in `crates/dotnet-vm/src/stack/context_ops.rs`; `mod context_ops;` in `crates/dotnet-vm/src/stack/mod.rs`), then ran `bash check.sh` to completion. Marked checklist step `4.2` complete in `CHECKLIST.md`.
+**What I learned:** The full phase-gate matrix (feature combinations, build-script probes, lock-order harness, prototype compilation guards, and hang-probe integration tests) now passes after step `3.3`; no regressions attributable to the context split were surfaced.
+**Follow-ups for future steps:** Proceed to Phase 5 (`5.1`) when ready.
+**Open questions:** None.
