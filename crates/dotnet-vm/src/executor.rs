@@ -18,13 +18,16 @@ use dotnet_utils::{
     gc::GCHandle,
     sync::{Arc, Ordering},
 };
+use dotnet_value::StackValue;
+#[cfg(not(feature = "fuzzing"))]
 use dotnet_value::{
-    StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
+use dotnet_vm_ops::ManagedException;
+#[cfg(not(feature = "fuzzing"))]
+use dotnet_vm_ops::{LoaderOps, MemoryOps};
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use dotnet_vm_ops::{LoaderOps, ManagedException, MemoryOps};
 
 #[cfg(feature = "multithreading")]
 use crate::gc::arena::THREAD_ARENA;
@@ -59,6 +62,36 @@ impl std::fmt::Display for ExecutorResult {
 }
 
 impl Executor {
+    #[cfg(feature = "fuzzing")]
+    fn fuzzing_default_entrypoint_arg<'gc>(
+        parameter: &ParameterType<MethodType>,
+    ) -> StackValue<'gc> {
+        match parameter {
+            ParameterType::Value(MethodType::Base(base_type)) => match base_type.as_ref() {
+                BaseType::Boolean
+                | BaseType::Char
+                | BaseType::Int8
+                | BaseType::UInt8
+                | BaseType::Int16
+                | BaseType::UInt16
+                | BaseType::Int32
+                | BaseType::UInt32 => StackValue::Int32(0),
+                BaseType::Int64 | BaseType::UInt64 => StackValue::Int64(0),
+                BaseType::Float32 | BaseType::Float64 => StackValue::NativeFloat(0.0),
+                BaseType::IntPtr
+                | BaseType::UIntPtr
+                | BaseType::FunctionPointer(_)
+                | BaseType::ValuePointer(_, _) => StackValue::NativeInt(0),
+                BaseType::Object
+                | BaseType::String
+                | BaseType::Array(_, _)
+                | BaseType::Vector(_, _)
+                | BaseType::Type { .. } => StackValue::null(),
+            },
+            _ => StackValue::null(),
+        }
+    }
+
     #[cfg(feature = "multithreading")]
     fn thread_arena_not_initialized_error() -> VmError {
         VmError::Execution(ExecutionError::InternalError(
@@ -178,6 +211,7 @@ impl Executor {
     }
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
+        #[cfg(not(feature = "fuzzing"))]
         let argv: Vec<String> = std::env::args().skip(1).collect();
         #[cfg(feature = "bench-instrumentation")]
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
@@ -203,31 +237,59 @@ impl Executor {
                     .get_method_info(method, &Default::default(), shared.clone())
                     .expect("Failed to resolve entrypoint");
                 let mut ctx = c.ves_context(gc_handle);
+                #[cfg(not(feature = "fuzzing"))]
+                {
+                    assert!(
+                        !info.signature.instance,
+                        "Entrypoint must be static (ECMA-335 II.15.4.1.2)"
+                    );
+                    assert!(
+                        info.source
+                            .parent
+                            .definition()
+                            .generic_parameters
+                            .is_empty(),
+                        "Entrypoint cannot be declared on a generic type (ECMA-335 II.15.4.1.2)"
+                    );
+                    let has_supported_return_type = match &info.signature.return_type.1 {
+                        None => true,
+                        Some(ParameterType::Value(MethodType::Base(base_type))) => {
+                            matches!(base_type.as_ref(), BaseType::Int32 | BaseType::UInt32)
+                        }
+                        _ => false,
+                    };
+                    assert!(
+                        has_supported_return_type,
+                        "Entrypoint return type must be void, int32, or uint32 (ECMA-335 II.15.4.1.2)"
+                    );
+                }
                 let entrypoint_args = match info.signature.parameters.len() {
                     0 => vec![],
                     1 => {
                         let entrypoint_param = &info.signature.parameters[0].1;
-                        let accepts_string_array = matches!(
-                            entrypoint_param,
-                            ParameterType::Value(MethodType::Base(base_type))
-                                if matches!(
-                                    base_type.as_ref(),
-                                    BaseType::Vector(_, element) | BaseType::Array(element, _)
-                                        if matches!(
-                                            element,
-                                            MethodType::Base(element_base)
-                                                if matches!(element_base.as_ref(), BaseType::String)
-                                        )
-                                )
-                        );
-                        assert!(
-                            accepts_string_array,
-                            "Entrypoint parameter must be string[] (ECMA-335 II.15.4.1.2)"
-                        );
+                        #[cfg(not(feature = "fuzzing"))]
+                        {
+                            let accepts_string_array = matches!(
+                                entrypoint_param,
+                                ParameterType::Value(MethodType::Base(base_type))
+                                    if matches!(
+                                        base_type.as_ref(),
+                                        BaseType::Vector(_, element)
+                                            if matches!(
+                                                element,
+                                                MethodType::Base(element_base)
+                                                    if matches!(element_base.as_ref(), BaseType::String)
+                                            )
+                                    )
+                            );
+                            assert!(
+                                accepts_string_array,
+                                "Entrypoint parameter must be a string[] vector (ECMA-335 II.15.4.1.2)"
+                            );
 
-                        let string_type = ctx
-                            .loader()
-                            .corlib_type("System.String")
+                            let string_type = ctx
+                                .loader()
+                                .corlib_type("System.String")
                             .expect("Failed to resolve System.String type");
                         let mut argv_vector = ctx
                             .new_vector(string_type.into(), argv.len())
@@ -243,13 +305,28 @@ impl Executor {
                             arg_ref.write(chunk);
                         }
 
-                        let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(argv_vector));
-                        ctx.register_new_object(&argv_ref);
-                        vec![StackValue::ObjectRef(argv_ref)]
+                            let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(argv_vector));
+                            ctx.register_new_object(&argv_ref);
+                            vec![StackValue::ObjectRef(argv_ref)]
+                        }
+                        #[cfg(feature = "fuzzing")]
+                        {
+                            vec![Self::fuzzing_default_entrypoint_arg(entrypoint_param)]
+                        }
                     }
+                    #[cfg(not(feature = "fuzzing"))]
                     _ => {
-                        panic!("Entrypoint must have zero parameters or a single string[] parameter")
+                        panic!(
+                            "Entrypoint must have zero parameters or a single string[] parameter"
+                        )
                     }
+                    #[cfg(feature = "fuzzing")]
+                    _ => info
+                        .signature
+                        .parameters
+                        .iter()
+                        .map(|parameter| Self::fuzzing_default_entrypoint_arg(&parameter.1))
+                        .collect(),
                 };
 
                 ctx.entrypoint_frame(info, Default::default(), entrypoint_args)

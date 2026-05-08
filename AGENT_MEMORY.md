@@ -166,3 +166,10 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** The review anchor still matched current code before editing (`entrypoint_frame(..., vec![])` at the TODO site). The required targeted verification commands for this step currently fail due a pre-existing compile error outside this step (`call_ops_impl.rs:669` still passes `ResolutionS` by value to `TypeComparer::signatures_equal` after step 5 changes).
 **Follow-ups for future steps:** Complete new checklist item `5.3`, then re-run step-level `dotnet-vm` clippy/tests to revalidate `6.1` in a green state.
 **Open questions:** None.
+
+## 2026-05-07 — Step Finalizer — gpt-5 — completed
+**Goal:** Run the whole-project finalizer audit, apply cross-cutting cleanup, and prepare the branch for merge readiness.
+**What changed:** Fixed stale architecture/threading docs (`docs/ARCHITECTURE.md`, `docs/THREADING_AND_SYNCHRONIZATION.md`), tightened ECMA entrypoint guard behavior in `crates/dotnet-vm/src/executor.rs`, and added a `feature = \"fuzzing\"`-only synthetic entrypoint-argument path so fuzz harness programs continue to run under the stricter guard. Re-ran targeted checks and full `check.sh` successfully. Rewrote branch history into phase-grouped commits plus a finalizer pass and prepared workflow artifacts for removal in the final cleanup step.
+**What I learned:** The strict 6.1 guard change was correct for normal entrypoints but regressed the `fuzzing` feature matrix because fuzz programs intentionally use non-ECMA synthetic signatures. Gating the strict enforcement to non-fuzzing builds preserves both goals: spec alignment for runtime entrypoints and stable fuzz infrastructure.
+**Follow-ups for future steps:** Delete workflow scratch artifacts (`REVIEW.md`, `CHECKLIST.md`, `AGENT_MEMORY.md`, `AGENT_PROMPT.md`, `copy_prompt.py`, `PROMPT.md`) as the final cleanup commit and keep them out of the merged branch.
+**Open questions:** None.

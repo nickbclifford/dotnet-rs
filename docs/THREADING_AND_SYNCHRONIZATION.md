@@ -151,7 +151,7 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 
 Current multithreaded call path:
 `VesContext::monitor_get_or_create_sync_block_for_object`
-(`crates/dotnet-vm/src/stack/context.rs`) reads the object's current index, calls
+(`crates/dotnet-vm/src/stack/context_ops.rs`) reads the object's current index, calls
 `get_or_create_sync_block(current_index)`, then publishes the returned index with
 `object.set_sync_block_index(gc, new_index)` only after the call returns.
 

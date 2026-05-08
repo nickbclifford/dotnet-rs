@@ -140,7 +140,7 @@ The VES trait system is split across two crates to avoid circular dependencies:
 ### Base Traits (`dotnet-vm-ops/src/ops.rs`)
 Foundational traits that instruction handlers and intrinsics can target without depending on `dotnet-vm`:
 - `EvalStackOps`, `TypedStackOps`, `LocalOps`, `ArgumentOps`, `VariableOps`
-- `ExceptionOps`, `RawMemoryOps`, `ThreadOps`, `CallOps`, `LoaderOps`
+- `ExceptionOps`, `RawMemoryOps`, `ThreadOps`, `LoaderOps`
 - `MemoryOps`, `ResolutionOps`, `ReflectionOps`, `StaticsOps`
 - `VesBaseOps`, `VesInternals`, `ExceptionContext`, `PInvokeContext`
 
@@ -150,9 +150,9 @@ VM-specific extensions that add resolver, shared state, and reflection capabilit
 - `ResolutionOps` (extends `BaseResolutionOps` with `ResolutionContext`)
 - `ReflectionOps` (extends `BaseReflectionOps` + `IntrinsicDispatchOps` + `ReflectionLookupOps`)
 - `LoaderOps` (extends `BaseLoaderOps` with `VmResolverService` and `SharedGlobalState`)
-- `CallOps` (extends `BaseCallOps` with frame construction and method dispatch)
+- `VmCallOps` (VM-local frame construction and method dispatch)
 - `StaticsOps` (extends `BaseStaticsOps` with `StaticStorageManager` access)
-- `VesOps`: The unified trait combining `ExceptionContext + PInvokeContext + StaticsOps + ThreadOps + CallOps`. Primary generic bound for instruction handlers.
+- `VesOps`: The unified trait combining `ExceptionContext + PInvokeContext + StaticsOps + ThreadOps + VmCallOps`. Primary generic bound for instruction handlers.
 
 ### Usage Pattern
 ```rust
