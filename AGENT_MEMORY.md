@@ -89,3 +89,17 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** `crates/dotnet-vm/build_support/scanner.rs` still includes the SIMD intrinsic root by default; the drift was documentation-only.
 **Follow-ups for future steps:** None.
 **Open questions:** None.
+
+## 2026-05-04 — Step 2.1 — gpt-5 — completed
+**Goal:** Remove empty `CallOps<'gc>` trait and associated vestigial plumbing/re-exports.
+**What changed:** Removed `CallOps<'gc>` from `crates/dotnet-vm-ops/src/ops.rs`; removed its public re-export from `crates/dotnet-vm-ops/src/lib.rs`; removed `CallOps` import/re-export usage and the `VmCallOps<'gc>: CallOps<'gc>` supertrait from `crates/dotnet-vm/src/stack/ops.rs`; removed the blank `impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {}` from `crates/dotnet-vm/src/stack/context.rs`; removed remaining `CallOps` re-exports from `crates/dotnet-vm/src/stack/mod.rs` and `crates/dotnet-vm/src/lib.rs`; updated one stack module doc bullet to reference `VmCallOps` instead of `CallOps`. Marked checklist step `2.1` complete in `CHECKLIST.md`.
+**What I learned:** The review anchors were still valid at execution time; there were no independent `CallOps` bounds or remaining in-crate references once re-exports/imports were removed.
+**Follow-ups for future steps:** None.
+**Open questions:** None.
+
+## 2026-05-04 — Step 2.2 — gpt-5 — completed
+**Goal:** Remove `AtomicMemoryHost<'gc>` shim trait and call `RawMemoryOps` directly from threading intrinsic handlers.
+**What changed:** In `crates/dotnet-intrinsics-threading/src/lib.rs`, removed the `AtomicMemoryHost<'gc>` trait (including its blanket impl), updated `ThreadingIntrinsicHost<'gc>` to require `+ RawMemoryOps<'gc>` directly, and added a module-level doc comment that names the `RawMemoryOps` atomic methods used by Interlocked/Volatile handlers. In `crates/dotnet-intrinsics-threading/src/interlocked.rs` and `crates/dotnet-intrinsics-threading/src/volatile.rs`, replaced all `threading_*_atomic` invocations with direct `RawMemoryOps::{compare_exchange_atomic,exchange_atomic,exchange_add_atomic,load_atomic,store_atomic}` calls.
+**What I learned:** The review anchors still matched current code exactly (the shim trait and all threading-prefixed call sites were still present). `dotnet-intrinsics-threading` has no crate-local `multithreading` feature, so the prescribed single-crate feature-scoped command is not valid there.
+**Follow-ups for future steps:** None.
+**Open questions:** None.

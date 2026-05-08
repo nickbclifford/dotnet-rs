@@ -12,8 +12,8 @@ Each step is small enough for one agent session. References are stable anchors i
 - [x] 1.6 Add missing `../dotnet-intrinsics-simd/src` default intrinsic root to `docs/BUILD_TIME_CODE_GENERATION.md` root list — discovered during step 1.2 execution
 
 ## Phase 2: Remove Vestigial Trait Plumbing
-- [ ] 2.1 Remove empty `CallOps<'gc>` trait from `dotnet-vm-ops/src/ops.rs`; remove `: CallOps<'gc>` from `VmCallOps`; remove blank impl in `context.rs`; update all re-exports — refs REVIEW.md#F-DEAD-001
-- [ ] 2.2 Remove `AtomicMemoryHost<'gc>` from `dotnet-intrinsics-threading/src/lib.rs`; replace `+ AtomicMemoryHost<'gc>` with `+ RawMemoryOps<'gc>` in `ThreadingIntrinsicHost`; rename `threading_*` calls to `RawMemoryOps` calls in handler files — refs REVIEW.md#F-DEAD-002
+- [x] 2.1 Remove empty `CallOps<'gc>` trait from `dotnet-vm-ops/src/ops.rs`; remove `: CallOps<'gc>` from `VmCallOps`; remove blank impl in `context.rs`; update all re-exports — refs REVIEW.md#F-DEAD-001
+- [x] 2.2 Remove `AtomicMemoryHost<'gc>` from `dotnet-intrinsics-threading/src/lib.rs`; replace `+ AtomicMemoryHost<'gc>` with `+ RawMemoryOps<'gc>` in `ThreadingIntrinsicHost`; rename `threading_*` calls to `RawMemoryOps` calls in handler files — refs REVIEW.md#F-DEAD-002
 
 ## Phase 3: Error Propagation in Hot Paths
 - [ ] 3.1 Replace `self.frame_stack.pop().unwrap()` in `context.rs:229` (`return_frame`) with a match that returns `StepResult::Error(...)` on empty stack — refs REVIEW.md#F-IDIOM-001

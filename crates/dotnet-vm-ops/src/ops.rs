@@ -5,7 +5,7 @@
 //! `dotnet-types`, `dotnet-utils`) and not on any `dotnet-vm` internals.
 //!
 //! Higher-level traits (`StackOps`, `ResolutionOps`, `ReflectionOps`, `LoaderOps`,
-//! `StaticsOps`, `CallOps`, `VesInternals`, `VesOps`) remain in `dotnet-vm` because
+//! `StaticsOps`, `VmCallOps`, `VesInternals`, `VesOps`) remain in `dotnet-vm` because
 //! they reference internal VM types (`StackFrame`, `ResolutionContext`, `SharedGlobalState`, etc.).
 //!
 use dotnet_assemblies::AssemblyLoader;
@@ -289,8 +289,6 @@ pub trait LoaderOps {
         Arc::clone(self.loader())
     }
 }
-
-pub trait CallOps<'gc> {}
 
 pub trait MemoryOps<'gc> {
     fn no_active_borrows_token(&self) -> dotnet_utils::GcReadyToken<'_>;

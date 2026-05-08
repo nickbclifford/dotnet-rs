@@ -44,7 +44,7 @@ use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    ArgumentOps, CallOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps,
+    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps,
     PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
     SimdIntrinsicHost as VmSimdIntrinsicHost, StackOps, StaticsOps, ThreadOps, TypedStackOps,
     VariableOps, VesBaseOps, VesInternals,
@@ -140,7 +140,7 @@ pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
     fn statics(&self) -> &StaticStorageManager;
 }
 
-pub trait VmCallOps<'gc>: CallOps<'gc> {
+pub trait VmCallOps<'gc> {
     fn return_frame(&mut self) -> StepResult;
 
     fn constructor_frame(

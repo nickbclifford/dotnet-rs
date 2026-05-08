@@ -54,7 +54,7 @@ pub use dotnet_utils::{
 pub use dotnet_vm_data::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
 pub use executor::{Executor, ExecutorResult};
 pub use stack::{
-    ArgumentOps, BasePointer, CallOps, CallStack, EvalStackOps, EvaluationStack, ExceptionContext,
+    ArgumentOps, BasePointer, CallStack, EvalStackOps, EvaluationStack, ExceptionContext,
     ExceptionOps, ExceptionState, FrameStack, GCArena, GCArenaRoot, IntrinsicDispatchOps,
     LoaderOps, LocalOps, MemoryOps, PInvokeContext, PinnedLocals, RawMemoryOps,
     ReflectionLookupOps, ReflectionOps, ResolutionOps, StackFrame, StackOps, StaticsOps,

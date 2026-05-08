@@ -20,9 +20,9 @@ pub use dotnet_vm_data::{
     stack::{BasePointer, EvaluationStack, FrameStack, MulticastState, PinnedLocals, StackFrame},
 };
 pub use ops::{
-    ArgumentOps, CallOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext, ExceptionOps,
-    LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionIntrinsicHost,
-    ReflectionOps, ResolutionOps, SimdCapabilityOps, SimdIntrinsicHost, SpanIntrinsicHost,
-    StackOps, StaticsOps, StringIntrinsicHost, ThreadOps, ThreadingIntrinsicHost, TypedStackOps,
-    UnsafeIntrinsicHost, VariableOps, VesBaseOps, VesInternals,
+    ArgumentOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps,
+    LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionIntrinsicHost, ReflectionOps,
+    ResolutionOps, SimdCapabilityOps, SimdIntrinsicHost, SpanIntrinsicHost, StackOps, StaticsOps,
+    StringIntrinsicHost, ThreadOps, ThreadingIntrinsicHost, TypedStackOps, UnsafeIntrinsicHost,
+    VariableOps, VesBaseOps, VesInternals,
 };

@@ -33,7 +33,7 @@
 //! The [`ops`] module defines traits that decompose `VesContext` functionality:
 //!
 //! - [`StackOps`](StackOps): Push/pop/dup operations on the evaluation stack
-//! - [`CallOps`](CallOps): Method invocation and frame management
+//! - [`VmCallOps`](VmCallOps): Method invocation and frame management
 //! - [`ExceptionOps`](ExceptionOps): Exception throwing and handling
 //! - [`ResolutionOps`](ResolutionOps): Type and method resolution
 //! - [`VesOps`](VesOps): Unified trait combining all operations
@@ -87,10 +87,10 @@ mod stack_ops_impl;
 pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
 pub use dotnet_vm_ops::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
 pub use ops::{
-    ArgumentOps, CallOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps,
-    LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps,
-    ReflectionOps, ResolutionOps, StackOps, StaticsOps, ThreadOps, TypedStackOps, VariableOps,
-    VesBaseOps, VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext,
+    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps, LoaderOps,
+    LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps, ReflectionOps,
+    ResolutionOps, StackOps, StaticsOps, ThreadOps, TypedStackOps, VariableOps, VesBaseOps,
+    VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext,
     VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
 };
 

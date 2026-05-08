@@ -13,6 +13,7 @@ use dotnet_types::{
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::RawMemoryOps;
 
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,
@@ -50,7 +51,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width CAS.
             let prev = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comparand as u64,
@@ -80,7 +82,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit CAS.
             let prev = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comparand as u64,
@@ -110,7 +113,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match the selected primitive operation.
             let prev = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comparand as u64,
@@ -136,7 +140,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match the selected primitive operation.
             let prev = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comparand as u64,
@@ -163,7 +168,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match pointer-width CAS.
             let prev = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comparand as u64,
@@ -204,7 +210,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             // SAFETY: `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
             // use the same tagged object representation as regular field writes.
             let prev_raw = match unsafe {
-                ctx.threading_compare_exchange_atomic(
+                RawMemoryOps::compare_exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     comp_raw as u64,
@@ -261,7 +268,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width exchange.
             let prev = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -284,7 +292,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit exchange.
             let prev = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -306,7 +315,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
             let prev = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -324,7 +334,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
             let prev = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -343,7 +354,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let size = ObjectRef::SIZE;
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches pointer width.
             let prev = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -380,7 +392,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             // SAFETY: `target_ptr` is the managed `ref T` argument and `val_raw`
             // uses the VM tagged object representation.
             let prev_raw = unsafe {
-                ctx.threading_exchange_atomic(
+                RawMemoryOps::exchange_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     val_raw as u64,
@@ -429,7 +442,8 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
             let prev = unsafe {
-                ctx.threading_exchange_add_atomic(
+                RawMemoryOps::exchange_add_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,
@@ -452,7 +466,8 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
             let prev = unsafe {
-                ctx.threading_exchange_add_atomic(
+                RawMemoryOps::exchange_add_atomic(
+                    ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
                     value as u64,

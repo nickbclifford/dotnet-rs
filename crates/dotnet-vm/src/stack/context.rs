@@ -441,8 +441,6 @@ impl<'a, 'gc> SimdCapabilityOps for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {}
-
 impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn stack_value_type(
