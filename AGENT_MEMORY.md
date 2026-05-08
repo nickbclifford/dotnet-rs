@@ -145,3 +145,17 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** The full phase-gate matrix (feature combinations, build-script probes, lock-order harness, prototype compilation guards, and hang-probe integration tests) now passes after step `3.3`; no regressions attributable to the context split were surfaced.
 **Follow-ups for future steps:** Proceed to Phase 5 (`5.1`) when ready.
 **Open questions:** None.
+
+## 2026-05-05 — Step 5.1 — gpt-5 — completed
+**Goal:** Change `TypeComparer` in `crates/dotnet-types/src/comparer.rs` to take `&ResolutionS` (`res1`/`res2`) and remove in-file `res1.clone()` / `res2.clone()` call sites.
+**What changed:** Updated all `TypeComparer` methods in `comparer.rs` that accepted `res1`/`res2` by value to accept `&ResolutionS` (`type_slices_equal`, `types_equal`, `param_types_equal`, `params_equal`, `signatures_compatible_with_variance`, `signatures_equal`, `concrete_equals_method_type`, `concrete_equals_base_type`). Rewired internal call chains and macro call sites in `find_method_in_type_internal` to pass references. Updated comparer unit tests in the same file to pass `&ResolutionS`. Removed all `res1.clone()` / `res2.clone()` call sites from the file. Marked checklist step `5.1` complete in `CHECKLIST.md`.
+**What I learned:** Review anchors still matched before edits (by-value signatures and clone-heavy recursive calls were present). `dotnet-types` does not define a `multithreading` feature, so the prescribed per-step command variant with `--features multithreading` is invalid for this crate and must be run without that feature flag.
+**Follow-ups for future steps:** Proceed to step `5.2` to update cross-crate callers in `dotnet-runtime-resolver/` for the new reference-based `TypeComparer` signatures.
+**Open questions:** None.
+
+## 2026-05-05 — Step 5.2 — gpt-5 — completed
+**Goal:** Update `dotnet-runtime-resolver` callers of `TypeComparer` APIs to pass `&ResolutionS` references.
+**What changed:** Updated `crates/dotnet-runtime-resolver/src/methods.rs` at the two `TypeComparer` call sites (`signatures_compatible_with_variance` and `signatures_equal`) to pass borrowed resolutions via `&method.method_resolution` and `&decl.method_resolution` instead of calling cloning accessors (`method.resolution()` / `decl.resolution()`). Marked checklist step `5.2` complete in `CHECKLIST.md`.
+**What I learned:** In `dotnet-runtime-resolver`, only two cross-crate `TypeComparer` calls existed, both in `methods.rs`. The existing calls compiled via auto-borrowed temporaries but still cloned `ResolutionS`; borrowing struct fields removes that clone at the call boundary.
+**Follow-ups for future steps:** Proceed to Phase 6 when ready.
+**Open questions:** None.

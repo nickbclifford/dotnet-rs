@@ -27,10 +27,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn type_slices_equal(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &[MethodType],
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &[MethodType],
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -38,7 +38,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
         for (a, b) in a.iter().zip(b.iter()) {
-            if !self.types_equal(res1.clone(), a, generics1, res2.clone(), b, generics2) {
+            if !self.types_equal(res1, a, generics1, res2, b, generics2) {
                 return false;
             }
         }
@@ -47,10 +47,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn types_equal(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &MethodType,
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -63,8 +63,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                     let (ut1, generics1_list) = decompose_type_source(ts1);
                     let (ut2, generics2_list) = decompose_type_source(ts2);
-                    let td1 = self.loader.locate_type(res1.clone(), ut1);
-                    let td2 = self.loader.locate_type(res2.clone(), ut2);
+                    let td1 = self.loader.locate_type(ResolutionS::clone(res1), ut1);
+                    let td2 = self.loader.locate_type(ResolutionS::clone(res2), ut2);
                     let same_type = match (td1, td2) {
                         (Ok(left), Ok(right)) => {
                             let left_type_name = left.type_name();
@@ -80,10 +80,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
                     same_type
                         && self.type_slices_equal(
-                            res1.clone(),
+                            res1,
                             &generics1_list,
                             generics1,
-                            res2.clone(),
+                            res2,
                             &generics2_list,
                             generics2,
                         )
@@ -169,10 +169,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn param_types_equal(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &ParameterType<MethodType>,
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &ParameterType<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -188,10 +188,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn params_equal(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &[Parameter<MethodType>],
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &[Parameter<MethodType>],
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -199,7 +199,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
         for (Parameter(_, a), Parameter(_, b)) in a.iter().zip(b.iter()) {
-            if !self.param_types_equal(res1.clone(), a, generics1, res2.clone(), b, generics2) {
+            if !self.param_types_equal(res1, a, generics1, res2, b, generics2) {
                 return false;
             }
         }
@@ -208,10 +208,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn signatures_compatible_with_variance(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &ManagedMethod<MethodType>,
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &ManagedMethod<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -237,11 +237,13 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     ParameterType::Value(v) | ParameterType::Ref(v) => v,
                     ParameterType::TypedReference => return false, // Not variant
                 };
-                let Ok(l_concrete) = lookup1.make_concrete(res1.clone(), l_m.clone(), self.loader)
+                let Ok(l_concrete) =
+                    lookup1.make_concrete(ResolutionS::clone(res1), l_m.clone(), self.loader)
                 else {
                     return false;
                 };
-                let Ok(r_concrete) = lookup2.make_concrete(res2.clone(), r_m.clone(), self.loader)
+                let Ok(r_concrete) =
+                    lookup2.make_concrete(ResolutionS::clone(res2), r_m.clone(), self.loader)
                 else {
                     return false;
                 };
@@ -256,13 +258,19 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         for (Parameter(_, a_p), Parameter(_, b_p)) in a.parameters.iter().zip(b.parameters.iter()) {
             match (a_p, b_p) {
                 (ParameterType::Value(a_v), ParameterType::Value(b_v)) => {
-                    let Ok(a_concrete) =
-                        lookup1.make_concrete(res1.clone(), a_v.clone(), self.loader)
+                    let Ok(a_concrete) = lookup1.make_concrete(
+                        ResolutionS::clone(res1),
+                        a_v.clone(),
+                        self.loader,
+                    )
                     else {
                         return false;
                     };
-                    let Ok(b_concrete) =
-                        lookup2.make_concrete(res2.clone(), b_v.clone(), self.loader)
+                    let Ok(b_concrete) = lookup2.make_concrete(
+                        ResolutionS::clone(res2),
+                        b_v.clone(),
+                        self.loader,
+                    )
                     else {
                         return false;
                     };
@@ -273,10 +281,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 _ => {
                     // Non-value parameters (ByRef, Pinned) must match exactly
                     if !self.param_types_equal(
-                        res1.clone(),
+                        res1,
                         a_p,
                         generics1,
-                        res2.clone(),
+                        res2,
                         b_p,
                         generics2,
                     ) {
@@ -290,10 +298,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     pub fn signatures_equal(
         &self,
-        res1: ResolutionS,
+        res1: &ResolutionS,
         a: &ManagedMethod<MethodType>,
         generics1: Option<&GenericLookup>,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &ManagedMethod<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -310,7 +318,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 generics2,
             ),
             (ReturnType(_, Some(l)), ReturnType(_, Some(r))) => {
-                if self.param_types_equal(res1.clone(), l, generics1, res2.clone(), r, generics2) {
+                if self.param_types_equal(res1, l, generics1, res2, r, generics2) {
                     self.params_equal(
                         res1,
                         &a.parameters,
@@ -330,7 +338,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     pub fn concrete_equals_method_type(
         &self,
         concrete: &ConcreteType,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -360,7 +368,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     pub fn concrete_equals_base_type(
         &self,
         concrete: &ConcreteType,
-        res2: ResolutionS,
+        res2: &ResolutionS,
         b: &BaseType<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
@@ -377,7 +385,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     .expect("Type resolution failed during comparison");
                 let td2 = self
                     .loader
-                    .locate_type(res2.clone(), ut2)
+                    .locate_type(ResolutionS::clone(res2), ut2)
                     .expect("Type resolution failed during comparison");
 
                 if td1 != td2 {
@@ -393,7 +401,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 }
 
                 for (g1, g2) in generics1.iter().zip(generics2_list.iter()) {
-                    if !self.concrete_equals_method_type(g1, res2.clone(), g2, generics2) {
+                    if !self.concrete_equals_method_type(g1, res2, g2, generics2) {
                         return false;
                     }
                 }
@@ -623,19 +631,19 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     && m.signature.parameters.len() == signature.parameters.len()
                     && (if allow_variance {
                         self.signatures_compatible_with_variance(
-                            sig_res.clone(),
+                            &sig_res,
                             signature,
                             sig_generics,
-                            desc.resolution.clone(),
+                            &desc.resolution,
                             &m.signature,
                             type_generics,
                         )
                     } else {
                         self.signatures_equal(
-                            sig_res.clone(),
+                            &sig_res,
                             signature,
                             sig_generics,
-                            desc.resolution.clone(),
+                            &desc.resolution,
                             &m.signature,
                             type_generics,
                         )
@@ -924,8 +932,8 @@ mod tests {
         let t2 = MethodType::Base(Box::new(BaseType::Int32));
         let t3 = MethodType::Base(Box::new(BaseType::Int64));
 
-        assert!(comparer.types_equal(res.clone(), &t1, None, res.clone(), &t2, None));
-        assert!(!comparer.types_equal(res.clone(), &t1, None, res.clone(), &t3, None));
+        assert!(comparer.types_equal(&res, &t1, None, &res, &t2, None));
+        assert!(!comparer.types_equal(&res, &t1, None, &res, &t3, None));
     }
 
     #[test]
@@ -938,8 +946,8 @@ mod tests {
         let t2 = ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)));
         let t3 = ParameterType::Ref(MethodType::Base(Box::new(BaseType::Int32)));
 
-        assert!(comparer.param_types_equal(res.clone(), &t1, None, res.clone(), &t2, None));
-        assert!(!comparer.param_types_equal(res.clone(), &t1, None, res.clone(), &t3, None));
+        assert!(comparer.param_types_equal(&res, &t1, None, &res, &t2, None));
+        assert!(!comparer.param_types_equal(&res, &t1, None, &res, &t3, None));
     }
 
     // Regression test for property getter method lookup.
@@ -1080,7 +1088,7 @@ mod tests {
         let resolver = MockResolver;
         let comparer = TypeComparer::new(&resolver);
         assert!(
-            comparer.types_equal(res_left, &left, None, res_right, &right, None),
+            comparer.types_equal(&res_left, &left, None, &res_right, &right, None),
             "matching full names across different resolutions should compare equal"
         );
     }

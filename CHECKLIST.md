@@ -25,8 +25,8 @@ Each step is small enough for one agent session. References are stable anchors i
 - [x] 4.2 Run `check.sh` under all feature combinations to verify no regressions from the split — refs REVIEW.md#F-OVER-001
 
 ## Phase 5: TypeComparer — ResolutionS by Reference
-- [ ] 5.1 Change all `TypeComparer` method signatures in `comparer.rs` from `res1: ResolutionS` to `res1: &ResolutionS`; remove the 38 `.clone()` calls on `res1`/`res2` within the file — refs REVIEW.md#F-TYPES-001
-- [ ] 5.2 Update callers of `TypeComparer` methods in `dotnet-runtime-resolver/` to pass `&ResolutionS` references — refs REVIEW.md#F-TYPES-001
+- [x] 5.1 Change all `TypeComparer` method signatures in `comparer.rs` from `res1: ResolutionS` to `res1: &ResolutionS`; remove the 38 `.clone()` calls on `res1`/`res2` within the file — refs REVIEW.md#F-TYPES-001
+- [x] 5.2 Update callers of `TypeComparer` methods in `dotnet-runtime-resolver/` to pass `&ResolutionS` references — refs REVIEW.md#F-TYPES-001
 
 ## Phase 6: Address Open TODOs
 - [ ] 6.1 Implement argv initialization: wire `std::env::args()` to managed `Main(string[] args)` entry point in `executor.rs:165` — refs REVIEW.md#F-TYPES-002

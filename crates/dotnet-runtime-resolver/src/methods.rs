@@ -252,19 +252,19 @@ where
                 let comparer = self.loader.comparer();
                 if allow_variance {
                     comparer.signatures_compatible_with_variance(
-                        method.resolution(),
+                        &method.method_resolution,
                         &method.method().signature,
                         Some(&method.parent_generics),
-                        decl.resolution(),
+                        &decl.method_resolution,
                         &decl.method().signature,
                         Some(&decl.parent_generics),
                     )
                 } else {
                     comparer.signatures_equal(
-                        method.resolution(),
+                        &method.method_resolution,
                         &method.method().signature,
                         Some(&method.parent_generics),
-                        decl.resolution(),
+                        &decl.method_resolution,
                         &decl.method().signature,
                         Some(&decl.parent_generics),
                     )

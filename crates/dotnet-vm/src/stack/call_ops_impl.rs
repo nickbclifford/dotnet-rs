@@ -664,10 +664,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             let loader = self.loader_arc();
             let comparer = dotnet_types::comparer::TypeComparer::new(loader.as_ref());
             let res_ctx = self.current_context();
-            let res_s = res_ctx.resolution.clone();
+            let res_s = &res_ctx.resolution;
 
             if !comparer.signatures_equal(
-                res_s.clone(),
+                res_s,
                 current_sig,
                 Some(res_ctx.generics), // Current generics
                 res_s,
