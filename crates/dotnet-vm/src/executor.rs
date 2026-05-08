@@ -54,33 +54,44 @@ impl std::fmt::Display for ExecutorResult {
 }
 
 impl Executor {
-    fn with_arena<R>(&mut self, f: impl FnOnce(&mut GCArena) -> R) -> R {
+    #[cfg(feature = "multithreading")]
+    fn thread_arena_not_initialized_error() -> VmError {
+        VmError::Execution(ExecutionError::InternalError(
+            "Thread arena not initialized".into(),
+        ))
+    }
+
+    fn with_arena<R>(&mut self, f: impl FnOnce(&mut GCArena) -> R) -> Result<R, VmError> {
         #[cfg(feature = "multithreading")]
         {
             THREAD_ARENA.with(|cell| {
                 let mut arena_opt = cell.borrow_mut();
-                let arena = arena_opt.as_mut().expect("Thread arena not initialized");
-                f(arena)
+                let arena = arena_opt
+                    .as_mut()
+                    .ok_or_else(Self::thread_arena_not_initialized_error)?;
+                Ok(f(arena))
             })
         }
         #[cfg(not(feature = "multithreading"))]
         {
-            f(&mut self.arena)
+            Ok(f(&mut self.arena))
         }
     }
 
-    fn with_arena_ref<R>(&self, f: impl FnOnce(&GCArena) -> R) -> R {
+    fn with_arena_ref<R>(&self, f: impl FnOnce(&GCArena) -> R) -> Result<R, VmError> {
         #[cfg(feature = "multithreading")]
         {
             THREAD_ARENA.with(|cell| {
                 let arena_opt = cell.borrow();
-                let arena = arena_opt.as_ref().expect("Thread arena not initialized");
-                f(arena)
+                let arena = arena_opt
+                    .as_ref()
+                    .ok_or_else(Self::thread_arena_not_initialized_error)?;
+                Ok(f(arena))
             })
         }
         #[cfg(not(feature = "multithreading"))]
         {
-            f(&self.arena)
+            Ok(f(&self.arena))
         }
     }
 
@@ -167,7 +178,7 @@ impl Executor {
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         #[cfg(feature = "memory-validation")]
         let thread_id = self.thread_id;
-        self.with_arena(|arena| {
+        let _ = self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
                 let gc_handle = GCHandle::new(
                     gc,
@@ -220,15 +231,17 @@ impl Executor {
             {
                 self.gc_tick_counter += 1;
                 // Only collect debt every 8 ticks to reduce overhead
-                if self.gc_tick_counter.is_multiple_of(8) {
-                    self.with_arena(|arena| {
+                if self.gc_tick_counter.is_multiple_of(8)
+                    && let Err(e) = self.with_arena(|arena| {
                         arena.collect_debt();
-                    });
+                    })
+                {
+                    break ExecutorResult::Error(e);
                 }
             }
 
             #[cfg(feature = "multithreading")]
-            let (_full_collect, collection_requested) = self.with_arena(|arena| {
+            let (_full_collect, collection_requested) = match self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     let full_collect = if c.stack.local.heap.needs_full_collect.get() {
                         c.stack.local.heap.needs_full_collect.set(false);
@@ -240,10 +253,13 @@ impl Executor {
                         full_collect || c.stack.arena.needs_collection().load(Ordering::Acquire);
                     (full_collect, collection_requested)
                 })
-            });
+            }) {
+                Ok(v) => v,
+                Err(e) => break ExecutorResult::Error(e),
+            };
 
             #[cfg(not(feature = "multithreading"))]
-            let (_full_collect, collection_requested) = self.with_arena(|arena| {
+            let (_full_collect, collection_requested) = match self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     let full_collect = if c.stack.local.heap.needs_full_collect.get() {
                         c.stack.local.heap.needs_full_collect.set(false);
@@ -253,12 +269,17 @@ impl Executor {
                     };
                     (full_collect, full_collect)
                 })
-            });
+            }) {
+                Ok(v) => v,
+                Err(e) => break ExecutorResult::Error(e),
+            };
 
+            if collection_requested && let Err(e) = self.perform_full_gc() {
+                break ExecutorResult::Error(e);
+            }
             if collection_requested {
-                self.perform_full_gc();
                 #[cfg(feature = "multithreading")]
-                self.with_arena(|arena| {
+                if let Err(e) = self.with_arena(|arena| {
                     arena.mutate(|_, c| {
                         c.stack
                             .arena
@@ -269,7 +290,9 @@ impl Executor {
                             .allocation_counter()
                             .store(0, Ordering::Release);
                     })
-                });
+                }) {
+                    break ExecutorResult::Error(e);
+                }
             }
 
             // Reach a safe point between instructions if requested
@@ -288,7 +311,7 @@ impl Executor {
 
             #[cfg(feature = "memory-validation")]
             let thread_id = self.thread_id;
-            self.with_arena(|arena| {
+            if let Err(e) = self.with_arena(|arena| {
                 // Optimization: Only mutate the root to process finalizers if there are actually pending finalizers
                 let has_pending = arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers());
                 if has_pending {
@@ -307,11 +330,13 @@ impl Executor {
                         c.ves_context(gc_handle).process_pending_finalizers()
                     });
                 }
-            });
+            }) {
+                break ExecutorResult::Error(e);
+            }
 
             #[cfg(feature = "memory-validation")]
             let thread_id = self.thread_id;
-            let step_result = self.with_arena(|arena| {
+            let step_result = match self.with_arena(|arena| {
                 arena.mutate_root(|gc, c| {
                     let gc_handle = GCHandle::new(
                         gc,
@@ -326,11 +351,14 @@ impl Executor {
                     );
                     c.run(gc_handle)
                 })
-            });
+            }) {
+                Ok(v) => v,
+                Err(e) => break ExecutorResult::Error(e),
+            };
 
             match step_result {
                 StepResult::Return => {
-                    let exit_code = self.with_arena_ref(|arena| {
+                    let exit_code = match self.with_arena_ref(|arena| {
                         arena.mutate(|_, c| {
                             match c.stack.execution.evaluation_stack.stack.first() {
                                 Some(StackValue::Int32(i)) => *i as u8,
@@ -338,7 +366,10 @@ impl Executor {
                                 None => 0,
                             }
                         })
-                    });
+                    }) {
+                        Ok(v) => v,
+                        Err(e) => break ExecutorResult::Error(e),
+                    };
                     break ExecutorResult::Exited(exit_code);
                 }
                 StepResult::MethodThrew(exc) => {
@@ -351,18 +382,21 @@ impl Executor {
             }
 
             {
-                let (gc_bytes, external_bytes) = self.with_arena_ref(|arena| {
+                let (gc_bytes, external_bytes) = match self.with_arena_ref(|arena| {
                     let metrics = arena.metrics();
                     (
                         metrics.total_gc_allocation(),
                         metrics.total_external_allocation(),
                     )
-                });
+                }) {
+                    Ok(v) => v,
+                    Err(e) => break ExecutorResult::Error(e),
+                };
 
                 #[cfg(feature = "multithreading")]
                 {
                     // Update the arena's metrics directly
-                    self.with_arena(|arena| {
+                    if let Err(e) = self.with_arena(|arena| {
                         arena.mutate(|_, c| {
                             c.stack
                                 .arena
@@ -373,7 +407,9 @@ impl Executor {
                                 .external_allocated_bytes()
                                 .store(external_bytes, Ordering::Relaxed);
                         })
-                    });
+                    }) {
+                        break ExecutorResult::Error(e);
+                    }
 
                     // Update global metrics from aggregated values
                     let total_gc = self.shared.gc_coordinator.total_gc_allocation();
@@ -398,7 +434,7 @@ impl Executor {
     }
 
     /// Perform a full GC collection with stop-the-world coordination.
-    fn perform_full_gc(&mut self) {
+    fn perform_full_gc(&mut self) -> Result<(), VmError> {
         #[cfg(feature = "multithreading")]
         {
             use std::time::Instant;
@@ -410,14 +446,14 @@ impl Executor {
             //    we unwind before the explicit `finish()` below.
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
             let Some(session) = coordinator.begin_collection() else {
-                return; // Another thread is already collecting
+                return Ok(()); // Another thread is already collecting
             };
 
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     vm_debug!(c.stack, "GC: Coordinated stop-the-world collection started");
                 });
-            });
+            })?;
 
             // 2. Request stop-the-world pause and bind it with the collection
             //    session into a single guard that enforces drop order:
@@ -446,7 +482,7 @@ impl Executor {
                         duration
                     );
                 });
-            });
+            })?;
         }
         #[cfg(not(feature = "multithreading"))]
         {
@@ -468,13 +504,14 @@ impl Executor {
                     // It internally calls do_collection with no early stop, which handles
                     // Mark, Collecting, and Sleep phases correctly.
                     arena.finish_cycle();
-                });
+                })?;
             }
 
             let duration = start_time.elapsed();
             self.shared.metrics.record_gc_pause(duration);
             vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
         }
+        Ok(())
     }
 }
 

@@ -103,3 +103,38 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** The review anchors still matched current code exactly (the shim trait and all threading-prefixed call sites were still present). `dotnet-intrinsics-threading` has no crate-local `multithreading` feature, so the prescribed single-crate feature-scoped command is not valid there.
 **Follow-ups for future steps:** None.
 **Open questions:** None.
+
+## 2026-05-04 — Step 3.1 — gpt-5 — completed
+**Goal:** Replace `self.frame_stack.pop().unwrap()` in `return_frame()` with graceful `StepResult::Error(...)` handling on empty stack.
+**What changed:** Updated `crates/dotnet-vm/src/stack/context.rs` in `return_frame()` to replace `self.frame_stack.pop().unwrap()` with a `match`; on `None`, it now returns `StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::InternalError("ret instruction with empty frame stack".into())))`. Marked checklist step `3.1` complete in `CHECKLIST.md`.
+**What I learned:** The review anchor still matched the code location and behavior. `ExecutionError::InvalidOperation` referenced in the review note does not exist in this codebase (`dotnet-types::error::ExecutionError`), so `ExecutionError::InternalError` is the closest existing execution-error variant for this defensive path.
+**Follow-ups for future steps:** None.
+**Open questions:** None.
+
+## 2026-05-04 — Step 3.2 — gpt-5 — completed
+**Goal:** Replace `expect("Thread arena not initialized")` panics in `executor.rs` with graceful error returns.
+**What changed:** Updated `crates/dotnet-vm/src/executor.rs` to remove both `expect("Thread arena not initialized")` usages in `with_arena`/`with_arena_ref`. Both helpers now return `Result<_, VmError>` and emit `VmError::Execution(ExecutionError::InternalError("Thread arena not initialized".into()))` when TLS arena state is missing. Threaded the new fallible helpers through `run()` so each arena access path returns `ExecutorResult::Error(...)` on missing arena instead of panicking, and updated `perform_full_gc()` to return `Result<(), VmError>` and propagate failures into `run()`. Marked checklist step `3.2` complete in `CHECKLIST.md`.
+**What I learned:** Review anchors still matched current code at the cited sites. `entrypoint()` has no result return channel, so it now intentionally ignores a missing-arena error (`let _ = ...`), while `run()` is now the graceful error boundary as required.
+**Follow-ups for future steps:** None.
+**Open questions:** None.
+
+## 2026-05-05 — Step 4.1 — gpt-5 — completed
+**Goal:** Split trait impl blocks out of `crates/dotnet-vm/src/stack/context.rs` into new `context_ops.rs` and wire the module in `stack/mod.rs`.
+**What changed:** Created `crates/dotnet-vm/src/stack/context_ops.rs` and moved all `impl<'a, 'gc> Trait for VesContext<'a, 'gc>` blocks there (`LoaderOps`, `SimdCapabilityOps`, `ResolutionOps`, `StackOps`, `BaseMemoryOps`, `ReflectionOps`, intrinsic host traits, `StaticsOps`, `VesInternals`, `VesBaseOps`, `ExceptionContext`, `VmExceptionContext`, `PInvokeContext`, `VmPInvokeContext`, `VesOps`). `crates/dotnet-vm/src/stack/context.rs` now keeps the `VesContext`/`ThreadContext` structs, inherent `impl VesContext` methods, and tests. Updated `crates/dotnet-vm/src/stack/mod.rs` with `mod context_ops;`. Marked checklist step `4.1` complete in `CHECKLIST.md`.
+**What I learned:** Review anchors still matched current code shape (`context.rs` at 1408 lines before split, trait impls beginning around line 434). The move required import hygiene fixes in both files and one trait import in `context_ops.rs` (`ValueResolution`) for method resolution.
+**Follow-ups for future steps:** Continue with step `4.2` (phase-gate `check.sh`).
+**Open questions:** None.
+
+## 2026-05-05 — Step 4.2 — gpt-5 — partial
+**Goal:** Run `check.sh` under all feature combinations to verify no regressions from the `context.rs` trait-impl split.
+**What changed:** Ran `bash check.sh` from repo root after verifying split state (`context.rs` + `context_ops.rs` + `mod context_ops;` in `stack/mod.rs`). Did not change runtime/source behavior. Added a new unchecked checklist item `3.3` in `CHECKLIST.md` for the blocker uncovered by this run.
+**What I learned:** The phase-gate run fails in the `=== Combination: No features ===` clippy leg at `crates/dotnet-vm/src/executor.rs` with three `-D warnings` errors: one `dead_code` (`thread_arena_not_initialized_error`) and two `clippy::collapsible_if` sites. This blocks completion of step `4.2`; no evidence of a `context.rs` split-specific regression was surfaced before failure.
+**Follow-ups for future steps:** Complete new checklist item `3.3`, then re-run step `4.2` (`bash check.sh`) as the phase gate.
+**Open questions:** None.
+
+## 2026-05-05 — Step 3.3 — gpt-5 — completed
+**Goal:** Fix `dotnet-vm` no-feature clippy regressions in `executor.rs` introduced by step 3.2 (`dead_code` + `collapsible_if`) so full matrix can pass.
+**What changed:** Updated `crates/dotnet-vm/src/executor.rs` to `#[cfg(feature = "multithreading")]`-gate `thread_arena_not_initialized_error()` (it is only referenced in multithreading TLS arena paths), and collapsed two nested conditionals in `run()` into idiomatic `if <cond> && let Err(e) = ...` forms to satisfy `clippy::collapsible_if` in no-feature builds. Marked checklist step `3.3` complete in `CHECKLIST.md`.
+**What I learned:** The review note still matched current code locations before editing (`thread_arena_not_initialized_error` plus the two nested `if` sites in the non-multithread loop path). Keeping the multithread-only arena reset block under `if collection_requested { ... }` was necessary to preserve behavior while resolving clippy.
+**Follow-ups for future steps:** Resume step `4.2` by re-running `bash check.sh` phase gate.
+**Open questions:** None.

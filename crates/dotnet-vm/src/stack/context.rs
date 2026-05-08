@@ -226,7 +226,16 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     pub fn return_frame(&mut self) -> StepResult {
-        let frame = self.frame_stack.pop().unwrap();
+        let frame = match self.frame_stack.pop() {
+            Some(frame) => frame,
+            None => {
+                return StepResult::Error(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::InternalError(
+                        "ret instruction with empty frame stack".into(),
+                    ),
+                ));
+            }
+        };
 
         if self.tracer_enabled() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
