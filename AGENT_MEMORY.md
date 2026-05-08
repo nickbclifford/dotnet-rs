@@ -159,3 +159,10 @@ This file is a persistent scratch log for agent sessions executing the refactor 
 **What I learned:** In `dotnet-runtime-resolver`, only two cross-crate `TypeComparer` calls existed, both in `methods.rs`. The existing calls compiled via auto-borrowed temporaries but still cloned `ResolutionS`; borrowing struct fields removes that clone at the call boundary.
 **Follow-ups for future steps:** Proceed to Phase 6 when ready.
 **Open questions:** None.
+
+## 2026-05-07 — Step 6.1 — gpt-5 — completed
+**Goal:** Implement argv initialization for managed entrypoints (`Main(string[] args)`) in `crates/dotnet-vm/src/executor.rs`.
+**What changed:** Updated `crates/dotnet-vm/src/executor.rs` `entrypoint()` to collect `std::env::args().skip(1)`, build a managed `System.String[]` when the entrypoint has one parameter, and pass that array to `entrypoint_frame`; zero-parameter entrypoints still receive no arguments. Added an ECMA-aligned signature guard (entrypoint must be either no params or single `string[]`). Registered all allocated argv string objects and the argv vector with the GC tracking path. Marked checklist step `6.1` complete in `CHECKLIST.md`. Added checklist item `5.3` for an uncovered remaining `TypeComparer::signatures_equal` by-value call in `crates/dotnet-vm/src/stack/call_ops_impl.rs:669`.
+**What I learned:** The review anchor still matched current code before editing (`entrypoint_frame(..., vec![])` at the TODO site). The required targeted verification commands for this step currently fail due a pre-existing compile error outside this step (`call_ops_impl.rs:669` still passes `ResolutionS` by value to `TypeComparer::signatures_equal` after step 5 changes).
+**Follow-ups for future steps:** Complete new checklist item `5.3`, then re-run step-level `dotnet-vm` clippy/tests to revalidate `6.1` in a green state.
+**Open questions:** None.

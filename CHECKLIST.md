@@ -27,8 +27,9 @@ Each step is small enough for one agent session. References are stable anchors i
 ## Phase 5: TypeComparer — ResolutionS by Reference
 - [x] 5.1 Change all `TypeComparer` method signatures in `comparer.rs` from `res1: ResolutionS` to `res1: &ResolutionS`; remove the 38 `.clone()` calls on `res1`/`res2` within the file — refs REVIEW.md#F-TYPES-001
 - [x] 5.2 Update callers of `TypeComparer` methods in `dotnet-runtime-resolver/` to pass `&ResolutionS` references — refs REVIEW.md#F-TYPES-001
+- [ ] 5.3 Update remaining `TypeComparer::signatures_equal` call in `crates/dotnet-vm/src/stack/call_ops_impl.rs:669` to pass `&ResolutionS` refs (discovered during step 6.1 verification)
 
 ## Phase 6: Address Open TODOs
-- [ ] 6.1 Implement argv initialization: wire `std::env::args()` to managed `Main(string[] args)` entry point in `executor.rs:165` — refs REVIEW.md#F-TYPES-002
-- [ ] 6.2 Encode element type and rank in `RuntimeType` for arrays/vectors (replace TODO at `intrinsics/mod.rs:514`) — refs REVIEW.md#F-TYPES-002
+- [x] 6.1 Implement argv initialization: wire `std::env::args()` to managed `Main(string[] args)` entry point in `executor.rs:165` — refs REVIEW.md#F-TYPES-002
+- [x] 6.2 Encode element type and rank in `RuntimeType` for arrays/vectors (replace TODO at `intrinsics/mod.rs:514`) — refs REVIEW.md#F-TYPES-002
 - [ ] 6.3 Document span non-ordinal comparison limitation at `span/equality.rs:320` with a concrete explanation of what implementation would require — refs REVIEW.md#F-TYPES-002

@@ -18,8 +18,13 @@ use dotnet_utils::{
     gc::GCHandle,
     sync::{Arc, Ordering},
 };
-use dotnet_value::StackValue;
-use dotnet_vm_ops::ManagedException;
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+    string::CLRString,
+};
+use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
+use dotnet_vm_ops::{LoaderOps, ManagedException, MemoryOps};
 
 #[cfg(feature = "multithreading")]
 use crate::gc::arena::THREAD_ARENA;
@@ -173,7 +178,7 @@ impl Executor {
     }
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
-        // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
+        let argv: Vec<String> = std::env::args().skip(1).collect();
         #[cfg(feature = "bench-instrumentation")]
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         #[cfg(feature = "memory-validation")]
@@ -197,8 +202,57 @@ impl Executor {
                     .caches
                     .get_method_info(method, &Default::default(), shared.clone())
                     .expect("Failed to resolve entrypoint");
-                c.ves_context(gc_handle)
-                    .entrypoint_frame(info, Default::default(), vec![])
+                let mut ctx = c.ves_context(gc_handle);
+                let entrypoint_args = match info.signature.parameters.len() {
+                    0 => vec![],
+                    1 => {
+                        let entrypoint_param = &info.signature.parameters[0].1;
+                        let accepts_string_array = matches!(
+                            entrypoint_param,
+                            ParameterType::Value(MethodType::Base(base_type))
+                                if matches!(
+                                    base_type.as_ref(),
+                                    BaseType::Vector(_, element) | BaseType::Array(element, _)
+                                        if matches!(
+                                            element,
+                                            MethodType::Base(element_base)
+                                                if matches!(element_base.as_ref(), BaseType::String)
+                                        )
+                                )
+                        );
+                        assert!(
+                            accepts_string_array,
+                            "Entrypoint parameter must be string[] (ECMA-335 II.15.4.1.2)"
+                        );
+
+                        let string_type = ctx
+                            .loader()
+                            .corlib_type("System.String")
+                            .expect("Failed to resolve System.String type");
+                        let mut argv_vector = ctx
+                            .new_vector(string_type.into(), argv.len())
+                            .expect("Failed to allocate argv array");
+
+                        for (arg, chunk) in argv
+                            .iter()
+                            .zip(argv_vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
+                        {
+                            let arg_ref =
+                                ObjectRef::new(gc_handle, HeapStorage::Str(CLRString::from(arg)));
+                            ctx.register_new_object(&arg_ref);
+                            arg_ref.write(chunk);
+                        }
+
+                        let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(argv_vector));
+                        ctx.register_new_object(&argv_ref);
+                        vec![StackValue::ObjectRef(argv_ref)]
+                    }
+                    _ => {
+                        panic!("Entrypoint must have zero parameters or a single string[] parameter")
+                    }
+                };
+
+                ctx.entrypoint_frame(info, Default::default(), entrypoint_args)
                     .expect("Failed to set up entrypoint frame")
             });
         });

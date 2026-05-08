@@ -317,10 +317,14 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, T: SpanIntrinsicHost<'g
     let b = ctx.pop_value_type();
     let a = ctx.pop_value_type();
 
-    // TODO: Support non-ordinal comparison types if needed
-    // In many .NET versions, Ordinal is 4. OrdinalIgnoreCase is 5.
+    // Current implementation is a raw UTF-16 ordinal, case-sensitive compare for all modes.
+    // Implementing CurrentCulture*/InvariantCulture* would require wiring span-based compare
+    // into globalization (CultureInfo/CompareInfo/CompareOptions-backed collation tables).
+    // Implementing OrdinalIgnoreCase correctly would require Unicode case folding over UTF-16
+    // scalar values before compare; byte-wise equality is not sufficient.
+    // StringComparison enum values in .NET: Ordinal = 4, OrdinalIgnoreCase = 5.
     if comparison_type != 4 && comparison_type != 5 {
-        // Fallback to ordinal for now but log a warning if we had a tracer
+        // Unsupported modes currently fall back to ordinal/case-sensitive semantics.
     }
 
     let a_len = match read_span_length(&a) {
