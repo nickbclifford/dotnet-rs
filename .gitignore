@@ -33,3 +33,4 @@ crates/dotnet-benchmarks/baselines/phase0/criterion/
 crates/dotnet-benchmarks/fixtures/**/bin/
 crates/dotnet-benchmarks/fixtures/**/obj/
 crates/dotnet-benchmarks/fixtures/**/BenchmarkDotNet.Artifacts/
+.refactor-orchestrator/
