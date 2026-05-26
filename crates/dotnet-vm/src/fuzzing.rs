@@ -782,7 +782,9 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
 
     let mut executor = Executor::new(shared);
     executor.instruction_budget = Some(10000); // Prevent infinite loops
-    executor.entrypoint(entrypoint);
+    if executor.entrypoint(entrypoint).is_err() {
+        return;
+    }
 
     let _result = executor.run();
 }

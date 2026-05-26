@@ -8,7 +8,7 @@ use crate::{
 use dotnet_tracer::Tracer;
 use dotnet_types::{
     TypeDescription,
-    error::{IntrinsicError, TypeResolutionError},
+    error::{ExecutionError, IntrinsicError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -301,12 +301,18 @@ impl<'a, 'gc> dotnet_intrinsics_span::SpanObjectFactoryHost<'gc> for VesContext<
 
 impl<'a, 'gc> dotnet_intrinsics_span::SpanRuntimeHost<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn span_resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
+    fn span_resolve_runtime_field(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(FieldDescription, GenericLookup), ExecutionError> {
         self.resolve_runtime_field(obj)
     }
 
     #[inline]
-    fn span_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
+    fn span_resolve_runtime_type(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<RuntimeType, ExecutionError> {
         self.resolve_runtime_type(obj)
     }
 
@@ -479,9 +485,13 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
     }
 
     #[inline]
-    fn unsafe_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> ConcreteType {
-        self.resolve_runtime_type(obj)
-            .to_concrete(self.loader().as_ref())
+    fn unsafe_resolve_runtime_type(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<ConcreteType, ExecutionError> {
+        Ok(self
+            .resolve_runtime_type(obj)?
+            .to_concrete(self.loader().as_ref()))
     }
 }
 

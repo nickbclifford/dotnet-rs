@@ -83,115 +83,117 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
             }
         }
 
-        let result = obj.as_heap_storage(|storage| -> Result<StackValue<'gc>, ()> {
-            match storage {
-                HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
-                    // Boxed value or struct is an Object.
-                    let td = o.description.clone();
+        let result = dotnet_vm_ops::vm_try!(obj.try_as_heap_storage(
+            |storage| -> Result<StackValue<'gc>, ()> {
+                match storage {
+                    HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
+                        // Boxed value or struct is an Object.
+                        let td = o.description.clone();
 
-                    if is_nullable {
-                        // ECMA-335 §III.4.33: unbox.any Nullable<T> on boxed T.
-                        // Extract T (the inner type).
-                        let BaseType::Type { source, .. } = target_ct.get() else {
-                            unreachable!("Nullable must be a type");
-                        };
-                        let (_ut, generics) = decompose_type_source(source);
-                        let inner_t: &ConcreteType = generics.first().ok_or(())?;
-                        let concrete_inner_t =
-                            res_ctx.normalize_type(inner_t.clone()).map_err(|_| ())?;
+                        if is_nullable {
+                            // ECMA-335 §III.4.33: unbox.any Nullable<T> on boxed T.
+                            // Extract T (the inner type).
+                            let BaseType::Type { source, .. } = target_ct.get() else {
+                                unreachable!("Nullable must be a type");
+                            };
+                            let (_ut, generics) = decompose_type_source(source);
+                            let inner_t: &ConcreteType = generics.first().ok_or(())?;
+                            let concrete_inner_t =
+                                res_ctx.normalize_type(inner_t.clone()).map_err(|_| ())?;
 
-                        // Check if obj is indeed a boxed T.
-                        let obj_type = res_ctx
-                            .get_heap_description(obj.0.unwrap())
-                            .map_err(|_| ())?;
-                        let obj_ct = res_ctx.normalize_type(obj_type.into()).map_err(|_| ())?;
+                            // Check if obj is indeed a boxed T.
+                            let obj_type = res_ctx
+                                .get_heap_description(obj.0.unwrap())
+                                .map_err(|_| ())?;
+                            let obj_ct = res_ctx.normalize_type(obj_type.into()).map_err(|_| ())?;
 
-                        if !res_ctx
-                            .is_a(obj_ct, concrete_inner_t.clone())
-                            .map_err(|_| ())?
-                        {
-                            return Err(());
-                        }
+                            if !res_ctx
+                                .is_a(obj_ct, concrete_inner_t.clone())
+                                .map_err(|_| ())?
+                            {
+                                return Err(());
+                            }
 
-                        // Create Nullable<T> instance.
-                        let target_td = ctx
-                            .loader()
-                            .find_concrete_type(target_ct.clone())
-                            .map_err(|_| ())?;
+                            // Create Nullable<T> instance.
+                            let target_td = ctx
+                                .loader()
+                                .find_concrete_type(target_ct.clone())
+                                .map_err(|_| ())?;
 
-                        let (_, generics) = decompose_type_source(source);
-                        let lookup = GenericLookup::new(generics.clone());
-                        let ctx_with_generics =
-                            res_ctx.for_type_with_generics(target_td.clone(), &lookup);
+                            let (_, generics) = decompose_type_source(source);
+                            let lookup = GenericLookup::new(generics.clone());
+                            let ctx_with_generics =
+                                res_ctx.for_type_with_generics(target_td.clone(), &lookup);
 
-                        let nullable_instance =
-                            ctx_with_generics.new_object(target_td).map_err(|_| ())?;
+                            let nullable_instance =
+                                ctx_with_generics.new_object(target_td).map_err(|_| ())?;
 
-                        // Set HasValue = true.
-                        let layout = nullable_instance.instance_storage.layout().clone();
-                        let has_value_field = layout
-                            .fields
-                            .iter()
-                            .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
-                            .map(|(_, v)| v)
-                            .ok_or(())?;
+                            // Set HasValue = true.
+                            let layout = nullable_instance.instance_storage.layout().clone();
+                            let has_value_field = layout
+                                .fields
+                                .iter()
+                                .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
+                                .map(|(_, v)| v)
+                                .ok_or(())?;
 
-                        nullable_instance.instance_storage.with_data_mut(|d| {
-                            d[has_value_field.position.as_usize()] = 1;
-                        });
-
-                        // Set Value = data from boxed object.
-                        let value_field = layout
-                            .fields
-                            .iter()
-                            .find(|(k, _)| k.name == "value" || k.name == "_value")
-                            .map(|(_, v)| v)
-                            .ok_or(())?;
-
-                        let value_pos = value_field.position.as_usize();
-                        let value_size = value_field.layout.size().as_usize();
-
-                        nullable_instance
-                            .instance_storage
-                            .with_data_mut(|nullable_data| {
-                                o.instance_storage.with_data(|boxed_data| {
-                                    nullable_data[value_pos..value_pos + value_size]
-                                        .copy_from_slice(&boxed_data[..value_size]);
-                                })
+                            nullable_instance.instance_storage.with_data_mut(|d| {
+                                d[has_value_field.position.as_usize()] = 1;
                             });
 
-                        return Ok(StackValue::ValueType(nullable_instance));
-                    }
+                            // Set Value = data from boxed object.
+                            let value_field = layout
+                                .fields
+                                .iter()
+                                .find(|(k, _)| k.name == "value" || k.name == "_value")
+                                .map(|(_, v)| v)
+                                .ok_or(())?;
 
-                    // If the target is a primitive, we need to extract it.
-                    if let Some(e) = td.is_enum() {
-                        let enum_type = res_ctx.make_concrete(e).map_err(|_| ())?;
-                        let cts = o
-                            .instance_storage
-                            .with_data(|d| ctx.read_cts_value(&enum_type, d))
-                            .map_err(|_| ())?;
-                        Ok(cts.into_stack())
-                    } else if td.definition().namespace.as_deref() == Some("System") {
-                        let name = &td.definition().name;
-                        match name.as_ref() {
-                            "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
-                            | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
-                            | "IntPtr" | "UIntPtr" => {
-                                let cts = o
-                                    .instance_storage
-                                    .with_data(|d| ctx.read_cts_value(&target_ct, d))
-                                    .map_err(|_| ())?;
-                                Ok(cts.into_stack())
-                            }
-                            _ => Ok(StackValue::ValueType(o.clone())),
+                            let value_pos = value_field.position.as_usize();
+                            let value_size = value_field.layout.size().as_usize();
+
+                            nullable_instance
+                                .instance_storage
+                                .with_data_mut(|nullable_data| {
+                                    o.instance_storage.with_data(|boxed_data| {
+                                        nullable_data[value_pos..value_pos + value_size]
+                                            .copy_from_slice(&boxed_data[..value_size]);
+                                    })
+                                });
+
+                            return Ok(StackValue::ValueType(nullable_instance));
                         }
-                    } else {
-                        Ok(StackValue::ValueType(o.clone()))
+
+                        // If the target is a primitive, we need to extract it.
+                        if let Some(e) = td.is_enum() {
+                            let enum_type = res_ctx.make_concrete(e).map_err(|_| ())?;
+                            let cts = o
+                                .instance_storage
+                                .with_data(|d| ctx.read_cts_value(&enum_type, d))
+                                .map_err(|_| ())?;
+                            Ok(cts.into_stack())
+                        } else if td.definition().namespace.as_deref() == Some("System") {
+                            let name = &td.definition().name;
+                            match name.as_ref() {
+                                "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
+                                | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
+                                | "IntPtr" | "UIntPtr" => {
+                                    let cts = o
+                                        .instance_storage
+                                        .with_data(|d| ctx.read_cts_value(&target_ct, d))
+                                        .map_err(|_| ())?;
+                                    Ok(cts.into_stack())
+                                }
+                                _ => Ok(StackValue::ValueType(o.clone())),
+                            }
+                        } else {
+                            Ok(StackValue::ValueType(o.clone()))
+                        }
                     }
+                    _ => Err(()),
                 }
-                _ => Err(()),
-            }
-        });
+            },
+        ));
         match result {
             Ok(v) => ctx.push(v),
             Err(_) => {

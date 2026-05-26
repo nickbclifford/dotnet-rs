@@ -1,5 +1,6 @@
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
+    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
@@ -148,7 +149,14 @@ pub fn intrinsic_numeric_create_truncating<'gc, T: TypedStackOps<'gc>>(
                 "Int64" | "System.Int64" => ctx.push_i64($val as i64),
                 "UIntPtr" | "System.UIntPtr" => ctx.push_isize(($val as usize) as isize),
                 "IntPtr" | "System.IntPtr" => ctx.push_isize($val as isize),
-                _ => panic!("unsupported CreateTruncating target type: {}", target_type),
+                _ => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected:
+                            "Byte/SByte/UInt16/Int16/UInt32/Int32/UInt64/Int64/UIntPtr/IntPtr"
+                                .to_string(),
+                        actual: target_type.clone(),
+                    }));
+                }
             }
         };
     }
@@ -157,7 +165,12 @@ pub fn intrinsic_numeric_create_truncating<'gc, T: TypedStackOps<'gc>>(
         StackValue::Int32(v) => convert!(v),
         StackValue::Int64(v) => convert!(v),
         StackValue::NativeInt(v) => convert!(v),
-        _ => panic!("unsupported CreateTruncating source type: {:?}", value),
+        actual => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "Int32 or Int64 or NativeInt".to_string(),
+                actual: format!("{actual:?}"),
+            }));
+        }
     }
 
     StepResult::Continue

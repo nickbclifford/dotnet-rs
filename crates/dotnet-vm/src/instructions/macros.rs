@@ -19,7 +19,8 @@ macro_rules! binary_op {
             use $crate::stack::ops::EvalStackOps;
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
-            ctx.push(v1 $op v2);
+            let result = dotnet_vm_ops::vm_try!(v1 $op v2);
+            ctx.push(result);
             StepResult::Continue
         }
     };
@@ -33,15 +34,18 @@ macro_rules! binary_op_result {
             sgn: NumberSign,
         ) -> StepResult {
             #[allow(unused_imports)]
-            use $crate::stack::ops::EvalStackOps;
+            use $crate::stack::ops::{EvalStackOps, ExceptionOps};
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
             match v1.$method(v2, sgn) {
-                Ok(v) => {
-                    ctx.push(v);
+                Ok(result) => {
+                    ctx.push(result);
                     StepResult::Continue
                 }
-                Err(e) => ctx.throw_by_name_with_message(e.exception_type, e.message),
+                Err(dotnet_value::StackValueError::ManagedException(e)) => {
+                    ctx.throw_by_name_with_message(e.exception_type, e.message)
+                }
+                Err(dotnet_value::StackValueError::Execution(e)) => StepResult::Error(e.into()),
             }
         }
     };
@@ -58,7 +62,8 @@ macro_rules! binary_op_sgn {
             use $crate::stack::ops::EvalStackOps;
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
-            ctx.push(v1.$method(v2, sgn));
+            let result = dotnet_vm_ops::vm_try!(v1.$method(v2, sgn));
+            ctx.push(result);
             StepResult::Continue
         }
     };
@@ -73,7 +78,8 @@ macro_rules! unary_op {
             #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             let v = vm_pop!(ctx);
-            ctx.push($op v);
+            let result = dotnet_vm_ops::vm_try!($op v);
+            ctx.push(result);
             StepResult::Continue
         }
     };

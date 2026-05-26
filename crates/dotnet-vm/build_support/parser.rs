@@ -91,7 +91,7 @@ pub fn process_instruction_file(
                     let dummy_fn: ItemFn = syn::parse_quote! {
                         #(#attrs)*
                         pub fn #name<'gc, T: crate::stack::ops::VesOps<'gc> + ?Sized>(ctx: &mut T, #params) -> crate::StepResult {
-                            unimplemented!()
+                            unreachable!("build_support parser: dummy handler body is never executed")
                         }
                     };
                     process_fn(&dummy_fn, &mod_path, path, entries);

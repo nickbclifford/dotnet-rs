@@ -30,7 +30,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
-    error::TypeResolutionError,
+    error::{ExecutionError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -44,8 +44,8 @@ use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps,
-    PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
+    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps, PInvokeContext,
+    RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
     SimdIntrinsicHost as VmSimdIntrinsicHost, StackOps, StaticsOps, ThreadOps, TypedStackOps,
     VariableOps, VesBaseOps, VesInternals,
 };
@@ -124,9 +124,15 @@ pub trait VmReflectionOps<'gc>:
         &self,
         handle: FieldSource,
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError>;
-    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
-    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
-    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
+    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> Result<RuntimeType, ExecutionError>;
+    fn resolve_runtime_method(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(MethodDescription, GenericLookup), ExecutionError>;
+    fn resolve_runtime_field(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(FieldDescription, GenericLookup), ExecutionError>;
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc>;
 }

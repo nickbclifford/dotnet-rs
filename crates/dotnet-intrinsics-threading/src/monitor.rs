@@ -59,15 +59,20 @@ pub fn intrinsic_monitor_exit<'gc, T: ThreadingIntrinsicHost<'gc>>(
         // Get the sync block if it exists
         if let Some(sync_block) = ctx.monitor_get_sync_block_for_object(obj_ref) {
             if !ctx.monitor_exit(&sync_block, thread_id) {
-                panic!("SynchronizationLockException: Object not locked by current thread");
+                return ctx.throw_by_name_with_message(
+                    "System.Threading.SynchronizationLockException",
+                    "Object not locked by current thread",
+                );
             }
         } else {
-            panic!("SynchronizationLockException: Object not locked");
+            return ctx.throw_by_name_with_message(
+                "System.Threading.SynchronizationLockException",
+                "Object not locked",
+            );
         }
     } else {
-        // Monitor.Exit(null) is a no-op or throws ArgumentNullException in .NET?
-        // Actually it throws ArgumentNullException.
-        panic!("ArgumentNullException: Monitor.Exit(null)");
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
     }
 
     StepResult::Continue

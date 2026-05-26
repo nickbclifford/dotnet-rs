@@ -238,7 +238,9 @@ impl BenchHarness {
             resolution,
             MethodMemberIndex::Method(method_index),
         );
-        executor.entrypoint(entrypoint);
+        executor
+            .entrypoint(entrypoint)
+            .expect("failed to initialize benchmark entrypoint");
 
         let exit_code = match executor.run() {
             ExecutorResult::Exited(code) => code,

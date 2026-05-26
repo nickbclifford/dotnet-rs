@@ -217,13 +217,13 @@ fn ldelema_internal<
     let element_layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     let element_offset = (element_layout.size() * index).as_usize();
-    let result = obj.as_vector(|v| {
+    let result = dotnet_vm_ops::vm_try!(obj.try_as_vector(|v| {
         if index >= v.layout.length {
             return Err(());
         }
         let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
         Ok(ptr)
-    });
+    }));
 
     let ptr = match result {
         Ok(p) => p,

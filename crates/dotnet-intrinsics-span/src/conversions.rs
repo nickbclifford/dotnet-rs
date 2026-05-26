@@ -298,7 +298,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
             .unwrap()
             .read();
-        ctx.span_resolve_runtime_field(obj_ref)
+        dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
     let field = field_desc.field();
     let field_resolution = field_desc.field_resolution;
@@ -385,7 +385,10 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         ctx.push_value_type(span_instance);
         StepResult::Continue
     } else {
-        todo!("initial field data for {:?}", field_desc);
+        StepResult::Error(
+            ExecutionError::NotImplemented(format!("initial field data for {:?}", field_desc))
+                .into(),
+        )
     }
 }
 
@@ -432,7 +435,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
             .unwrap()
             .read();
-        ctx.span_resolve_runtime_field(obj_ref)
+        dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
     let field = field_desc.field();
 
@@ -466,7 +469,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
             .field::<ObjectRef<'gc>>(type_handle.description, "_value")
             .unwrap()
             .read();
-        ctx.span_resolve_runtime_type(obj_ref)
+        dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_type(obj_ref))
     };
 
     let element_type: ConcreteType = element_type_runtime.to_concrete(ctx.loader().as_ref());
@@ -575,7 +578,7 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
             .throw_by_name_with_message("System.ArgumentException", "Invalid RuntimeFieldHandle.");
     }
 
-    let (field_desc, _) = ctx.span_resolve_runtime_field(field_obj_ref);
+    let (field_desc, _) = dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(field_obj_ref));
     let Some(initial_data) = &field_desc.field().initial_value else {
         return ctx.throw_by_name_with_message(
             "System.ArgumentException",

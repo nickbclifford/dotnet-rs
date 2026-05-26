@@ -4,6 +4,7 @@ use crate::{
     ops::{ExceptionOps, RawMemoryOps, StackOps, VmRawMemoryOps, VmStackOps},
 };
 use dotnet_macros::dotnet_instruction;
+use dotnet_types::error::ExecutionError;
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
@@ -22,7 +23,7 @@ const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.
 pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
-    let size = vm_pop!(ctx).as_isize() as usize;
+    let size = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as usize;
     let src = vm_pop!(ctx).as_ptr();
     let dest = vm_pop!(ctx).as_ptr();
 
@@ -53,8 +54,8 @@ pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
-    let size = vm_pop!(ctx).as_isize() as usize;
-    let val = vm_pop!(ctx).as_isize() as u8;
+    let size = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as usize;
+    let val = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as u8;
     let addr = vm_pop!(ctx).as_ptr();
 
     if addr.is_null() {
@@ -82,7 +83,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 pub fn localloc<'gc, T: StackOps<'gc> + VmRawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
-    let size_isize = vm_pop!(ctx).as_isize();
+    let size_isize = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize());
     if size_isize < 0 {
         return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
     }
@@ -117,7 +118,7 @@ pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
         && off == ByteOffset::ZERO
         && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
     {
-        let typed_val = convert_to_stack_value(val, param0);
+        let typed_val = dotnet_vm_ops::vm_try!(convert_to_stack_value(val, param0));
         ctx.set_slot(slot_idx, typed_val);
         return StepResult::Continue;
     }
@@ -180,7 +181,7 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
         && off == ByteOffset::ZERO
         && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
     {
-        let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);
+        let val = dotnet_vm_ops::vm_try!(convert_from_stack_value(ctx.get_slot(slot_idx), param0));
         ctx.push(val);
         return StepResult::Continue;
     }
@@ -235,26 +236,34 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     StepResult::Continue
 }
 
-fn convert_to_stack_value(val: StackValue, store_type: StoreType) -> StackValue {
+fn convert_to_stack_value(
+    val: StackValue,
+    store_type: StoreType,
+) -> Result<StackValue, ExecutionError> {
     match store_type {
-        StoreType::Int8 | StoreType::Int16 | StoreType::Int32 => StackValue::Int32(val.as_i32()),
-        StoreType::Int64 => StackValue::Int64(val.as_i64()),
-        StoreType::IntPtr => StackValue::NativeInt(val.as_isize()),
-        StoreType::Float32 | StoreType::Float64 => StackValue::NativeFloat(val.as_f64()),
-        StoreType::Object => val, // Already correct type
+        StoreType::Int8 | StoreType::Int16 | StoreType::Int32 => {
+            Ok(StackValue::Int32(val.try_as_i32()?))
+        }
+        StoreType::Int64 => Ok(StackValue::Int64(val.try_as_i64()?)),
+        StoreType::IntPtr => Ok(StackValue::NativeInt(val.try_as_isize()?)),
+        StoreType::Float32 | StoreType::Float64 => Ok(StackValue::NativeFloat(val.try_as_f64()?)),
+        StoreType::Object => Ok(val), // Already correct type
     }
 }
 
-fn convert_from_stack_value(val: StackValue, load_type: LoadType) -> StackValue {
+fn convert_from_stack_value(
+    val: StackValue,
+    load_type: LoadType,
+) -> Result<StackValue, ExecutionError> {
     match load_type {
-        LoadType::Int8 => StackValue::Int32(val.as_i32() as i8 as i32),
-        LoadType::UInt8 => StackValue::Int32(val.as_i32() as u8 as i32),
-        LoadType::Int16 => StackValue::Int32(val.as_i32() as i16 as i32),
-        LoadType::UInt16 => StackValue::Int32(val.as_i32() as u16 as i32),
-        LoadType::Int32 | LoadType::UInt32 => StackValue::Int32(val.as_i32()),
-        LoadType::Int64 => StackValue::Int64(val.as_i64()),
-        LoadType::Float32 | LoadType::Float64 => StackValue::NativeFloat(val.as_f64()),
-        LoadType::IntPtr => StackValue::NativeInt(val.as_isize()),
-        LoadType::Object => val,
+        LoadType::Int8 => Ok(StackValue::Int32(val.try_as_i32()? as i8 as i32)),
+        LoadType::UInt8 => Ok(StackValue::Int32(val.try_as_i32()? as u8 as i32)),
+        LoadType::Int16 => Ok(StackValue::Int32(val.try_as_i32()? as i16 as i32)),
+        LoadType::UInt16 => Ok(StackValue::Int32(val.try_as_i32()? as u16 as i32)),
+        LoadType::Int32 | LoadType::UInt32 => Ok(StackValue::Int32(val.try_as_i32()?)),
+        LoadType::Int64 => Ok(StackValue::Int64(val.try_as_i64()?)),
+        LoadType::Float32 | LoadType::Float64 => Ok(StackValue::NativeFloat(val.try_as_f64()?)),
+        LoadType::IntPtr => Ok(StackValue::NativeInt(val.try_as_isize()?)),
+        LoadType::Object => Ok(val),
     }
 }

@@ -2,7 +2,7 @@
 //!
 use dotnet_types::{
     TypeDescription,
-    error::TypeResolutionError,
+    error::{ExecutionError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -43,9 +43,13 @@ pub trait SpanObjectFactoryHost<'gc> {
 }
 
 pub trait SpanRuntimeHost<'gc> {
-    fn span_resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
+    fn span_resolve_runtime_field(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(FieldDescription, GenericLookup), ExecutionError>;
 
-    fn span_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
+    fn span_resolve_runtime_type(&self, obj: ObjectRef<'gc>)
+    -> Result<RuntimeType, ExecutionError>;
 
     fn span_dispatch_method(
         &mut self,

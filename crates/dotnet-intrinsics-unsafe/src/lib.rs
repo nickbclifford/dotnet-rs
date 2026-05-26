@@ -1,7 +1,7 @@
 //! Unsafe and marshalling intrinsic handlers with explicit safety host seams.
 //!
 use dotnet_types::{
-    error::{MemoryAccessError, TypeResolutionError},
+    error::{ExecutionError, MemoryAccessError, TypeResolutionError},
     generics::ConcreteType,
 };
 use dotnet_value::{layout::LayoutManager, object::ObjectRef, pointer::PointerOrigin};
@@ -38,7 +38,10 @@ pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
 
     fn unsafe_set_last_pinvoke_error(&mut self, value: i32);
 
-    fn unsafe_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> ConcreteType;
+    fn unsafe_resolve_runtime_type(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<ConcreteType, ExecutionError>;
 }
 
 pub(crate) fn ptr_info<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(

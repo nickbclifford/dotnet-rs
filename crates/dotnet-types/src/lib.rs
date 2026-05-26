@@ -97,6 +97,7 @@ impl TypeDescription {
 
     pub fn definition(&self) -> &'static TypeDefinition<'static> {
         if self.is_null() {
+            // invariant: TypeDescription::definition() must only be called on resolved, non-null metadata handles.
             panic!("Attempted to access definition of a null or uninitialized TypeDescription")
         }
         &self.resolution.definition()[self.index]

@@ -46,8 +46,16 @@ impl AssemblyLoader {
         e: &ExportedType,
     ) -> Result<TypeDescription, TypeResolutionError> {
         match e.implementation {
-            TypeImplementation::Nested(_) => todo!(),
-            TypeImplementation::ModuleFile { .. } => todo!(),
+            TypeImplementation::Nested(_) => Err(TypeResolutionError::TypeNotFound(format!(
+                "Nested exported type not implemented: {}",
+                e.type_name()
+            ))),
+            TypeImplementation::ModuleFile { .. } => {
+                Err(TypeResolutionError::TypeNotFound(format!(
+                    "ModuleFile exported type not implemented: {}",
+                    e.type_name()
+                )))
+            }
             TypeImplementation::TypeForwarder(a) => {
                 self.find_in_assembly(&resolution[a], &e.type_name())
             }
@@ -258,10 +266,19 @@ impl AssemblyLoader {
 
         use ResolutionScope::*;
         match &type_ref.scope {
-            ExternalModule(_) => todo!(),
-            CurrentModule => todo!(),
+            ExternalModule(_) => Err(TypeResolutionError::TypeNotFound(format!(
+                "ExternalModule scope not implemented for type: {}",
+                type_ref.type_name()
+            ))),
+            CurrentModule => Err(TypeResolutionError::TypeNotFound(format!(
+                "CurrentModule scope not implemented for type: {}",
+                type_ref.type_name()
+            ))),
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
-            Exported => todo!(),
+            Exported => Err(TypeResolutionError::TypeNotFound(format!(
+                "Exported (type-forwarder) scope not implemented for type: {}",
+                type_ref.type_name()
+            ))),
             Nested(o) => {
                 let td = self.locate_type_ref(resolution.clone(), *o)?;
                 let res = td.resolution.clone();
@@ -446,6 +463,7 @@ impl AssemblyLoader {
                 }
             }
         }
+        // invariant: a MethodIndex must point into exactly one member sub-collection of its parent type.
         panic!(
             "method_member_index_from_index: method pointer not found in any sub-collection of parent type"
         );
@@ -597,8 +615,14 @@ impl AssemblyLoader {
                             }
                         }
                     }
-                    Module(_) => todo!("method reference: module"),
-                    VarargMethod(_) => todo!("method reference: vararg method"),
+                    Module(_) => Err(TypeResolutionError::MethodNotFound(format!(
+                        "Module method references are not implemented: {}",
+                        method_ref.name
+                    ))),
+                    VarargMethod(_) => Err(TypeResolutionError::MethodNotFound(format!(
+                        "Vararg method references are not implemented: {}",
+                        method_ref.name
+                    ))),
                 }
             }
         };
@@ -683,7 +707,10 @@ impl AssemblyLoader {
                             field_ref.name
                         )))
                     }
-                    _ => todo!("Field reference with non-type parent"),
+                    _ => Err(TypeResolutionError::FieldNotFound(format!(
+                        "Field references with non-type parents are not implemented: {}",
+                        field_ref.name
+                    ))),
                 }
             }
         }
@@ -707,7 +734,7 @@ impl<'a> Resolver<'a> for &'a AssemblyLoader {
         name: &str,
     ) -> Result<(&'a TypeDefinition<'a>, &'a Resolution<'a>), Self::Error> {
         if name.contains("=") {
-            todo!("fully qualified name {}", name)
+            return Err(AttrResolveError);
         }
         let td = self.corlib_type(name).map_err(|_| AttrResolveError)?;
         Ok((td.definition(), td.resolution.definition()))

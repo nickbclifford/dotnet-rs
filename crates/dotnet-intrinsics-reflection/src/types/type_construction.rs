@@ -1,6 +1,7 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -21,10 +22,10 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let arg = ctx.peek_stack();
     let StackValue::ValueType(handle) = arg else {
-        panic!(
-            "RunClassConstructor expects a RuntimeTypeHandle, received {:?}",
-            arg
-        )
+        return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+            expected: "RuntimeTypeHandle".to_string(),
+            actual: format!("{arg:?}"),
+        }));
     };
 
     let target_obj = handle
@@ -32,7 +33,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
         .field::<ObjectRef<'gc>>(handle.description, "_value")
         .unwrap()
         .read();
-    let target_type = crate::common::resolve_runtime_type(ctx, target_obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
     let target_ct = target_type.to_concrete(ctx.loader().as_ref());
     let target_desc = ctx
         .loader()
@@ -93,10 +94,10 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             return StepResult::FramePushed;
         }
 
-        panic!(
+        StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
             "could not find a parameterless constructor in {:?}",
             target_td
-        )
+        ))))
     }
 }
 
@@ -120,19 +121,23 @@ pub fn handle_make_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Yield;
     }
 
-    let target_rt = crate::common::resolve_runtime_type(ctx, target);
+    let target_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target));
 
     if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
-        let param_objs = parameters.as_vector(|v: &dotnet_value::object::Vector<'gc>| {
-            v.get()
-                .chunks_exact(ObjectRef::SIZE)
-                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
-                .collect::<Vec<_>>()
-        });
-        let new_generics: Vec<_> = param_objs
-            .into_iter()
-            .map(|p_obj| crate::common::resolve_runtime_type(ctx, p_obj).clone())
-            .collect();
+        let param_objs = dotnet_vm_ops::vm_try!(parameters.try_as_vector(
+            |v: &dotnet_value::object::Vector<'gc>| {
+                v.get()
+                    .chunks_exact(ObjectRef::SIZE)
+                    .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
+                    .collect::<Vec<_>>()
+            }
+        ));
+        let mut new_generics = Vec::with_capacity(param_objs.len());
+        for p_obj in param_objs {
+            new_generics.push(dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(
+                ctx, p_obj
+            )));
+        }
 
         #[cfg(feature = "generic-constraint-validation")]
         {
@@ -180,12 +185,17 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
         return StepResult::Yield;
     }
 
-    let target_rt = crate::common::resolve_runtime_type(ctx, target_obj);
+    let target_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
 
     let (td, type_generics) = match target_rt {
         RuntimeType::Type(td) => (td, vec![]),
         RuntimeType::Generic(td, args) => (td, args.clone()),
-        _ => panic!("cannot create instance of {:?}", target_rt),
+        _ => {
+            return StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
+                "cannot create instance of {:?}",
+                target_rt
+            ))));
+        }
     };
 
     let type_generics_concrete: Vec<ConcreteType> = type_generics
@@ -215,5 +225,8 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
         return StepResult::FramePushed;
     }
 
-    panic!("could not find a parameterless constructor in {:?}", td)
+    StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
+        "could not find a parameterless constructor in {:?}",
+        td
+    ))))
 }

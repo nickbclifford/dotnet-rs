@@ -17,15 +17,18 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::{Instruction, MethodSource};
 
+// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(
     fn panic_not_enough_values_for_call(method: &MethodInfo<'static>, num_args: usize) =>
         "not enough values on stack for call: args={} in {:?}",
         num_args, method.source
 );
+// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(
     fn panic_expected_boxed_value_type_in_unbox_canonicalization() =>
         "Expected boxed value type in unbox canonicalization"
 );
+// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(
     fn panic_stack_height_underflow_for_call(
         frame_height: crate::StackSlotIndex,
@@ -35,7 +38,9 @@ vm_cold_panic!(
         "Not enough values on stack for call: height={}, args={} in {:?}",
         frame_height, num_args, source
 );
+// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(fn panic_tail_call_requires_current_frame() => "tail call requires a current frame");
+// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current frame");
 
 #[cold]

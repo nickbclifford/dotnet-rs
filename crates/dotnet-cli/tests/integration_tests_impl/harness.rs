@@ -174,7 +174,15 @@ impl TestHarness {
                 resolution,
                 MethodMemberIndex::Method(method_index),
             );
-            executor.entrypoint(method);
+            if let Err(e) = executor.entrypoint(method) {
+                let msg = format!("Entrypoint setup error: {:?}", e);
+                eprintln!("{}", msg);
+                let _ = tx.send(ExecutionResult {
+                    exit_code: 255,
+                    stderr: Some(msg),
+                });
+                return;
+            }
 
             let result = match executor.run() {
                 vm::ExecutorResult::Exited(code) => ExecutionResult {
@@ -285,7 +293,14 @@ impl TestHarness {
             resolution,
             MethodMemberIndex::Method(method_index),
         );
-        executor.entrypoint(method);
+        if let Err(e) = executor.entrypoint(method) {
+            let msg = format!("Entrypoint setup error: {:?}", e);
+            eprintln!("{}", msg);
+            return ExecutionResult {
+                exit_code: 255,
+                stderr: Some(msg),
+            };
+        }
 
         let result = match executor.run() {
             vm::ExecutorResult::Exited(code) => ExecutionResult {

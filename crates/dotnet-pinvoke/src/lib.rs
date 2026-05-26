@@ -341,45 +341,74 @@ enum TempBuffer {
 }
 
 impl TempBuffer {
-    fn as_i32(&self) -> &i32 {
+    fn kind_name(&self) -> &'static str {
         match self {
-            TempBuffer::I32(val) => val,
-            _ => panic!("P/Invoke temp buffer type mismatch (i32)"),
+            TempBuffer::I32(_) => "i32",
+            TempBuffer::I64(_) => "i64",
+            TempBuffer::Isize(_) => "isize",
+            TempBuffer::F64(_) => "f64",
+            TempBuffer::Ptr(_) => "ptr",
+            TempBuffer::Bytes(_) => "bytes",
         }
     }
 
-    fn as_i64(&self) -> &i64 {
+    fn as_i32(&self) -> Result<&i32, ExecutionError> {
         match self {
-            TempBuffer::I64(val) => val,
-            _ => panic!("P/Invoke temp buffer type mismatch (i64)"),
+            TempBuffer::I32(val) => Ok(val),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer i32".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
         }
     }
 
-    fn as_isize(&self) -> &isize {
+    fn as_i64(&self) -> Result<&i64, ExecutionError> {
         match self {
-            TempBuffer::Isize(val) => val,
-            _ => panic!("P/Invoke temp buffer type mismatch (isize)"),
+            TempBuffer::I64(val) => Ok(val),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer i64".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
         }
     }
 
-    fn as_f64(&self) -> &f64 {
+    fn as_isize(&self) -> Result<&isize, ExecutionError> {
         match self {
-            TempBuffer::F64(val) => val,
-            _ => panic!("P/Invoke temp buffer type mismatch (f64)"),
+            TempBuffer::Isize(val) => Ok(val),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer isize".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
         }
     }
 
-    fn as_ptr(&self) -> &*mut u8 {
+    fn as_f64(&self) -> Result<&f64, ExecutionError> {
         match self {
-            TempBuffer::Ptr(val) => val,
-            _ => panic!("P/Invoke temp buffer type mismatch (ptr)"),
+            TempBuffer::F64(val) => Ok(val),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer f64".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
         }
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    fn as_ptr(&self) -> Result<&*mut u8, ExecutionError> {
         match self {
-            TempBuffer::Bytes(buf) => buf,
-            _ => panic!("P/Invoke temp buffer type mismatch (bytes)"),
+            TempBuffer::Ptr(val) => Ok(val),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer ptr".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
+        }
+    }
+
+    fn as_bytes(&self) -> Result<&[u8], ExecutionError> {
+        match self {
+            TempBuffer::Bytes(buf) => Ok(buf),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer bytes".to_string(),
+                actual: self.kind_name().to_string(),
+            }),
         }
     }
 }
@@ -513,7 +542,17 @@ where
                 len: temp_buffers.len(),
             });
         };
-        let buf = temp.as_bytes();
+        let buf = match temp {
+            TempBuffer::Bytes(buf) => buf.as_slice(),
+            _ => {
+                return Err(dotnet_types::error::MemoryAccessError::TypeMismatch(
+                    format!(
+                        "P/Invoke temp buffer bytes expected, got {}",
+                        temp.kind_name()
+                    ),
+                ));
+            }
+        };
         if *len > buf.len() {
             return Err(dotnet_types::error::MemoryAccessError::BoundsCheck {
                 offset: 0,
@@ -707,7 +746,10 @@ fn external_call_impl<'gc>(
             temp_buffers.push(TempBuffer::Bytes(v.to_ne_bytes().to_vec()));
             let buf_idx = temp_buffers.len() - 1;
             arg_buffer_map[$idx] = Some(buf_idx);
-            arg_ptrs[$idx] = temp_buffers[buf_idx].as_bytes().as_ptr() as *mut c_void;
+            arg_ptrs[$idx] = match temp_buffers[buf_idx].as_bytes() {
+                Ok(buf) => buf.as_ptr() as *mut c_void,
+                Err(e) => return StepResult::Error(e.into()),
+            };
         }};
     }
 
@@ -734,8 +776,10 @@ fn external_call_impl<'gc>(
                         temp_buffers.push(TempBuffer::I32(Box::new(*val)));
                         let idx = temp_buffers.len() - 1;
                         arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] =
-                            temp_buffers[idx].as_i32() as *const i32 as *mut i32 as *mut c_void;
+                        arg_ptrs[i] = match temp_buffers[idx].as_i32() {
+                            Ok(v) => v as *const i32 as *mut i32 as *mut c_void,
+                            Err(e) => return StepResult::Error(e.into()),
+                        };
                     }
                 }
             }
@@ -756,8 +800,10 @@ fn external_call_impl<'gc>(
                         temp_buffers.push(TempBuffer::I64(Box::new(*val)));
                         let idx = temp_buffers.len() - 1;
                         arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] =
-                            temp_buffers[idx].as_i64() as *const i64 as *mut i64 as *mut c_void;
+                        arg_ptrs[i] = match temp_buffers[idx].as_i64() {
+                            Ok(v) => v as *const i64 as *mut i64 as *mut c_void,
+                            Err(e) => return StepResult::Error(e.into()),
+                        };
                     }
                 }
             }
@@ -778,8 +824,10 @@ fn external_call_impl<'gc>(
                         temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
                         let idx = temp_buffers.len() - 1;
                         arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] = temp_buffers[idx].as_isize() as *const isize as *mut isize
-                            as *mut c_void;
+                        arg_ptrs[i] = match temp_buffers[idx].as_isize() {
+                            Ok(v) => v as *const isize as *mut isize as *mut c_void,
+                            Err(e) => return StepResult::Error(e.into()),
+                        };
                     }
                 }
             }
@@ -787,14 +835,19 @@ fn external_call_impl<'gc>(
                 temp_buffers.push(TempBuffer::F64(Box::new(*val)));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_f64() as *const f64 as *mut f64 as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_f64() {
+                    Ok(v) => v as *const f64 as *mut f64 as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
             StackValue::UnmanagedPtr(val) => {
                 temp_buffers.push(TempBuffer::Ptr(Box::new(val.0.as_ptr())));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] =
-                    temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
+                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
             StackValue::ValueType(o) => {
                 let mut data = o.with_data(|d: &[u8]| d.to_vec());
@@ -809,7 +862,10 @@ fn external_call_impl<'gc>(
                 }
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_bytes().as_ptr() as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_bytes() {
+                    Ok(buf) => buf.as_ptr() as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
             StackValue::ObjectRef(obj) => {
                 let ptr = if let Some(h) = obj.0 {
@@ -829,8 +885,10 @@ fn external_call_impl<'gc>(
                 temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] =
-                    temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
+                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
             StackValue::TypedRef(p, t) => {
                 if let Some(owner) = p.owner() {
@@ -866,7 +924,10 @@ fn external_call_impl<'gc>(
                 temp_buffers.push(TempBuffer::Bytes(bytes.to_vec()));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_bytes().as_ptr() as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_bytes() {
+                    Ok(buf) => buf.as_ptr() as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
             StackValue::ManagedPtr(p) => {
                 let buf_len = ffi_size;
@@ -901,7 +962,10 @@ fn external_call_impl<'gc>(
                         buf_len,
                     ));
 
-                    arg_ptrs[i] = temp_buffers[buf_idx].as_bytes().as_ptr() as *mut c_void;
+                    arg_ptrs[i] = match temp_buffers[buf_idx].as_bytes() {
+                        Ok(buf) => buf.as_ptr() as *mut c_void,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
                 } else {
                     if let Some(owner) = p.owner() {
                         ctx.pin_object(owner);
@@ -933,8 +997,10 @@ fn external_call_impl<'gc>(
                     temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
                     let idx = temp_buffers.len() - 1;
                     arg_buffer_map[i] = Some(idx);
-                    arg_ptrs[i] =
-                        temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                    arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
+                        Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
                 }
             }
             #[cfg(feature = "multithreading")]
@@ -950,8 +1016,10 @@ fn external_call_impl<'gc>(
                 temp_buffers.push(TempBuffer::Ptr(Box::new(p)));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] =
-                    temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
+                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             }
         }
     }
@@ -1135,7 +1203,12 @@ fn external_call_impl<'gc>(
                 let addr = ret[0];
                 let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
                 if type_ptr.is_null() {
-                    panic!("null type handle in returned TypedReference");
+                    return StepResult::Error(
+                        ExecutionError::InternalError(
+                            "null type handle in returned TypedReference".to_string(),
+                        )
+                        .into(),
+                    );
                 }
                 let type_desc = unsafe {
                     let arc = Arc::from_raw(type_ptr);

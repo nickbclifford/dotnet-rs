@@ -21,7 +21,7 @@ pub fn ldvirtftn<'gc, T: VesOps<'gc>>(
     param0: &MethodSource,
     skip_null_check: bool,
 ) -> StepResult {
-    let obj = vm_pop!(ctx).as_object_ref();
+    let obj = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_object_ref());
     if !skip_null_check && obj.0.is_none() {
         return ctx.throw_by_name_with_message(
             "System.NullReferenceException",

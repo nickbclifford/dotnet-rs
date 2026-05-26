@@ -119,7 +119,9 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                         _ => false,
                     }
                 }
-                (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
+                // Function pointer signature comparison is not implemented yet.
+                // Conservatively treat funcptr types as not equal.
+                (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
                 _ => false,
             },
             (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => {
@@ -258,19 +260,13 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         for (Parameter(_, a_p), Parameter(_, b_p)) in a.parameters.iter().zip(b.parameters.iter()) {
             match (a_p, b_p) {
                 (ParameterType::Value(a_v), ParameterType::Value(b_v)) => {
-                    let Ok(a_concrete) = lookup1.make_concrete(
-                        ResolutionS::clone(res1),
-                        a_v.clone(),
-                        self.loader,
-                    )
+                    let Ok(a_concrete) =
+                        lookup1.make_concrete(ResolutionS::clone(res1), a_v.clone(), self.loader)
                     else {
                         return false;
                     };
-                    let Ok(b_concrete) = lookup2.make_concrete(
-                        ResolutionS::clone(res2),
-                        b_v.clone(),
-                        self.loader,
-                    )
+                    let Ok(b_concrete) =
+                        lookup2.make_concrete(ResolutionS::clone(res2), b_v.clone(), self.loader)
                     else {
                         return false;
                     };
@@ -280,14 +276,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 }
                 _ => {
                     // Non-value parameters (ByRef, Pinned) must match exactly
-                    if !self.param_types_equal(
-                        res1,
-                        a_p,
-                        generics1,
-                        res2,
-                        b_p,
-                        generics2,
-                    ) {
+                    if !self.param_types_equal(res1, a_p, generics1, res2, b_p, generics2) {
                         return false;
                     }
                 }
@@ -438,7 +427,9 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     _ => false,
                 }
             }
-            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
+            // Function pointer signature comparison is not implemented yet.
+            // Conservatively treat funcptr types as not equal.
+            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
             _ => false,
         }
     }
@@ -867,7 +858,9 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     _ => false,
                 }
             }
-            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
+            // Function pointer signature comparison is not implemented yet.
+            // Conservatively treat funcptr types as not equal.
+            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
             _ => false,
         }
     }

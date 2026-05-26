@@ -210,15 +210,15 @@ impl Executor {
         }
     }
 
-    pub fn entrypoint(&mut self, method: MethodDescription) {
+    pub fn entrypoint(&mut self, method: MethodDescription) -> Result<(), VmError> {
         #[cfg(not(feature = "fuzzing"))]
         let argv: Vec<String> = std::env::args().skip(1).collect();
         #[cfg(feature = "bench-instrumentation")]
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         #[cfg(feature = "memory-validation")]
         let thread_id = self.thread_id;
-        let _ = self.with_arena(|arena| {
-            arena.mutate_root(|gc, c| {
+        self.with_arena(|arena| {
+            arena.mutate_root(|gc, c| -> Result<(), VmError> {
                 let gc_handle = GCHandle::new(
                     gc,
                     #[cfg(feature = "multithreading")]
@@ -234,8 +234,7 @@ impl Executor {
                 let shared = c.stack.shared.clone();
                 let info = shared
                     .caches
-                    .get_method_info(method, &Default::default(), shared.clone())
-                    .expect("Failed to resolve entrypoint");
+                    .get_method_info(method, &Default::default(), shared.clone())?;
                 let mut ctx = c.ves_context(gc_handle);
                 #[cfg(not(feature = "fuzzing"))]
                 {
@@ -287,23 +286,18 @@ impl Executor {
                                 "Entrypoint parameter must be a string[] vector (ECMA-335 II.15.4.1.2)"
                             );
 
-                            let string_type = ctx
-                                .loader()
-                                .corlib_type("System.String")
-                            .expect("Failed to resolve System.String type");
-                        let mut argv_vector = ctx
-                            .new_vector(string_type.into(), argv.len())
-                            .expect("Failed to allocate argv array");
+                            let string_type = ctx.loader().corlib_type("System.String")?;
+                            let mut argv_vector = ctx.new_vector(string_type.into(), argv.len())?;
 
-                        for (arg, chunk) in argv
-                            .iter()
-                            .zip(argv_vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
-                        {
-                            let arg_ref =
-                                ObjectRef::new(gc_handle, HeapStorage::Str(CLRString::from(arg)));
-                            ctx.register_new_object(&arg_ref);
-                            arg_ref.write(chunk);
-                        }
+                            for (arg, chunk) in argv
+                                .iter()
+                                .zip(argv_vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
+                            {
+                                let arg_ref =
+                                    ObjectRef::new(gc_handle, HeapStorage::Str(CLRString::from(arg)));
+                                ctx.register_new_object(&arg_ref);
+                                arg_ref.write(chunk);
+                            }
 
                             let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(argv_vector));
                             ctx.register_new_object(&argv_ref);
@@ -316,9 +310,12 @@ impl Executor {
                     }
                     #[cfg(not(feature = "fuzzing"))]
                     _ => {
-                        panic!(
-                            "Entrypoint must have zero parameters or a single string[] parameter"
-                        )
+                        return Err(VmError::Execution(ExecutionError::TypeMismatch {
+                            expected:
+                                "zero parameters or a single string[] parameter at entrypoint"
+                                    .to_string(),
+                            actual: format!("{} parameters", info.signature.parameters.len()),
+                        }));
                     }
                     #[cfg(feature = "fuzzing")]
                     _ => info
@@ -329,10 +326,11 @@ impl Executor {
                         .collect(),
                 };
 
-                ctx.entrypoint_frame(info, Default::default(), entrypoint_args)
-                    .expect("Failed to set up entrypoint frame")
-            });
-        });
+                ctx.entrypoint_frame(info, Default::default(), entrypoint_args)?;
+                Ok(())
+            })
+        })??;
+        Ok(())
     }
 
     // assumes args are already on stack
@@ -489,15 +487,23 @@ impl Executor {
 
             match step_result {
                 StepResult::Return => {
-                    let exit_code = match self.with_arena_ref(|arena| {
-                        arena.mutate(|_, c| {
-                            match c.stack.execution.evaluation_stack.stack.first() {
-                                Some(StackValue::Int32(i)) => *i as u8,
-                                Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
-                                None => 0,
-                            }
+                    let exit_code = match self
+                        .with_arena_ref(|arena| {
+                            arena.mutate(|_, c| {
+                                match c.stack.execution.evaluation_stack.stack.first() {
+                                    Some(StackValue::Int32(i)) => Ok(*i as u8),
+                                    Some(v) => {
+                                        Err(VmError::Execution(ExecutionError::TypeMismatch {
+                                            expected: "Int32".to_string(),
+                                            actual: format!("{:?}", v),
+                                        }))
+                                    }
+                                    None => Ok(0),
+                                }
+                            })
                         })
-                    }) {
+                        .and_then(|v| v)
+                    {
                         Ok(v) => v,
                         Err(e) => break ExecutorResult::Error(e),
                     };

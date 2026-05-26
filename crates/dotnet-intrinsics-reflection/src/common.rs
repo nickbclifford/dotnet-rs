@@ -1,7 +1,7 @@
 use crate::{ReflectionIntrinsicHost, RuntimeTypeContext};
 use dotnet_types::{
     comparer::decompose_type_source,
-    error::TypeResolutionError,
+    error::{ExecutionError, TypeResolutionError},
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
@@ -75,8 +75,8 @@ pub fn get_runtime_type<'gc>(
 pub fn resolve_runtime_type<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
-) -> RuntimeType {
-    obj.as_object(|instance| {
+) -> Result<RuntimeType, ExecutionError> {
+    obj.try_as_object(|instance| {
         let index = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "index")
@@ -89,8 +89,8 @@ pub fn resolve_runtime_type<'gc>(
 pub fn resolve_runtime_method<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
-) -> (MethodDescription, GenericLookup) {
-    obj.as_object(|instance| {
+) -> Result<(MethodDescription, GenericLookup), ExecutionError> {
+    obj.try_as_object(|instance| {
         let index = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "index")
@@ -103,8 +103,8 @@ pub fn resolve_runtime_method<'gc>(
 pub fn resolve_runtime_field<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
-) -> (FieldDescription, GenericLookup) {
-    obj.as_object(|instance| {
+) -> Result<(FieldDescription, GenericLookup), ExecutionError> {
+    obj.try_as_object(|instance| {
         let index = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "index")

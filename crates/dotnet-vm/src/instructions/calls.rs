@@ -186,7 +186,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             Ok(overriding_method)
         } else {
             // No override: box the value and use base implementation
-            let m = args[0].as_managed_ptr();
+            let m = dotnet_vm_ops::vm_try!(args[0].try_as_managed_ptr());
             if m.is_null() {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

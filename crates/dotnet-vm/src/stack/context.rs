@@ -7,11 +7,8 @@ use crate::{
 };
 use dotnet_tracer::Tracer;
 use dotnet_types::{
-    TypeDescription,
-    error::TypeResolutionError,
-    generics::GenericLookup,
-    members::MethodDescription,
-    runtime::RuntimeType,
+    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
+    members::MethodDescription, runtime::RuntimeType,
 };
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{
@@ -62,19 +59,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if self.tracer_enabled() {
             let val_str = format!("{:?}", value);
             self.tracer().trace_stack_op(self.indent(), "POP", &val_str);
-        }
-    }
-
-    #[inline]
-    pub(crate) fn on_pop(&mut self) {
-        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height == crate::StackSlotIndex(0) {
-                panic!(
-                    "Stack height underflow in frame {:?}",
-                    frame.state.info_handle.source
-                );
-            }
-            frame.stack_height -= 1usize;
         }
     }
 

@@ -49,8 +49,17 @@ pub fn run_cli() -> ExitCode {
 
     let entry_method = match resolution.entry_point {
         Some(EntryPoint::Method(m)) => m,
-        Some(EntryPoint::File(f)) => todo!("find entry point in file {}", resolution[f].name),
-        None => panic!("expected input module to have an entry point, received one without"),
+        Some(EntryPoint::File(f)) => {
+            eprintln!(
+                "Entry-point files are not supported: {}",
+                resolution[f].name
+            );
+            return ExitCode::from(1);
+        }
+        None => {
+            eprintln!("Expected input module to have an entry point, received one without");
+            return ExitCode::from(1);
+        }
     };
 
     #[allow(clippy::arc_with_non_send_sync)]
@@ -58,12 +67,15 @@ pub fn run_cli() -> ExitCode {
     let mut executor = vm::Executor::new(shared);
 
     let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
-    let method_index = td
+    let Some(method_index) = td
         .definition()
         .methods
         .iter()
         .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
-        .unwrap();
+    else {
+        eprintln!("Internal VM error: failed to locate entry method index");
+        return ExitCode::from(1);
+    };
 
     let entrypoint = MethodDescription::new(
         td,
@@ -71,7 +83,10 @@ pub fn run_cli() -> ExitCode {
         resolution,
         MethodMemberIndex::Method(method_index),
     );
-    executor.entrypoint(entrypoint);
+    if let Err(e) = executor.entrypoint(entrypoint) {
+        eprintln!("Internal VM error: {}", e);
+        return ExitCode::from(1);
+    }
 
     let result = executor.run();
     match result {

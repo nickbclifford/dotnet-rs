@@ -8,7 +8,7 @@ use crate::{
     pointer::{self, ManagedPtr, PointerOrigin, UnmanagedPtr},
     string::CLRString,
 };
-use dotnet_types::TypeDescription;
+use dotnet_types::{TypeDescription, error::ExecutionError};
 use dotnet_utils::{
     ByteOffset, StackSlotIndex,
     atomic::{AtomicAccess, StandardAtomicAccess},
@@ -26,14 +26,40 @@ use std::{
     ptr::NonNull,
     sync::Arc,
 };
+use thiserror::Error;
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{exception_type}: {message}")]
 pub struct ManagedExceptionError {
     pub exception_type: &'static str,
     pub message: &'static str,
+}
+
+impl ManagedExceptionError {
+    pub const fn overflow() -> Self {
+        Self {
+            exception_type: "System.OverflowException",
+            message: "Arithmetic operation resulted in an overflow.",
+        }
+    }
+
+    pub const fn divide_by_zero() -> Self {
+        Self {
+            exception_type: "System.DivideByZeroException",
+            message: "Attempted to divide by zero.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum StackValueError {
+    #[error("{0}")]
+    ManagedException(#[from] ManagedExceptionError),
+    #[error(transparent)]
+    Execution(#[from] ExecutionError),
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -166,81 +192,51 @@ macro_rules! checked_arithmetic_op {
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::Int32)
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as u32)
                 .$op(r as u32)
                 .map(|v| StackValue::Int32(v as i32))
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::Int64)
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => (l as u64)
                 .$op(r as u64)
                 .map(|v| StackValue::Int64(v as i64))
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::NativeInt)
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => (l
                 as usize)
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             // Mixed types (Int32 <-> NativeInt)
             (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => l
                 .$op(r as isize)
                 .map(StackValue::NativeInt)
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as usize)
                 .$op((r as u32) as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => (l as isize)
                 .$op(r)
                 .map(StackValue::NativeInt)
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => ((l as u32)
                 as usize)
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or(ManagedExceptionError {
-                    exception_type: "System.OverflowException",
-                    message: "Arithmetic operation resulted in an overflow.",
-                }),
-            (l, r, _) => panic!(
-                "invalid types for checked operation: {}, {}",
-                stack_value_kind(&l),
-                stack_value_kind(&r)
-            ),
+                .ok_or_else(|| ManagedExceptionError::overflow().into()),
+            (l, r, _) => Err(ExecutionError::TypeMismatch {
+                expected: "checked arithmetic operands (Int32, Int64, NativeInt)".to_string(),
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+            }
+            .into()),
         }
     };
 }
@@ -248,23 +244,48 @@ macro_rules! checked_arithmetic_op {
 macro_rules! arithmetic_op {
     ($l:expr, $r:expr, $sgn:expr, $op:tt) => {
         match ($l, $r, $sgn) {
-            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => StackValue::Int32(l $op r),
-            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => StackValue::Int32(((l as u32) $op (r as u32)) as i32),
-            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => StackValue::Int64(l $op r),
-            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => StackValue::Int64(((l as u64) $op (r as u64)) as i64),
-            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt(l $op r),
-            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op (r as usize)) as isize),
-            (StackValue::NativeFloat(l), StackValue::NativeFloat(r), _) => StackValue::NativeFloat(l $op r),
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => {
+                Ok(StackValue::Int32(l $op r))
+            }
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                Ok(StackValue::Int32(((l as u32) $op (r as u32)) as i32))
+            }
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => {
+                Ok(StackValue::Int64(l $op r))
+            }
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => {
+                Ok(StackValue::Int64(((l as u64) $op (r as u64)) as i64))
+            }
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => {
+                Ok(StackValue::NativeInt(l $op r))
+            }
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                Ok(StackValue::NativeInt(((l as usize) $op (r as usize)) as isize))
+            }
+            (StackValue::NativeFloat(l), StackValue::NativeFloat(r), _) => {
+                Ok(StackValue::NativeFloat(l $op r))
+            }
             // Mixed types (Int32 <-> NativeInt)
-            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => StackValue::NativeInt(l $op (r as isize)),
-            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op ((r as u32) as usize)) as isize),
-            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt((l as isize) $op r),
-            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt((((l as u32) as usize) $op (r as usize)) as isize),
-            (l, r, _) => panic!(
-                "invalid types for arithmetic operation: {}, {}",
-                stack_value_kind(&l),
-                stack_value_kind(&r)
-            ),
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => {
+                Ok(StackValue::NativeInt(l $op (r as isize)))
+            }
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                Ok(StackValue::NativeInt(
+                    ((l as usize) $op ((r as u32) as usize)) as isize,
+                ))
+            }
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => {
+                Ok(StackValue::NativeInt((l as isize) $op r))
+            }
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                Ok(StackValue::NativeInt(
+                    (((l as u32) as usize) $op (r as usize)) as isize,
+                ))
+            }
+            (l, r, _) => Err(ExecutionError::TypeMismatch {
+                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat)".to_string(),
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+            }),
         }
     };
 }
@@ -272,13 +293,24 @@ macro_rules! arithmetic_op {
 macro_rules! shift_op {
     ($target:expr, $amount:expr, $sgn:expr, $op:tt) => {
         match ($target, $sgn) {
-            (StackValue::Int32(i), NumberSign::Signed) => StackValue::Int32(i $op $amount),
-            (StackValue::Int32(i), NumberSign::Unsigned) => StackValue::Int32(((i as u32) $op $amount) as i32),
-            (StackValue::Int64(i), NumberSign::Signed) => StackValue::Int64(i $op $amount),
-            (StackValue::Int64(i), NumberSign::Unsigned) => StackValue::Int64(((i as u64) $op $amount) as i64),
-            (StackValue::NativeInt(i), NumberSign::Signed) => StackValue::NativeInt(i $op $amount),
-            (StackValue::NativeInt(i), NumberSign::Unsigned) => StackValue::NativeInt(((i as usize) $op $amount) as isize),
-            (v, _) => panic!("invalid shift target: {}", stack_value_kind(&v)),
+            (StackValue::Int32(i), NumberSign::Signed) => Ok(StackValue::Int32(i $op $amount)),
+            (StackValue::Int32(i), NumberSign::Unsigned) => {
+                Ok(StackValue::Int32(((i as u32) $op $amount) as i32))
+            }
+            (StackValue::Int64(i), NumberSign::Signed) => Ok(StackValue::Int64(i $op $amount)),
+            (StackValue::Int64(i), NumberSign::Unsigned) => {
+                Ok(StackValue::Int64(((i as u64) $op $amount) as i64))
+            }
+            (StackValue::NativeInt(i), NumberSign::Signed) => {
+                Ok(StackValue::NativeInt(i $op $amount))
+            }
+            (StackValue::NativeInt(i), NumberSign::Unsigned) => {
+                Ok(StackValue::NativeInt(((i as usize) $op $amount) as isize))
+            }
+            (v, _) => Err(ExecutionError::TypeMismatch {
+                expected: "shift target (Int32, Int64, NativeInt)".to_string(),
+                actual: stack_value_kind(&v).to_string(),
+            }),
         }
     };
 }
@@ -286,18 +318,23 @@ macro_rules! shift_op {
 macro_rules! bitwise_op {
     ($l:expr, $r:expr, $op:tt) => {
         match ($l, $r) {
-            (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l $op r),
-            (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize) $op r),
-            (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l $op r),
-            (StackValue::Int64(l), StackValue::NativeInt(r)) => StackValue::Int64(l $op (r as i64)),
-            (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l $op (r as isize)),
-            (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64) $op r),
-            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l $op r),
-            (l, r) => panic!(
-                "invalid types for bitwise operation: {}, {}",
-                stack_value_kind(&l),
-                stack_value_kind(&r)
-            ),
+            (StackValue::Int32(l), StackValue::Int32(r)) => Ok(StackValue::Int32(l $op r)),
+            (StackValue::Int32(l), StackValue::NativeInt(r)) => {
+                Ok(StackValue::NativeInt((l as isize) $op r))
+            }
+            (StackValue::Int64(l), StackValue::Int64(r)) => Ok(StackValue::Int64(l $op r)),
+            (StackValue::Int64(l), StackValue::NativeInt(r)) => {
+                Ok(StackValue::Int64(l $op (r as i64)))
+            }
+            (StackValue::NativeInt(l), StackValue::Int32(r)) => {
+                Ok(StackValue::NativeInt(l $op (r as isize)))
+            }
+            (StackValue::NativeInt(l), StackValue::Int64(r)) => Ok(StackValue::Int64((l as i64) $op r)),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => Ok(StackValue::NativeInt(l $op r)),
+            (l, r) => Err(ExecutionError::TypeMismatch {
+                expected: "bitwise operands (Int32, Int64, NativeInt)".to_string(),
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+            }),
         }
     };
 }
@@ -305,32 +342,44 @@ macro_rules! bitwise_op {
 macro_rules! wrapping_arithmetic_op {
     ($l:expr, $r:expr, $op:ident, $float_op:tt) => {
         match ($l, $r) {
-            (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l.$op(r)),
-            (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize).$op(r)),
-            (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l.$op(r)),
-            (StackValue::Int64(l), StackValue::NativeInt(r)) => StackValue::Int64(l.$op(r as i64)),
-            (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l.$op(r as isize)),
-            (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64).$op(r)),
-            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l.$op(r)),
-            (StackValue::NativeFloat(l), StackValue::NativeFloat(r)) => StackValue::NativeFloat(l $float_op r),
+            (StackValue::Int32(l), StackValue::Int32(r)) => Ok(StackValue::Int32(l.$op(r))),
+            (StackValue::Int32(l), StackValue::NativeInt(r)) => {
+                Ok(StackValue::NativeInt((l as isize).$op(r)))
+            }
+            (StackValue::Int64(l), StackValue::Int64(r)) => Ok(StackValue::Int64(l.$op(r))),
+            (StackValue::Int64(l), StackValue::NativeInt(r)) => {
+                Ok(StackValue::Int64(l.$op(r as i64)))
+            }
+            (StackValue::NativeInt(l), StackValue::Int32(r)) => {
+                Ok(StackValue::NativeInt(l.$op(r as isize)))
+            }
+            (StackValue::NativeInt(l), StackValue::Int64(r)) => {
+                Ok(StackValue::Int64((l as i64).$op(r)))
+            }
+            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => {
+                Ok(StackValue::NativeInt(l.$op(r)))
+            }
+            (StackValue::NativeFloat(l), StackValue::NativeFloat(r)) => {
+                Ok(StackValue::NativeFloat(l $float_op r))
+            }
             (StackValue::ObjectRef(l), StackValue::NativeInt(r)) => {
-                 let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
-                 StackValue::NativeInt(ptr.$op(r))
-            },
+                let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                Ok(StackValue::NativeInt(ptr.$op(r)))
+            }
             (StackValue::ObjectRef(l), StackValue::Int32(r)) => {
-                 let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
-                 StackValue::NativeInt(ptr.$op(r as isize))
-            },
+                let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                Ok(StackValue::NativeInt(ptr.$op(r as isize)))
+            }
             (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => {
-                 let ptr_l = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
-                 let ptr_r = r.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
-                 StackValue::NativeInt(ptr_l.$op(ptr_r))
-            },
-            (l, r) => panic!(
-                "invalid types for arithmetic operation: {}, {}",
-                stack_value_kind(&l),
-                stack_value_kind(&r)
-            ),
+                let ptr_l = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                let ptr_r = r.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                Ok(StackValue::NativeInt(ptr_l.$op(ptr_r)))
+            }
+            (l, r) => Err(ExecutionError::TypeMismatch {
+                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat, ObjectRef+nint)"
+                    .to_string(),
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+            }),
         }
     };
 }
@@ -433,11 +482,32 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
+    pub fn try_as_i32(&self) -> Result<i32, ExecutionError> {
+        match self {
+            Self::Int32(i) => Ok(*i),
+            Self::NativeInt(i) => Ok(*i as i32),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "Int32".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
+        }
+    }
+
     pub fn as_i32(&self) -> i32 {
         match self {
             Self::Int32(i) => *i,
             Self::NativeInt(i) => *i as i32,
             v => panic!("expected Int32, received {:?}", v),
+        }
+    }
+
+    pub fn try_as_i64(&self) -> Result<i64, ExecutionError> {
+        match self {
+            Self::Int64(i) => Ok(*i),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "Int64".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
         }
     }
 
@@ -448,10 +518,31 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
+    pub fn try_as_f64(&self) -> Result<f64, ExecutionError> {
+        match self {
+            Self::NativeFloat(f) => Ok(*f),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "NativeFloat".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
+        }
+    }
+
     pub fn as_f64(&self) -> f64 {
         match self {
             Self::NativeFloat(f) => *f,
             v => panic!("expected NativeFloat, received {:?}", v),
+        }
+    }
+
+    pub fn try_as_isize(&self) -> Result<isize, ExecutionError> {
+        match self {
+            Self::NativeInt(i) => Ok(*i),
+            Self::Int32(i) => Ok(*i as isize),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "NativeInt".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
         }
     }
 
@@ -463,10 +554,30 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
+    pub fn try_as_object_ref(&self) -> Result<ObjectRef<'gc>, ExecutionError> {
+        match self {
+            Self::ObjectRef(o) => Ok(*o),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "ObjectRef".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
+        }
+    }
+
     pub fn as_object_ref(&self) -> ObjectRef<'gc> {
         match self {
             Self::ObjectRef(o) => *o,
             v => panic!("expected ObjectRef, received {:?}", v),
+        }
+    }
+
+    pub fn try_as_managed_ptr(&self) -> Result<ManagedPtr<'gc>, ExecutionError> {
+        match self {
+            Self::ManagedPtr(m) => Ok(m.deref().clone()),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "ManagedPtr".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
         }
     }
 
@@ -479,6 +590,16 @@ impl<'gc> StackValue<'gc> {
 
     pub fn is_managed_ptr(&self) -> bool {
         matches!(self, Self::ManagedPtr(_))
+    }
+
+    pub fn try_as_value_type(&self) -> Result<Object<'gc>, ExecutionError> {
+        match self {
+            Self::ValueType(v) => Ok(v.clone()),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "ValueType".to_string(),
+                actual: stack_value_kind(v).to_string(),
+            }),
+        }
     }
 
     pub fn as_value_type(&self) -> Object<'gc> {
@@ -501,33 +622,32 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
-    pub fn shr(self, other: Self, sgn: NumberSign) -> Self {
+    pub fn shr(self, other: Self, sgn: NumberSign) -> Result<Self, ExecutionError> {
         let amount = match other {
             StackValue::Int32(i) => i as u32,
             StackValue::NativeInt(i) => i as u32,
-            _ => panic!("invalid shift amount: {:?}", other),
+            v => {
+                return Err(ExecutionError::TypeMismatch {
+                    expected: "shift amount (Int32 or NativeInt)".to_string(),
+                    actual: stack_value_kind(&v).to_string(),
+                });
+            }
         };
         shift_op!(self, amount, sgn, >>)
     }
 
-    pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
+    pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, StackValueError> {
         if other.is_zero() {
-            return Err(ManagedExceptionError {
-                exception_type: "System.DivideByZeroException",
-                message: "Attempted to divide by zero.",
-            });
+            return Err(ManagedExceptionError::divide_by_zero().into());
         }
-        Ok(arithmetic_op!(self, other, sgn, /))
+        arithmetic_op!(self, other, sgn, /).map_err(StackValueError::from)
     }
 
-    pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
+    pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, StackValueError> {
         if other.is_zero() {
-            return Err(ManagedExceptionError {
-                exception_type: "System.DivideByZeroException",
-                message: "Attempted to divide by zero.",
-            });
+            return Err(ManagedExceptionError::divide_by_zero().into());
         }
-        Ok(arithmetic_op!(self, other, sgn, %))
+        arithmetic_op!(self, other, sgn, %).map_err(StackValueError::from)
     }
 
     pub fn compare(&self, other: &Self, sgn: NumberSign) -> Option<Ordering> {
@@ -543,15 +663,15 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
-    pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
+    pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, StackValueError> {
         checked_arithmetic_op!(self, other, sgn, checked_add)
     }
 
-    pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
+    pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, StackValueError> {
         checked_arithmetic_op!(self, other, sgn, checked_sub)
     }
 
-    pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
+    pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, StackValueError> {
         checked_arithmetic_op!(self, other, sgn, checked_mul)
     }
 
@@ -774,7 +894,7 @@ impl<'gc> PartialOrd for StackValue<'gc> {
 }
 
 impl<'gc> Add for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn add(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
@@ -782,22 +902,22 @@ impl<'gc> Add for StackValue<'gc> {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) }
+                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) })
             }
             (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) }
+                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) })
             }
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
-                UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
+                Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i as isize))
-                }))
+                })))
             }
             (NativeInt(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), NativeInt(i)) => {
-                UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
+                Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i))
-                }))
+                })))
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_add, +),
         }
@@ -805,31 +925,35 @@ impl<'gc> Add for StackValue<'gc> {
 }
 
 impl<'gc> Sub for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn sub(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
             (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize)))) }
+                Ok(unsafe {
+                    ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
+                })
             }
             (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) }
+                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) })
             }
             (ManagedPtr(m), Int64(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize)))) }
+                Ok(unsafe {
+                    ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
+                })
             }
-            (UnmanagedPtr(u), Int32(i)) => UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
+            (UnmanagedPtr(u), Int32(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
-            })),
-            (UnmanagedPtr(u), NativeInt(i)) => UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
+            }))),
+            (UnmanagedPtr(u), NativeInt(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-i))
-            })),
+            }))),
             (ManagedPtr(m1), ManagedPtr(m2)) => {
                 let v1 = if let Some(owner) = m1.owner() {
                     unsafe {
@@ -855,7 +979,7 @@ impl<'gc> Sub for StackValue<'gc> {
                 } else {
                     m2.offset.as_usize() as *mut u8
                 };
-                NativeInt((v1 as isize) - (v2 as isize))
+                Ok(NativeInt((v1 as isize) - (v2 as isize)))
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
         }
@@ -863,73 +987,87 @@ impl<'gc> Sub for StackValue<'gc> {
 }
 
 impl<'gc> Mul for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn mul(self, rhs: Self) -> Self::Output {
         wrapping_arithmetic_op!(self, rhs, wrapping_mul, *)
     }
 }
 
 impl<'gc> BitAnd for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn bitand(self, rhs: Self) -> Self::Output {
         bitwise_op!(self, rhs, &)
     }
 }
 
 impl<'gc> BitOr for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn bitor(self, rhs: Self) -> Self::Output {
         bitwise_op!(self, rhs, |)
     }
 }
 
 impl<'gc> BitXor for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn bitxor(self, rhs: Self) -> Self::Output {
         bitwise_op!(self, rhs, ^)
     }
 }
 
 impl<'gc> Shl for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn shl(self, rhs: Self) -> Self::Output {
         let amount = match rhs {
             StackValue::Int32(i) => i as u32,
             StackValue::NativeInt(i) => i as u32,
-            _ => panic!("invalid shift amount"),
+            v => {
+                return Err(ExecutionError::TypeMismatch {
+                    expected: "shift amount (Int32 or NativeInt)".to_string(),
+                    actual: stack_value_kind(&v).to_string(),
+                });
+            }
         };
         match self {
-            StackValue::Int32(i) => StackValue::Int32(i << amount),
-            StackValue::Int64(i) => StackValue::Int64(i << amount),
-            StackValue::NativeInt(i) => StackValue::NativeInt(i << amount),
-            _ => panic!("invalid shift target"),
+            StackValue::Int32(i) => Ok(StackValue::Int32(i << amount)),
+            StackValue::Int64(i) => Ok(StackValue::Int64(i << amount)),
+            StackValue::NativeInt(i) => Ok(StackValue::NativeInt(i << amount)),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "shift target (Int32, Int64, NativeInt)".to_string(),
+                actual: stack_value_kind(&v).to_string(),
+            }),
         }
     }
 }
 
 impl<'gc> Not for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn not(self) -> Self::Output {
         use StackValue::*;
         match self {
-            Int32(i) => Int32(!i),
-            Int64(i) => Int64(!i),
-            NativeInt(i) => NativeInt(!i),
-            _ => panic!("invalid type for not"),
+            Int32(i) => Ok(Int32(!i)),
+            Int64(i) => Ok(Int64(!i)),
+            NativeInt(i) => Ok(NativeInt(!i)),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "not operand (Int32, Int64, NativeInt)".to_string(),
+                actual: stack_value_kind(&v).to_string(),
+            }),
         }
     }
 }
 
 impl<'gc> Neg for StackValue<'gc> {
-    type Output = Self;
+    type Output = Result<Self, ExecutionError>;
     fn neg(self) -> Self::Output {
         use StackValue::*;
         match self {
-            Int32(i) => Int32(-i),
-            Int64(i) => Int64(-i),
-            NativeInt(i) => NativeInt(-i),
-            NativeFloat(f) => NativeFloat(-f),
-            _ => panic!("invalid type for neg"),
+            Int32(i) => Ok(Int32(-i)),
+            Int64(i) => Ok(Int64(-i)),
+            NativeInt(i) => Ok(NativeInt(-i)),
+            NativeFloat(f) => Ok(NativeFloat(-f)),
+            v => Err(ExecutionError::TypeMismatch {
+                expected: "neg operand (Int32, Int64, NativeInt, NativeFloat)".to_string(),
+                actual: stack_value_kind(&v).to_string(),
+            }),
         }
     }
 }
@@ -943,12 +1081,12 @@ mod tests {
         let v1 = StackValue::Int32(10);
         let v2 = StackValue::Int32(20);
 
-        let sum = v1.clone() + v2.clone();
+        let sum = (v1.clone() + v2.clone()).unwrap();
         assert_eq!(sum, StackValue::Int32(30));
 
         let v3 = StackValue::Int32(30);
         let v4 = StackValue::Int32(10);
-        let diff = v3 - v4;
+        let diff = (v3 - v4).unwrap();
         assert_eq!(diff, StackValue::Int32(20));
 
         // Test division by zero
@@ -956,8 +1094,10 @@ mod tests {
         let res = v1.div(v_zero, NumberSign::Signed);
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(err.exception_type, "System.DivideByZeroException");
-        assert_eq!(err.message, "Attempted to divide by zero.");
+        assert_eq!(
+            err,
+            StackValueError::ManagedException(ManagedExceptionError::divide_by_zero())
+        );
 
         // Test checked overflow
         let v_max = StackValue::Int32(i32::MAX);
@@ -965,7 +1105,9 @@ mod tests {
         let res = v_max.checked_add(v_one, NumberSign::Signed);
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(err.exception_type, "System.OverflowException");
-        assert_eq!(err.message, "Arithmetic operation resulted in an overflow.");
+        assert_eq!(
+            err,
+            StackValueError::ManagedException(ManagedExceptionError::overflow())
+        );
     }
 }

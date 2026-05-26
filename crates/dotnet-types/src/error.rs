@@ -44,7 +44,6 @@ impl From<std::io::Error> for AssemblyLoadError {
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]
-#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub enum ExecutionError {
     #[error("Stack underflow")]
     StackUnderflow,
@@ -61,6 +60,9 @@ pub enum ExecutionError {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 
+    #[error("Invalid CIL: {0}")]
+    InvalidCil(String),
+
     #[error("Internal error: {0}")]
     InternalError(String),
 
@@ -69,6 +71,27 @@ pub enum ExecutionError {
 
     #[error("Execution aborted: {0}")]
     Aborted(String),
+}
+
+#[cfg(feature = "fuzzing")]
+impl Arbitrary<'_> for ExecutionError {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
+        let tag = u.arbitrary::<u8>()? % 9;
+        match tag {
+            0 => Ok(ExecutionError::StackUnderflow),
+            1 => Ok(ExecutionError::InvalidIP(u.arbitrary()?)),
+            2 => Ok(ExecutionError::TypeMismatch {
+                expected: u.arbitrary()?,
+                actual: u.arbitrary()?,
+            }),
+            3 => Ok(ExecutionError::NullReference),
+            4 => Ok(ExecutionError::NotImplemented(u.arbitrary()?)),
+            5 => Ok(ExecutionError::InvalidCil(u.arbitrary()?)),
+            6 => Ok(ExecutionError::InternalError(u.arbitrary()?)),
+            7 => Ok(ExecutionError::FuzzBudgetExceeded),
+            _ => Ok(ExecutionError::Aborted(u.arbitrary()?)),
+        }
+    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

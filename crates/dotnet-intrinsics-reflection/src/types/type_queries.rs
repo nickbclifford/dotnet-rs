@@ -5,6 +5,7 @@ use crate::{
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeResolver,
+    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -149,7 +150,8 @@ pub fn intrinsic_json_converter_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     // Fast path: for converter implementations, the immediate generic base carries T.
-    let this_td = this_obj.as_object(|instance| instance.description.clone());
+    let this_td =
+        dotnet_vm_ops::vm_try!(this_obj.try_as_object(|instance| instance.description.clone()));
     let this_rt = RuntimeType::Type(this_td.clone());
     let this_lookup = build_generic_lookup_from_runtime_type(ctx, &this_rt);
     if let Some(base_source) = &this_td.definition().extends {
@@ -221,7 +223,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let o = ctx.pop_obj();
-    let target = crate::common::resolve_runtime_type(ctx, o);
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
     let target_ct = target.to_concrete(ctx.loader().as_ref());
     let target_desc = ctx
         .loader()
@@ -244,7 +246,7 @@ pub fn intrinsic_type_get_is_enum<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let o = ctx.pop_obj();
-    let target = crate::common::resolve_runtime_type(ctx, o);
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.is_enum().is_some(),
         _ => false,
@@ -262,7 +264,7 @@ pub fn intrinsic_type_get_is_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let o = ctx.pop_obj();
-    let target = crate::common::resolve_runtime_type(ctx, o);
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
             matches!(td.definition().flags.kind, Kind::Interface)
@@ -336,7 +338,7 @@ pub fn handle_get_namespace<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     match target_type {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
             match td.definition().namespace.as_ref() {
@@ -354,7 +356,7 @@ pub fn handle_is_primitive_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_primitive = matches!(
         rt,
         RuntimeType::Boolean
@@ -381,7 +383,7 @@ pub fn handle_is_array_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_array = matches!(rt, RuntimeType::Vector(_) | RuntimeType::Array(_, _));
     ctx.push_i32(if is_array { 1 } else { 0 });
     StepResult::Continue
@@ -392,7 +394,7 @@ pub fn handle_is_by_ref_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_by_ref = matches!(rt, RuntimeType::ByRef(_));
     ctx.push_i32(if is_by_ref { 1 } else { 0 });
     StepResult::Continue
@@ -403,7 +405,7 @@ pub fn handle_is_pointer_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_pointer = matches!(
         rt,
         RuntimeType::Pointer(_) | RuntimeType::ValuePointer(_, _)
@@ -417,7 +419,7 @@ pub fn handle_has_element_type_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let has_element_type = matches!(
         rt,
         RuntimeType::Vector(_)
@@ -435,7 +437,7 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     let mut interfaces = vec![];
     let mut seen = HashSet::new();
@@ -506,15 +508,20 @@ pub fn handle_get_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let name = name_obj.as_heap_storage(|s| {
-        if let HeapStorage::Str(s) = s {
-            s.as_string()
-        } else {
-            panic!("name is not a string")
+    let name = match dotnet_vm_ops::vm_try!(name_obj.try_as_heap_storage(|s| match s {
+        HeapStorage::Str(s) => Ok(s.as_string()),
+        other => Err(format!("{other:?}")),
+    })) {
+        Ok(name) => name,
+        Err(actual) => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "String".to_string(),
+                actual,
+            }));
         }
-    });
+    };
 
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let mut seen = HashSet::new();
     let mut queue = VecDeque::new();
 
@@ -604,7 +611,7 @@ pub fn handle_get_element_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let element_type = match rt {
         RuntimeType::Vector(t)
         | RuntimeType::Array(t, _)
@@ -627,7 +634,7 @@ pub fn handle_get_attribute_flags_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let rt = crate::common::resolve_runtime_type(ctx, obj);
+    let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     let target_type = match rt {
         RuntimeType::Type(_) | RuntimeType::Generic(_, _) => rt,
@@ -714,7 +721,7 @@ pub fn handle_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     ctx.push_string(target_type.get_name().into());
     StepResult::Continue
 }
@@ -724,7 +731,7 @@ pub fn handle_get_base_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     match target_type {
         RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) => {
             if let Some(base) = &td.definition().extends {
@@ -755,7 +762,7 @@ pub fn handle_get_is_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
     ctx.push_i32(if is_generic { 1 } else { 0 });
     StepResult::Continue
@@ -766,7 +773,7 @@ pub fn handle_get_generic_type_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     match target_type {
         RuntimeType::Generic(td, _) => {
             let n_params = td.definition().generic_parameters.len();
@@ -794,7 +801,7 @@ pub fn handle_get_generic_arguments<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let args = match target_type {
         RuntimeType::Generic(_, args) => args.clone(),
         _ => vec![],

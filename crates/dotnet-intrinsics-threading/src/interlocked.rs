@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    error::{CompareExchangeError, VmError},
+    error::{CompareExchangeError, ExecutionError, VmError},
     generics::GenericLookup,
     members::MethodDescription,
 };
@@ -382,10 +382,12 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     usize::from_ne_bytes(buf)
                 }
                 StackValue::NativeInt(i) => i as usize,
-                _ => panic!(
-                    "intrinsic_interlocked_exchange: Expected ObjectRef or NativeInt, got {:?}",
-                    value
-                ),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "ObjectRef or NativeInt".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
 
             let size = ObjectRef::SIZE;
@@ -485,10 +487,10 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
             }
         }
         InterlockedAtomicTypeDispatch::PointerSized | InterlockedAtomicTypeDispatch::ObjectRef => {
-            panic!(
-                "intrinsic_interlocked_exchange_add: Unsupported type {:?}",
-                target_type
-            );
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "Int32 or Int64".to_string(),
+                actual: format!("{:?}", target_type.get()),
+            }));
         }
     }
 

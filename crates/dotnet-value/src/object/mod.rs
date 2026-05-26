@@ -2,6 +2,7 @@
 use crate::ValidationTag;
 
 use crate::{ArenaId, ptr_common::PointerLike};
+use dotnet_types::error::ExecutionError;
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
@@ -569,6 +570,111 @@ impl<'gc> ObjectRef<'gc> {
             // SAFETY: Use write_unaligned to avoid UB. Caller holds lock.
             (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr_val);
         }
+    }
+
+    pub fn try_as_object<T>(
+        &self,
+        op: impl FnOnce(&Object<'gc>) -> T,
+    ) -> Result<T, ExecutionError> {
+        let ObjectRef(Some(o)) = &self else {
+            return Err(ExecutionError::NullReference);
+        };
+        let inner = o.borrow();
+        inner.validate_magic();
+        let HeapStorage::Obj(instance) = &inner.storage else {
+            let variant = match &inner.storage {
+                HeapStorage::Vec(_) => "Vec",
+                HeapStorage::Obj(_) => "Obj",
+                HeapStorage::Str(_) => "Str",
+                HeapStorage::Boxed(_) => "Boxed",
+            };
+            // invariant: try_as_object callers must only use object references whose heap storage
+            // kind has already been established; a different variant indicates VM heap corruption.
+            panic!(
+                "called ObjectRef::try_as_object on non-object heap reference: variant={}",
+                variant
+            )
+        };
+
+        Ok(op(instance))
+    }
+
+    pub fn try_as_object_mut<T>(
+        &self,
+        gc: GCHandle<'gc>,
+        op: impl FnOnce(&mut Object<'gc>) -> T,
+    ) -> Result<T, ExecutionError> {
+        let ObjectRef(Some(o)) = &self else {
+            return Err(ExecutionError::NullReference);
+        };
+        let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
+        let HeapStorage::Obj(instance) = &mut inner.storage else {
+            let variant = match &inner.storage {
+                HeapStorage::Vec(_) => "Vec",
+                HeapStorage::Obj(_) => "Obj",
+                HeapStorage::Str(_) => "Str",
+                HeapStorage::Boxed(_) => "Boxed",
+            };
+            // invariant: try_as_object_mut callers must only use object references whose heap
+            // storage kind has already been established; a different variant is a VM heap bug.
+            panic!(
+                "called ObjectRef::try_as_object_mut on non-object heap reference: variant={}",
+                variant
+            )
+        };
+
+        Ok(op(instance))
+    }
+
+    pub fn try_as_vector<T>(
+        &self,
+        op: impl FnOnce(&Vector<'gc>) -> T,
+    ) -> Result<T, ExecutionError> {
+        let ObjectRef(Some(o)) = &self else {
+            return Err(ExecutionError::NullReference);
+        };
+        let inner = o.borrow();
+        inner.validate_magic();
+        let HeapStorage::Vec(instance) = &inner.storage else {
+            // invariant: try_as_vector callers must only use object references whose heap storage
+            // kind has already been established; a different variant indicates VM heap corruption.
+            panic!("called ObjectRef::try_as_vector on non-vector heap reference")
+        };
+
+        Ok(op(instance))
+    }
+
+    pub fn try_as_vector_mut<T>(
+        &self,
+        gc: GCHandle<'gc>,
+        op: impl FnOnce(&mut Vector<'gc>) -> T,
+    ) -> Result<T, ExecutionError> {
+        let ObjectRef(Some(o)) = &self else {
+            return Err(ExecutionError::NullReference);
+        };
+        let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
+        let HeapStorage::Vec(instance) = &mut inner.storage else {
+            // invariant: try_as_vector_mut callers must only use object references whose heap
+            // storage kind has already been established; a different variant is a VM heap bug.
+            panic!("called ObjectRef::try_as_vector_mut on non-vector heap reference")
+        };
+
+        Ok(op(instance))
+    }
+
+    pub fn try_as_heap_storage<T>(
+        &self,
+        op: impl FnOnce(&HeapStorage<'gc>) -> T,
+    ) -> Result<T, ExecutionError> {
+        let ObjectRef(Some(o)) = &self else {
+            return Err(ExecutionError::NullReference);
+        };
+        let inner = o.borrow();
+        inner.validate_magic();
+        inner.validate_arena_id();
+        Ok(op(&inner.storage))
     }
 
     pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {

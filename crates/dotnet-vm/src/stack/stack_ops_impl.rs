@@ -19,10 +19,10 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn pop(&mut self) -> StackValue<'gc> {
-        self.on_pop();
-        let val = self.evaluation_stack.pop();
-        self.trace_pop(&val);
-        val
+        // invariant: infallible stack pops are only for call sites where stack availability was
+        // proven by instruction metadata or prior VM checks; fallible paths should use pop_safe().
+        self.pop_safe()
+            .expect("infallible EvalStackOps::pop called with empty evaluation stack")
     }
 
     #[inline]

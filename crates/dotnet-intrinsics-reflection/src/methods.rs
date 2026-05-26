@@ -1,6 +1,11 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
+use dotnet_types::{
+    error::{ExecutionError, VmError},
+    generics::GenericLookup,
+    members::MethodDescription,
+    runtime::RuntimeType,
+};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
@@ -83,13 +88,15 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let result = match (method_name, param_count) {
         ("GetName" | "get_Name", 0) => {
             let obj = ctx.pop_obj();
-            let (method, _) = crate::common::resolve_runtime_method(ctx, obj);
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
             ctx.push_string(method.method().name.clone().into());
             Some(StepResult::Continue)
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
             let obj = ctx.pop_obj();
-            let (method, _) = crate::common::resolve_runtime_method(ctx, obj);
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
             let rt_obj = crate::common::get_runtime_type(ctx, RuntimeType::Type(method.parent));
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
@@ -113,7 +120,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         ("get_ReturnType" | "GetReturnType", 0) => {
             let obj = ctx.pop_obj();
-            let (method, lookup) = crate::common::resolve_runtime_method(ctx, obj);
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
             let rt = resolve_return_type(ctx, &method, &lookup);
             let rt_obj = crate::common::get_runtime_type(ctx, rt);
             ctx.push_obj(rt_obj);
@@ -121,7 +129,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         ("GetParameters", 0) => {
             let obj = ctx.pop_obj();
-            let (method, lookup) = crate::common::resolve_runtime_method(ctx, obj);
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
             let method_index =
                 crate::common::get_runtime_method_index(ctx, method.clone(), lookup.clone())
                     as usize;
@@ -187,7 +196,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let this_obj = ctx.pop();
             let method_obj = ctx.pop_obj();
 
-            let (method, lookup) = crate::common::resolve_runtime_method(ctx, method_obj);
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
             let is_constructor = method.method().name == ".ctor";
 
             if is_constructor {
@@ -229,7 +239,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let _flags = ctx.pop_i32();
             let method_obj = ctx.pop_obj();
 
-            let (method, lookup) = crate::common::resolve_runtime_method(ctx, method_obj);
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
 
             let instance = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
             let this_obj = ObjectRef::new(gc, HeapStorage::Obj(instance));
@@ -279,7 +290,8 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
         .field::<ObjectRef<'gc>>(handle.description, "_value")
         .unwrap()
         .read();
-    let (method, lookup) = crate::common::resolve_runtime_method(ctx, method_obj);
+    let (method, lookup) =
+        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
     let index = crate::common::get_runtime_method_index(ctx, method, lookup);
     ctx.push_isize(index as isize);
     StepResult::Continue
@@ -309,13 +321,20 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let mut args = Vec::new();
 
     if parameters_obj.0.is_some() {
-        let vector = parameters_obj.as_heap_storage(|s| {
-            if let HeapStorage::Vec(v) = s {
-                v.clone()
-            } else {
-                panic!("parameters is not an array")
+        let vector = match parameters_obj.as_heap_storage(|s| match s {
+            HeapStorage::Vec(v) => Ok(v.clone()),
+            other => Err(format!("{other:?}")),
+        }) {
+            Ok(v) => v,
+            Err(actual) => {
+                return Err(StepResult::Error(VmError::Execution(
+                    ExecutionError::TypeMismatch {
+                        expected: "object[]".to_string(),
+                        actual,
+                    },
+                )));
             }
-        });
+        };
 
         for i in 0..vector.layout.length {
             let mut element_bytes = [0u8; ObjectRef::SIZE];
@@ -327,20 +346,38 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 ParameterType::Value(t) | ParameterType::Ref(t) => t,
                 ParameterType::TypedReference => {
                     if arg_obj.0.is_none() {
-                        panic!("TypedReference parameter cannot be null");
+                        return Err(StepResult::Error(VmError::Execution(
+                            ExecutionError::TypeMismatch {
+                                expected: "boxed System.TypedReference".to_string(),
+                                actual: "null".to_string(),
+                            },
+                        )));
                     }
-                    let val = arg_obj.as_heap_storage(|s| {
+                    let val = match arg_obj.as_heap_storage(|s| {
                         if let HeapStorage::Boxed(o) = s {
                             let tr_type = ctx
                                 .loader()
                                 .corlib_type("System.TypedReference")
                                 .expect("System.TypedReference must exist");
-                            o.instance_storage
-                                .with_data(|data| ctx.read_cts_value(&tr_type.into(), data))
+                            Ok(o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&tr_type.into(), data)))
                         } else {
-                            panic!("Expected boxed TypedReference for parameter {}", i)
+                            Err(format!("{s:?}"))
                         }
-                    });
+                    }) {
+                        Ok(v) => v,
+                        Err(actual) => {
+                            return Err(StepResult::Error(VmError::Execution(
+                                ExecutionError::TypeMismatch {
+                                    expected: format!(
+                                        "boxed System.TypedReference for parameter {}",
+                                        i
+                                    ),
+                                    actual,
+                                },
+                            )));
+                        }
+                    };
                     match val {
                         Ok(v) => {
                             args.push(v.into_stack());
@@ -366,14 +403,24 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 if arg_obj.0.is_none() {
                     args.push(StackValue::null());
                 } else {
-                    let val = arg_obj.as_heap_storage(|s| {
+                    let val = match arg_obj.as_heap_storage(|s| {
                         if let HeapStorage::Boxed(o) = s {
-                            o.instance_storage
-                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data))
+                            Ok(o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data)))
                         } else {
-                            panic!("Expected boxed value for parameter {}", i)
+                            Err(format!("{s:?}"))
                         }
-                    });
+                    }) {
+                        Ok(v) => v,
+                        Err(actual) => {
+                            return Err(StepResult::Error(VmError::Execution(
+                                ExecutionError::TypeMismatch {
+                                    expected: format!("boxed value for parameter {}", i),
+                                    actual,
+                                },
+                            )));
+                        }
+                    };
                     match val {
                         Ok(v) => args.push(v.into_stack()),
                         Err(e) => return Err(StepResult::Error(e.into())),

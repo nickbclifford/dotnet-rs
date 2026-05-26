@@ -41,9 +41,11 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
     {
         match (is_load, ordering) {
             (true, Ordering::Release) | (true, Ordering::AcqRel) => {
+                // invariant: internal atomic load callers must use load-compatible orderings.
                 panic!("Invalid load ordering: {:?}", ordering);
             }
             (false, Ordering::Acquire) | (false, Ordering::AcqRel) => {
+                // invariant: internal atomic store callers must use store-compatible orderings.
                 panic!("Invalid store ordering: {:?}", ordering);
             }
             _ => {}
@@ -124,7 +126,10 @@ impl AtomicAccess for StandardAtomicAccess {
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.load(ordering) as u64,
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.load(ordering) as u64,
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.load(ordering),
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 
@@ -137,7 +142,10 @@ impl AtomicAccess for StandardAtomicAccess {
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.store(value as u16, ordering),
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.store(value as u32, ordering),
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.store(value, ordering),
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 
@@ -165,7 +173,10 @@ impl AtomicAccess for StandardAtomicAccess {
                 .map_err(|x| x as u64),
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }
                 .compare_exchange(expected, new, success, failure),
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 
@@ -176,7 +187,10 @@ impl AtomicAccess for StandardAtomicAccess {
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.swap(new as u16, ordering) as u64,
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.swap(new as u32, ordering) as u64,
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.swap(new, ordering),
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 
@@ -194,7 +208,10 @@ impl AtomicAccess for StandardAtomicAccess {
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.fetch_add(value as u32, ordering)
                 as u64,
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.fetch_add(value, ordering),
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 }
@@ -212,7 +229,10 @@ impl AtomicAccess for StandardAtomicAccess {
             2 => unsafe { ptr::read_unaligned(ptr as *const u16) as u64 },
             4 => unsafe { ptr::read_unaligned(ptr as *const u32) as u64 },
             8 => unsafe { ptr::read_unaligned(ptr as *const u64) },
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 
@@ -227,7 +247,10 @@ impl AtomicAccess for StandardAtomicAccess {
             2 => unsafe { ptr::write_unaligned(ptr as *mut u16, value as u16) },
             4 => unsafe { ptr::write_unaligned(ptr as *mut u32, value as u32) },
             8 => unsafe { ptr::write_unaligned(ptr as *mut u64, value) },
-            _ => panic!("Unsupported atomic size: {}", size),
+            _ => {
+                // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
+                panic!("Unsupported atomic size: {}", size);
+            }
         }
     }
 

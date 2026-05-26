@@ -4,7 +4,11 @@
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
 use crate::{DelegateInvokeHost, NULL_REF_MSG, helpers::get_multicast_targets_ref};
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    error::{ExecutionError, VmError},
+    generics::GenericLookup,
+    members::MethodDescription,
+};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::{
     MulticastState, StepResult,
@@ -24,7 +28,12 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
 
     let delegate_ref = match &args[0] {
         StackValue::ObjectRef(r) => r,
-        _ => panic!("Expected delegate object reference, got {:?}", &args[0]),
+        actual => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "delegate object reference".to_string(),
+                actual: format!("{actual:?}"),
+            }));
+        }
     };
 
     if delegate_ref.0.is_none() {

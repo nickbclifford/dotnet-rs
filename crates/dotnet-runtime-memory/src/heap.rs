@@ -180,6 +180,7 @@ impl<'gc> HeapManager<'gc> {
                     let ptr = obj.0.expect("object in finalization queue is null");
                     let addr = Gc::as_ptr(ptr) as usize;
                     if !seen.insert(addr) {
+                        // invariant: GC bug — finalization queue must not contain duplicates.
                         panic!(
                             "Duplicate object in finalization queue at address {:#x}",
                             addr
@@ -190,6 +191,7 @@ impl<'gc> HeapManager<'gc> {
                     match &inner.storage {
                         HeapStorage::Obj(o) => {
                             if !o.has_finalizer {
+                                // invariant: GC bug — only objects with finalizers belong in this queue.
                                 panic!(
                                     "Object without finalizer in finalization queue: {:?}",
                                     o.description
@@ -197,6 +199,7 @@ impl<'gc> HeapManager<'gc> {
                             }
                         }
                         _ => {
+                            // invariant: GC bug — finalization queue entries must always be heap objects.
                             panic!("Non-object in finalization queue");
                         }
                     }

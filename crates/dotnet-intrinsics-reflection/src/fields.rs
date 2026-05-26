@@ -14,7 +14,7 @@ pub fn intrinsic_field_info_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj_ref = ctx.pop_obj();
-    let (field, _) = crate::common::resolve_runtime_field(ctx, obj_ref);
+    let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
     ctx.push_string(field.field().name.clone().into());
     StepResult::Continue
 }
@@ -26,7 +26,7 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, T: ReflectionIntrinsicHost<'
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj_ref = ctx.pop_obj();
-    let (field, _) = crate::common::resolve_runtime_field(ctx, obj_ref);
+    let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
     let rt_obj = crate::common::get_runtime_type(ctx, RuntimeType::Type(field.parent));
     ctx.push_obj(rt_obj);
     StepResult::Continue

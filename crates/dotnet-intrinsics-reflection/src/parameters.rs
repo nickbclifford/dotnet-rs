@@ -1,6 +1,9 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
+use dotnet_types::{
+    error::ExecutionError, generics::GenericLookup, members::MethodDescription,
+    runtime::RuntimeType,
+};
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_ops::{
     StepResult,
@@ -20,13 +23,15 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
     match method_name {
         "GetName" => {
             let obj = ctx.pop_obj();
-            let (_m_desc, _lookup, position) = resolve_runtime_parameter(ctx, obj);
+            let (_m_desc, _lookup, position) =
+                dotnet_vm_ops::vm_try!(resolve_runtime_parameter(ctx, obj));
             ctx.push_string(format!("p{}", position).into());
             StepResult::Continue
         }
         "GetParameterType" => {
             let obj = ctx.pop_obj();
-            let (m_desc, lookup, position) = resolve_runtime_parameter(ctx, obj);
+            let (m_desc, lookup, position) =
+                dotnet_vm_ops::vm_try!(resolve_runtime_parameter(ctx, obj));
             let param_type = &m_desc.method().signature.parameters[position].1;
 
             let rt = match param_type {
@@ -49,8 +54,8 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
 pub(crate) fn resolve_runtime_parameter<'gc>(
     ctx: &(impl TypedStackOps<'gc> + LoaderOps + crate::ReflectionRegistryHost<'gc>),
     obj: ObjectRef<'gc>,
-) -> (MethodDescription, GenericLookup, usize) {
-    obj.as_object(|instance| {
+) -> Result<(MethodDescription, GenericLookup, usize), ExecutionError> {
+    obj.try_as_object(|instance| {
         let method_index = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "method_index")

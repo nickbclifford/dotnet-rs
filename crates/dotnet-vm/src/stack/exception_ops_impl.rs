@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    error::{ExecutionError, VmError},
     stack::{
         context::VesContext,
         ops::{ExceptionOps, VmStackOps},
@@ -101,12 +102,11 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn rethrow(&mut self) -> StepResult {
-        let exception = self
-            .current_frame()
-            .exception_stack
-            .last()
-            .cloned()
-            .expect("rethrow without active exception");
+        let Some(exception) = self.current_frame().exception_stack.last().cloned() else {
+            return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
+                "rethrow without active exception".to_string(),
+            )));
+        };
         *self.exception_mode = ExceptionState::Throwing(exception, true);
         self.handle_exception()
     }
@@ -142,10 +142,10 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 *self.exception_mode = ExceptionState::Unwinding(*state);
                 self.handle_exception()
             }
-            _ => panic!(
+            _ => StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(format!(
                 "endfinally called outside of handler, state: {:?}",
                 self.exception_mode
-            ),
+            )))),
         }
     }
 
@@ -158,7 +158,11 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 state.original_ip,
                 state.original_stack_height,
             ),
-            _ => panic!("EndFilter called but not in Filtering mode"),
+            _ => {
+                return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
+                    "EndFilter called but not in Filtering mode".to_string(),
+                )));
+            }
         };
 
         // Restore state of the frame where filter ran

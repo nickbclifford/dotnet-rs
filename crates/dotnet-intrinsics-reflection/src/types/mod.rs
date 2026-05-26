@@ -267,7 +267,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 }
             };
 
-            let rt = crate::common::resolve_runtime_type(ctx, rt_obj);
+            let rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, rt_obj));
             let td = match &rt {
                 RuntimeType::Type(td) => td.clone(),
                 RuntimeType::Generic(td, _) => td.clone(),

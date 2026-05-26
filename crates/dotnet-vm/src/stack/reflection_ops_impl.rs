@@ -14,7 +14,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
-    error::TypeResolutionError,
+    error::{ExecutionError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
@@ -463,17 +463,23 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
+    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> Result<RuntimeType, ExecutionError> {
         dotnet_intrinsics_reflection::common::resolve_runtime_type(self, obj)
     }
 
     #[inline]
-    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup) {
+    fn resolve_runtime_method(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(MethodDescription, GenericLookup), ExecutionError> {
         dotnet_intrinsics_reflection::common::resolve_runtime_method(self, obj)
     }
 
     #[inline]
-    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
+    fn resolve_runtime_field(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> Result<(FieldDescription, GenericLookup), ExecutionError> {
         dotnet_intrinsics_reflection::common::resolve_runtime_field(self, obj)
     }
 

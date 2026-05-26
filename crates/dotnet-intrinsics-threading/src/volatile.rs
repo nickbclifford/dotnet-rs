@@ -5,7 +5,11 @@ use crate::{
     },
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    error::{ExecutionError, VmError},
+    generics::GenericLookup,
+    members::MethodDescription,
+};
 use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_data::StepResult;
@@ -202,7 +206,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::Byte => {
             let val = match value {
                 StackValue::Int32(i) => i as u64,
-                _ => panic!("Expected Int32 for byte-sized Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "Int32".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             // SAFETY: The write target came from a managed by-ref argument and this arm writes a
             // single byte, matching the resolved element width.
@@ -221,7 +230,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::Int16 => {
             let val = match value {
                 StackValue::Int32(i) => i as u64,
-                _ => panic!("Expected Int32 for 16-bit Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "Int32".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             // SAFETY: The dispatch guarantees 16-bit storage and the source value is normalized to
             // the corresponding 2-byte representation before the atomic store.
@@ -241,7 +255,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let val = match value {
                 StackValue::Int32(i) => i as u32 as u64,
                 StackValue::NativeFloat(f) => (f as f32).to_bits() as u64,
-                _ => panic!("Expected Int32 or Float for 32-bit Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "Int32 or NativeFloat".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             // SAFETY: This branch is only for 32-bit payloads and stores exactly 4 bytes into the
             // managed by-ref location selected by the intrinsic dispatch.
@@ -261,7 +280,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let val = match value {
                 StackValue::Int64(i) => i as u64,
                 StackValue::NativeFloat(f) => f.to_bits(),
-                _ => panic!("Expected Int64 or Float for 64-bit Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "Int64 or NativeFloat".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             // SAFETY: This arm handles only 64-bit payloads and performs an 8-byte atomic write
             // against a managed by-ref pointer validated by the VM.
@@ -280,7 +304,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::PointerSized => {
             let val = match value {
                 StackValue::NativeInt(i) => i as u64,
-                _ => panic!("Expected NativeInt for Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "NativeInt".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             let size = ObjectRef::SIZE;
             // SAFETY: Pointer-sized values are written using the runtime pointer width and the
@@ -303,7 +332,12 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize as u64,
                 StackValue::ObjectRef(ObjectRef(None)) => 0,
                 StackValue::NativeInt(i) => i as u64,
-                _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
+                actual => {
+                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "ObjectRef or NativeInt".to_string(),
+                        actual: format!("{actual:?}"),
+                    }));
+                }
             };
             let size = ObjectRef::SIZE;
             // SAFETY: This branch stores one object-reference-sized slot atomically; source values

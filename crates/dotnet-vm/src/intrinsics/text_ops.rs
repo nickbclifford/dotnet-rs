@@ -3,7 +3,11 @@ use crate::{
     stack::ops::{EvalStackOps, MemoryOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    error::{ExecutionError, VmError},
+    generics::GenericLookup,
+    members::MethodDescription,
+};
 use dotnet_value::StackValue;
 
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsAsciiCodePoint(uint)")]
@@ -47,7 +51,12 @@ pub fn intrinsic_unicode_utility_is_in_range_inclusive<
         (StackValue::NativeInt(v), StackValue::NativeInt(l), StackValue::NativeInt(h)) => {
             v >= l && v <= h
         }
-        _ => panic!("IsInRangeInclusive: mismatched types"),
+        (actual_value, actual_low, actual_high) => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "all Int32, all Int64, or all NativeInt".to_string(),
+                actual: format!("value={actual_value:?}, low={actual_low:?}, high={actual_high:?}"),
+            }));
+        }
     };
     ctx.push_i32(if result { 1 } else { 0 });
     StepResult::Continue

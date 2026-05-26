@@ -6,6 +6,7 @@ use dotnet_assemblies::SUPPORT_ASSEMBLY;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
+    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -87,7 +88,7 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj = ctx.pop_obj();
 
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let resolution = target_type.resolution(ctx.loader().as_ref());
 
     if let Some(o) = ctx.reflection_cached_runtime_assembly(resolution.clone()) {
@@ -149,7 +150,7 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
@@ -207,14 +208,19 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let name = name_obj.as_heap_storage(|s| {
-        if let HeapStorage::Str(s) = s {
-            s.as_string()
-        } else {
-            panic!("name is not a string")
+    let name = match dotnet_vm_ops::vm_try!(name_obj.try_as_heap_storage(|s| match s {
+        HeapStorage::Str(s) => Ok(s.as_string()),
+        other => Err(format!("{other:?}")),
+    })) {
+        Ok(name) => name,
+        Err(actual) => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "String".to_string(),
+                actual,
+            }));
         }
-    });
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    };
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
@@ -278,7 +284,7 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
 
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
@@ -384,7 +390,7 @@ pub fn handle_get_fields<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
@@ -437,14 +443,19 @@ pub fn handle_get_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let name = name_obj.as_heap_storage(|s| {
-        if let HeapStorage::Str(s) = s {
-            s.as_string()
-        } else {
-            panic!("name is not a string")
+    let name = match dotnet_vm_ops::vm_try!(name_obj.try_as_heap_storage(|s| match s {
+        HeapStorage::Str(s) => Ok(s.as_string()),
+        other => Err(format!("{other:?}")),
+    })) {
+        Ok(name) => name,
+        Err(actual) => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "String".to_string(),
+                actual,
+            }));
         }
-    });
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    };
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
@@ -531,7 +542,7 @@ pub fn handle_get_constructors<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
-    let target_type = crate::common::resolve_runtime_type(ctx, obj);
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;

@@ -62,7 +62,7 @@ pub fn intrinsic_marshal_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();
-        ctx.unsafe_resolve_runtime_type(type_obj)
+        dotnet_vm_ops::vm_try!(ctx.unsafe_resolve_runtime_type(type_obj))
     };
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(concrete_type));
     ctx.push_i32(layout.size().as_usize() as i32);
@@ -85,7 +85,7 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();
-        ctx.unsafe_resolve_runtime_type(type_obj)
+        dotnet_vm_ops::vm_try!(ctx.unsafe_resolve_runtime_type(type_obj))
     };
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(concrete_type.clone()));
 

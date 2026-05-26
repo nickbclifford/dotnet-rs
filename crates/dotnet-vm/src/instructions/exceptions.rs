@@ -16,13 +16,13 @@ pub fn endfinally<'gc, T: ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
 
 #[dotnet_instruction(EndFilter)]
 pub fn endfilter<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
-    let result_val = vm_pop!(ctx).as_i32();
+    let result_val = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_i32());
     ctx.endfilter(result_val)
 }
 
 #[dotnet_instruction(Throw)]
 pub fn throw<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
-    let exc = vm_pop!(ctx).as_object_ref();
+    let exc = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_object_ref());
     if exc.0.is_none() {
         return ctx.throw_by_name_with_message(
             "System.NullReferenceException",
