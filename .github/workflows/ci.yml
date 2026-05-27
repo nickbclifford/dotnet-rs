@@ -171,6 +171,7 @@ jobs:
         with:
           name: dotnet-fixtures
           path: ${{ steps.fixture-output-dir.outputs.path }}
+          include-hidden-files: true
           retention-days: 1
 
   test:
