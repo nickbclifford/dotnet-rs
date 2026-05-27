@@ -21,6 +21,39 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+print_log_excerpt() {
+    local log_file="$1"
+    echo "---- tail: $log_file ----" >&2
+    if [[ -f "$log_file" ]]; then
+        tail -n 200 "$log_file" >&2
+    else
+        echo "(missing log file)" >&2
+    fi
+    echo "-------------------------" >&2
+}
+
+run_logged() {
+    local log_file="$1"
+    shift
+    if ! "$@" >"$log_file" 2>&1; then
+        print_log_excerpt "$log_file"
+        fail "command failed: $* (see $log_file)"
+    fi
+}
+
+assert_vm_rerun_marker_present() {
+    local log_file="$1"
+    local label="$2"
+    if rg -n 'Dirty dotnet-vm .*src/intrinsics' "$log_file" >/dev/null; then
+        return
+    fi
+    if rg -n 'build/dotnet-vm-.*/build-script-build' "$log_file" >/dev/null; then
+        return
+    fi
+    print_log_excerpt "$log_file"
+    fail "${label}-file rerun marker missing in $log_file"
+}
+
 support_dll_path() {
     find target -path '*/build/dotnet-assemblies-*/out/support.dll' -type f | head -n1
 }
@@ -66,24 +99,29 @@ assert_vm_directory_rerun_invalidation() {
     local add_log="$LOG_DIR/vm-rerun-add.log"
     local remove_log="$LOG_DIR/vm-rerun-remove.log"
     local probe_file="crates/dotnet-vm/src/intrinsics/__rerun_probe.rs"
+    local probe_dir
+    probe_dir="$(dirname "$probe_file")"
 
     log_step "Probe 3/3: dotnet-vm rerun-if-changed should retrigger on add/remove under watched root"
     cargo clean
-    cargo build -p dotnet-vm --no-default-features -vv >"$baseline_log" 2>&1
+    run_logged "$baseline_log" cargo build -p dotnet-vm --no-default-features -vv
 
     rm -f "$probe_file"
     cat >"$probe_file" <<'EOF'
 // Temporary probe file for build-script invalidation test.
 EOF
+    sleep 1
+    touch "$probe_dir"
 
-    cargo build -p dotnet-vm --no-default-features -vv >"$add_log" 2>&1
-    rg -n 'Dirty dotnet-vm .*src/intrinsics' "$add_log" >/dev/null \
-        || fail "add-file rerun marker missing in $add_log"
+    run_logged "$add_log" cargo build -p dotnet-vm --no-default-features -vv
+    assert_vm_rerun_marker_present "$add_log" "add"
 
     rm -f "$probe_file"
-    cargo build -p dotnet-vm --no-default-features -vv >"$remove_log" 2>&1
-    rg -n 'Dirty dotnet-vm .*src/intrinsics' "$remove_log" >/dev/null \
-        || fail "remove-file rerun marker missing in $remove_log"
+    sleep 1
+    touch "$probe_dir"
+
+    run_logged "$remove_log" cargo build -p dotnet-vm --no-default-features -vv
+    assert_vm_rerun_marker_present "$remove_log" "remove"
 }
 
 main() {

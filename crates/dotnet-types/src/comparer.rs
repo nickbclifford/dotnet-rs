@@ -306,19 +306,17 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 &b.parameters,
                 generics2,
             ),
-            (ReturnType(_, Some(l)), ReturnType(_, Some(r))) => {
-                if self.param_types_equal(res1, l, generics1, res2, r, generics2) {
-                    self.params_equal(
-                        res1,
-                        &a.parameters,
-                        generics1,
-                        res2,
-                        &b.parameters,
-                        generics2,
-                    )
-                } else {
-                    false
-                }
+            (ReturnType(_, Some(l)), ReturnType(_, Some(r)))
+                if self.param_types_equal(res1, l, generics1, res2, r, generics2) =>
+            {
+                self.params_equal(
+                    res1,
+                    &a.parameters,
+                    generics1,
+                    res2,
+                    &b.parameters,
+                    generics2,
+                )
             }
             _ => false,
         }
