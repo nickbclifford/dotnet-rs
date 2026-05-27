@@ -120,7 +120,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libffi-dev
+          sudo apt-get install -y libffi-dev ripgrep
 
       - name: Run build-script regression probes
         run: bash scripts/check_build_script_regressions.sh
