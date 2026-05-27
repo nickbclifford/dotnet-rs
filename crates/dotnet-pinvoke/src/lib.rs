@@ -636,6 +636,426 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+enum IntegerArgValue {
+    Int32(i32),
+    Int64(i64),
+    NativeInt(isize),
+}
+
+impl IntegerArgValue {
+    fn default_parameter_base_type(self) -> BaseType<ConcreteType> {
+        match self {
+            IntegerArgValue::Int32(_) => BaseType::IntPtr,
+            IntegerArgValue::Int64(_) => BaseType::Int64,
+            IntegerArgValue::NativeInt(_) => BaseType::IntPtr,
+        }
+    }
+
+    fn raw_value(self) -> i128 {
+        match self {
+            IntegerArgValue::Int32(val) => i128::from(val),
+            IntegerArgValue::Int64(val) => i128::from(val),
+            IntegerArgValue::NativeInt(val) => val as i128,
+        }
+    }
+
+    fn supports_i32_u32_narrowing(self) -> bool {
+        !matches!(self, IntegerArgValue::Int32(_))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IntegerNarrowTarget {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+}
+
+impl IntegerNarrowTarget {
+    fn name(self) -> &'static str {
+        match self {
+            IntegerNarrowTarget::I8 => "i8",
+            IntegerNarrowTarget::U8 => "u8",
+            IntegerNarrowTarget::I16 => "i16",
+            IntegerNarrowTarget::U16 => "u16",
+            IntegerNarrowTarget::I32 => "i32",
+            IntegerNarrowTarget::U32 => "u32",
+        }
+    }
+}
+
+fn checked_narrow_integer(
+    value: IntegerArgValue,
+    target: IntegerNarrowTarget,
+) -> Result<Vec<u8>, ExecutionError> {
+    let raw_value = value.raw_value();
+
+    let bytes = match target {
+        IntegerNarrowTarget::I8 => i8::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+        IntegerNarrowTarget::U8 => u8::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+        IntegerNarrowTarget::I16 => i16::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+        IntegerNarrowTarget::U16 => u16::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+        IntegerNarrowTarget::I32 => i32::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+        IntegerNarrowTarget::U32 => u32::try_from(raw_value)
+            .map(|v| v.to_ne_bytes().to_vec())
+            .map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    raw_value,
+                    target.name()
+                ))
+            })?,
+    };
+
+    Ok(bytes)
+}
+
+fn marshal_integer_arg<'gc>(
+    value: IntegerArgValue,
+    p_type: &ParameterType<MethodType>,
+    ctx: &mut dyn PInvokeContext<'gc>,
+    i: usize,
+    temp_buffers: &mut Vec<TempBuffer>,
+    arg_buffer_map: &mut [Option<usize>],
+    arg_ptrs: &mut [*mut c_void],
+) -> Result<(), StepResult> {
+    let p_base_type = resolve_parameter_base_type(p_type, ctx, value.default_parameter_base_type())
+        .map_err(|e| StepResult::Error(e.into()))?;
+
+    let narrow_target = match p_base_type {
+        BaseType::Int8 => Some(IntegerNarrowTarget::I8),
+        BaseType::UInt8 | BaseType::Boolean => Some(IntegerNarrowTarget::U8),
+        BaseType::Int16 => Some(IntegerNarrowTarget::I16),
+        BaseType::UInt16 | BaseType::Char => Some(IntegerNarrowTarget::U16),
+        BaseType::Int32 if value.supports_i32_u32_narrowing() => Some(IntegerNarrowTarget::I32),
+        BaseType::UInt32 if value.supports_i32_u32_narrowing() => Some(IntegerNarrowTarget::U32),
+        _ => None,
+    };
+
+    if let Some(target) = narrow_target {
+        let bytes =
+            checked_narrow_integer(value, target).map_err(|e| StepResult::Error(e.into()))?;
+        temp_buffers.push(TempBuffer::Bytes(bytes));
+        let buf_idx = temp_buffers.len() - 1;
+        arg_buffer_map[i] = Some(buf_idx);
+        arg_ptrs[i] = temp_buffers[buf_idx]
+            .as_bytes()
+            .map_err(|e| StepResult::Error(e.into()))?
+            .as_ptr() as *mut c_void;
+        return Ok(());
+    }
+
+    match value {
+        IntegerArgValue::Int32(val) => {
+            temp_buffers.push(TempBuffer::I32(Box::new(val)));
+            let idx = temp_buffers.len() - 1;
+            arg_buffer_map[i] = Some(idx);
+            arg_ptrs[i] = temp_buffers[idx]
+                .as_i32()
+                .map_err(|e| StepResult::Error(e.into()))? as *const i32
+                as *mut i32 as *mut c_void;
+        }
+        IntegerArgValue::Int64(val) => {
+            temp_buffers.push(TempBuffer::I64(Box::new(val)));
+            let idx = temp_buffers.len() - 1;
+            arg_buffer_map[i] = Some(idx);
+            arg_ptrs[i] = temp_buffers[idx]
+                .as_i64()
+                .map_err(|e| StepResult::Error(e.into()))? as *const i64
+                as *mut i64 as *mut c_void;
+        }
+        IntegerArgValue::NativeInt(val) => {
+            temp_buffers.push(TempBuffer::Isize(Box::new(val)));
+            let idx = temp_buffers.len() - 1;
+            arg_buffer_map[i] = Some(idx);
+            arg_ptrs[i] = temp_buffers[idx]
+                .as_isize()
+                .map_err(|e| StepResult::Error(e.into()))? as *const isize
+                as *mut isize as *mut c_void;
+        }
+    }
+
+    Ok(())
+}
+
+struct PInvokeCallData<'a, 'gc> {
+    cif: &'a Cif,
+    target_fn: unsafe extern "C" fn(),
+    arg_ptrs: &'a mut [*mut c_void],
+    write_backs: &'a [(WriteBackSource<'gc>, usize, usize)],
+    temp_buffers: &'a [TempBuffer],
+}
+
+fn invoke_ffi_call_with_write_backs<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    call_data: &mut PInvokeCallData<'_, 'gc>,
+    ret_ptr: *mut c_void,
+) -> Result<(), StepResult> {
+    // SAFETY: `call_data.cif` is a prepared libffi CIF, `call_data.arg_ptrs` points to
+    // marshalling-owned argument storage valid for the duration of the call, and `ret_ptr`
+    // points to writable storage matching the return ABI (or is null for void returns).
+    unsafe {
+        libffi::raw::ffi_call(
+            call_data.cif.as_raw_ptr(),
+            Some(call_data.target_fn),
+            ret_ptr,
+            call_data.arg_ptrs.as_mut_ptr(),
+        );
+    }
+
+    apply_write_backs(ctx, call_data.write_backs, call_data.temp_buffers)
+        .map_err(|e| StepResult::Error(e.into()))
+}
+
+fn read_pinvoke_return<'gc, T>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    call_data: &mut PInvokeCallData<'_, 'gc>,
+) -> Result<T, StepResult> {
+    validate_typed_return_abi::<T>(call_data.cif).map_err(|e| StepResult::Error(e.into()))?;
+
+    let mut ret = std::mem::MaybeUninit::<T>::uninit();
+    invoke_ffi_call_with_write_backs(ctx, call_data, ret.as_mut_ptr() as *mut c_void)?;
+    // SAFETY: `ffi_call` initialized the entire return slot after ABI validation.
+    Ok(unsafe { ret.assume_init() })
+}
+
+fn handle_pinvoke_return<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    method: &MethodDescription,
+    arg_count: usize,
+    call_data: &mut PInvokeCallData<'_, 'gc>,
+) -> StepResult {
+    match &method.method().signature.return_type.1 {
+        None => {
+            if let Err(e) = invoke_ffi_call_with_write_backs(ctx, call_data, std::ptr::null_mut()) {
+                return e;
+            }
+            let _ = ctx.pop_multiple(arg_count);
+        }
+        Some(ParameterType::Value(t)) => {
+            let t = match ctx.make_concrete(t) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+
+            let v = match t.get() {
+                BaseType::Boolean => match read_pinvoke_return::<u8>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::Char => match read_pinvoke_return::<u16>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::Int8 => match read_pinvoke_return::<i8>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::UInt8 => match read_pinvoke_return::<u8>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::Int16 => match read_pinvoke_return::<i16>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::UInt16 => match read_pinvoke_return::<u16>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::Int32 => match read_pinvoke_return::<i32>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v),
+                    Err(e) => return e,
+                },
+                BaseType::UInt32 => match read_pinvoke_return::<u32>(ctx, call_data) {
+                    Ok(v) => StackValue::Int32(v as i32),
+                    Err(e) => return e,
+                },
+                BaseType::Int64 => match read_pinvoke_return::<i64>(ctx, call_data) {
+                    Ok(v) => StackValue::Int64(v),
+                    Err(e) => return e,
+                },
+                BaseType::UInt64 => match read_pinvoke_return::<u64>(ctx, call_data) {
+                    Ok(v) => StackValue::Int64(v as i64),
+                    Err(e) => return e,
+                },
+                BaseType::Float32 => match read_pinvoke_return::<f32>(ctx, call_data) {
+                    Ok(v) => StackValue::NativeFloat(v as f64),
+                    Err(e) => return e,
+                },
+                BaseType::Float64 => match read_pinvoke_return::<f64>(ctx, call_data) {
+                    Ok(v) => StackValue::NativeFloat(v),
+                    Err(e) => return e,
+                },
+                BaseType::IntPtr => match read_pinvoke_return::<isize>(ctx, call_data) {
+                    Ok(v) => StackValue::NativeInt(v),
+                    Err(e) => return e,
+                },
+                BaseType::UIntPtr => match read_pinvoke_return::<usize>(ctx, call_data) {
+                    Ok(v) => StackValue::NativeInt(v as isize),
+                    Err(e) => return e,
+                },
+                BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                    match read_pinvoke_return::<*mut u8>(ctx, call_data) {
+                        Ok(v) => StackValue::unmanaged_ptr(v),
+                        Err(e) => return e,
+                    }
+                }
+                BaseType::Type {
+                    value_kind: Some(ValueKind::ValueType),
+                    source,
+                } => {
+                    let (_, _type_generics) = decompose_type_source::<ConcreteType>(source);
+
+                    let concrete = ConcreteType::new(
+                        t.resolution(),
+                        BaseType::Type {
+                            source: source.clone(),
+                            value_kind: Some(ValueKind::ValueType),
+                        },
+                    );
+                    let td = ctx
+                        .loader()
+                        .find_concrete_type(concrete)
+                        .expect("Failed to resolve type in pinvoke interop");
+
+                    let instance = match ctx.new_object(td) {
+                        Ok(inst) => inst,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
+
+                    let (ffi_size, ffi_align) = match ffi_cif_return_layout(call_data.cif) {
+                        Ok(v) => v,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
+                    let mut temp_buffer = match AlignedReturnBuffer::new_zeroed(ffi_size, ffi_align)
+                    {
+                        Ok(v) => v,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
+
+                    if let Err(e) = invoke_ffi_call_with_write_backs(
+                        ctx,
+                        call_data,
+                        temp_buffer.as_mut_ptr() as *mut c_void,
+                    ) {
+                        return e;
+                    }
+
+                    instance.instance_storage.with_data_mut(|guard| {
+                        copy_value_type_return_data(guard, temp_buffer.as_bytes());
+                    });
+
+                    StackValue::ValueType(instance)
+                }
+                BaseType::Type { .. }
+                | BaseType::Array { .. }
+                | BaseType::Vector { .. }
+                | BaseType::Object
+                | BaseType::String => match read_pinvoke_return::<*mut u8>(ctx, call_data) {
+                    Ok(v) => StackValue::unmanaged_ptr(v),
+                    Err(e) => return e,
+                },
+            };
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(v);
+        }
+        Some(ParameterType::Ref(t)) => {
+            let ptr = match read_pinvoke_return::<*mut u8>(ctx, call_data) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+            let concrete = match ctx.make_concrete(t) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            let td = ctx
+                .loader()
+                .find_concrete_type(concrete)
+                .expect("failed to resolve return type");
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
+        }
+        Some(ParameterType::TypedReference) => {
+            let ret = match read_pinvoke_return::<[usize; 2]>(ctx, call_data) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+            let addr = ret[0];
+            let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
+            if type_ptr.is_null() {
+                return StepResult::Error(
+                    ExecutionError::InternalError(
+                        "null type handle in returned TypedReference".to_string(),
+                    )
+                    .into(),
+                );
+            }
+            let type_desc = unsafe {
+                let arc = Arc::from_raw(type_ptr);
+                let clone = arc.clone();
+                let _ = Arc::into_raw(arc);
+                clone
+            };
+            let m = ManagedPtr::new(
+                NonNull::new(addr as *mut u8),
+                (*type_desc).clone(),
+                None,
+                false,
+                Some(ByteOffset(0)),
+            );
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(StackValue::TypedRef(m.into(), type_desc));
+        }
+    }
+
+    StepResult::Continue
+}
+
 fn external_call_impl<'gc>(
     ctx: &mut dyn PInvokeContext<'gc>,
     method: MethodDescription,
@@ -731,28 +1151,6 @@ fn external_call_impl<'gc>(
     let mut arg_buffer_map: Vec<Option<usize>> = vec![None; stack_values.len()];
     let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); stack_values.len()];
 
-    macro_rules! checked_narrow {
-        ($val:expr, $t:ty, $name:expr, $idx:expr) => {{
-            let v = <$t>::try_from(*$val).map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    *$val, $name
-                ))
-            });
-            let v = match v {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-            temp_buffers.push(TempBuffer::Bytes(v.to_ne_bytes().to_vec()));
-            let buf_idx = temp_buffers.len() - 1;
-            arg_buffer_map[$idx] = Some(buf_idx);
-            arg_ptrs[$idx] = match temp_buffers[buf_idx].as_bytes() {
-                Ok(buf) => buf.as_ptr() as *mut c_void,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-        }};
-    }
-
     // Pass 1: Prepare buffers
     for (i, (v, Parameter(_, p_type))) in stack_values
         .iter()
@@ -762,73 +1160,42 @@ fn external_call_impl<'gc>(
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
         match v {
             StackValue::Int32(val) => {
-                let p_base_type = match resolve_parameter_base_type(p_type, ctx, BaseType::IntPtr) {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-
-                match p_base_type {
-                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
-                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
-                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
-                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
-                    _ => {
-                        temp_buffers.push(TempBuffer::I32(Box::new(*val)));
-                        let idx = temp_buffers.len() - 1;
-                        arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] = match temp_buffers[idx].as_i32() {
-                            Ok(v) => v as *const i32 as *mut i32 as *mut c_void,
-                            Err(e) => return StepResult::Error(e.into()),
-                        };
-                    }
+                if let Err(e) = marshal_integer_arg(
+                    IntegerArgValue::Int32(*val),
+                    p_type,
+                    ctx,
+                    i,
+                    &mut temp_buffers,
+                    &mut arg_buffer_map,
+                    &mut arg_ptrs,
+                ) {
+                    return e;
                 }
             }
             StackValue::Int64(val) => {
-                let p_base_type = match resolve_parameter_base_type(p_type, ctx, BaseType::Int64) {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-
-                match p_base_type {
-                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
-                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
-                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
-                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
-                    BaseType::Int32 => checked_narrow!(val, i32, "i32", i),
-                    BaseType::UInt32 => checked_narrow!(val, u32, "u32", i),
-                    _ => {
-                        temp_buffers.push(TempBuffer::I64(Box::new(*val)));
-                        let idx = temp_buffers.len() - 1;
-                        arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] = match temp_buffers[idx].as_i64() {
-                            Ok(v) => v as *const i64 as *mut i64 as *mut c_void,
-                            Err(e) => return StepResult::Error(e.into()),
-                        };
-                    }
+                if let Err(e) = marshal_integer_arg(
+                    IntegerArgValue::Int64(*val),
+                    p_type,
+                    ctx,
+                    i,
+                    &mut temp_buffers,
+                    &mut arg_buffer_map,
+                    &mut arg_ptrs,
+                ) {
+                    return e;
                 }
             }
             StackValue::NativeInt(val) => {
-                let p_base_type = match resolve_parameter_base_type(p_type, ctx, BaseType::IntPtr) {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-
-                match p_base_type {
-                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
-                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
-                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
-                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
-                    BaseType::Int32 => checked_narrow!(val, i32, "i32", i),
-                    BaseType::UInt32 => checked_narrow!(val, u32, "u32", i),
-                    _ => {
-                        temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
-                        let idx = temp_buffers.len() - 1;
-                        arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] = match temp_buffers[idx].as_isize() {
-                            Ok(v) => v as *const isize as *mut isize as *mut c_void,
-                            Err(e) => return StepResult::Error(e.into()),
-                        };
-                    }
+                if let Err(e) = marshal_integer_arg(
+                    IntegerArgValue::NativeInt(*val),
+                    p_type,
+                    ctx,
+                    i,
+                    &mut temp_buffers,
+                    &mut arg_buffer_map,
+                    &mut arg_ptrs,
+                ) {
+                    return e;
                 }
             }
             StackValue::NativeFloat(val) => {
@@ -1036,200 +1403,15 @@ fn external_call_impl<'gc>(
         );
     }
 
-    let call_result = (|| -> StepResult {
-        macro_rules! read_return {
-            ($t:ty) => {{
-                if let Err(e) = validate_typed_return_abi::<$t>(&cif) {
-                    return StepResult::Error(e.into());
-                }
+    let mut call_data = PInvokeCallData {
+        cif: &cif,
+        target_fn,
+        arg_ptrs: arg_ptrs.as_mut_slice(),
+        write_backs: &write_backs,
+        temp_buffers: &temp_buffers,
+    };
 
-                let mut ret = std::mem::MaybeUninit::<$t>::uninit();
-                // SAFETY: The checked ABI contract above guarantees the return slot size/alignment
-                // matches `$t`; `arg_ptrs` points at marshalling-owned argument storage.
-                unsafe {
-                    libffi::raw::ffi_call(
-                        cif.as_raw_ptr(),
-                        Some(target_fn),
-                        ret.as_mut_ptr() as *mut c_void,
-                        arg_ptrs.as_mut_ptr(),
-                    );
-                }
-                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
-                    return StepResult::Error(e.into());
-                }
-                // SAFETY: `ffi_call` initialized the full return slot for this ABI-checked type.
-                unsafe { ret.assume_init() }
-            }};
-        }
-
-        match &method.method().signature.return_type.1 {
-            None => {
-                // SAFETY: Void return requires a null return slot; argument pointers remain valid
-                // for the duration of the call.
-                unsafe {
-                    libffi::raw::ffi_call(
-                        cif.as_raw_ptr(),
-                        Some(target_fn),
-                        std::ptr::null_mut(),
-                        arg_ptrs.as_mut_ptr(),
-                    );
-                }
-                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
-                    return StepResult::Error(e.into());
-                }
-                let _ = ctx.pop_multiple(arg_count);
-            }
-            Some(ParameterType::Value(t)) => {
-                macro_rules! read_into_i32 {
-                    ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
-                }
-
-                let t = match ctx.make_concrete(t) {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-                let v = match t.get() {
-                    BaseType::Boolean => read_into_i32!(u8),
-                    BaseType::Char => read_into_i32!(u16),
-                    BaseType::Int8 => read_into_i32!(i8),
-                    BaseType::UInt8 => read_into_i32!(u8),
-                    BaseType::Int16 => read_into_i32!(i16),
-                    BaseType::UInt16 => read_into_i32!(u16),
-                    BaseType::Int32 => read_into_i32!(i32),
-                    BaseType::UInt32 => read_into_i32!(u32),
-                    BaseType::Int64 => StackValue::Int64(read_return!(i64)),
-                    BaseType::UInt64 => StackValue::Int64(read_return!(u64) as i64),
-                    BaseType::Float32 => StackValue::NativeFloat(read_return!(f32) as f64),
-                    BaseType::Float64 => StackValue::NativeFloat(read_return!(f64)),
-                    BaseType::IntPtr => StackValue::NativeInt(read_return!(isize)),
-                    BaseType::UIntPtr => StackValue::NativeInt(read_return!(usize) as isize),
-                    BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                        StackValue::unmanaged_ptr(read_return!(*mut u8))
-                    }
-                    BaseType::Type {
-                        value_kind: Some(ValueKind::ValueType),
-                        source,
-                    } => {
-                        let (_, _type_generics) = decompose_type_source::<ConcreteType>(source);
-
-                        let concrete = ConcreteType::new(
-                            t.resolution(),
-                            BaseType::Type {
-                                source: source.clone(),
-                                value_kind: Some(ValueKind::ValueType),
-                            },
-                        );
-                        let td = ctx
-                            .loader()
-                            .find_concrete_type(concrete)
-                            .expect("Failed to resolve type in pinvoke interop");
-
-                        let instance = match ctx.new_object(td) {
-                            Ok(inst) => inst,
-                            Err(e) => return StepResult::Error(e.into()),
-                        };
-
-                        let (ffi_size, ffi_align) = match ffi_cif_return_layout(&cif) {
-                            Ok(v) => v,
-                            Err(e) => return StepResult::Error(e.into()),
-                        };
-                        let mut temp_buffer =
-                            match AlignedReturnBuffer::new_zeroed(ffi_size, ffi_align) {
-                                Ok(v) => v,
-                                Err(e) => return StepResult::Error(e.into()),
-                            };
-
-                        // SAFETY: `temp_buffer` was allocated with ffi-reported size/alignment and
-                        // is valid for the full call; argument pointers are valid marshalling data.
-                        unsafe {
-                            libffi::raw::ffi_call(
-                                cif.as_raw_ptr(),
-                                Some(target_fn),
-                                temp_buffer.as_mut_ptr() as *mut c_void,
-                                arg_ptrs.as_mut_ptr(),
-                            );
-                        }
-                        if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
-                            return StepResult::Error(e.into());
-                        }
-
-                        instance.instance_storage.with_data_mut(|guard| {
-                            copy_value_type_return_data(guard, temp_buffer.as_bytes());
-                        });
-
-                        StackValue::ValueType(instance)
-                    }
-                    BaseType::Type { .. }
-                    | BaseType::Array { .. }
-                    | BaseType::Vector { .. }
-                    | BaseType::Object
-                    | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
-                };
-                let _ = ctx.pop_multiple(arg_count);
-                ctx.push(v);
-            }
-            Some(ParameterType::Ref(t)) => {
-                let ptr = read_return!(*mut u8);
-                let concrete = match ctx.make_concrete(t) {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-                let td = ctx
-                    .loader()
-                    .find_concrete_type(concrete)
-                    .expect("failed to resolve return type");
-                let _ = ctx.pop_multiple(arg_count);
-                ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
-            }
-            Some(ParameterType::TypedReference) => {
-                if let Err(e) = validate_typed_return_abi::<[usize; 2]>(&cif) {
-                    return StepResult::Error(e.into());
-                }
-                let mut ret = std::mem::MaybeUninit::<[usize; 2]>::uninit();
-                // SAFETY: ABI check above guarantees the return slot matches `[usize; 2]`.
-                unsafe {
-                    libffi::raw::ffi_call(
-                        cif.as_raw_ptr(),
-                        Some(target_fn),
-                        ret.as_mut_ptr() as *mut c_void,
-                        arg_ptrs.as_mut_ptr(),
-                    );
-                }
-                if let Err(e) = apply_write_backs(ctx, &write_backs, &temp_buffers) {
-                    return StepResult::Error(e.into());
-                }
-                // SAFETY: `ffi_call` initialized the full typed-reference return slot.
-                let ret = unsafe { ret.assume_init() };
-                let addr = ret[0];
-                let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
-                if type_ptr.is_null() {
-                    return StepResult::Error(
-                        ExecutionError::InternalError(
-                            "null type handle in returned TypedReference".to_string(),
-                        )
-                        .into(),
-                    );
-                }
-                let type_desc = unsafe {
-                    let arc = Arc::from_raw(type_ptr);
-                    let clone = arc.clone();
-                    let _ = Arc::into_raw(arc);
-                    clone
-                };
-                let m = ManagedPtr::new(
-                    NonNull::new(addr as *mut u8),
-                    (*type_desc).clone(),
-                    None,
-                    false,
-                    Some(ByteOffset(0)),
-                );
-                let _ = ctx.pop_multiple(arg_count);
-                ctx.push(StackValue::TypedRef(m.into(), type_desc));
-            }
-        }
-
-        StepResult::Continue
-    })();
+    let call_result = handle_pinvoke_return(ctx, &method, arg_count, &mut call_data);
 
     for obj in pinned_objects {
         ctx.unpin_object(obj);

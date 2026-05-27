@@ -311,6 +311,105 @@ fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
+fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    arg: ObjectRef<'gc>,
+    param_type: &ParameterType<dotnetdll::prelude::MethodType>,
+    lookup: &GenericLookup,
+    param_index: usize,
+) -> Result<StackValue<'gc>, StepResult> {
+    match param_type {
+        ParameterType::TypedReference => {
+            if arg.0.is_none() {
+                return Err(StepResult::Error(VmError::Execution(
+                    ExecutionError::TypeMismatch {
+                        expected: "boxed System.TypedReference".to_string(),
+                        actual: "null".to_string(),
+                    },
+                )));
+            }
+
+            let val = match arg.as_heap_storage(|s| {
+                if let HeapStorage::Boxed(o) = s {
+                    let tr_type = ctx
+                        .loader()
+                        .corlib_type("System.TypedReference")
+                        .expect("System.TypedReference must exist");
+                    Ok(o.instance_storage
+                        .with_data(|data| ctx.read_cts_value(&tr_type.into(), data)))
+                } else {
+                    Err(format!("{s:?}"))
+                }
+            }) {
+                Ok(v) => v,
+                Err(actual) => {
+                    return Err(StepResult::Error(VmError::Execution(
+                        ExecutionError::TypeMismatch {
+                            expected: format!(
+                                "boxed System.TypedReference for parameter {}",
+                                param_index
+                            ),
+                            actual,
+                        },
+                    )));
+                }
+            };
+
+            match val {
+                Ok(v) => Ok(v.into_stack()),
+                Err(e) => Err(StepResult::Error(e.into())),
+            }
+        }
+        ParameterType::Value(t) | ParameterType::Ref(t) => {
+            let concrete_param_type = match ctx.make_concrete(t) {
+                Ok(v) => v,
+                Err(e) => return Err(StepResult::Error(e.into())),
+            };
+            let td = ctx
+                .loader()
+                .find_concrete_type(concrete_param_type.clone())
+                .expect("Parameter type must exist for MethodInfo.Invoke");
+
+            let is_value_type = match ctx.reflection_is_value_type_with_lookup(td, lookup) {
+                Ok(v) => v,
+                Err(e) => return Err(StepResult::Error(e.into())),
+            };
+
+            if is_value_type {
+                if arg.0.is_none() {
+                    Ok(StackValue::null())
+                } else {
+                    let val = match arg.as_heap_storage(|s| {
+                        if let HeapStorage::Boxed(o) = s {
+                            Ok(o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data)))
+                        } else {
+                            Err(format!("{s:?}"))
+                        }
+                    }) {
+                        Ok(v) => v,
+                        Err(actual) => {
+                            return Err(StepResult::Error(VmError::Execution(
+                                ExecutionError::TypeMismatch {
+                                    expected: format!("boxed value for parameter {}", param_index),
+                                    actual,
+                                },
+                            )));
+                        }
+                    };
+
+                    match val {
+                        Ok(v) => Ok(v.into_stack()),
+                        Err(e) => Err(StepResult::Error(e.into())),
+                    }
+                }
+            } else {
+                Ok(StackValue::ObjectRef(arg))
+            }
+        }
+    }
+}
+
 fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     gc: &GCHandle<'gc>,
@@ -341,94 +440,9 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
             element_bytes
                 .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
-
-            let param_type = match &method.method().signature.parameters[i].1 {
-                ParameterType::Value(t) | ParameterType::Ref(t) => t,
-                ParameterType::TypedReference => {
-                    if arg_obj.0.is_none() {
-                        return Err(StepResult::Error(VmError::Execution(
-                            ExecutionError::TypeMismatch {
-                                expected: "boxed System.TypedReference".to_string(),
-                                actual: "null".to_string(),
-                            },
-                        )));
-                    }
-                    let val = match arg_obj.as_heap_storage(|s| {
-                        if let HeapStorage::Boxed(o) = s {
-                            let tr_type = ctx
-                                .loader()
-                                .corlib_type("System.TypedReference")
-                                .expect("System.TypedReference must exist");
-                            Ok(o.instance_storage
-                                .with_data(|data| ctx.read_cts_value(&tr_type.into(), data)))
-                        } else {
-                            Err(format!("{s:?}"))
-                        }
-                    }) {
-                        Ok(v) => v,
-                        Err(actual) => {
-                            return Err(StepResult::Error(VmError::Execution(
-                                ExecutionError::TypeMismatch {
-                                    expected: format!(
-                                        "boxed System.TypedReference for parameter {}",
-                                        i
-                                    ),
-                                    actual,
-                                },
-                            )));
-                        }
-                    };
-                    match val {
-                        Ok(v) => {
-                            args.push(v.into_stack());
-                            continue;
-                        }
-                        Err(e) => return Err(StepResult::Error(e.into())),
-                    }
-                }
-            };
-            let concrete_param_type = match ctx.make_concrete(param_type) {
-                Ok(v) => v,
-                Err(e) => return Err(StepResult::Error(e.into())),
-            };
-            let td = ctx
-                .loader()
-                .find_concrete_type(concrete_param_type.clone())
-                .expect("Parameter type must exist for MethodInfo.Invoke");
-
-            if match ctx.reflection_is_value_type_with_lookup(td, lookup) {
-                Ok(v) => v,
-                Err(e) => return Err(StepResult::Error(e.into())),
-            } {
-                if arg_obj.0.is_none() {
-                    args.push(StackValue::null());
-                } else {
-                    let val = match arg_obj.as_heap_storage(|s| {
-                        if let HeapStorage::Boxed(o) = s {
-                            Ok(o.instance_storage
-                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data)))
-                        } else {
-                            Err(format!("{s:?}"))
-                        }
-                    }) {
-                        Ok(v) => v,
-                        Err(actual) => {
-                            return Err(StepResult::Error(VmError::Execution(
-                                ExecutionError::TypeMismatch {
-                                    expected: format!("boxed value for parameter {}", i),
-                                    actual,
-                                },
-                            )));
-                        }
-                    };
-                    match val {
-                        Ok(v) => args.push(v.into_stack()),
-                        Err(e) => return Err(StepResult::Error(e.into())),
-                    }
-                }
-            } else {
-                args.push(StackValue::ObjectRef(arg_obj));
-            }
+            let param_type = &method.method().signature.parameters[i].1;
+            let arg = unbox_param_to_stack_value(ctx, arg_obj, param_type, lookup, i)?;
+            args.push(arg);
         }
     }
 

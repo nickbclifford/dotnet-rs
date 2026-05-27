@@ -34,6 +34,79 @@ fn pop_nonneg_usize<'gc, T: SpanIntrinsicHost<'gc>>(ctx: &mut T) -> Result<usize
     }
 }
 
+struct SpanSourceData {
+    base_ptr: *mut u8,
+    total_len: usize,
+    element_type: ConcreteType,
+    element_size: usize,
+}
+
+fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    source: &StackValue<'gc>,
+    generics: &GenericLookup,
+) -> Result<SpanSourceData, StepResult> {
+    match source {
+        StackValue::ObjectRef(ObjectRef(Some(h))) => {
+            let heap = h.borrow();
+            match &heap.storage {
+                HeapStorage::Str(s) => {
+                    let element_type =
+                        match ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char))) {
+                            Ok(v) => v,
+                            Err(e) => return Err(StepResult::Error(e.into())),
+                        };
+
+                    Ok(SpanSourceData {
+                        // SAFETY: `heap` borrow pins the string storage for this scope; we only
+                        // use the pointer to build a managed reference with validated bounds below.
+                        base_ptr: unsafe { heap.storage.raw_data_ptr() },
+                        total_len: s.len(),
+                        element_type,
+                        element_size: 2, // char is 2 bytes in .NET
+                    })
+                }
+                HeapStorage::Vec(a) => Ok(SpanSourceData {
+                    // SAFETY: `heap` borrow keeps vector storage alive and we only derive an
+                    // offset pointer after explicit start/length range checks.
+                    base_ptr: unsafe { a.raw_data_ptr() },
+                    total_len: a.layout.length,
+                    element_type: a.element.clone(),
+                    element_size: a.layout.element_layout.size().as_usize(),
+                }),
+                _ => Err(StepResult::Error(
+                    ExecutionError::NotImplemented(format!(
+                        "AsSpan called on non-string/non-array object: {:?}",
+                        heap.storage
+                    ))
+                    .into(),
+                )),
+            }
+        }
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            let element_type = if !generics.method_generics.is_empty() {
+                generics.method_generics[0].clone()
+            } else {
+                match ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char))) {
+                    Ok(v) => v,
+                    Err(e) => return Err(StepResult::Error(e.into())),
+                }
+            };
+
+            Ok(SpanSourceData {
+                base_ptr: std::ptr::null_mut::<u8>(),
+                total_len: 0,
+                element_type,
+                element_size: 2,
+            })
+        }
+        _ => Err(ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The argument must be a string or an array.",
+        )),
+    }
+}
+
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string)")]
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int)")]
 #[dotnet_intrinsic(
@@ -101,59 +174,14 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         _ => None,
     };
 
-    let (base_ptr, total_len, element_type, element_size) = match &source {
-        StackValue::ObjectRef(ObjectRef(Some(h))) => {
-            let heap = h.borrow();
-            match &heap.storage {
-                HeapStorage::Str(s) => (
-                    // SAFETY: `heap` borrow pins the string storage for this scope; we only use
-                    // the pointer to build a managed reference with validated bounds below.
-                    unsafe { heap.storage.raw_data_ptr() },
-                    s.len(),
-                    dotnet_vm_ops::vm_try!(
-                        ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))
-                    ),
-                    2, // char is 2 bytes in .NET
-                ),
-                HeapStorage::Vec(a) => {
-                    let elem_type = a.element.clone();
-                    let elem_size = a.layout.element_layout.size();
-                    (
-                        // SAFETY: `heap` borrow keeps vector storage alive and we only derive an
-                        // offset pointer after explicit start/length range checks.
-                        unsafe { a.raw_data_ptr() },
-                        a.layout.length,
-                        elem_type,
-                        elem_size.as_usize(),
-                    )
-                }
-                _ => {
-                    return StepResult::Error(
-                        ExecutionError::NotImplemented(format!(
-                            "AsSpan called on non-string/non-array object: {:?}",
-                            heap.storage
-                        ))
-                        .into(),
-                    );
-                }
-            }
-        }
-        StackValue::ObjectRef(ObjectRef(None)) => {
-            let element_type = if !generics.method_generics.is_empty() {
-                generics.method_generics[0].clone()
-            } else {
-                dotnet_vm_ops::vm_try!(
-                    ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))
-                )
-            };
-            (std::ptr::null_mut::<u8>(), 0, element_type, 2)
-        }
-        _ => {
-            return ctx.throw_by_name_with_message(
-                "System.ArgumentException",
-                "The argument must be a string or an array.",
-            );
-        }
+    let SpanSourceData {
+        base_ptr,
+        total_len,
+        element_type,
+        element_size,
+    } = match extract_span_source(ctx, &source, generics) {
+        Ok(v) => v,
+        Err(e) => return e,
     };
 
     // Apply start and length_override

@@ -107,49 +107,64 @@ impl LayoutFactory {
         }
     }
 
+    fn place_fields_sequentially(
+        fields: Vec<(TypeDescription, &str, Option<usize>, Arc<LayoutManager>)>,
+        base_size: usize,
+        base_alignment: usize,
+        packing_size: usize,
+    ) -> (
+        std::collections::HashMap<FieldKey, FieldLayout>,
+        usize,
+        usize,
+        GcDesc,
+        bool,
+    ) {
+        let mut mapping = std::collections::HashMap::new();
+        let mut gc_desc = GcDesc::default();
+        let mut has_ref_fields = false;
+        let mut max_alignment = base_alignment.max(1);
+        let mut offset = base_size;
+
+        for (owner, name, _, layout) in fields {
+            let field_align = layout.alignment().min(packing_size);
+            max_alignment = max_alignment.max(field_align);
+
+            let aligned_offset = align_up(offset, field_align);
+
+            Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
+            if layout.has_managed_ptrs() {
+                has_ref_fields = true;
+            }
+
+            mapping.insert(
+                FieldKey {
+                    owner,
+                    name: name.to_string(),
+                },
+                FieldLayout {
+                    position: ByteOffset(aligned_offset),
+                    layout: layout.clone(),
+                },
+            );
+            offset = aligned_offset + layout.size().as_usize();
+        }
+
+        let total_size = align_up(offset, max_alignment);
+
+        (mapping, total_size, max_alignment, gc_desc, has_ref_fields)
+    }
+
     pub fn create_field_layout<'a>(
         fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, Arc<LayoutManager>)>,
         layout: Layout,
         base_size: usize,
         base_alignment: usize,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let mut mapping = std::collections::HashMap::new();
-        let mut gc_desc = GcDesc::default();
-        let mut has_ref_fields = false;
-        let total_size;
-        let mut max_alignment = base_alignment.max(1);
-
         let fields: Vec<_> = fields.into_iter().collect();
 
-        match layout {
+        let (mapping, total_size, max_alignment, gc_desc, has_ref_fields) = match layout {
             Layout::Automatic => {
-                let mut offset = base_size;
-
-                for (owner, name, _, layout) in fields {
-                    let field_align = layout.alignment();
-                    max_alignment = max_alignment.max(field_align);
-
-                    let aligned_offset = align_up(offset, field_align);
-
-                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
-                    if layout.has_managed_ptrs() {
-                        has_ref_fields = true;
-                    }
-
-                    mapping.insert(
-                        FieldKey {
-                            owner,
-                            name: name.to_string(),
-                        },
-                        FieldLayout {
-                            position: ByteOffset(aligned_offset),
-                            layout: layout.clone(),
-                        },
-                    );
-                    offset = aligned_offset + layout.size().as_usize();
-                }
-
-                total_size = align_up(offset, max_alignment);
+                Self::place_fields_sequentially(fields, base_size, base_alignment, usize::MAX)
             }
             Layout::Sequential(s) => {
                 let (packing_size, class_size) = match s {
@@ -160,35 +175,27 @@ impl LayoutFactory {
                     }) => (if packing_size == 0 { 8 } else { packing_size }, class_size),
                 };
 
-                let mut offset = base_size;
-
-                for (owner, name, _, layout) in fields {
-                    let field_align = layout.alignment().min(packing_size);
-                    max_alignment = max_alignment.max(field_align);
-
-                    let aligned_offset = align_up(offset, field_align);
-
-                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
-                    if layout.has_managed_ptrs() {
-                        has_ref_fields = true;
-                    }
-
-                    mapping.insert(
-                        FieldKey {
-                            owner,
-                            name: name.to_string(),
-                        },
-                        FieldLayout {
-                            position: ByteOffset(aligned_offset),
-                            layout: layout.clone(),
-                        },
+                let (mapping, total_size, max_alignment, gc_desc, has_ref_fields) =
+                    Self::place_fields_sequentially(
+                        fields,
+                        base_size,
+                        base_alignment,
+                        packing_size,
                     );
-                    offset = aligned_offset + layout.size().as_usize();
-                }
 
-                total_size = align_up(offset, max_alignment).max(base_size + class_size);
+                (
+                    mapping,
+                    total_size.max(base_size + class_size),
+                    max_alignment,
+                    gc_desc,
+                    has_ref_fields,
+                )
             }
             Layout::Explicit(e) => {
+                let mut mapping = std::collections::HashMap::new();
+                let mut gc_desc = GcDesc::default();
+                let mut has_ref_fields = false;
+                let mut max_alignment = base_alignment.max(1);
                 let mut offset = base_size;
                 let mut placed_fields: Vec<(usize, usize, Arc<LayoutManager>)> = Vec::new();
 
@@ -258,12 +265,14 @@ impl LayoutFactory {
                         }
                     };
                 }
-                total_size = match e {
+                let total_size = match e {
                     Some(ExplicitLayout { class_size }) => (base_size + class_size).max(offset),
                     None => offset,
                 };
+
+                (mapping, total_size, max_alignment, gc_desc, has_ref_fields)
             }
-        }
+        };
 
         if total_size > 0x1000_0000 {
             return Err(TypeResolutionError::MassiveAllocation(format!(

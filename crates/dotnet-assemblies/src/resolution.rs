@@ -469,6 +469,26 @@ impl AssemblyLoader {
         );
     }
 
+    fn try_resolve_method_via_corelib_fallback(
+        &self,
+        parent_type: &TypeDescription,
+        method_ref: &ExternalMethodReference,
+        resolution: ResolutionS,
+        lookup: &GenericLookup,
+    ) -> Option<MethodDescription> {
+        let corelib_res = self.get_assembly("System.Private.CoreLib").ok()?;
+        let corelib_parent = self.try_find_in_assembly(corelib_res, &parent_type.type_name())?;
+
+        self.find_method_in_type_with_substitution(
+            corelib_parent,
+            &method_ref.name,
+            &method_ref.signature,
+            resolution,
+            lookup,
+            false,
+        )
+    }
+
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
@@ -584,18 +604,13 @@ impl AssemblyLoader {
                                 // forwarded to CoreLib. If lookup fails on the facade type, try
                                 // the CoreLib type with the same full name before reporting a
                                 // hard method-missing error.
-                                if let Ok(corelib_res) = self.get_assembly("System.Private.CoreLib")
-                                    && let Some(corelib_parent) = self
-                                        .try_find_in_assembly(corelib_res, &parent_type.type_name())
-                                    && let Some(mut method) = self
-                                        .find_method_in_type_with_substitution(
-                                            corelib_parent,
-                                            &method_ref.name,
-                                            &method_ref.signature,
-                                            resolution.clone(),
-                                            &lookup_for_substitution,
-                                            false,
-                                        )
+                                if let Some(mut method) = self
+                                    .try_resolve_method_via_corelib_fallback(
+                                        &parent_type,
+                                        method_ref,
+                                        resolution.clone(),
+                                        &lookup_for_substitution,
+                                    )
                                 {
                                     method.parent_generics = parent_generics;
                                     return Ok(method);

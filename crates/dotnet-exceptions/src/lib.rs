@@ -463,6 +463,63 @@ impl ExceptionHandlingSystem {
         StepResult::MethodThrew(managed_exc)
     }
 
+    fn is_exiting_section(section: &ProtectedSection, ip: usize, target: UnwindTarget) -> bool {
+        let in_try = section.instructions.contains(&ip);
+
+        match target {
+            // When unwinding to a catch/filter, any 'try' block we were in is being exited.
+            UnwindTarget::Handler(_) => in_try,
+            // When unwinding due to 'leave', we check if the target is outside the try block.
+            UnwindTarget::Instruction(target_ip) => {
+                let mut in_handler = false;
+                for handler in &section.handlers {
+                    if handler.instructions.contains(&ip) {
+                        in_handler = true;
+
+                        if handler.instructions.contains(&target_ip) {
+                            return false;
+                        }
+                    }
+                }
+
+                (in_try || in_handler) && !section.instructions.contains(&target_ip)
+            }
+        }
+    }
+
+    fn complete_nested_filter_unwind<'gc>(
+        &self,
+        ctx: &mut dyn ExceptionContext<'gc>,
+        gc: GCHandle<'gc>,
+        nested: FilterState<'gc>,
+    ) -> StepResult {
+        // Resume original search
+        // Restore suspended evaluation and frame stacks
+        ctx.evaluation_stack_mut().restore_suspended();
+        ctx.frame_stack_mut().restore_suspended();
+
+        // Restore state of the frame where filter ran
+        let frame = &mut ctx.frame_stack_mut().frames[nested.handler.frame_index];
+        frame.state.ip = nested.original_ip;
+        frame.stack_height = nested
+            .original_stack_height
+            .saturating_sub_idx(frame.base.stack);
+        frame.exception_stack.pop();
+
+        // Result is 0 (false): Continue searching after this filter handler.
+        *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
+            exception: nested.exception,
+            cursor: HandlerAddress {
+                frame_index: nested.handler.frame_index,
+                section_index: nested.handler.section_index,
+                handler_index: nested.handler.handler_index + 1,
+            },
+            nested_filter: None,
+        });
+
+        self.handle_exception(ctx, gc)
+    }
+
     fn unwind<'gc>(
         &self,
         ctx: &mut dyn ExceptionContext<'gc>,
@@ -505,32 +562,7 @@ impl ExceptionHandlingSystem {
                     break;
                 }
 
-                let in_try = section.instructions.contains(&ip);
-
-                // Determine if we are currently exiting this protected section.
-                let exiting = match target {
-                    // When unwinding to a catch/filter, any 'try' block we were in is being exited.
-                    UnwindTarget::Handler(_) => in_try,
-                    // When unwinding due to 'leave', we check if the target is outside the try block.
-                    UnwindTarget::Instruction(target_ip) => {
-                        let mut jumping_within_handler = false;
-                        let in_handler = section.handlers.iter().any(|h| {
-                            let in_h = h.instructions.contains(&ip);
-                            if in_h && h.instructions.contains(&target_ip) {
-                                jumping_within_handler = true;
-                            }
-                            in_h
-                        });
-
-                        if jumping_within_handler {
-                            false
-                        } else {
-                            (in_try || in_handler) && !section.instructions.contains(&target_ip)
-                        }
-                    }
-                };
-
-                if !exiting {
+                if !Self::is_exiting_section(section, ip, target) {
                     continue;
                 }
 
@@ -621,31 +653,7 @@ impl ExceptionHandlingSystem {
         if let UnwindTarget::Instruction(usize::MAX) = target
             && let Some(nested) = nested_filter
         {
-            // Resume original search
-            // Restore suspended evaluation and frame stacks
-            ctx.evaluation_stack_mut().restore_suspended();
-            ctx.frame_stack_mut().restore_suspended();
-
-            // Restore state of the frame where filter ran
-            let frame = &mut ctx.frame_stack_mut().frames[nested.handler.frame_index];
-            frame.state.ip = nested.original_ip;
-            frame.stack_height = nested
-                .original_stack_height
-                .saturating_sub_idx(frame.base.stack);
-            frame.exception_stack.pop();
-
-            // Result is 0 (false): Continue searching after this filter handler.
-            *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
-                exception: nested.exception,
-                cursor: HandlerAddress {
-                    frame_index: nested.handler.frame_index,
-                    section_index: nested.handler.section_index,
-                    handler_index: nested.handler.handler_index + 1,
-                },
-                nested_filter: None,
-            });
-
-            return self.handle_exception(ctx, gc);
+            return self.complete_nested_filter_unwind(ctx, gc, nested);
         }
 
         let mut resumed_handler_unwind = None;
