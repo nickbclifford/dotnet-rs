@@ -19,22 +19,12 @@ use std::ptr::NonNull;
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Collect, Default)]
 #[collect(require_static)]
 pub struct BasePointer {
     pub arguments: StackSlotIndex,
     pub locals: StackSlotIndex,
     pub stack: StackSlotIndex,
-}
-
-impl Default for BasePointer {
-    fn default() -> Self {
-        Self {
-            arguments: StackSlotIndex(0),
-            locals: StackSlotIndex(0),
-            stack: StackSlotIndex(0),
-        }
-    }
 }
 
 #[derive(Collect)]

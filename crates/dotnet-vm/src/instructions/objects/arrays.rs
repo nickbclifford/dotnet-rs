@@ -61,7 +61,7 @@ pub fn ldelem<
     let load_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(load_type));
-    let offset = ByteOffset(layout.size().as_usize() * index);
+    let offset = layout.size() * index;
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe {
@@ -126,7 +126,7 @@ pub fn ldelem_primitive<
         LoadType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = ByteOffset(layout.size().as_usize() * index);
+    let offset = layout.size() * index;
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
@@ -289,7 +289,7 @@ pub fn stelem<
     let res_ctx = ctx.current_context();
     let store_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
     let layout = dotnet_vm_ops::vm_try!(type_layout(store_type, &res_ctx));
-    let offset = ByteOffset(layout.size().as_usize() * index);
+    let offset = layout.size() * index;
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
@@ -343,7 +343,7 @@ pub fn stelem_primitive<
         StoreType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = ByteOffset(layout.size().as_usize() * index);
+    let offset = layout.size() * index;
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {

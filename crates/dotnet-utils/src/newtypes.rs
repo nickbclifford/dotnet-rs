@@ -30,6 +30,12 @@ impl From<ByteOffset> for usize {
     }
 }
 
+impl Default for ByteOffset {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 impl ByteOffset {
     pub const ZERO: Self = ByteOffset(0);
 
@@ -144,6 +150,12 @@ impl TryFrom<usize> for ManagedByteOffset {
     }
 }
 
+impl Default for ManagedByteOffset {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
@@ -212,7 +224,7 @@ impl ArenaId {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct LocalIndex(pub usize);
@@ -223,10 +235,23 @@ impl LocalIndex {
     }
 }
 
+impl From<LocalIndex> for usize {
+    fn from(index: LocalIndex) -> Self {
+        index.0
+    }
+}
+
 impl Add<usize> for LocalIndex {
     type Output = Self;
     fn add(self, rhs: usize) -> Self {
         LocalIndex(self.0 + rhs)
+    }
+}
+
+impl Add<Self> for LocalIndex {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        LocalIndex(self.0 + rhs.0)
     }
 }
 
@@ -237,9 +262,22 @@ impl Sub<usize> for LocalIndex {
     }
 }
 
+impl Sub<Self> for LocalIndex {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        LocalIndex(self.0 - rhs.0)
+    }
+}
+
 impl AddAssign<usize> for LocalIndex {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
+    }
+}
+
+impl AddAssign<Self> for LocalIndex {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
     }
 }
 
@@ -249,7 +287,13 @@ impl SubAssign<usize> for LocalIndex {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
+impl SubAssign<Self> for LocalIndex {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct ArgumentIndex(pub usize);
@@ -260,10 +304,23 @@ impl ArgumentIndex {
     }
 }
 
+impl From<ArgumentIndex> for usize {
+    fn from(index: ArgumentIndex) -> Self {
+        index.0
+    }
+}
+
 impl Add<usize> for ArgumentIndex {
     type Output = Self;
     fn add(self, rhs: usize) -> Self {
         ArgumentIndex(self.0 + rhs)
+    }
+}
+
+impl Add<Self> for ArgumentIndex {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        ArgumentIndex(self.0 + rhs.0)
     }
 }
 
@@ -274,15 +331,34 @@ impl Sub<usize> for ArgumentIndex {
     }
 }
 
+impl Sub<Self> for ArgumentIndex {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        ArgumentIndex(self.0 - rhs.0)
+    }
+}
+
 impl AddAssign<usize> for ArgumentIndex {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
     }
 }
 
+impl AddAssign<Self> for ArgumentIndex {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
 impl SubAssign<usize> for ArgumentIndex {
     fn sub_assign(&mut self, rhs: usize) {
         self.0 -= rhs;
+    }
+}
+
+impl SubAssign<Self> for ArgumentIndex {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
     }
 }
 
@@ -304,7 +380,7 @@ impl Display for StackSlotIndex {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct StackSlotIndex(pub usize);

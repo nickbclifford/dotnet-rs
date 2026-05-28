@@ -213,7 +213,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     }
 
     for i in 0..len {
-        let offset = ByteOffset(base_offset.as_usize() + i * elem_size);
+        let offset = base_offset + i * elem_size;
         if let Err(e) =
             unsafe { ctx.write_unaligned(origin.clone(), offset, value.clone(), &layout) }
         {

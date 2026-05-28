@@ -18,10 +18,7 @@ use dotnetdll::prelude::{
     MemberType, MethodMemberIndex, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
 };
 use gc_arena::static_collect;
-use std::{
-    fmt::{Debug, Formatter},
-    hash::{Hash, Hasher},
-};
+use std::fmt::{Debug, Formatter};
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
@@ -67,7 +64,7 @@ pub trait TypeResolver {
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TypeDescription {
     pub resolution: ResolutionS,
     pub index: TypeIndex,
@@ -119,21 +116,6 @@ impl Debug for TypeDescription {
                 self.definition().show(self.resolution.definition())
             )
         }
-    }
-}
-
-impl PartialEq for TypeDescription {
-    fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.resolution == other.resolution
-    }
-}
-
-impl Eq for TypeDescription {}
-
-impl Hash for TypeDescription {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.index.hash(state);
-        self.resolution.hash(state);
     }
 }
 

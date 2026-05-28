@@ -6,7 +6,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct MethodDescription {
     pub parent: TypeDescription,
     pub parent_generics: GenericLookup,
@@ -79,26 +79,6 @@ impl Debug for MethodDescription {
                 format!("{}::{}", self.parent.type_name(), self.method().name)
             )
         )
-    }
-}
-
-impl PartialEq for MethodDescription {
-    fn eq(&self, other: &Self) -> bool {
-        self.parent == other.parent
-            && self.method_member_index == other.method_member_index
-            && self.method_resolution == other.method_resolution
-            && self.parent_generics == other.parent_generics
-    }
-}
-
-impl Eq for MethodDescription {}
-
-impl Hash for MethodDescription {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.parent.hash(state);
-        self.method_member_index.hash(state);
-        self.method_resolution.hash(state);
-        self.parent_generics.hash(state);
     }
 }
 
