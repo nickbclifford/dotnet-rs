@@ -109,10 +109,8 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 
     pub fn record_managed_ptr(&mut self, target: &ManagedPtr<'gc>) {
         match target.origin() {
-            PointerOrigin::CrossArenaObjectRef(p, ref_tid) => {
-                if *ref_tid != self.arena_id {
-                    self.buffer.push((*ref_tid, p.as_ptr() as usize));
-                }
+            PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
+                self.buffer.push((*ref_tid, p.as_ptr() as usize));
             }
             PointerOrigin::Heap(r) => {
                 self.record_ref(*r);
@@ -959,10 +957,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             PointerOrigin::Heap(r) => {
                 self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
             }
-            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
-                if *target_tid != owner_tid {
-                    recorder.buffer.push((*target_tid, p.as_ptr() as usize));
-                }
+            PointerOrigin::CrossArenaObjectRef(p, target_tid) if *target_tid != owner_tid => {
+                recorder.buffer.push((*target_tid, p.as_ptr() as usize));
             }
             _ => {}
         }
@@ -1234,21 +1230,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     });
                 }
             }
-            LayoutManager::Array(arr) => {
-                if arr.element_layout.is_or_contains_refs() {
-                    let elem_size = arr.element_layout.size().as_usize();
-                    for i in 0..arr.length {
-                        // SAFETY: `i * elem_size` is within the array allocation
-                        // because `i < arr.length` and `arr.length * elem_size`
-                        // equals the total allocation size.
-                        unsafe {
-                            self.record_refs_recursive_with_recorder(
-                                gc,
-                                ptr.add(i * elem_size),
-                                &arr.element_layout,
-                                recorder,
-                            );
-                        }
+            LayoutManager::Array(arr) if arr.element_layout.is_or_contains_refs() => {
+                let elem_size = arr.element_layout.size().as_usize();
+                for i in 0..arr.length {
+                    // SAFETY: `i * elem_size` is within the array allocation
+                    // because `i < arr.length` and `arr.length * elem_size`
+                    // equals the total allocation size.
+                    unsafe {
+                        self.record_refs_recursive_with_recorder(
+                            gc,
+                            ptr.add(i * elem_size),
+                            &arr.element_layout,
+                            recorder,
+                        );
                     }
                 }
             }
@@ -1302,26 +1296,30 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             LayoutManager::Array(alm) => {
                 let elem_size = alm.element_layout.size().as_usize();
-                if elem_size > 0 {
-                    let start_idx = range_start / elem_size;
-                    let end_idx = range_end.div_ceil(elem_size);
-                    let start_idx = start_idx.min(alm.length);
-                    let end_idx = end_idx.min(alm.length);
+                let Some(start_idx) = range_start.checked_div(elem_size) else {
+                    return;
+                };
+                let Some(end_quot) = range_end.checked_div(elem_size) else {
+                    return;
+                };
+                let end_idx = end_quot + usize::from(!range_end.is_multiple_of(elem_size));
 
-                    for i in start_idx..end_idx {
-                        let f_start = i * elem_size;
-                        // SAFETY: `f_start = i * elem_size` with `i < alm.length`
-                        // is within the array's backing storage.
-                        unsafe {
-                            self.record_refs_in_range_with_recorder(
-                                gc,
-                                ptr.add(f_start),
-                                &alm.element_layout,
-                                range_start.saturating_sub(f_start),
-                                range_end.saturating_sub(f_start),
-                                recorder,
-                            );
-                        }
+                let start_idx = start_idx.min(alm.length);
+                let end_idx = end_idx.min(alm.length);
+
+                for i in start_idx..end_idx {
+                    let f_start = i * elem_size;
+                    // SAFETY: `f_start = i * elem_size` with `i < alm.length`
+                    // is within the array's backing storage.
+                    unsafe {
+                        self.record_refs_in_range_with_recorder(
+                            gc,
+                            ptr.add(f_start),
+                            &alm.element_layout,
+                            range_start.saturating_sub(f_start),
+                            range_end.saturating_sub(f_start),
+                            recorder,
+                        );
                     }
                 }
             }
