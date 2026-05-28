@@ -40,21 +40,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev valgrind libc6-dbg
 
+      - name: Resolve fixture output directory
+        id: fixture-output-dir
+        run: |
+          OUTPUT_DIR=$(cargo run --quiet -p xtask -- fixtures output-dir --profile debug)
+          echo "path=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Compute fixture cache key
+        id: fixture-cache-key
+        run: |
+          CACHE_KEY=$(cargo run --quiet -p xtask -- fixtures cache-key --profile debug)
+          echo "key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+
       - name: Cache .NET fixtures
         id: cache-fixtures
         uses: actions/cache@v4
         with:
-          path: target/debug/dotnet-fixtures
-          key: ${{ runner.os }}-dotnet-fixtures-${{ hashFiles('crates/dotnet-cli/tests/fixtures/**/*.cs', 'crates/dotnet-cli/tests/*.csproj') }}
+          path: ${{ steps.fixture-output-dir.outputs.path }}
+          key: ${{ runner.os }}-dotnet-fixtures-${{ steps.fixture-cache-key.outputs.key }}
           restore-keys: |
             ${{ runner.os }}-dotnet-fixtures-
 
       - name: Build fixtures
         if: steps.cache-fixtures.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p target/debug/dotnet-fixtures
-          dotnet restore crates/dotnet-cli/tests/SingleFile.csproj -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ --nologo -v:q
-          dotnet build crates/dotnet-cli/tests/BatchFixtures.csproj -p:FixtureOutputBase=$(pwd)/target/debug/dotnet-fixtures/ -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ -m -v:q --nologo -clp:ErrorsOnly --no-restore
+        run: cargo run -p xtask -- fixtures build --output-dir "${{ steps.fixture-output-dir.outputs.path }}"
 
       - name: Build integration test binary (No features)
         run: |
