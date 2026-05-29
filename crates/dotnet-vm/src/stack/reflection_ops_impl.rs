@@ -446,8 +446,15 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
         dotnet_intrinsics_reflection::common::pre_initialize_reflection(self)
     }
 
-    #[inline]
     fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType {
+        // Resolve generic type/method parameters through the current lookup first.
+        // Without this, `typeof(T)` inside a generic method returns an unresolved
+        // TypeParameter that `to_concrete` maps to Object, breaking IsValueType etc.
+        if let Ok(concrete) = ctx.generics.make_concrete(ctx.resolution.clone(), source.clone(), self.loader().as_ref()) {
+            if let Some(rt) = dotnet_intrinsics_reflection::types::runtime_type_from_concrete(self.loader().as_ref(), &concrete) {
+                return rt;
+            }
+        }
         dotnet_intrinsics_reflection::common::make_runtime_type(ctx, source)
             .expect("failed to build runtime type")
     }

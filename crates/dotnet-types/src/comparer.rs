@@ -54,6 +54,19 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
+        // Preserve identity of matching generic placeholders before any concrete substitution.
+        // If we substitute first, cross-resolution concrete equality can spuriously fail even
+        // when both signatures reference the same generic slot (e.g. T0 vs T0).
+        match (a, b) {
+            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) if i1 == i2 => {
+                return true;
+            }
+            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) if i1 == i2 => {
+                return true;
+            }
+            _ => {}
+        }
+
         if let Some(concrete) = Self::resolve_generic_type(generics1, a) {
             return self.concrete_equals_method_type(concrete, res2, b, generics2);
         }

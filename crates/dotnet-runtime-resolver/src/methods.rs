@@ -120,6 +120,36 @@ where
         generics: &GenericLookup,
         _ctx: &Ctx,
     ) -> Result<MethodDescription, TypeResolutionError> {
+        // Strip method generics that exceed the base method's declared arity.
+        // Callers in generic contexts (e.g. a callvirt inside a generic method) pass
+        // the full calling-context lookup, which may contain spurious method generics
+        // unrelated to the dispatched method. These extra generics corrupt override map
+        // keys and VMT cache lookups, causing MethodNotFound for valid overrides.
+        let method_generic_arity = base_method.method().generic_parameters.len();
+        let trimmed_generics;
+        let generics = if generics.method_generics.len() > method_generic_arity {
+            trimmed_generics = GenericLookup {
+                type_generics: generics.type_generics.clone(),
+                method_generics: generics.method_generics[..method_generic_arity].into(),
+            };
+            &trimmed_generics
+        } else {
+            generics
+        };
+
+        // `callvirt` is used for both virtual and non-virtual instance calls.
+        // For non-virtual members, dispatch target is the referenced method itself.
+        if !base_method.method().virtual_member {
+            self.caches.record_vmt_key_clones(3);
+            self.caches.set_vmt_cached(
+                base_method.clone(),
+                this_type.clone(),
+                generics.clone(),
+                base_method.clone(),
+            );
+            return Ok(base_method);
+        }
+
         if let Some(cached) = self
             .caches
             .get_vmt_cached(&base_method, &this_type, generics)

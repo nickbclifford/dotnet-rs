@@ -790,6 +790,12 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.Unsafe::CopyBlock(byte&, byte&, uint)"
 )]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::CopyBlockUnaligned(void*, void*, uint)"
+)]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::CopyBlockUnaligned(byte&, byte&, uint)"
+)]
 pub fn intrinsic_unsafe_copy_block<
     'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
@@ -817,6 +823,12 @@ pub fn intrinsic_unsafe_copy_block<
 )]
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.Unsafe::InitBlock(byte&, byte, uint)"
+)]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::InitBlockUnaligned(void*, byte, uint)"
+)]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::InitBlockUnaligned(byte&, byte, uint)"
 )]
 pub fn intrinsic_unsafe_init_block<
     'gc,

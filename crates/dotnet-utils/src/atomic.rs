@@ -311,10 +311,9 @@ impl Atomic {
 
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
+    /// For sizes > 8 or misaligned pointers, the caller must hold an external lock;
+    /// this falls back to a non-atomic memcpy guarded by that lock.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
-        #[cfg(feature = "multithreading")]
-        Self::ensure_atomic_field_access_supported(ptr, size, "load");
-
         if Self::is_atomic_field_access_supported(ptr, size) {
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
@@ -334,11 +333,10 @@ impl Atomic {
 
     /// # Safety
     /// Caller must ensure `ptr` is valid for `value.len()` bytes.
+    /// For sizes > 8 or misaligned pointers, the caller must hold an external lock;
+    /// this falls back to a non-atomic memcpy guarded by that lock.
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
-        #[cfg(feature = "multithreading")]
-        Self::ensure_atomic_field_access_supported(ptr as *const u8, size, "store");
-
         if Self::is_atomic_field_access_supported(ptr as *const u8, size) {
             let val = match size {
                 1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
@@ -466,24 +464,27 @@ mod tests {
 
     #[test]
     #[cfg(feature = "multithreading")]
-    #[should_panic(expected = "Unsupported atomic field load")]
-    fn test_load_field_misaligned_panics_in_mt() {
-        let data = [0u64; 2];
-        let ptr = data.as_ptr() as *const u8;
+    fn test_load_field_misaligned_falls_back_in_mt() {
+        // Misaligned 8-byte load: not atomically expressible, falls back to memcpy.
+        // Caller must hold an external lock; here we just verify correct data is returned.
+        let mut data = [0u8; 16];
+        data[1..9].copy_from_slice(&0x0102030405060708u64.to_ne_bytes());
+        let ptr = data.as_ptr();
         let misaligned_ptr = unsafe { ptr.add(1) };
-        unsafe {
-            let _ = Atomic::load_field(misaligned_ptr, 8, Ordering::SeqCst);
-        }
+        let loaded = unsafe { Atomic::load_field(misaligned_ptr, 8, Ordering::SeqCst) };
+        assert_eq!(loaded, 0x0102030405060708u64.to_ne_bytes());
     }
 
     #[test]
     #[cfg(feature = "multithreading")]
-    #[should_panic(expected = "Unsupported atomic field store")]
-    fn test_store_field_unsupported_size_panics_in_mt() {
+    fn test_store_field_large_size_falls_back_in_mt() {
+        // 3-byte store: not atomically expressible, falls back to memcpy.
+        // Caller must hold an external lock; here we just verify the bytes are written.
         let mut data = [0u8; 8];
         unsafe {
             Atomic::store_field(data.as_mut_ptr(), &[1, 2, 3], Ordering::SeqCst);
         }
+        assert_eq!(&data[..3], &[1, 2, 3]);
     }
 
     #[test]

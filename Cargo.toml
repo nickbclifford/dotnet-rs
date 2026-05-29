@@ -62,7 +62,7 @@ gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f537
 parking_lot = "0.12"
 dashmap = "6.1"
 tracing = "0.1"
-thiserror = "1.0"
+thiserror = "2.0"
 sptr = "0.3"
 smallvec = "1.13"
 slab = "0.4"

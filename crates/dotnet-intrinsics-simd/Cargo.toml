@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 dotnet-macros = { workspace = true }
 dotnet-simd = { workspace = true, default-features = false }
+dotnetdll = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }

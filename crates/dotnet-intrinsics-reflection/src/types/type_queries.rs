@@ -24,7 +24,7 @@ use dotnetdll::{
 };
 use std::collections::{HashSet, VecDeque};
 
-fn runtime_type_from_concrete(
+pub fn runtime_type_from_concrete(
     loader: &impl TypeResolver,
     concrete: &ConcreteType,
 ) -> Option<RuntimeType> {

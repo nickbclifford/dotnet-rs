@@ -168,10 +168,8 @@ impl FieldStorage {
 
     /// Returns a copy of the field's data using atomic operations for supported sizes.
     /// This method respects the provided `Ordering` and is suitable for volatile access.
-    /// It still acquires a read lock to ensure memory safety and prevent tearing
-    /// against synchronized writers for large field sizes.
-    /// In multithreading mode, unsupported atomic width/alignment is rejected
-    /// by `dotnet_utils::atomic::Atomic::load_field` (fail-fast).
+    /// It acquires a read lock; for sizes > 8 or misaligned fields the lock guards a
+    /// non-atomic memcpy fallback instead of a hardware atomic load.
     ///
     /// # Memory Ordering
     /// For .NET volatile loads, `Ordering::Acquire` or `Ordering::SeqCst` should be used.
@@ -191,10 +189,8 @@ impl FieldStorage {
 
     /// Sets the field's data using atomic operations for supported sizes.
     /// This method respects the provided `Ordering` and is suitable for volatile access.
-    /// It acquires a write lock to ensure memory safety and prevent tearing
-    /// against other synchronized readers/writers for large field sizes.
-    /// In multithreading mode, unsupported atomic width/alignment is rejected
-    /// by `dotnet_utils::atomic::Atomic::store_field` (fail-fast).
+    /// It acquires a write lock; for sizes > 8 or misaligned fields the lock guards a
+    /// non-atomic memcpy fallback instead of a hardware atomic store.
     ///
     /// # Memory Ordering
     /// For .NET volatile stores, `Ordering::Release` or `Ordering::SeqCst` should be used.

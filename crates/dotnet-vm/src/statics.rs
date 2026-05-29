@@ -302,13 +302,37 @@ impl StaticStorageManager {
             // as it might be expensive or trigger recursive resolutions.
             let layout = self.get_static_field_layout(description.clone(), context, metrics)?;
             let size = layout.size();
+            let mut data = vec![0; size.as_usize()];
+
+            // Seed static RVA-backed fields (for example, UTF-8 literal backing data)
+            // into the static storage image so `ldsflda` sees the correct bytes.
+            for field in &description.definition().fields {
+                let Some(initial_data) = &field.initial_value else {
+                    continue;
+                };
+                let Some(field_layout) = layout.get_field(description.clone(), field.name.as_ref())
+                else {
+                    continue;
+                };
+
+                let dst_start = field_layout.position.as_usize();
+                let field_size = field_layout.layout.size().as_usize();
+                let copy_len = std::cmp::min(field_size, initial_data.len());
+                if copy_len == 0 {
+                    continue;
+                }
+
+                let dst_end = dst_start + copy_len;
+                data[dst_start..dst_end].copy_from_slice(&initial_data[..copy_len]);
+            }
+
             let mut shard = self.shards[shard_idx].write();
             #[allow(clippy::arc_with_non_send_sync)]
             shard.entry(key.clone()).or_insert_with(|| {
                 Arc::new(StaticStorage {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
                     initializing_thread: AtomicU64::new(0),
-                    storage: FieldStorage::new(layout, vec![0; size.as_usize()]),
+                    storage: FieldStorage::new(layout, data),
                     init_cond: Arc::new(Condvar::new()),
                     init_mutex: Arc::new(OrderedMutex::new(())),
                 })

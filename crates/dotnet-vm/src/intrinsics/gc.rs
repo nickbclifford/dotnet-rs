@@ -39,6 +39,9 @@ pub fn intrinsic_argument_null_exception_throw_if_null<
 
 /// System.Environment::GetEnvironmentVariableCore(string)
 #[dotnet_intrinsic("static string System.Environment::GetEnvironmentVariableCore(string)")]
+#[dotnet_intrinsic(
+    "static string System.Environment::GetEnvironmentVariableCore_NoArrayPool(string)"
+)]
 pub fn intrinsic_environment_get_variable_core<
     'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
@@ -569,5 +572,27 @@ pub fn intrinsic_dependent_handle_internal_free<'gc, T: TypedStackOps<'gc> + Mem
         }
     }
     ctx.push_i32(1);
+    StepResult::Continue
+}
+
+/// RuntimeHelpers.ObjectHasComponentSize — returns true for arrays and strings.
+///
+/// In the CLR, "component-sized" objects (arrays, strings) store a per-element
+/// size field in their object header.  ReadOnlyMemory<T>.Span uses this to
+/// distinguish array-backed memory from MemoryManager-backed memory.
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.RuntimeHelpers::ObjectHasComponentSize(object)"
+)]
+pub fn intrinsic_object_has_component_size<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let has_component_size = obj.0.as_ref().map_or(false, |handle| {
+        let storage = handle.borrow();
+        matches!(storage.storage, HeapStorage::Vec(_) | HeapStorage::Str(_))
+    });
+    ctx.push_i32(has_component_size as i32);
     StepResult::Continue
 }
