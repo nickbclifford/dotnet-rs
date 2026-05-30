@@ -141,9 +141,6 @@ impl<'gc> Default for EvaluationStack<'gc> {
 }
 
 impl<'gc> EvaluationStack<'gc> {
-    #[cfg(feature = "segmented-eval-stack-prototype")]
-    const SEGMENTED_STACK_GRANULARITY: usize = 64;
-
     pub fn new() -> Self {
         Self {
             stack: vec![],
@@ -162,22 +159,6 @@ impl<'gc> EvaluationStack<'gc> {
         dotnet_metrics::record_active_eval_stack_reallocation(fixup_start.elapsed());
     }
 
-    #[cfg(feature = "segmented-eval-stack-prototype")]
-    #[inline]
-    fn normalize_reserve_target(required_slots: usize) -> usize {
-        if required_slots == 0 {
-            return 0;
-        }
-
-        let rem = required_slots % Self::SEGMENTED_STACK_GRANULARITY;
-        if rem == 0 {
-            required_slots
-        } else {
-            required_slots.saturating_add(Self::SEGMENTED_STACK_GRANULARITY - rem)
-        }
-    }
-
-    #[cfg(not(feature = "segmented-eval-stack-prototype"))]
     #[inline]
     fn normalize_reserve_target(required_slots: usize) -> usize {
         required_slots

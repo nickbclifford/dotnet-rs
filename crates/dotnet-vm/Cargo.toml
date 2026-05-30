@@ -87,12 +87,8 @@ bench-instrumentation = [
 heap-diagnostics = ["dotnet-runtime-memory/heap-diagnostics"]
 # Enables runtime parking_lot deadlock detection and background reporting.
 deadlock-diagnostics = ["multithreading", "parking_lot/deadlock_detection"]
-# Enables eval-stack reserve-growth prototype (kept intentionally as a toggle).
-segmented-eval-stack-prototype = ["dotnet-vm-ops/segmented-eval-stack-prototype"]
 # Selects generated function-pointer jump-table dispatch.
 instruction-dispatch-jump-table = []
-# Enables super-instruction prototype handlers in dispatch loop.
-dispatch-super-instruction-prototype = []
 
 [build-dependencies]
 dotnet-build-tools = { workspace = true }

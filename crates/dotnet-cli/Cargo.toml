@@ -24,8 +24,6 @@ fuzzing = ["dotnet-vm/fuzzing"]
 heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
 # Forwards deadlock detection diagnostics from vm multithreading runtime.
 deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
-# Forwards eval-stack growth-policy prototype from vm-data stack backend.
-segmented-eval-stack-prototype = ["dotnet-vm/segmented-eval-stack-prototype"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

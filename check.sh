@@ -35,15 +35,13 @@ for features in "${FEATURES_COMBINATIONS[@]}"; do
     fi
 done
 
-# Prototype feature runs are compile/regression guards only; they do not yet
-# include feature-specific behavioral assertions.
-echo "Running prototype compilation guards..."
+# Optional feature runs are compile/regression guards for diagnostics and
+# alternate dispatch implementations that are not covered by the matrix above.
+echo "Running optional feature compilation guards..."
 cargo test --features bench-instrumentation -- --nocapture
 cargo test --features heap-diagnostics -- --nocapture
 cargo test -p dotnet-vm --features deadlock-diagnostics -- --nocapture
-cargo test --features segmented-eval-stack-prototype -- --nocapture
 cargo test -p dotnet-vm --features instruction-dispatch-jump-table -- --nocapture
-cargo test -p dotnet-vm --features "instruction-dispatch-jump-table dispatch-super-instruction-prototype" -- --nocapture
 
 echo "Running hang-probe integration tests..."
 HANG_PROBE_TESTS=(
