@@ -7,7 +7,7 @@ use crate::{
     },
     threading::{IS_PERFORMING_GC, STWGuardOps, ThreadState},
 };
-use dotnet_runtime_memory::access::flush_write_barrier_buffer;
+use dotnet_runtime_memory::flush_write_barrier_buffer;
 use dotnet_tracer::Tracer;
 use dotnet_utils::{
     ArenaId,

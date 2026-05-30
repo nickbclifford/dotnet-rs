@@ -7,7 +7,7 @@ use crate::{
     },
     threading::ThreadManagerOps,
 };
-use dotnet_runtime_memory::access::MemoryOwner;
+use dotnet_runtime_memory::{HeapWriteTarget, MemoryOwner};
 use dotnet_types::TypeDescription;
 use dotnet_utils::{BorrowScopeOps, GcScopeGuard};
 use dotnet_value::{
@@ -100,7 +100,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    use dotnet_runtime_memory::access::HeapWriteTarget;
                     memory.write_to_heap(
                         self.gc,
                         HeapWriteTarget(MemoryOwner::Local(owner)),
@@ -121,7 +120,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    use dotnet_runtime_memory::access::HeapWriteTarget;
                     memory.write_to_heap(
                         self.gc,
                         HeapWriteTarget(MemoryOwner::cross_arena(self.gc, ptr, tid)),
