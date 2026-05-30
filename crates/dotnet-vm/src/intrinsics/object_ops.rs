@@ -5,8 +5,7 @@ use crate::{
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_runtime_memory::ops::MemoryOps;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+use dotnet_vm_ops::NULL_REF_MSG;
 
 #[dotnet_intrinsic("object System.Object::MemberwiseClone()")]
 pub fn object_memberwise_clone<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(

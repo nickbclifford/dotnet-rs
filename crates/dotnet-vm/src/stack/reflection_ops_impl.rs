@@ -178,9 +178,7 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
     ) -> Result<(), TypeResolutionError> {
         self.constructor_frame(instance, method, generic_inst)
     }
-}
 
-impl<'a, 'gc> dotnet_intrinsics_reflection::LayoutQueryHost for VesContext<'a, 'gc> {
     fn reflection_type_layout(
         &self,
         t: ConcreteType,

@@ -14,7 +14,7 @@ use dotnet_value::{
     object::{Object, ObjectRef},
 };
 use dotnet_vm_data::MethodInfo;
-use dotnet_vm_ops::ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost;
+use dotnet_vm_ops::{NULL_REF_MSG, ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost};
 use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
 
@@ -81,9 +81,7 @@ pub trait ResolutionContextHost<'gc> {
         method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError>;
-}
 
-pub trait LayoutQueryHost {
     fn reflection_type_layout(
         &self,
         t: ConcreteType,
@@ -154,8 +152,5 @@ dotnet_vm_ops::trait_alias! {
     pub trait ReflectionIntrinsicHost<'gc> =
         VmReflectionIntrinsicHost<'gc>
         + ResolutionContextHost<'gc>
-        + LayoutQueryHost
         + ReflectionRegistryHost<'gc>;
 }
-
-pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";

@@ -135,6 +135,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
+use dotnet_vm_ops::NULL_REF_MSG;
 use dotnetdll::prelude::{BaseType, TypeSource};
 use std::sync::Arc;
 
@@ -157,8 +158,6 @@ pub use metadata::{IntrinsicKind, IntrinsicMetadata, classify_intrinsic};
 use super::{StepResult, context::ResolutionContext};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[cold]
 #[inline(never)]

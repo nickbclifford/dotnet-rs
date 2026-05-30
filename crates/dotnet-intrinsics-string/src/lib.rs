@@ -5,15 +5,13 @@ use dotnet_types::{
 };
 use dotnet_value::object::Object;
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::StringIntrinsicHost as VmStringIntrinsicHost;
+use dotnet_vm_ops::{NULL_REF_MSG, ops::StringIntrinsicHost as VmStringIntrinsicHost};
 
 pub mod accessors;
 pub mod constructors;
 pub mod operations;
 pub mod search;
 pub(crate) mod simd;
-
-pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 pub trait IntrinsicStringHost<'gc>: VmStringIntrinsicHost<'gc> {
     fn string_intrinsic_as_span(

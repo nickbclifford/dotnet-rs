@@ -6,7 +6,9 @@ use crate::{
     sync::{Arc, Weak},
 };
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_runtime_resolver::{ResolverCacheAdapter, ResolverLayoutAdapter};
+use dotnet_runtime_resolver::{
+    IntrinsicCacheAdapter, ResolverLayoutAdapter, TypePropertyCacheAdapter, VmtCacheAdapter,
+};
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -180,7 +182,7 @@ impl VmResolverCaches {
     }
 }
 
-impl ResolverCacheAdapter for VmResolverCaches {
+impl IntrinsicCacheAdapter for VmResolverCaches {
     fn get_intrinsic_cached(&self, method: &MethodDescription) -> Option<bool> {
         if let Some(cached) = self.caches.intrinsic_cache.read().get(method).copied() {
             if let Some(shared) = self.shared_state() {
@@ -230,7 +232,9 @@ impl ResolverCacheAdapter for VmResolverCaches {
     fn compute_is_intrinsic_field(&self, field: FieldDescription, loader: &AssemblyLoader) -> bool {
         intrinsics::is_intrinsic_field(field, loader, &self.caches.intrinsic_registry)
     }
+}
 
+impl VmtCacheAdapter for VmResolverCaches {
     fn get_vmt_cached(
         &self,
         base_method: &MethodDescription,
@@ -336,7 +340,9 @@ impl ResolverCacheAdapter for VmResolverCaches {
     ) {
         self.caches.overrides_cache.insert(key, overrides);
     }
+}
 
+impl TypePropertyCacheAdapter for VmResolverCaches {
     fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool> {
         if self.caches.front_cache_enabled() {
             if let Some(front_cached) =

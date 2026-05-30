@@ -429,6 +429,9 @@ pub trait StaticsOps<'gc> {
 }
 
 crate::trait_alias! {
+    // push_string has no default body on TypedStackOps, so a blanket impl
+    // `impl<T: TypedStackOps + …> StackOps for T` would require T to provide
+    // push_string twice. Blanket impl suppressed intentionally.
     #[no_blanket_impl]
     pub trait StackOps<'gc> = TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc>;
     /// Host contract for string intrinsic handlers.

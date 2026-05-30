@@ -6,11 +6,9 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_ops::{
-    StepResult,
+    NULL_REF_MSG, StepResult,
     ops::{EvalStackOps, ExceptionOps, MemoryOps, TypedStackOps},
 };
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
 const NOT_ARRAY_MSG: &str = "Object must be of type Array.";
 const INDEX_ARG_TYPE_MSG: &str = "Index must be Int32, Int64, or Int32[].";

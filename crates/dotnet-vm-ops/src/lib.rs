@@ -10,6 +10,8 @@
 mod macros;
 pub mod ops;
 
+pub const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 pub use dotnet_macros::trait_alias;
 pub use dotnet_vm_data::{
     self, CollectableMethodDescription, MethodInfo, MethodState, StepResult,

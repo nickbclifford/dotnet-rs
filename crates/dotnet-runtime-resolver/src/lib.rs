@@ -28,7 +28,7 @@ pub trait ResolverThreadSafety {}
 #[cfg(not(feature = "multithreading"))]
 impl<T> ResolverThreadSafety for T {}
 
-pub trait ResolverCacheAdapter: ResolverThreadSafety + 'static {
+pub trait IntrinsicCacheAdapter: ResolverThreadSafety + 'static {
     fn get_intrinsic_cached(&self, method: &MethodDescription) -> Option<bool>;
     fn set_intrinsic_cached(&self, method: MethodDescription, is_intrinsic: bool);
     fn compute_is_intrinsic(&self, method: MethodDescription, loader: &AssemblyLoader) -> bool;
@@ -36,7 +36,9 @@ pub trait ResolverCacheAdapter: ResolverThreadSafety + 'static {
     fn get_intrinsic_field_cached(&self, field: &FieldDescription) -> Option<bool>;
     fn set_intrinsic_field_cached(&self, field: FieldDescription, is_intrinsic: bool);
     fn compute_is_intrinsic_field(&self, field: FieldDescription, loader: &AssemblyLoader) -> bool;
+}
 
+pub trait VmtCacheAdapter: ResolverThreadSafety + 'static {
     fn get_vmt_cached(
         &self,
         base_method: &MethodDescription,
@@ -61,7 +63,9 @@ pub trait ResolverCacheAdapter: ResolverThreadSafety + 'static {
         key: (TypeDescription, GenericLookup),
         overrides: Arc<HashMap<MethodDescription, MethodDescription>>,
     );
+}
 
+pub trait TypePropertyCacheAdapter: ResolverThreadSafety + 'static {
     fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool>;
     fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool);
     fn record_hierarchy_key_clones(&self, _count: u64) {}
@@ -71,6 +75,16 @@ pub trait ResolverCacheAdapter: ResolverThreadSafety + 'static {
 
     fn get_has_finalizer_cached(&self, td: &TypeDescription) -> Option<bool>;
     fn set_has_finalizer_cached(&self, td: TypeDescription, has_finalizer: bool);
+}
+
+pub trait ResolverCacheAdapter:
+    IntrinsicCacheAdapter + VmtCacheAdapter + TypePropertyCacheAdapter
+{
+}
+
+impl<T: IntrinsicCacheAdapter + VmtCacheAdapter + TypePropertyCacheAdapter> ResolverCacheAdapter
+    for T
+{
 }
 
 pub trait ResolverLayoutAdapter: ResolverThreadSafety + Clone + 'static {

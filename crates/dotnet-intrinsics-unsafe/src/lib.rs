@@ -6,14 +6,12 @@ use dotnet_types::{
 };
 use dotnet_value::{layout::LayoutManager, object::ObjectRef, pointer::PointerOrigin};
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::UnsafeIntrinsicHost as VmUnsafeIntrinsicHost;
+use dotnet_vm_ops::{NULL_REF_MSG, ops::UnsafeIntrinsicHost as VmUnsafeIntrinsicHost};
 use std::sync::Arc;
 
 pub mod buffer;
 pub mod marshal;
 pub mod unsafe_ptr;
-
-pub(crate) const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
     fn unsafe_type_layout(

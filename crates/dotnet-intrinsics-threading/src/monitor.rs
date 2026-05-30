@@ -4,6 +4,7 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{ArenaId, StackSlotIndex};
 use dotnet_value::{ManagedPtr, StackValue, pointer::PointerOrigin};
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::NULL_REF_MSG;
 use std::{
     cell::Cell,
     time::{Duration, Instant},
@@ -34,8 +35,6 @@ fn get_deadline(timeout_ms: i32) -> Instant {
 fn clear_deadline() {
     CURRENT_DEADLINE.with(|c| c.set(None));
 }
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
