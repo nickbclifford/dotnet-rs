@@ -354,13 +354,33 @@ thread_local! {
     static FOUND_CROSS_ARENA_REFS: RefCell<Vec<(ArenaId, usize, u64)>> = const { RefCell::new(Vec::new()) };
     /// The thread ID of the arena currently being traced.
     static CURRENTLY_TRACING_THREAD_ID: Cell<Option<ArenaId>> = const { Cell::new(None) };
+    /// Whether tracing is currently running under an active STW pause.
+    static CURRENTLY_TRACING_UNDER_STW: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Set the thread ID of the arena currently being traced.
-pub fn set_currently_tracing(thread_id: Option<ArenaId>) {
+/// Generation marker recorded for cross-arena refs discovered while STW is
+/// active.  During STW, arena unregister is paused so record-time generation
+/// capture is unnecessary; harvest can accept any live lease generation.
+pub const STW_TRACING_GENERATION_SENTINEL: u64 = u64::MAX;
+
+/// Set the tracing context for the current thread.
+///
+/// `stw_active` should be `true` only when called from STW mark tracing.
+pub fn set_currently_tracing_with_stw(thread_id: Option<ArenaId>, stw_active: bool) {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
         id.set(thread_id);
     });
+    CURRENTLY_TRACING_UNDER_STW.with(|flag| {
+        flag.set(stw_active);
+    });
+}
+
+/// Set the thread ID of the arena currently being traced.
+///
+/// Backward-compatible helper used by older call sites/tests that do not
+/// thread through STW state.
+pub fn set_currently_tracing(thread_id: Option<ArenaId>) {
+    set_currently_tracing_with_stw(thread_id, false);
 }
 
 /// Get the thread ID of the arena currently being traced.
@@ -389,17 +409,40 @@ pub fn take_found_cross_arena_refs_with_generation() -> Vec<(ArenaId, usize, u64
 /// has already exited.
 ///
 /// When called during a GC tracing phase the reference is pushed to the
-/// thread-local `FOUND_CROSS_ARENA_REFS` list together with the arena's
-/// current **generation** (captured via [`try_acquire_lease`]).  This closes
-/// the recording-side TOCTOU window: the arena is pinned by the lease while
-/// the push occurs, so the generation stored in the list is guaranteed to
-/// reflect a live registration.  The lease is released immediately after the
-/// push; dereference-side protection is provided at the harvest site via
-/// [`take_found_cross_arena_refs_with_generation`].
+/// thread-local `FOUND_CROSS_ARENA_REFS` list together with a generation tag.
+///
+/// - Outside STW tracing, the generation is captured via [`try_acquire_lease`]
+///   to close recording-side TOCTOU.
+/// - During STW tracing, arena unregister is paused by invariant, so we skip
+///   lease acquisition (and the registry read-lock) and only check the lock-free
+///   fast bitset for IDs < 64.
 pub fn record_cross_arena_ref(target_thread_id: ArenaId, ptr: usize) -> bool {
     // Only record the reference if we are currently in a GC tracing phase.
     if CURRENTLY_TRACING_THREAD_ID.with(|id| id.get().is_some()) {
-        // Acquire a lease to pin the arena and capture its generation atomically.
+        let tracing_under_stw = CURRENTLY_TRACING_UNDER_STW.with(|flag| flag.get());
+        if tracing_under_stw {
+            let id = target_thread_id.0;
+            let valid = if id < 64 {
+                (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
+            } else {
+                // IDs >= 64 are not represented in the fast bitset.  Under STW
+                // this optimistic validity is safe: harvest still acquires a
+                // lease before dereference and drops stale/exited arenas.
+                true
+            };
+            if valid {
+                FOUND_CROSS_ARENA_REFS.with(|refs| {
+                    refs.borrow_mut().push((
+                        target_thread_id,
+                        ptr,
+                        STW_TRACING_GENERATION_SENTINEL,
+                    ));
+                });
+            }
+            return valid;
+        }
+
+        // Non-STW tracing path: pin arena and capture generation atomically.
         if let Some(lease) = try_acquire_lease(target_thread_id) {
             let generation = lease.generation();
             FOUND_CROSS_ARENA_REFS.with(|refs| {
@@ -420,6 +463,9 @@ pub fn record_cross_arena_ref(target_thread_id: ArenaId, ptr: usize) -> bool {
 pub fn clear_tracing_state() {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
         id.set(None);
+    });
+    CURRENTLY_TRACING_UNDER_STW.with(|flag| {
+        flag.set(false);
     });
     FOUND_CROSS_ARENA_REFS.with(|refs| {
         refs.borrow_mut().clear();
@@ -746,6 +792,30 @@ mod lease_tests {
             ref_gen, expected_gen,
             "stored generation must match arena generation at record time"
         );
+
+        unregister_arena(id);
+    }
+
+    // ------------------------------------------------------------------
+    // STW tracing path records sentinel generation without lease acquisition
+    // ------------------------------------------------------------------
+    #[test]
+    fn record_cross_arena_ref_stw_tracing_uses_sentinel_generation() {
+        let id = ArenaId(10_013);
+        register_arena(id, stw_flag());
+
+        set_currently_tracing_with_stw(Some(id), true);
+        let recorded = record_cross_arena_ref(id, 0xABCD);
+        set_currently_tracing_with_stw(None, false);
+
+        assert!(recorded, "record should succeed for live arena in STW mode");
+
+        let refs = take_found_cross_arena_refs_with_generation();
+        assert_eq!(refs.len(), 1);
+        let (ref_id, ref_ptr, ref_gen) = refs[0];
+        assert_eq!(ref_id, id);
+        assert_eq!(ref_ptr, 0xABCD);
+        assert_eq!(ref_gen, STW_TRACING_GENERATION_SENTINEL);
 
         unregister_arena(id);
     }

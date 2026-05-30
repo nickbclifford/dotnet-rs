@@ -403,7 +403,7 @@ pub fn newarr<
     let v = dotnet_vm_ops::vm_try!(ctx.new_vector(elem_type, length));
     let o = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Vec(v),
+        HeapStorage::Vec(Box::new(v)),
     );
     ctx.register_new_object(&o);
     ctx.push(StackValue::ObjectRef(o));

@@ -43,7 +43,7 @@ pub fn intrinsic_assembly_get_custom_attributes<
 
     let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
     let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
-    let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array)));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
 
@@ -74,7 +74,7 @@ pub fn intrinsic_attribute_get_custom_attributes<
 
     let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
     let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
-    let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array)));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
 
@@ -115,7 +115,7 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .field::<usize>(asm_handle.description.clone(), "resolution")
         .unwrap()
         .write(resolution.as_raw() as usize);
-    let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+    let v = ObjectRef::new(gc, HeapStorage::Obj(Box::new(asm_handle)));
     ctx.register_new_object(&v);
 
     ctx.reflection_cache_runtime_assembly(resolution, v);

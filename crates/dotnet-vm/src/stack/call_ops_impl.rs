@@ -74,7 +74,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let value = if desc.is_value_type(&self.current_context())? {
             StackValue::ValueType(instance)
         } else {
-            let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
+            let in_heap = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
             self.register_new_object(&in_heap);
             StackValue::ObjectRef(in_heap)
         };

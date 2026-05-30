@@ -1,9 +1,12 @@
 use crate::{
-    StackValue, ValidationTag,
+    StackValue,
     layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
+
+#[cfg(any(feature = "memory-validation", debug_assertions))]
+use crate::ValidationTag;
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -16,7 +19,7 @@ use std::{
     iter,
     marker::PhantomData,
     mem::size_of,
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 #[cfg(feature = "fuzzing")]
@@ -165,10 +168,15 @@ impl<'gc> CTSValue<'gc> {
     }
 }
 
+#[cfg(any(feature = "memory-validation", debug_assertions))]
 pub(crate) const VECTOR_MAGIC: u64 = 0x5AFE_7EC7_0B00_0000;
+
+static TRACE_GC_PTR_READ: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok());
 
 // Manual implementation of Clone and PartialEq to handle ThreadSafeLock
 pub struct Vector<'gc> {
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
     pub(crate) magic: ValidationTag,
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
@@ -181,6 +189,7 @@ impl<'gc> Clone for Vector<'gc> {
     fn clone(&self) -> Self {
         self.validate_magic();
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
             magic: ValidationTag::new(VECTOR_MAGIC),
             element: self.element.clone(),
             layout: self.layout.clone(),
@@ -241,6 +250,7 @@ impl<'gc> Vector<'gc> {
         dims: Vec<usize>,
     ) -> Self {
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
             magic: ValidationTag::new(VECTOR_MAGIC),
             element,
             layout,
@@ -251,6 +261,7 @@ impl<'gc> Vector<'gc> {
     }
 
     fn validate_magic(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
         self.magic.validate(VECTOR_MAGIC, "Vector");
     }
 
@@ -291,10 +302,10 @@ impl<'gc> Vector<'gc> {
         &mut self.storage
     }
 
-    /// Returns a pointer to the raw data without acquiring a lock.
+    /// Returns a pointer to the raw data without taking a field access guard.
     ///
     /// # Safety
-    /// The caller must ensure that the lock is held elsewhere (e.g. during STW GC)
+    /// The caller must ensure synchronization is provided elsewhere (e.g. during STW GC)
     /// or that the data is otherwise stable and no writers are active.
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         self.storage.as_ptr() as *mut u8
@@ -357,7 +368,7 @@ impl<'a, 'gc> Arbitrary<'a> for Object<'gc> {
             generics: u.arbitrary()?,
             instance_storage: FieldStorage::new(
                 Arc::new(crate::layout::FieldLayoutManager {
-                    fields: std::collections::HashMap::new(),
+                    fields: hashbrown::HashMap::new(),
                     total_size: 0,
                     alignment: 1,
                     gc_desc: crate::layout::GcDesc::default(),
@@ -401,7 +412,7 @@ impl<'gc> Eq for Object<'gc> {}
 // We use the layout manager associated with the type description to trace fields.
 unsafe impl<'gc> Collect<'gc> for Object<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
+        if *TRACE_GC_PTR_READ {
             eprintln!(
                 "[GC] tracing Object type={:?} generics={:?}",
                 self.description, self.generics

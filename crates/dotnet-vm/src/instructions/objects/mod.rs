@@ -126,7 +126,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 );
                 let o = ObjectRef::new(
                     ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                    HeapStorage::Vec(vec_obj),
+                    HeapStorage::Vec(Box::new(vec_obj)),
                 );
                 ctx.register_new_object(&o);
                 ctx.push(StackValue::ObjectRef(o));

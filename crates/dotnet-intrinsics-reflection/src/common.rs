@@ -57,7 +57,7 @@ pub fn get_runtime_type<'gc>(
     let rt_obj = ctx
         .new_object(rt.clone())
         .expect("Failed to create RuntimeType object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
     ctx.register_new_object(&obj_ref);
 
     obj_ref.as_object_mut(gc, |instance| {
@@ -249,7 +249,7 @@ pub fn get_runtime_method_obj<'gc>(
     let rt_obj = ctx
         .new_object(rt.clone())
         .expect("Failed to create reflection object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
     ctx.register_new_object(&obj_ref);
 
     obj_ref.as_object_mut(gc, |instance| {
@@ -283,7 +283,7 @@ pub fn get_runtime_field_obj<'gc>(
     let rt_obj = ctx
         .new_object(rt.clone())
         .expect("Failed to create FieldInfo object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
     ctx.register_new_object(&obj_ref);
 
     obj_ref.as_object_mut(gc, |instance| {

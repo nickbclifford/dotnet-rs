@@ -228,7 +228,7 @@ pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'
     {
         item.write(chunk);
     }
-    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector))));
     StepResult::Continue
 }
 

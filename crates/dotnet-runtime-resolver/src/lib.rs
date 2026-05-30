@@ -18,7 +18,17 @@ mod types;
 
 pub use layout::LayoutFactory;
 
-pub trait ResolverCacheAdapter: Send + Sync + 'static {
+#[cfg(feature = "multithreading")]
+pub trait ResolverThreadSafety: Send + Sync {}
+#[cfg(feature = "multithreading")]
+impl<T: Send + Sync> ResolverThreadSafety for T {}
+
+#[cfg(not(feature = "multithreading"))]
+pub trait ResolverThreadSafety {}
+#[cfg(not(feature = "multithreading"))]
+impl<T> ResolverThreadSafety for T {}
+
+pub trait ResolverCacheAdapter: ResolverThreadSafety + 'static {
     fn get_intrinsic_cached(&self, method: &MethodDescription) -> Option<bool>;
     fn set_intrinsic_cached(&self, method: MethodDescription, is_intrinsic: bool);
     fn compute_is_intrinsic(&self, method: MethodDescription, loader: &AssemblyLoader) -> bool;
@@ -63,7 +73,7 @@ pub trait ResolverCacheAdapter: Send + Sync + 'static {
     fn set_has_finalizer_cached(&self, td: TypeDescription, has_finalizer: bool);
 }
 
-pub trait ResolverLayoutAdapter: Send + Sync + Clone + 'static {
+pub trait ResolverLayoutAdapter: ResolverThreadSafety + Clone + 'static {
     fn get_layout_cached(&self, key: &ConcreteType) -> Option<Arc<LayoutManager>>;
     fn set_layout_cached(&self, key: ConcreteType, layout: Arc<LayoutManager>);
 

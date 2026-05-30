@@ -33,6 +33,12 @@ pub const GC_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
+pub const ALLOC_THROUGHPUT_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "alloc_throughput",
+    source: "fixtures/gc/AllocationThroughput_0.cs",
+    expected_exit_code: 0,
+};
+
 pub const GC_CROSS_ARENA_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "gc_cross_arena",
     source: "fixtures/gc_cross_arena/CrossArenaGcPressure_0.cs",
@@ -93,10 +99,11 @@ pub const REFLECTION_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 13] = [
+pub const BENCHMARK_CASES: [BenchmarkCase; 14] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
+    ALLOC_THROUGHPUT_BENCHMARK,
     GC_CROSS_ARENA_BENCHMARK,
     DISPATCH_BENCHMARK,
     GENERICS_BENCHMARK,

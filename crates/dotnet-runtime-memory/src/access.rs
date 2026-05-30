@@ -13,7 +13,12 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
-use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
+use std::{
+    cell::RefCell,
+    marker::PhantomData,
+    ptr,
+    sync::{Arc, LazyLock},
+};
 
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
@@ -37,39 +42,61 @@ thread_local! {
     static WB_LOCAL_BUF: RefCell<Vec<(ArenaId, usize)>> = RefCell::new(Vec::with_capacity(128));
 }
 
-/// RAII guard that drains the thread-local write-barrier buffer on drop.
-///
-/// Place one instance (as `let _flush_guard = WriteBarrierFlushGuard;`) immediately
-/// before each `WB_LOCAL_BUF.with(...)` write-barrier block.  Because `Drop` runs
-/// even during stack unwinding the buffer is always flushed to the GC coordinator,
-/// preventing stale cross-arena references from accumulating when a closure panics
-/// mid-write.
-///
-/// # Drop ordering
-/// The guard must be declared *before* the `WB_LOCAL_BUF.with(...)` call so that
-/// it drops *after* that call returns (Rust drops locals in reverse declaration
-/// order).  By the time `Drop` runs, the `RefMut` borrowed inside the `with`
-/// closure has already been released, so the re-borrow in `Drop` cannot panic.
-pub(crate) struct WriteBarrierFlushGuard;
+#[cfg(feature = "multithreading")]
+const DEFAULT_WB_FLUSH_THRESHOLD: usize = 32;
 
-impl Drop for WriteBarrierFlushGuard {
+static TRACE_CULTUREDATA_WRITES: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok());
+
+#[cfg(feature = "multithreading")]
+static WRITE_BARRIER_FLUSH_THRESHOLD: LazyLock<usize> = LazyLock::new(|| {
+    std::env::var("DOTNET_WB_FLUSH_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_WB_FLUSH_THRESHOLD)
+});
+
+#[cfg(feature = "multithreading")]
+fn flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
+    for (tid, ptr) in buffer.drain(..) {
+        dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+    }
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
+    buffer.clear();
+}
+
+#[cfg(feature = "multithreading")]
+fn maybe_flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
+    if buffer.len() >= *WRITE_BARRIER_FLUSH_THRESHOLD {
+        flush_write_barrier_entries(buffer);
+    }
+}
+
+/// Flushes the calling thread's deferred write-barrier buffer.
+///
+/// This is called at GC safepoint entry so all recorded cross-arena references
+/// become visible before mark starts.
+pub fn flush_write_barrier_buffer() {
+    WB_LOCAL_BUF.with(|buf| {
+        flush_write_barrier_entries(&mut buf.borrow_mut());
+    });
+}
+
+/// RAII guard that flushes deferred write-barrier entries only during panic unwind.
+///
+/// This preserves panic safety (no leaked buffered references when a write path
+/// unwinds) while allowing normal writes to batch until a threshold or safepoint.
+pub(crate) struct WriteBarrierPanicFlushGuard;
+
+impl Drop for WriteBarrierPanicFlushGuard {
     fn drop(&mut self) {
-        WB_LOCAL_BUF.with(|buf| {
-            // SAFETY: The `RefMut` from the write operation that created this
-            // guard lives inside the `WB_LOCAL_BUF.with(...)` closure body,
-            // which has already returned — either normally or via unwind —
-            // before this `Drop` executes.  Therefore `borrow_mut` here cannot
-            // encounter an already-active mutable borrow and will not panic.
-            #[cfg(feature = "multithreading")]
-            for (tid, ptr) in buf.borrow_mut().drain(..) {
-                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
-            }
-            // Under non-multithreading the recorder push methods are no-ops so
-            // the buffer is always empty in production.  We clear explicitly
-            // anyway to keep the invariant sound for tests that seed it directly.
-            #[cfg(not(feature = "multithreading"))]
-            buf.borrow_mut().clear();
-        });
+        if std::thread::panicking() {
+            flush_write_barrier_buffer();
+        }
     }
 }
 
@@ -103,6 +130,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             if ref_tid != self.arena_id {
                 self.buffer
                     .push((ref_tid, gc_arena::Gc::as_ptr(h) as usize));
+                maybe_flush_write_barrier_entries(self.buffer);
             }
         }
     }
@@ -111,6 +139,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         match target.origin() {
             PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
                 self.buffer.push((*ref_tid, p.as_ptr() as usize));
+                maybe_flush_write_barrier_entries(self.buffer);
             }
             PointerOrigin::Heap(r) => {
                 self.record_ref(*r);
@@ -232,14 +261,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
-            // Get layout before locking to avoid deadlock
+            // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             let dest_layout = self.get_layout_from_owner(owner);
 
-            // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
-            // write_value_internal will copy the data.  The flush guard drains
-            // WB_LOCAL_BUF on drop, ensuring cross-arena refs are recorded even
-            // if the inner closure panics.
-            let _flush_guard = WriteBarrierFlushGuard;
+            // SAFETY: with_data_mut provides exclusive access for the duration of the closure.
+            // write_value_internal will copy the data.  The panic-flush guard
+            // preserves unwind safety while allowing normal-path batching.
+            let _flush_guard = WriteBarrierPanicFlushGuard;
             WB_LOCAL_BUF.with(|buf| {
                 let mut b = buf.borrow_mut();
                 let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
@@ -299,10 +327,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
-            // Get layout before locking to avoid deadlock
+            // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             let src_layout = self.get_layout_from_owner(owner);
 
-            // SAFETY: with_data ensures the lock is held for the duration of the closure.
+            // SAFETY: with_data provides stable shared access for the duration of the closure.
             // read_value_internal will read the data.
             owner.with_data(|data| {
                 let base = data.as_ptr();
@@ -350,13 +378,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {});
 
-            // Get layout before locking to avoid deadlock
+            // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             #[cfg(feature = "multithreading")]
             let layout = self.get_layout_from_owner(owner);
 
-            // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
-            // refs are recorded even if the inner closure panics.
-            let _flush_guard = WriteBarrierFlushGuard;
+            // The panic-flush guard preserves unwind safety while allowing
+            // normal-path write-barrier batching.
+            let _flush_guard = WriteBarrierPanicFlushGuard;
             WB_LOCAL_BUF.with(|buf| {
                 let mut b = buf.borrow_mut();
                 let mut _recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
@@ -780,7 +808,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
         let dest_layout = self.get_layout_from_owner(owner);
 
-        if std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok() {
+        if *TRACE_CULTUREDATA_WRITES {
             let write_start = offset.as_usize();
             let write_end = write_start + layout.size().as_usize();
             let target_start = 288usize;
@@ -848,9 +876,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
         }
 
-        // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
-        // refs are recorded even if the inner closure panics.
-        let _flush_guard = WriteBarrierFlushGuard;
+        // The panic-flush guard drains WB_LOCAL_BUF only during unwinding;
+        // normal-path writes batch until threshold or safepoint flush.
+        let _flush_guard = WriteBarrierPanicFlushGuard;
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
@@ -959,6 +987,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             PointerOrigin::CrossArenaObjectRef(p, target_tid) if *target_tid != owner_tid => {
                 recorder.buffer.push((*target_tid, p.as_ptr() as usize));
+                maybe_flush_write_barrier_entries(recorder.buffer);
             }
             _ => {}
         }
@@ -972,9 +1001,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), MemoryAccessError> {
-        // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
-        // refs are recorded even if the inner closure panics.
-        let _flush_guard = WriteBarrierFlushGuard;
+        // The panic-flush guard drains WB_LOCAL_BUF only during unwinding;
+        // normal-path writes batch until threshold or safepoint flush.
+        let _flush_guard = WriteBarrierPanicFlushGuard;
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut _recorder = WriteBarrierRecorder::new(
@@ -1190,7 +1219,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             LayoutManager::Field(flm) => {
                 // Use GcDesc for fast ObjectRef recording
                 let ptr_size = ObjectRef::SIZE;
-                for word_index in flm.gc_desc.bitmap.iter_ones() {
+                flm.gc_desc.for_each_word_index(|word_index| {
                     let offset = word_index * ptr_size;
                     // SAFETY: `offset` is a word-aligned byte offset derived from
                     // the layout's GC bitmap; `ptr.add(offset)` stays within the
@@ -1203,7 +1232,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             recorder,
                         );
                     }
-                }
+                });
                 for offset in &flm.gc_desc.unaligned_offsets {
                     // SAFETY: Unaligned offsets are validated by layout construction
                     // to lie within the struct's storage.
@@ -1423,7 +1452,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WB_LOCAL_BUF, WriteBarrierFlushGuard, check_bounds};
+    use super::{WB_LOCAL_BUF, WriteBarrierPanicFlushGuard, check_bounds};
     use dotnet_types::error::{CompareExchangeError, MemoryAccessError};
     use dotnet_utils::ArenaId;
 
@@ -1521,14 +1550,14 @@ mod tests {
         );
     }
 
-    /// Verify that `WriteBarrierFlushGuard::drop` drains `WB_LOCAL_BUF` even
+    /// Verify that `WriteBarrierPanicFlushGuard::drop` drains `WB_LOCAL_BUF` even
     /// when the surrounding code panics mid-write.
     ///
     /// We manually seed the TLS buffer, then force a panic inside
     /// `catch_unwind` while the guard is live.  After unwinding the buffer
     /// must be empty — confirming that `Drop` ran and drained it.
     #[test]
-    fn write_barrier_flush_guard_drains_on_panic() {
+    fn write_barrier_panic_flush_guard_drains_on_panic() {
         use std::panic::{self, AssertUnwindSafe};
 
         // Seed the TLS buffer with a dummy entry so there is something to drain.
@@ -1539,7 +1568,7 @@ mod tests {
         // Introduce a guard, then panic.  The guard's Drop must drain the buffer
         // even though control never reaches the end of the closure normally.
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            let _flush_guard = WriteBarrierFlushGuard;
+            let _flush_guard = WriteBarrierPanicFlushGuard;
             panic!("intentional test panic to verify flush-guard drop");
         }));
 
@@ -1549,8 +1578,26 @@ mod tests {
         WB_LOCAL_BUF.with(|buf| {
             assert!(
                 buf.borrow().is_empty(),
-                "WB_LOCAL_BUF should be empty after WriteBarrierFlushGuard dropped on unwind"
+                "WB_LOCAL_BUF should be empty after WriteBarrierPanicFlushGuard dropped on unwind"
             );
+        });
+    }
+
+    #[test]
+    fn write_barrier_panic_flush_guard_does_not_flush_on_normal_drop() {
+        WB_LOCAL_BUF.with(|buf| {
+            let mut b = buf.borrow_mut();
+            b.clear();
+            b.push((ArenaId(0), 0xDEAD_BEEF));
+        });
+
+        {
+            let _flush_guard = WriteBarrierPanicFlushGuard;
+        }
+
+        WB_LOCAL_BUF.with(|buf| {
+            assert_eq!(buf.borrow().len(), 1);
+            buf.borrow_mut().clear();
         });
     }
 

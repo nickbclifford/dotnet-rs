@@ -825,7 +825,7 @@ pub fn handle_get_generic_arguments<'gc, T: ReflectionIntrinsicHost<'gc>>(
         let arg_obj = crate::common::get_runtime_type(ctx, arg);
         arg_obj.write(chunk);
     }
-    let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector)));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
     StepResult::Continue

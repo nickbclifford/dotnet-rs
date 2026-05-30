@@ -129,7 +129,10 @@ where
                         });
                     }
                 }
-                Ok(ObjectRef::new(gc, HeapStorage::Boxed(obj_instance)))
+                Ok(ObjectRef::new(
+                    gc,
+                    HeapStorage::Boxed(Box::new(obj_instance)),
+                ))
             }
             CTSValue::Ref(r) => Ok(r),
         }

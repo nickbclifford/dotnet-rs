@@ -61,11 +61,13 @@ dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f53718357b741ed4027560f14e90836" }
 parking_lot = "0.12"
 dashmap = "6.1"
+hashbrown = "0.15"
 tracing = "0.1"
 thiserror = "2.0"
 sptr = "0.3"
 smallvec = "1.13"
 slab = "0.4"
+lru = "0.13"
 
 # Benchmark profile guidance:
 # - Use `bench-thin` for fast benchmark iteration.

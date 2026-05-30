@@ -1,7 +1,8 @@
 use gc_arena::static_collect;
+use lru::LruCache;
 use std::{
-    collections::HashMap,
     fmt::{Debug, Formatter},
+    num::NonZeroUsize,
     ops::Deref,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -80,19 +81,21 @@ struct InternConfig {
 
 const STRING_INTERN_DEFAULT_MAX_ENTRIES: usize = 4096;
 
-type StringInternerMap = HashMap<Arc<[u16]>, Arc<[u16]>>;
+type StringInternerCache = LruCache<Arc<[u16]>, Arc<[u16]>>;
+
+fn parse_env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
 
 static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
-    let enabled = match std::env::var("DOTNET_STRING_INTERN_EXPERIMENT") {
-        Ok(raw) => {
-            let trimmed = raw.trim();
-            trimmed.eq_ignore_ascii_case("1")
-                || trimmed.eq_ignore_ascii_case("true")
-                || trimmed.eq_ignore_ascii_case("yes")
-                || trimmed.eq_ignore_ascii_case("on")
-        }
-        Err(_) => false,
-    };
+    let enabled = parse_env_bool("DOTNET_STRING_INTERN_EXPERIMENT", true);
 
     let max_entries = match std::env::var("DOTNET_STRING_INTERN_MAX_ENTRIES") {
         Ok(raw) => match raw.trim().parse::<usize>() {
@@ -108,8 +111,11 @@ static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
     }
 });
 
-static STRING_INTERNER: LazyLock<Mutex<StringInternerMap>> =
-    LazyLock::new(|| Mutex::new(StringInternerMap::new()));
+static STRING_INTERNER: LazyLock<Mutex<StringInternerCache>> = LazyLock::new(|| {
+    let capacity = NonZeroUsize::new(INTERN_CONFIG.max_entries)
+        .expect("string interner max entries must be non-zero");
+    Mutex::new(StringInternerCache::new(capacity))
+});
 
 fn maybe_intern(chars: Vec<u16>) -> StringStorage {
     if !INTERN_CONFIG.enabled {
@@ -123,12 +129,8 @@ fn maybe_intern(chars: Vec<u16>) -> StringStorage {
         return StringStorage::Interned(Arc::clone(existing));
     }
 
-    if interner.len() >= INTERN_CONFIG.max_entries {
-        interner.clear();
-    }
-
     let interned = Arc::<[u16]>::from(chars.into_boxed_slice());
-    interner.insert(Arc::clone(&interned), Arc::clone(&interned));
+    interner.put(Arc::clone(&interned), Arc::clone(&interned));
     StringStorage::Interned(interned)
 }
 

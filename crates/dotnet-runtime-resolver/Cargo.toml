@@ -9,6 +9,7 @@ dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
+hashbrown = { workspace = true }
 sptr = { workspace = true }
 tracing = { workspace = true }
 

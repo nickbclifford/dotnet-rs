@@ -5,6 +5,8 @@ use crate::{
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
+#[cfg(feature = "multithreading")]
+use dotnet_metrics::ArenaGcPressureSnapshot;
 use dotnet_metrics::{CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot};
 use dotnet_pinvoke::NativeLibraries;
 use dotnet_runtime_memory::HeapManager;
@@ -16,18 +18,20 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
 };
 use gc_arena::{Collect, collect::Trace};
+use lru::LruCache;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     env,
     hash::Hash,
     mem::size_of,
+    num::NonZeroUsize,
     sync::OnceLock,
 };
 
@@ -53,7 +57,7 @@ impl Default for CachePolicy {
             method_info_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_METHOD_INFO"),
             vmt_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_VMT"),
             hierarchy_capacity: parse_env_usize("DOTNET_CACHE_LIMIT_HIERARCHY"),
-            front_cache_enabled: parse_env_bool("DOTNET_FRONT_CACHE_ENABLED", false),
+            front_cache_enabled: parse_env_bool("DOTNET_FRONT_CACHE_ENABLED", true),
             front_cache_capacity: parse_env_usize("DOTNET_FRONT_CACHE_CAPACITY")
                 .unwrap_or(FRONT_CACHE_DEFAULT_CAPACITY),
         }
@@ -108,11 +112,26 @@ where
     Some(entry.key().clone())
 }
 
+#[inline]
+fn cache_locked_map_len<K, V>(map: &RwLock<HashMap<K, V>>) -> usize
+where
+    K: Eq + Hash,
+{
+    map.read().len()
+}
+
 fn estimated_dashmap_bytes<K, V>(map: &DashMap<K, V>) -> u64
 where
     K: Eq + Hash,
 {
     (cache_map_len(map) as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64)
+}
+
+fn estimated_locked_map_bytes<K, V>(map: &RwLock<HashMap<K, V>>) -> u64
+where
+    K: Eq + Hash,
+{
+    (cache_locked_map_len(map) as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64)
 }
 
 fn insert_with_optional_capacity<K, V>(
@@ -140,9 +159,21 @@ fn insert_with_optional_capacity<K, V>(
     map.insert(key, value);
 }
 
-#[derive(Default)]
 struct MethodInfoFrontCache {
-    entries: VecDeque<(MethodDescription, GenericLookup, Arc<MethodInfo<'static>>)>,
+    entries: Option<LruCache<(MethodDescription, GenericLookup), Arc<MethodInfo<'static>>>>,
+    capacity: usize,
+}
+
+impl Default for MethodInfoFrontCache {
+    fn default() -> Self {
+        Self {
+            entries: Some(LruCache::new(
+                NonZeroUsize::new(FRONT_CACHE_DEFAULT_CAPACITY)
+                    .expect("front cache default capacity must be non-zero"),
+            )),
+            capacity: FRONT_CACHE_DEFAULT_CAPACITY,
+        }
+    }
 }
 
 impl MethodInfoFrontCache {
@@ -151,14 +182,8 @@ impl MethodInfoFrontCache {
         method: &MethodDescription,
         generics: &GenericLookup,
     ) -> Option<Arc<MethodInfo<'static>>> {
-        let index = self
-            .entries
-            .iter()
-            .position(|(m, g, _)| m == method && g == generics)?;
-        let entry = self.entries.remove(index)?;
-        let value = Arc::clone(&entry.2);
-        self.entries.push_back(entry);
-        Some(value)
+        let key = (method.clone(), generics.clone());
+        self.entries.as_mut()?.get(&key).cloned()
     }
 
     fn insert(
@@ -169,20 +194,21 @@ impl MethodInfoFrontCache {
         capacity: usize,
     ) {
         if capacity == 0 {
+            self.entries = None;
+            self.capacity = 0;
             return;
         }
 
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|(m, g, _)| m == &method && g == &generics)
-        {
-            self.entries.remove(index);
+        if self.capacity != capacity {
+            self.entries = Some(LruCache::new(
+                NonZeroUsize::new(capacity)
+                    .expect("front cache capacity must be non-zero when enabled"),
+            ));
+            self.capacity = capacity;
         }
 
-        self.entries.push_back((method, generics, value));
-        while self.entries.len() > capacity {
-            self.entries.pop_front();
+        if let Some(entries) = self.entries.as_mut() {
+            entries.put((method, generics), value);
         }
     }
 }
@@ -205,16 +231,16 @@ pub struct GlobalCaches {
     /// Cache for type hierarchy checks: (child, parent) -> is_a result
     pub hierarchy_cache: DashMap<(ConcreteType, ConcreteType), bool>,
     /// Cache for intrinsic checks: method -> is_intrinsic
-    pub intrinsic_cache: DashMap<MethodDescription, bool>,
+    pub intrinsic_cache: RwLock<HashMap<MethodDescription, bool>>,
     /// Cache for intrinsic field checks: field -> is_intrinsic
-    pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
+    pub intrinsic_field_cache: RwLock<HashMap<FieldDescription, bool>>,
     /// Cache for static field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
     pub static_field_layout_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
     /// Cache for value type checks: TypeDescription -> bool
-    pub value_type_cache: DashMap<TypeDescription, bool>,
+    pub value_type_cache: RwLock<HashMap<TypeDescription, bool>>,
     /// Cache for finalizer checks: TypeDescription -> bool
-    pub has_finalizer_cache: DashMap<TypeDescription, bool>,
+    pub has_finalizer_cache: RwLock<HashMap<TypeDescription, bool>>,
     /// Cache for resolved overrides: (TypeDescription, GenericLookup) -> Map<DeclMethod, ImplMethod>
     pub overrides_cache: DashMap<
         (TypeDescription, GenericLookup),
@@ -236,11 +262,11 @@ impl GlobalCaches {
             instance_field_layout_cache: DashMap::new(),
             vmt_cache: DashMap::new(),
             hierarchy_cache: DashMap::new(),
-            intrinsic_cache: DashMap::new(),
-            intrinsic_field_cache: DashMap::new(),
+            intrinsic_cache: RwLock::new(HashMap::new()),
+            intrinsic_field_cache: RwLock::new(HashMap::new()),
             static_field_layout_cache: DashMap::new(),
-            value_type_cache: DashMap::new(),
-            has_finalizer_cache: DashMap::new(),
+            value_type_cache: RwLock::new(HashMap::new()),
+            has_finalizer_cache: RwLock::new(HashMap::new()),
             overrides_cache: DashMap::new(),
             method_info_cache: DashMap::new(),
             intrinsic_registry,
@@ -446,6 +472,27 @@ impl SharedGlobalState {
     }
 
     pub fn get_runtime_metrics_snapshot(&self) -> RuntimeMetricsSnapshot {
+        #[cfg(feature = "multithreading")]
+        let gc_pressure_by_arena = self
+            .gc_coordinator
+            .arena_gc_pressure_snapshot()
+            .into_iter()
+            .map(|(arena_id, metrics)| {
+                (
+                    arena_id.to_string(),
+                    ArenaGcPressureSnapshot {
+                        collection_trigger_count: metrics.collection_trigger_count,
+                        peak_allocation_counter: metrics.peak_allocation_counter,
+                    },
+                )
+            })
+            .collect();
+        #[cfg(not(feature = "multithreading"))]
+        let gc_pressure_by_arena = std::collections::BTreeMap::new();
+
+        self.metrics
+            .update_arena_gc_pressure_metrics(gc_pressure_by_arena);
+
         let cache_sizes = self.cache_sizes();
         let cache_stats = self.metrics.cache_statistics(cache_sizes);
         self.metrics.snapshot(cache_stats, cache_sizes)
@@ -457,10 +504,10 @@ impl SharedGlobalState {
             layout_bytes: estimated_dashmap_bytes(&self.caches.layout_cache),
             vmt_size: cache_map_len(&self.caches.vmt_cache),
             vmt_bytes: estimated_dashmap_bytes(&self.caches.vmt_cache),
-            intrinsic_size: cache_map_len(&self.caches.intrinsic_cache),
-            intrinsic_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_cache),
-            intrinsic_field_size: cache_map_len(&self.caches.intrinsic_field_cache),
-            intrinsic_field_bytes: estimated_dashmap_bytes(&self.caches.intrinsic_field_cache),
+            intrinsic_size: cache_locked_map_len(&self.caches.intrinsic_cache),
+            intrinsic_bytes: estimated_locked_map_bytes(&self.caches.intrinsic_cache),
+            intrinsic_field_size: cache_locked_map_len(&self.caches.intrinsic_field_cache),
+            intrinsic_field_bytes: estimated_locked_map_bytes(&self.caches.intrinsic_field_cache),
             hierarchy_size: cache_map_len(&self.caches.hierarchy_cache),
             hierarchy_bytes: estimated_dashmap_bytes(&self.caches.hierarchy_cache),
             static_field_layout_size: cache_map_len(&self.caches.static_field_layout_cache),
@@ -471,10 +518,10 @@ impl SharedGlobalState {
             instance_field_layout_bytes: estimated_dashmap_bytes(
                 &self.caches.instance_field_layout_cache,
             ),
-            value_type_size: cache_map_len(&self.caches.value_type_cache),
-            value_type_bytes: estimated_dashmap_bytes(&self.caches.value_type_cache),
-            has_finalizer_size: cache_map_len(&self.caches.has_finalizer_cache),
-            has_finalizer_bytes: estimated_dashmap_bytes(&self.caches.has_finalizer_cache),
+            value_type_size: cache_locked_map_len(&self.caches.value_type_cache),
+            value_type_bytes: estimated_locked_map_bytes(&self.caches.value_type_cache),
+            has_finalizer_size: cache_locked_map_len(&self.caches.has_finalizer_cache),
+            has_finalizer_bytes: estimated_locked_map_bytes(&self.caches.has_finalizer_cache),
             overrides_size: cache_map_len(&self.caches.overrides_cache),
             overrides_bytes: estimated_dashmap_bytes(&self.caches.overrides_cache),
             method_info_size: cache_map_len(&self.caches.method_info_cache),

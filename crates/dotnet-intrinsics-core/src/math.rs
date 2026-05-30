@@ -69,9 +69,9 @@ pub fn intrinsic_equality_comparer_get_default<
 
     let instance = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(dotnet_vm_ops::vm_try!(
+        HeapStorage::Obj(Box::new(dotnet_vm_ops::vm_try!(
             ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
-        )),
+        ))),
     );
 
     ctx.push_obj(instance);
@@ -109,9 +109,9 @@ pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + Typed
 
     let instance = ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(dotnet_vm_ops::vm_try!(
+        HeapStorage::Obj(Box::new(dotnet_vm_ops::vm_try!(
             ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
-        )),
+        ))),
     );
 
     ctx.push_obj(instance);

@@ -55,6 +55,11 @@ pub type SyncBlockIndex = NonZeroUsize;
 pub struct ObjectInner<'gc> {
     #[cfg(any(feature = "memory-validation", debug_assertions))]
     magic: ValidationTag,
+    pub storage: HeapStorage<'gc>,
+    /// Encoded sync-block index for System.Threading.Monitor.
+    /// `0` is the sentinel for "no sync block yet", all non-zero values are valid
+    /// `SyncBlockIndex` values.
+    sync_block_index: usize,
     /// Arena owner used by:
     /// - write-barrier cross-arena reference recording
     /// - tagged cross-arena serialization (`Tag 5`)
@@ -63,11 +68,6 @@ pub struct ObjectInner<'gc> {
     /// Invariant: immutable after construction and safe for lock-free reads.
     #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     owner_id: ArenaId,
-    /// Encoded sync-block index for System.Threading.Monitor.
-    /// `0` is the sentinel for "no sync block yet", all non-zero values are valid
-    /// `SyncBlockIndex` values.
-    sync_block_index: usize,
-    pub storage: HeapStorage<'gc>,
 }
 
 impl<'gc> ObjectInner<'gc> {
@@ -79,10 +79,10 @@ impl<'gc> ObjectInner<'gc> {
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
             magic: ValidationTag::new(OBJECT_MAGIC),
+            storage,
+            sync_block_index: 0,
             #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
             owner_id,
-            sync_block_index: 0,
-            storage,
         }
     }
 

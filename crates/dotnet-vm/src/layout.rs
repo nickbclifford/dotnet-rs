@@ -99,7 +99,7 @@ mod tests {
 
         assert_eq!(layout.total_size, 8, "Nullable<int> should be 8 bytes");
         assert!(
-            layout.gc_desc.bitmap.not_any(),
+            layout.gc_desc.bitmap.iter().all(|word| *word == 0),
             "Nullable<int> should not contain object references"
         );
         assert!(
@@ -127,15 +127,15 @@ mod tests {
         VmLayoutFactory::populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
 
         assert!(
-            desc.bitmap.not_any(),
+            desc.bitmap.iter().all(|word| *word == 0),
             "unaligned refs must not be rounded into bitmap words"
         );
-        assert_eq!(desc.unaligned_offsets, vec![1]);
+        assert_eq!(desc.unaligned_offsets.as_slice(), &[1]);
 
         let mut nested = dotnet_value::layout::GcDesc::default();
         nested.set_offset(3);
         let nested_layout = LayoutManager::Field(dotnet_value::layout::FieldLayoutManager {
-            fields: std::collections::HashMap::new(),
+            fields: hashbrown::HashMap::new(),
             total_size: 16,
             alignment: 1,
             gc_desc: nested,
@@ -145,6 +145,9 @@ mod tests {
         let mut outer = dotnet_value::layout::GcDesc::default();
         VmLayoutFactory::populate_gc_desc(&nested_layout, 5, &mut outer);
         assert!(outer.unaligned_offsets.is_empty());
-        assert!(outer.bitmap.get(1).is_some_and(|b| *b));
+
+        let mut set_slots = Vec::new();
+        outer.for_each_word_index(|index| set_slots.push(index));
+        assert_eq!(set_slots, vec![1]);
     }
 }

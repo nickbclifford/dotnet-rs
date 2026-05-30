@@ -13,11 +13,8 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_value::layout::{FieldLayoutManager, LayoutManager};
-use std::{
-    cell::RefCell,
-    collections::{HashMap, VecDeque},
-    ops::Deref,
-};
+use lru::LruCache;
+use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, ops::Deref};
 
 #[derive(Clone)]
 pub struct VmResolverService {
@@ -65,15 +62,28 @@ impl VmResolverService {
     }
 }
 
-#[derive(Default)]
 struct ResolverFrontCache {
-    vmt: VecDeque<(
-        MethodDescription,
-        TypeDescription,
-        GenericLookup,
-        MethodDescription,
-    )>,
-    hierarchy: VecDeque<(ConcreteType, ConcreteType, bool)>,
+    vmt: Option<LruCache<(MethodDescription, TypeDescription, GenericLookup), MethodDescription>>,
+    hierarchy: Option<LruCache<(ConcreteType, ConcreteType), bool>>,
+    capacity: usize,
+}
+
+impl Default for ResolverFrontCache {
+    fn default() -> Self {
+        const FRONT_CACHE_DEFAULT_CAPACITY: usize = 128;
+
+        Self {
+            vmt: Some(LruCache::new(
+                NonZeroUsize::new(FRONT_CACHE_DEFAULT_CAPACITY)
+                    .expect("front cache default capacity must be non-zero"),
+            )),
+            hierarchy: Some(LruCache::new(
+                NonZeroUsize::new(FRONT_CACHE_DEFAULT_CAPACITY)
+                    .expect("front cache default capacity must be non-zero"),
+            )),
+            capacity: FRONT_CACHE_DEFAULT_CAPACITY,
+        }
+    }
 }
 
 impl ResolverFrontCache {
@@ -83,14 +93,8 @@ impl ResolverFrontCache {
         this_type: &TypeDescription,
         generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        let index = self
-            .vmt
-            .iter()
-            .position(|(m, t, g, _)| m == base_method && t == this_type && g == generics)?;
-        let entry = self.vmt.remove(index)?;
-        let value = entry.3.clone();
-        self.vmt.push_back(entry);
-        Some(value)
+        let key = (base_method.clone(), this_type.clone(), generics.clone());
+        self.vmt.as_mut()?.get(&key).cloned()
     }
 
     fn insert_vmt(
@@ -101,34 +105,18 @@ impl ResolverFrontCache {
         resolved_method: MethodDescription,
         capacity: usize,
     ) {
-        if capacity == 0 {
+        if !self.ensure_capacity(capacity) {
             return;
         }
 
-        if let Some(index) = self
-            .vmt
-            .iter()
-            .position(|(m, t, g, _)| m == &base_method && t == &this_type && g == &generics)
-        {
-            self.vmt.remove(index);
-        }
-
-        self.vmt
-            .push_back((base_method, this_type, generics, resolved_method));
-        while self.vmt.len() > capacity {
-            self.vmt.pop_front();
+        if let Some(vmt) = self.vmt.as_mut() {
+            vmt.put((base_method, this_type, generics), resolved_method);
         }
     }
 
     fn get_hierarchy(&mut self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool> {
-        let index = self
-            .hierarchy
-            .iter()
-            .position(|(c, p, _)| c == child && p == parent)?;
-        let entry = self.hierarchy.remove(index)?;
-        let value = entry.2;
-        self.hierarchy.push_back(entry);
-        Some(value)
+        let key = (child.clone(), parent.clone());
+        self.hierarchy.as_mut()?.get(&key).copied()
     }
 
     fn insert_hierarchy(
@@ -138,22 +126,36 @@ impl ResolverFrontCache {
         is_match: bool,
         capacity: usize,
     ) {
-        if capacity == 0 {
+        if !self.ensure_capacity(capacity) {
             return;
         }
 
-        if let Some(index) = self
-            .hierarchy
-            .iter()
-            .position(|(c, p, _)| c == &child && p == &parent)
-        {
-            self.hierarchy.remove(index);
+        if let Some(hierarchy) = self.hierarchy.as_mut() {
+            hierarchy.put((child, parent), is_match);
+        }
+    }
+
+    fn ensure_capacity(&mut self, capacity: usize) -> bool {
+        if capacity == 0 {
+            self.vmt = None;
+            self.hierarchy = None;
+            self.capacity = 0;
+            return false;
         }
 
-        self.hierarchy.push_back((child, parent, is_match));
-        while self.hierarchy.len() > capacity {
-            self.hierarchy.pop_front();
+        if self.capacity != capacity {
+            self.vmt = Some(LruCache::new(
+                NonZeroUsize::new(capacity)
+                    .expect("front cache capacity must be non-zero when enabled"),
+            ));
+            self.hierarchy = Some(LruCache::new(
+                NonZeroUsize::new(capacity)
+                    .expect("front cache capacity must be non-zero when enabled"),
+            ));
+            self.capacity = capacity;
         }
+
+        true
     }
 }
 
@@ -180,11 +182,11 @@ impl VmResolverCaches {
 
 impl ResolverCacheAdapter for VmResolverCaches {
     fn get_intrinsic_cached(&self, method: &MethodDescription) -> Option<bool> {
-        if let Some(cached) = self.caches.intrinsic_cache.get(method) {
+        if let Some(cached) = self.caches.intrinsic_cache.read().get(method).copied() {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_intrinsic_cache_hit();
             }
-            Some(*cached)
+            Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_intrinsic_cache_miss();
@@ -194,7 +196,10 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn set_intrinsic_cached(&self, method: MethodDescription, is_intrinsic: bool) {
-        self.caches.intrinsic_cache.insert(method, is_intrinsic);
+        self.caches
+            .intrinsic_cache
+            .write()
+            .insert(method, is_intrinsic);
     }
 
     fn compute_is_intrinsic(&self, method: MethodDescription, loader: &AssemblyLoader) -> bool {
@@ -202,11 +207,11 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn get_intrinsic_field_cached(&self, field: &FieldDescription) -> Option<bool> {
-        if let Some(cached) = self.caches.intrinsic_field_cache.get(field) {
+        if let Some(cached) = self.caches.intrinsic_field_cache.read().get(field).copied() {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_intrinsic_field_cache_hit();
             }
-            Some(*cached)
+            Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_intrinsic_field_cache_miss();
@@ -218,6 +223,7 @@ impl ResolverCacheAdapter for VmResolverCaches {
     fn set_intrinsic_field_cached(&self, field: FieldDescription, is_intrinsic: bool) {
         self.caches
             .intrinsic_field_cache
+            .write()
             .insert(field, is_intrinsic);
     }
 
@@ -284,6 +290,18 @@ impl ResolverCacheAdapter for VmResolverCaches {
         generics: GenericLookup,
         method: MethodDescription,
     ) {
+        if self.caches.front_cache_enabled() {
+            RESOLVER_FRONT_CACHE.with(|cache| {
+                cache.borrow_mut().insert_vmt(
+                    base_method.clone(),
+                    this_type.clone(),
+                    generics.clone(),
+                    method.clone(),
+                    self.caches.front_cache_capacity(),
+                );
+            });
+        }
+
         self.caches
             .set_vmt((base_method, this_type, generics), method);
     }
@@ -366,6 +384,17 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool) {
+        if self.caches.front_cache_enabled() {
+            RESOLVER_FRONT_CACHE.with(|cache| {
+                cache.borrow_mut().insert_hierarchy(
+                    child.clone(),
+                    parent.clone(),
+                    is_match,
+                    self.caches.front_cache_capacity(),
+                );
+            });
+        }
+
         self.caches.set_hierarchy((child, parent), is_match);
     }
 
@@ -376,11 +405,11 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn get_value_type_cached(&self, td: &TypeDescription) -> Option<bool> {
-        if let Some(cached) = self.caches.value_type_cache.get(td) {
+        if let Some(cached) = self.caches.value_type_cache.read().get(td).copied() {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_value_type_cache_hit();
             }
-            Some(*cached)
+            Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_value_type_cache_miss();
@@ -390,15 +419,18 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn set_value_type_cached(&self, td: TypeDescription, is_value_type: bool) {
-        self.caches.value_type_cache.insert(td, is_value_type);
+        self.caches
+            .value_type_cache
+            .write()
+            .insert(td, is_value_type);
     }
 
     fn get_has_finalizer_cached(&self, td: &TypeDescription) -> Option<bool> {
-        if let Some(cached) = self.caches.has_finalizer_cache.get(td) {
+        if let Some(cached) = self.caches.has_finalizer_cache.read().get(td).copied() {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_has_finalizer_cache_hit();
             }
-            Some(*cached)
+            Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_has_finalizer_cache_miss();
@@ -408,7 +440,10 @@ impl ResolverCacheAdapter for VmResolverCaches {
     }
 
     fn set_has_finalizer_cached(&self, td: TypeDescription, has_finalizer: bool) {
-        self.caches.has_finalizer_cache.insert(td, has_finalizer);
+        self.caches
+            .has_finalizer_cache
+            .write()
+            .insert(td, has_finalizer);
     }
 }
 

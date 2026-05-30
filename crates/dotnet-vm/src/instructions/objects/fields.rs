@@ -25,7 +25,13 @@ use dotnet_value::{
     pointer::ManagedPtr,
 };
 use dotnetdll::prelude::*;
-use std::ptr::{self, NonNull};
+use std::{
+    ptr::{self, NonNull},
+    sync::LazyLock,
+};
+
+static TRACE_CULTUREDATA_WRITES: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok());
 
 fn canonical_static_lookup(field: &FieldDescription, lookup: &GenericLookup) -> GenericLookup {
     let type_arity = field.parent.definition().generic_parameters.len();
@@ -165,9 +171,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
 
     let offset = base_offset + field_layout.position;
 
-    if std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok()
-        && field.parent.type_name() == "System.Globalization.CultureData"
-    {
+    if *TRACE_CULTUREDATA_WRITES && field.parent.type_name() == "System.Globalization.CultureData" {
         let frame = ctx.current_frame();
         let method = &frame.state.info_handle.source;
         let ip = frame.state.ip;

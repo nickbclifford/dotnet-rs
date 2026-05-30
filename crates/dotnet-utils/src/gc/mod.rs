@@ -17,10 +17,11 @@ pub use thread_safe_lock::{ThreadSafeLock, ThreadSafeReadGuard, ThreadSafeWriteG
 pub use arena::{ALLOCATION_THRESHOLD, ArenaHandle, ArenaHandleInner};
 #[cfg(feature = "multithreading")]
 pub use cross_arena::{
-    ArenaLease, ArenaState, clear_tracing_state, get_currently_tracing, is_stw_in_progress,
-    is_valid_cross_arena_ref, record_cross_arena_ref, register_arena, reset_arena_registry,
-    set_currently_tracing, set_stw_in_progress, take_found_cross_arena_refs_with_generation,
-    try_acquire_lease, unregister_arena,
+    ArenaLease, ArenaState, STW_TRACING_GENERATION_SENTINEL, clear_tracing_state,
+    get_currently_tracing, is_stw_in_progress, is_valid_cross_arena_ref, record_cross_arena_ref,
+    register_arena, reset_arena_registry, set_currently_tracing, set_currently_tracing_with_stw,
+    set_stw_in_progress, take_found_cross_arena_refs_with_generation, try_acquire_lease,
+    unregister_arena,
 };
 
 /// A handle to the GC mutation context.
@@ -77,13 +78,20 @@ impl<'gc> GCHandle<'gc> {
     }
 
     /// Record an allocation of the given size in the arena.
-    pub fn record_allocation(&self, _size: usize) {
+    ///
+    /// Returns `true` when this call flipped `needs_collection` from `false` to `true`.
+    pub fn record_allocation(&self, _size: usize) -> bool {
         #[cfg(feature = "memory-validation")]
         self.validate_thread();
 
         #[cfg(feature = "multithreading")]
         {
-            self.arena.record_allocation(_size);
+            self.arena.record_allocation(_size)
+        }
+
+        #[cfg(not(feature = "multithreading"))]
+        {
+            false
         }
     }
 

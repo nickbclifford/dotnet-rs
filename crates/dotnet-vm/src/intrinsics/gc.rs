@@ -589,7 +589,7 @@ pub fn intrinsic_object_has_component_size<'gc, T: TypedStackOps<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
-    let has_component_size = obj.0.as_ref().map_or(false, |handle| {
+    let has_component_size = obj.0.as_ref().is_some_and(|handle| {
         let storage = handle.borrow();
         matches!(storage.storage, HeapStorage::Vec(_) | HeapStorage::Str(_))
     });

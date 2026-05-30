@@ -1,11 +1,14 @@
 use crate::{object::ObjectRef, pointer::ManagedPtr};
-use bitvec::prelude::*;
 use dotnet_types::TypeDescription;
 use dotnet_utils::sync::Arc;
 use gc_arena::{Collect, collect::Trace};
+use hashbrown::{Equivalent, HashMap};
+use smallvec::SmallVec;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
+    hash::{Hash, Hasher},
     ops::Range,
+    sync::LazyLock,
 };
 
 pub trait HasLayout {
@@ -212,6 +215,33 @@ impl FieldLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FieldKeyRef<'a> {
+    pub owner: &'a TypeDescription,
+    pub name: &'a str,
+}
+
+impl PartialEq for FieldKeyRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner && self.name == other.name
+    }
+}
+
+impl Eq for FieldKeyRef<'_> {}
+
+impl Hash for FieldKeyRef<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.owner.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl Equivalent<FieldKey> for FieldKeyRef<'_> {
+    fn equivalent(&self, key: &FieldKey) -> bool {
+        key.owner == *self.owner && key.name == self.name
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FieldKey {
     pub owner: TypeDescription,
@@ -224,18 +254,42 @@ impl std::fmt::Display for FieldKey {
     }
 }
 
+static TRACE_GC_PTR_READ: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok());
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GcDesc {
-    pub bitmap: BitVec<usize, Lsb0>,
-    pub unaligned_offsets: Vec<usize>,
+    /// Raw bitmap words where each bit marks an aligned ObjectRef slot by index.
+    /// Bit i in word n corresponds to slot index `n * usize::BITS + i`.
+    pub bitmap: SmallVec<[usize; 2]>,
+    pub unaligned_offsets: SmallVec<[usize; 2]>,
 }
 
 impl GcDesc {
-    pub fn set(&mut self, word_index: usize) {
-        if word_index >= self.bitmap.len() {
-            self.bitmap.resize(word_index + 1, false);
+    const BITS_PER_WORD: usize = usize::BITS as usize;
+
+    pub fn for_each_word_index(&self, mut f: impl FnMut(usize)) {
+        for (bitmap_word_index, bitmap_word) in self.bitmap.iter().copied().enumerate() {
+            let mut remaining_bits = bitmap_word;
+
+            while remaining_bits != 0 {
+                let bit_index = remaining_bits.trailing_zeros() as usize;
+                let word_index = bitmap_word_index * Self::BITS_PER_WORD + bit_index;
+                f(word_index);
+                remaining_bits &= remaining_bits - 1;
+            }
         }
-        self.bitmap.set(word_index, true);
+    }
+
+    pub fn set(&mut self, word_index: usize) {
+        let bitmap_word_index = word_index / Self::BITS_PER_WORD;
+        let bit_index = word_index % Self::BITS_PER_WORD;
+
+        if bitmap_word_index >= self.bitmap.len() {
+            self.bitmap.resize(bitmap_word_index + 1, 0);
+        }
+
+        self.bitmap[bitmap_word_index] |= 1usize << bit_index;
     }
 
     pub fn set_offset(&mut self, byte_offset: usize) {
@@ -253,9 +307,13 @@ impl GcDesc {
 
     pub fn merge(&mut self, other: &GcDesc) {
         if other.bitmap.len() > self.bitmap.len() {
-            self.bitmap.resize(other.bitmap.len(), false);
+            self.bitmap.resize(other.bitmap.len(), 0);
         }
-        self.bitmap |= &other.bitmap;
+
+        for (index, other_word) in other.bitmap.iter().copied().enumerate() {
+            self.bitmap[index] |= other_word;
+        }
+
         for offset in &other.unaligned_offsets {
             if !self.unaligned_offsets.contains(offset) {
                 self.unaligned_offsets.push(*offset);
@@ -266,13 +324,14 @@ impl GcDesc {
 
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         let ptr_size = ObjectRef::SIZE;
-        for word_index in self.bitmap.iter_ones() {
+
+        self.for_each_word_index(|word_index| {
             let offset = word_index * ptr_size;
 
             // Safety: layout creation ensures this offset is valid and contains a pointer
             if offset + ptr_size <= storage.len() {
                 // Env-gated diagnostic for CI debugging
-                if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
+                if *TRACE_GC_PTR_READ {
                     let raw_bytes = &storage[offset..offset + ptr_size.min(storage.len() - offset)];
                     let raw_value = if raw_bytes.len() >= 8 {
                         u64::from_ne_bytes(raw_bytes[..8].try_into().unwrap())
@@ -293,7 +352,7 @@ impl GcDesc {
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
                 ptr.trace(cc);
             }
-        }
+        });
 
         for offset in &self.unaligned_offsets {
             if *offset + ptr_size <= storage.len() {
@@ -373,9 +432,9 @@ impl FieldLayoutManager {
 
     /// Get a field's layout by owner and name
     pub fn get_field(&self, owner: TypeDescription, name: &str) -> Option<&FieldLayout> {
-        self.fields.get(&FieldKey {
-            owner,
-            name: name.to_string(),
+        self.fields.get(&FieldKeyRef {
+            owner: &owner,
+            name,
         })
     }
 
@@ -535,6 +594,34 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
 #[allow(clippy::mutable_key_type)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_gc_desc_bitmap_set_and_merge() {
+        let mut lhs = GcDesc::default();
+        lhs.set(0);
+        lhs.set(usize::BITS as usize);
+
+        let mut rhs = GcDesc::default();
+        rhs.set(1);
+        rhs.set(usize::BITS as usize + 2);
+
+        lhs.merge(&rhs);
+
+        assert_eq!(lhs.bitmap.len(), 2);
+        assert_eq!(lhs.bitmap[0] & 0b11, 0b11);
+        assert_eq!(lhs.bitmap[1] & 0b101, 0b101);
+    }
+
+    #[test]
+    fn test_gc_desc_unaligned_offsets_are_sorted_and_unique() {
+        let mut desc = GcDesc::default();
+
+        desc.set_offset(13);
+        desc.set_offset(5);
+        desc.set_offset(13);
+
+        assert_eq!(desc.unaligned_offsets.as_slice(), &[5, 13]);
+    }
 
     #[test]
     fn test_field_layout_manager_recursion() {

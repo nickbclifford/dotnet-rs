@@ -314,7 +314,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
 
         // 1. Transient origin (Fixed behavior in Stage 1)
         let layout = Arc::new(crate::layout::FieldLayoutManager {
-            fields: std::collections::HashMap::new(),
+            fields: hashbrown::HashMap::new(),
             total_size: 0,
             alignment: 1,
             gc_desc: crate::layout::GcDesc::default(),

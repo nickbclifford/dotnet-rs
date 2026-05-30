@@ -1,12 +1,13 @@
 //! Runtime and cache metric counters used across the VM.
 use serde::Serialize;
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
-
-#[cfg(feature = "bench-instrumentation")]
-use std::{collections::BTreeMap, sync::Mutex};
 
 #[derive(Debug, Serialize, Clone, Copy)]
 pub struct CacheStat {
@@ -152,14 +153,31 @@ impl OpcodeCategory {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Default)]
+pub struct ArenaGcPressureSnapshot {
+    /// Number of times this arena crossed its allocation threshold and requested collection.
+    pub collection_trigger_count: u64,
+    /// Lifetime high-water mark of bytes allocated between collections for this arena.
+    ///
+    /// The per-cycle allocation counter is reset after each collection; this metric intentionally
+    /// preserves the largest observed counter value so snapshots retain pressure history.
+    pub peak_allocation_counter: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeMetricsSnapshot {
     pub gc_pause_total_us: u64,
     pub gc_pause_count: u64,
+    pub gc_pause_samples: u64,
+    pub gc_pause_p50_us: u64,
+    pub gc_pause_p95_us: u64,
+    pub gc_pause_p99_us: u64,
+    pub gc_pause_max_us: u64,
     pub lock_contention_count: u64,
     pub lock_contention_total_us: u64,
     pub current_gc_allocated: u64,
     pub current_external_allocated: u64,
+    pub gc_pressure_by_arena: BTreeMap<String, ArenaGcPressureSnapshot>,
     pub cache_stats: CacheStats,
     #[cfg(feature = "bench-instrumentation")]
     pub bench: BenchInstrumentationSnapshot,
@@ -201,6 +219,8 @@ pub struct BenchInstrumentationSnapshot {
     pub cache_memory_bytes_by_cache: BTreeMap<String, u64>,
 }
 
+const GC_PAUSE_SAMPLE_WINDOW: usize = 1_000;
+
 /// Metrics counters.
 ///
 /// All counters use `Ordering::Relaxed` because they are independent and do not
@@ -221,6 +241,8 @@ pub struct RuntimeMetrics {
     pub current_gc_allocated: AtomicU64,
     /// Current bytes allocated externally but tracked by GC-arena
     pub current_external_allocated: AtomicU64,
+    /// Snapshot of per-arena allocation-pressure counters
+    arena_gc_pressure_by_arena: Mutex<BTreeMap<String, ArenaGcPressureSnapshot>>,
     /// Cache hit/miss counters
     pub layout_cache_hits: AtomicU64,
     pub layout_cache_misses: AtomicU64,
@@ -244,6 +266,12 @@ pub struct RuntimeMetrics {
     pub overrides_cache_misses: AtomicU64,
     pub method_info_cache_hits: AtomicU64,
     pub method_info_cache_misses: AtomicU64,
+    pub shared_runtime_types_cache_hits: AtomicU64,
+    pub shared_runtime_types_cache_misses: AtomicU64,
+    pub shared_runtime_methods_cache_hits: AtomicU64,
+    pub shared_runtime_methods_cache_misses: AtomicU64,
+    pub shared_runtime_fields_cache_hits: AtomicU64,
+    pub shared_runtime_fields_cache_misses: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     eval_stack_reallocations: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
@@ -256,7 +284,6 @@ pub struct RuntimeMetrics {
     frame_pool_miss_count: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     frame_pool_recycle_count: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
     gc_pause_samples_us: Mutex<Vec<u64>>,
     #[cfg(feature = "bench-instrumentation")]
     gc_fixed_point_cycle_count: AtomicU64,
@@ -336,14 +363,15 @@ impl RuntimeMetrics {
         self.gc_pause_total_us
             .fetch_add(duration_us, Ordering::Relaxed);
         self.gc_pause_count.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "bench-instrumentation")]
-        {
-            let mut samples = self
-                .gc_pause_samples_us
-                .lock()
-                .expect("gc pause samples lock poisoned");
-            samples.push(duration_us);
+
+        let mut samples = self
+            .gc_pause_samples_us
+            .lock()
+            .expect("gc pause samples lock poisoned");
+        if samples.len() == GC_PAUSE_SAMPLE_WINDOW {
+            samples.remove(0);
         }
+        samples.push(duration_us);
     }
 
     pub fn record_lock_contention(&self, duration: Duration) {
@@ -356,6 +384,16 @@ impl RuntimeMetrics {
         self.current_gc_allocated.store(gc_bytes, Ordering::Relaxed);
         self.current_external_allocated
             .store(external_bytes, Ordering::Relaxed);
+    }
+
+    pub fn update_arena_gc_pressure_metrics(
+        &self,
+        gc_pressure_by_arena: BTreeMap<String, ArenaGcPressureSnapshot>,
+    ) {
+        *self
+            .arena_gc_pressure_by_arena
+            .lock()
+            .expect("arena gc pressure metrics lock poisoned") = gc_pressure_by_arena;
     }
 
     #[inline]
@@ -471,6 +509,42 @@ impl RuntimeMetrics {
     #[inline]
     pub fn record_method_info_cache_miss(&self) {
         self.method_info_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_types_cache_hit(&self) {
+        self.shared_runtime_types_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_types_cache_miss(&self) {
+        self.shared_runtime_types_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_methods_cache_hit(&self) {
+        self.shared_runtime_methods_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_methods_cache_miss(&self) {
+        self.shared_runtime_methods_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_fields_cache_hit(&self) {
+        self.shared_runtime_fields_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_shared_runtime_fields_cache_miss(&self) {
+        self.shared_runtime_fields_cache_misses
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -822,9 +896,26 @@ impl RuntimeMetrics {
                 sizes.assembly_method_info.1,
                 sizes.assembly_method_info.2,
             ),
-            shared_runtime_types: self.stat(0, 0, sizes.shared_runtime_types_size),
-            shared_runtime_methods: self.stat(0, 0, sizes.shared_runtime_methods_size),
-            shared_runtime_fields: self.stat(0, 0, sizes.shared_runtime_fields_size),
+            shared_runtime_types: self.stat(
+                self.shared_runtime_types_cache_hits.load(Ordering::Relaxed),
+                self.shared_runtime_types_cache_misses
+                    .load(Ordering::Relaxed),
+                sizes.shared_runtime_types_size,
+            ),
+            shared_runtime_methods: self.stat(
+                self.shared_runtime_methods_cache_hits
+                    .load(Ordering::Relaxed),
+                self.shared_runtime_methods_cache_misses
+                    .load(Ordering::Relaxed),
+                sizes.shared_runtime_methods_size,
+            ),
+            shared_runtime_fields: self.stat(
+                self.shared_runtime_fields_cache_hits
+                    .load(Ordering::Relaxed),
+                self.shared_runtime_fields_cache_misses
+                    .load(Ordering::Relaxed),
+                sizes.shared_runtime_fields_size,
+            ),
         }
     }
 
@@ -833,21 +924,35 @@ impl RuntimeMetrics {
         cache_stats: CacheStats,
         _cache_sizes: CacheSizes,
     ) -> RuntimeMetricsSnapshot {
+        let (gc_pause_samples, gc_pause_p50_us, gc_pause_p95_us, gc_pause_p99_us, gc_pause_max_us) =
+            self.gc_pause_histogram_snapshot();
+
+        let gc_pressure_by_arena = self
+            .arena_gc_pressure_by_arena
+            .lock()
+            .expect("arena gc pressure metrics lock poisoned")
+            .clone();
+
         RuntimeMetricsSnapshot {
             gc_pause_total_us: self.gc_pause_total_us.load(Ordering::Relaxed),
             gc_pause_count: self.gc_pause_count.load(Ordering::Relaxed),
+            gc_pause_samples,
+            gc_pause_p50_us,
+            gc_pause_p95_us,
+            gc_pause_p99_us,
+            gc_pause_max_us,
             lock_contention_count: self.lock_contention_count.load(Ordering::Relaxed),
             lock_contention_total_us: self.lock_contention_total_us.load(Ordering::Relaxed),
             current_gc_allocated: self.current_gc_allocated.load(Ordering::Relaxed),
             current_external_allocated: self.current_external_allocated.load(Ordering::Relaxed),
+            gc_pressure_by_arena,
             cache_stats,
             #[cfg(feature = "bench-instrumentation")]
             bench: self.bench_snapshot(_cache_sizes),
         }
     }
 
-    #[cfg(feature = "bench-instrumentation")]
-    pub fn bench_snapshot(&self, cache_sizes: CacheSizes) -> BenchInstrumentationSnapshot {
+    fn gc_pause_histogram_snapshot(&self) -> (u64, u64, u64, u64, u64) {
         let mut gc_pause_samples = self
             .gc_pause_samples_us
             .lock()
@@ -859,6 +964,20 @@ impl RuntimeMetrics {
         let gc_pause_p95_us = percentile_sorted(&gc_pause_samples, 95);
         let gc_pause_p99_us = percentile_sorted(&gc_pause_samples, 99);
         let gc_pause_max_us = gc_pause_samples.last().copied().unwrap_or(0);
+
+        (
+            gc_pause_sample_count,
+            gc_pause_p50_us,
+            gc_pause_p95_us,
+            gc_pause_p99_us,
+            gc_pause_max_us,
+        )
+    }
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn bench_snapshot(&self, cache_sizes: CacheSizes) -> BenchInstrumentationSnapshot {
+        let (gc_pause_samples, gc_pause_p50_us, gc_pause_p95_us, gc_pause_p99_us, gc_pause_max_us) =
+            self.gc_pause_histogram_snapshot();
 
         let mut opcode_dispatch_by_category = BTreeMap::new();
         opcode_dispatch_by_category.insert(
@@ -1022,7 +1141,7 @@ impl RuntimeMetrics {
             frame_pool_hit_count: self.frame_pool_hit_count.load(Ordering::Relaxed),
             frame_pool_miss_count: self.frame_pool_miss_count.load(Ordering::Relaxed),
             frame_pool_recycle_count: self.frame_pool_recycle_count.load(Ordering::Relaxed),
-            gc_pause_samples: gc_pause_sample_count,
+            gc_pause_samples,
             gc_pause_p50_us,
             gc_pause_p95_us,
             gc_pause_p99_us,
@@ -1203,11 +1322,93 @@ fn update_atomic_max(target: &AtomicU64, candidate: u64) {
     }
 }
 
-#[cfg(feature = "bench-instrumentation")]
 fn percentile_sorted(samples: &[u64], percentile: u64) -> u64 {
     if samples.is_empty() {
         return 0;
     }
     let idx = ((samples.len() - 1) * percentile as usize) / 100;
     samples[idx]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_cache_sizes() -> CacheSizes {
+        CacheSizes {
+            layout_size: 0,
+            layout_bytes: 0,
+            vmt_size: 0,
+            vmt_bytes: 0,
+            intrinsic_size: 0,
+            intrinsic_bytes: 0,
+            intrinsic_field_size: 0,
+            intrinsic_field_bytes: 0,
+            hierarchy_size: 0,
+            hierarchy_bytes: 0,
+            static_field_layout_size: 0,
+            static_field_layout_bytes: 0,
+            instance_field_layout_size: 0,
+            instance_field_layout_bytes: 0,
+            value_type_size: 0,
+            value_type_bytes: 0,
+            has_finalizer_size: 0,
+            has_finalizer_bytes: 0,
+            overrides_size: 0,
+            overrides_bytes: 0,
+            method_info_size: 0,
+            method_info_bytes: 0,
+            assembly_type_info: (0, 0, 0),
+            assembly_method_info: (0, 0, 0),
+            shared_runtime_types_size: 0,
+            shared_runtime_types_bytes: 0,
+            shared_runtime_methods_size: 0,
+            shared_runtime_methods_bytes: 0,
+            shared_runtime_fields_size: 0,
+            shared_runtime_fields_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn snapshot_includes_always_on_gc_pause_percentiles() {
+        let metrics = RuntimeMetrics::new();
+        for micros in [10_u64, 20, 30, 40, 50] {
+            metrics.record_gc_pause(std::time::Duration::from_micros(micros));
+        }
+
+        let cache_sizes = empty_cache_sizes();
+        let cache_stats = metrics.cache_statistics(cache_sizes);
+        let snapshot = metrics.snapshot(cache_stats, cache_sizes);
+
+        assert_eq!(snapshot.gc_pause_samples, 5);
+        assert_eq!(snapshot.gc_pause_p50_us, 30);
+        assert_eq!(snapshot.gc_pause_p95_us, 40);
+        assert_eq!(snapshot.gc_pause_p99_us, 40);
+        assert_eq!(snapshot.gc_pause_max_us, 50);
+    }
+
+    #[test]
+    fn snapshot_includes_per_arena_gc_pressure_metrics() {
+        let metrics = RuntimeMetrics::new();
+        let mut by_arena = BTreeMap::new();
+        by_arena.insert(
+            "7".to_string(),
+            ArenaGcPressureSnapshot {
+                collection_trigger_count: 3,
+                peak_allocation_counter: 8192,
+            },
+        );
+        metrics.update_arena_gc_pressure_metrics(by_arena);
+
+        let cache_sizes = empty_cache_sizes();
+        let cache_stats = metrics.cache_statistics(cache_sizes);
+        let snapshot = metrics.snapshot(cache_stats, cache_sizes);
+
+        let arena_7 = snapshot
+            .gc_pressure_by_arena
+            .get("7")
+            .expect("expected arena metrics in snapshot");
+        assert_eq!(arena_7.collection_trigger_count, 3);
+        assert_eq!(arena_7.peak_allocation_counter, 8192);
+    }
 }

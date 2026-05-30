@@ -174,7 +174,11 @@ impl Executor {
             c.stack.thread_id.set(thread_id);
             #[cfg(feature = "multithreading")]
             {
-                c.stack.arena = ArenaHandle::new(thread_id);
+                let stack_arena = ArenaHandle::new(thread_id);
+                shared
+                    .gc_coordinator
+                    .bind_collection_pressure_flag(&stack_arena);
+                c.stack.arena = stack_arena;
             }
 
             let gc_handle = GCHandle::new(
@@ -299,7 +303,7 @@ impl Executor {
                                 arg_ref.write(chunk);
                             }
 
-                            let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(argv_vector));
+                            let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(argv_vector)));
                             ctx.register_new_object(&argv_ref);
                             vec![StackValue::ObjectRef(argv_ref)]
                         }
@@ -597,17 +601,17 @@ impl Executor {
             //    session cleanup before thread resume.
             let thread_manager = Arc::clone(&self.shared.thread_manager);
             let stw_guard = thread_manager.request_stop_the_world();
-            let mut gc_cycle = GcCycleGuard::new(session, stw_guard);
+            let gc_cycle = GcCycleGuard::new(session, stw_guard);
 
             // 3. Perform coordinated GC across all arenas
             gc_cycle.collect_all_arenas(self.thread_id);
 
-            // 4. Record metrics and log completion
+            // 4. End the STW cycle before recording pause metrics so the sample
+            //    covers the full pause boundary, including coordinator cleanup
+            //    and thread-resume handoff.
+            drop(gc_cycle);
             let duration = start_time.elapsed();
             self.shared.metrics.record_gc_pause(duration);
-
-            // Explicitly finish collection before recording the end event.
-            gc_cycle.finish_collection();
 
             vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
 

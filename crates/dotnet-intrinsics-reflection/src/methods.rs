@@ -145,7 +145,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let mut pi_objs = Vec::with_capacity(param_count);
             for i in 0..param_count {
                 let pi_obj = dotnet_vm_ops::vm_try!(ctx.new_object(pi_type.clone()));
-                let pi_ref = ObjectRef::new(gc, HeapStorage::Obj(pi_obj));
+                let pi_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(pi_obj)));
                 ctx.register_new_object(&pi_ref);
                 let pi_type_inner = pi_type.clone();
                 pi_ref.as_object_mut(gc, |instance| {
@@ -169,7 +169,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .expect("System.Reflection.ParameterInfo not found");
             let array_obj =
                 dotnet_vm_ops::vm_try!(ctx.new_vector(array_element_type.into(), param_count));
-            let array_ref = ObjectRef::new(gc, HeapStorage::Vec(array_obj));
+            let array_ref = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array_obj)));
             ctx.register_new_object(&array_ref);
 
             for (i, pi_ref) in pi_objs.into_iter().enumerate() {
@@ -243,7 +243,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
 
             let instance = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
-            let this_obj = ObjectRef::new(gc, HeapStorage::Obj(instance));
+            let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
             ctx.register_new_object(&this_obj);
 
             ctx.push_obj(this_obj);

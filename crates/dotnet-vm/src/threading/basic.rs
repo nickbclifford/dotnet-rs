@@ -7,12 +7,13 @@ use crate::{
     },
     threading::{IS_PERFORMING_GC, STWGuardOps, ThreadState},
 };
+use dotnet_runtime_memory::access::flush_write_barrier_buffer;
 use dotnet_tracer::Tracer;
 use dotnet_utils::{
     ArenaId,
     gc::{
-        register_arena, set_currently_tracing, take_found_cross_arena_refs_with_generation,
-        try_acquire_lease,
+        STW_TRACING_GENERATION_SENTINEL, register_arena, set_currently_tracing_with_stw,
+        take_found_cross_arena_refs_with_generation, try_acquire_lease,
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, OrderedMutex,
@@ -353,6 +354,10 @@ impl super::ThreadManagerBackend for ThreadManager {
             return;
         }
 
+        // Safepoint visibility guarantee: flush deferred write-barrier entries
+        // before this thread is counted as stopped.
+        flush_write_barrier_buffer();
+
         let thread_info = {
             let threads = self.threads.lock();
             threads.get(&managed_id).cloned()
@@ -408,6 +413,10 @@ impl super::ThreadManagerBackend for ThreadManager {
         // Signal all threads to stop.
         // Multiple threads might do this simultaneously, which is fine.
         self.gc_stop_requested.store(true, Ordering::Release);
+
+        // Initiator thread may not pass through `safe_point`, so flush its
+        // deferred write-barrier buffer explicitly before waiting for mark.
+        flush_write_barrier_buffer();
 
         // Panic guard: if anything below panics before we hand ownership to
         // `StopTheWorldGuard`, resume threads so they are never left hanging.
@@ -613,10 +622,12 @@ impl Drop for ResumeOnPanic<'_> {
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
     for (target_id, ptr_usize, recorded_gen) in take_found_cross_arena_refs_with_generation() {
         if let Some(lease) = try_acquire_lease(target_id) {
-            if lease.generation() == recorded_gen {
+            let generation_matches = recorded_gen == STW_TRACING_GENERATION_SENTINEL
+                || lease.generation() == recorded_gen;
+            if generation_matches {
                 // SAFETY: The pointer was recorded from a live cross-arena reference.
-                // We hold a matching generation lease for `target_id`, so teardown
-                // cannot complete while reconstructing `ObjectPtr`.
+                // We hold a lease for `target_id`, so teardown cannot complete while
+                // reconstructing `ObjectPtr`.
                 let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                 coordinator.record_cross_arena_ref(target_id, ptr);
             } else {
@@ -645,7 +656,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        set_currently_tracing(Some(thread_id));
+                        set_currently_tracing_with_stw(Some(thread_id), true);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let clear_cross_arena_roots_start = Instant::now();
@@ -668,7 +679,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             finish_marking_start.elapsed(),
                         );
 
-                        set_currently_tracing(None);
+                        set_currently_tracing_with_stw(None, false);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let harvest_cross_arena_refs_start = Instant::now();
@@ -686,7 +697,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        set_currently_tracing(Some(thread_id));
+                        set_currently_tracing_with_stw(Some(thread_id), true);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let install_roots_start = Instant::now();
@@ -718,7 +729,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             finish_marking_start.elapsed(),
                         );
 
-                        set_currently_tracing(None);
+                        set_currently_tracing_with_stw(None, false);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let harvest_cross_arena_refs_start = Instant::now();

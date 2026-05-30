@@ -26,6 +26,13 @@ pub use dotnet_utils::gc::{
 };
 
 #[cfg(feature = "multithreading")]
+#[derive(Debug, Clone, Copy)]
+pub struct ArenaGcPressureMetrics {
+    pub collection_trigger_count: u64,
+    pub peak_allocation_counter: u64,
+}
+
+#[cfg(feature = "multithreading")]
 /// Coordinates stop-the-world collections across multiple thread-local arenas.
 pub struct GCCoordinator {
     /// thread_id -> arena metadata
@@ -34,6 +41,8 @@ pub struct GCCoordinator {
     collection_lock: OrderedMutex<levels::CollectionLock, ()>,
     /// Flag indicating if a stop-the-world pause is in progress (shared with arenas)
     stw_in_progress: Arc<AtomicBool>,
+    /// Sticky flag set by allocation pressure to accelerate `should_collect`.
+    needs_any_collection: Arc<AtomicBool>,
     /// Cross-arena references found during marking
     cross_arena_refs:
         OrderedMutex<levels::CrossArenaRefs, HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
@@ -106,6 +115,7 @@ impl GCCoordinator {
             arenas: OrderedMutex::new(HashMap::new()),
             collection_lock: OrderedMutex::new(()),
             stw_in_progress,
+            needs_any_collection: Arc::new(AtomicBool::new(false)),
             cross_arena_refs: OrderedMutex::new(HashMap::new()),
         }
     }
@@ -127,8 +137,17 @@ impl GCCoordinator {
         }
     }
 
+    pub(crate) fn bind_collection_pressure_flag(&self, handle: &ArenaHandle) {
+        handle.bind_needs_any_collection_flag(Arc::clone(&self.needs_any_collection));
+    }
+
     /// Register a thread-local arena with the coordinator.
     pub fn register_arena(&self, handle: ArenaHandle) {
+        self.bind_collection_pressure_flag(&handle);
+        if handle.needs_collection().load(Ordering::Acquire) {
+            self.needs_any_collection.store(true, Ordering::Release);
+        }
+
         let mut arenas = self.arenas.lock();
         arenas.insert(handle.thread_id(), handle);
     }
@@ -143,10 +162,21 @@ impl GCCoordinator {
             *cmd = None;
             handle.finish_signal().notify_all();
         }
+
+        if arenas.is_empty() {
+            // It is race-free to clear the global pressure hint only when no arenas
+            // remain: a partial recompute during unregister could otherwise clobber
+            // a concurrent arena's `record_allocation` store(true).
+            self.needs_any_collection.store(false, Ordering::Release);
+        }
     }
 
     /// Check if any arena requires collection due to allocation pressure.
     pub fn should_collect(&self) -> bool {
+        if !self.needs_any_collection.load(Ordering::Acquire) {
+            return false;
+        }
+
         let arenas = self.arenas.lock();
         for handle in arenas.values() {
             if handle.needs_collection().load(Ordering::Acquire) {
@@ -185,15 +215,15 @@ impl GCCoordinator {
 
         self.stw_in_progress.store(false, Ordering::Release);
 
-        // Reset all collection flags
+        // Reset all collection flags and per-cycle allocation counters.
         {
             let arenas = self.arenas.lock_after(held);
             for handle in arenas.values() {
                 handle.needs_collection().store(false, Ordering::Release);
-                // We don't reset allocation_counter here as it might be useful for stats,
-                // or we might want to reset it. For now, let's just clear the flag.
+                handle.allocation_counter().store(0, Ordering::Release);
             }
         }
+        self.needs_any_collection.store(false, Ordering::Release);
 
         self.assert_no_pending_commands(held, &format!("{context} postcondition"));
         let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
@@ -228,6 +258,29 @@ impl GCCoordinator {
             .values()
             .map(|h| h.external_allocated_bytes().load(Ordering::Acquire))
             .sum()
+    }
+
+    /// Snapshot per-arena allocation-pressure metrics.
+    pub fn arena_gc_pressure_snapshot(
+        &self,
+    ) -> Vec<(dotnet_utils::ArenaId, ArenaGcPressureMetrics)> {
+        let arenas = self.arenas.lock();
+        arenas
+            .iter()
+            .map(|(thread_id, handle)| {
+                (
+                    *thread_id,
+                    ArenaGcPressureMetrics {
+                        collection_trigger_count: handle
+                            .collection_trigger_count()
+                            .load(Ordering::Relaxed),
+                        peak_allocation_counter: handle
+                            .peak_allocation_counter()
+                            .load(Ordering::Relaxed),
+                    },
+                )
+            })
+            .collect()
     }
 
     fn get_arena(&self, thread_id: dotnet_utils::ArenaId) -> Option<ArenaHandle> {
@@ -751,7 +804,7 @@ mod tests {
         coordinator.register_arena(handle.clone());
         assert_eq!(coordinator.total_allocated(), 100);
 
-        handle.needs_collection().store(true, Ordering::Release);
+        handle.record_allocation(*ALLOCATION_THRESHOLD);
         assert!(coordinator.should_collect());
 
         let session = coordinator.begin_collection().unwrap();
@@ -773,17 +826,47 @@ mod tests {
         coordinator.register_arena(handle.clone());
 
         // Allocate just below threshold using the handle directly
-        handle.record_allocation(ALLOCATION_THRESHOLD - 100);
+        handle.record_allocation(*ALLOCATION_THRESHOLD - 100);
         assert!(!handle.needs_collection().load(Ordering::Acquire));
 
         // Allocate to cross threshold
         handle.record_allocation(200);
         assert!(handle.needs_collection().load(Ordering::Acquire));
+        assert!(coordinator.should_collect());
 
         // Reset via coordinator
         let session = coordinator.begin_collection().unwrap();
         session.finish();
         assert!(!handle.needs_collection().load(Ordering::Acquire));
+        assert_eq!(handle.allocation_counter().load(Ordering::Acquire), 0);
+        assert!(!coordinator.should_collect());
+
+        // A tiny allocation after collection should not immediately re-trigger GC.
+        handle.record_allocation(1);
+        assert!(!handle.needs_collection().load(Ordering::Acquire));
+        assert!(!coordinator.should_collect());
+    }
+
+    #[test]
+    fn test_arena_gc_pressure_snapshot_reports_per_arena_metrics() {
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
+        let handle = ArenaHandle::new(dotnet_utils::ArenaId(7));
+
+        coordinator.register_arena(handle.clone());
+
+        handle.record_allocation(*ALLOCATION_THRESHOLD - 32);
+        handle.record_allocation(64);
+        handle.record_allocation(128);
+
+        let snapshot = coordinator.arena_gc_pressure_snapshot();
+        let (_, metrics) = snapshot
+            .into_iter()
+            .find(|(thread_id, _)| *thread_id == dotnet_utils::ArenaId(7))
+            .expect("expected registered arena in snapshot");
+
+        assert_eq!(metrics.collection_trigger_count, 1);
+        assert!(metrics.peak_allocation_counter >= (*ALLOCATION_THRESHOLD + 32) as u64);
     }
 
     #[test]
@@ -937,7 +1020,7 @@ mod tests {
                     // Simulate some allocation pressure so the coordinator
                     // exercises the should_collect path in some iterations.
                     if i % 5 == 0 {
-                        handle.record_allocation(ALLOCATION_THRESHOLD / 2);
+                        handle.record_allocation(*ALLOCATION_THRESHOLD / 2);
                     }
                     coordinator.unregister_arena(id);
                 }

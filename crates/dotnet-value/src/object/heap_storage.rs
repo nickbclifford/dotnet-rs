@@ -7,10 +7,10 @@ use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HeapStorage<'gc> {
-    Vec(Vector<'gc>),
-    Obj(Object<'gc>),
+    Vec(Box<Vector<'gc>>),
+    Obj(Box<Object<'gc>>),
     Str(CLRString),
-    Boxed(Object<'gc>),
+    Boxed(Box<Object<'gc>>),
 }
 
 // SAFETY: HeapStorage is an enum where each variant either implements Collect or
@@ -92,10 +92,10 @@ impl<'gc> HeapStorage<'gc> {
         }
     }
 
-    /// Returns a pointer to the raw data without acquiring a lock.
+    /// Returns a pointer to the raw data without taking a field access guard.
     ///
     /// # Safety
-    /// The caller must ensure that the lock is held elsewhere (e.g. during STW GC)
+    /// The caller must ensure synchronization is provided elsewhere (e.g. during STW GC)
     /// or that the data is otherwise stable and no writers are active.
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         match self {

@@ -84,9 +84,9 @@ impl LayoutFactory {
                 desc.set_offset(base_offset);
             }
             LayoutManager::Field(m) => {
-                for word_idx in m.gc_desc.bitmap.iter_ones() {
+                m.gc_desc.for_each_word_index(|word_idx| {
                     desc.set_offset(base_offset + (word_idx * ptr_size));
-                }
+                });
                 for offset in &m.gc_desc.unaligned_offsets {
                     desc.set_offset(base_offset + *offset);
                 }
@@ -113,13 +113,13 @@ impl LayoutFactory {
         base_alignment: usize,
         packing_size: usize,
     ) -> (
-        std::collections::HashMap<FieldKey, FieldLayout>,
+        hashbrown::HashMap<FieldKey, FieldLayout>,
         usize,
         usize,
         GcDesc,
         bool,
     ) {
-        let mut mapping = std::collections::HashMap::new();
+        let mut mapping = hashbrown::HashMap::new();
         let mut gc_desc = GcDesc::default();
         let mut has_ref_fields = false;
         let mut max_alignment = base_alignment.max(1);
@@ -192,7 +192,7 @@ impl LayoutFactory {
                 )
             }
             Layout::Explicit(e) => {
-                let mut mapping = std::collections::HashMap::new();
+                let mut mapping = hashbrown::HashMap::new();
                 let mut gc_desc = GcDesc::default();
                 let mut has_ref_fields = false;
                 let mut max_alignment = base_alignment.max(1);

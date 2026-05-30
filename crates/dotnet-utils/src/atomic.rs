@@ -297,18 +297,6 @@ impl Atomic {
         (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
     }
 
-    #[cfg(feature = "multithreading")]
-    #[inline]
-    fn ensure_atomic_field_access_supported(ptr: *const u8, size: usize, op: &str) {
-        assert!(
-            Self::is_atomic_field_access_supported(ptr, size),
-            "Unsupported atomic field {}: ptr={:p}, size={}. In multithreading mode, only aligned 1/2/4/8-byte atomic accesses are supported.",
-            op,
-            ptr,
-            size
-        );
-    }
-
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
     /// For sizes > 8 or misaligned pointers, the caller must hold an external lock;

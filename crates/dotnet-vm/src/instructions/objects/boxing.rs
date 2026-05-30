@@ -184,10 +184,10 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                                         .map_err(|_| ())?;
                                     Ok(cts.into_stack())
                                 }
-                                _ => Ok(StackValue::ValueType(o.clone())),
+                                _ => Ok(StackValue::ValueType((**o).clone())),
                             }
                         } else {
-                            Ok(StackValue::ValueType(o.clone()))
+                            Ok(StackValue::ValueType((**o).clone()))
                         }
                     }
                     _ => Err(()),
@@ -303,7 +303,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         // Wrap the manufactured Nullable<T> into a boxed object on the heap.
         let boxed_nullable = ObjectRef::new(
             ctx.gc_with_token(&ctx.no_active_borrows_token()),
-            HeapStorage::Boxed(instance),
+            HeapStorage::Boxed(Box::new(instance)),
         );
         ctx.register_new_object(&boxed_nullable);
 

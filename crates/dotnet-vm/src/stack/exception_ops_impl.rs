@@ -22,7 +22,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let gc = self.gc;
         let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
         let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
         self.register_new_object(&obj_ref);
 
         let base_exception_type =
@@ -57,7 +57,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let gc = self.gc;
         let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
         let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
         self.register_new_object(&obj_ref);
 
         let base_exception_type =
