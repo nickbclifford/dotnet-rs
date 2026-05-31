@@ -178,7 +178,7 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - `disarm(self)` consumes the guard and returns `Disarmed`, whose `Drop` is a no-op.
 - This guarantees exactly one completion signal on panic paths and avoids duplicate completion on normal paths.
 
-Write-barrier TLS buffers are drained on unwind by `WriteBarrierFlushGuard` (`crates/dotnet-runtime-memory/src/access.rs`), a zero-sized RAII guard placed at each write-barrier drain site. Its `Drop` impl flushes `WB_LOCAL_BUF` regardless of whether the enclosing operation completes normally or unwinds.
+Write-barrier TLS buffers are drained on panic unwind by `WriteBarrierPanicFlushGuard` (`crates/dotnet-runtime-memory/src/write_barrier.rs`), a zero-sized RAII guard placed at write sites. Its `Drop` impl flushes `WB_LOCAL_BUF` only when unwinding, while normal execution continues to batch until threshold/safepoint flush.
 
 ## HeapManager (`dotnet-runtime-memory/src/heap.rs` & `dotnet-runtime-memory/src/ops.rs`)
 

@@ -120,7 +120,7 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    // This handles GetValue(int index) or GetValue(params int[] indices) depending on which one is called
+    // Handles GetValue(int), GetValue(long), and GetValue(params int[]) overloads.
     let arg = ctx.pop();
     let this_val = ctx.pop();
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {

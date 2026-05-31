@@ -40,7 +40,7 @@ CHECKS=(
   "GC_AND_MEMORY_SAFETY.md|GcLifetime|*.rs"
   "GC_AND_MEMORY_SAFETY.md|MemoryOwner|*.rs"
   "GC_AND_MEMORY_SAFETY.md|ThreadSafeLock|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|WriteBarrierFlushGuard|*.rs"
+  "GC_AND_MEMORY_SAFETY.md|WriteBarrierPanicFlushGuard|*.rs"
   "GC_AND_MEMORY_SAFETY.md|validate_magic|*.rs"
   "GC_AND_MEMORY_SAFETY.md|validate_arena_id|*.rs"
 

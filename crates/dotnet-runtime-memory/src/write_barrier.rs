@@ -1,9 +1,11 @@
 use dotnet_utils::{ArenaId, gc::GCHandle};
-use dotnet_value::{
-    object::{HeapStorage, ObjectRef},
-    pointer::ManagedPtr,
-};
-use std::{cell::RefCell, marker::PhantomData, sync::LazyLock};
+use dotnet_value::object::{HeapStorage, ObjectRef};
+use std::{cell::RefCell, marker::PhantomData};
+
+#[cfg(feature = "multithreading")]
+use dotnet_value::pointer::ManagedPtr;
+#[cfg(feature = "multithreading")]
+use std::sync::LazyLock;
 
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::GcLifetime;
@@ -135,10 +137,6 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             _marker: PhantomData,
         }
     }
-
-    pub fn record_ref(&mut self, _target: ObjectRef<'gc>) {}
-
-    pub fn record_managed_ptr(&mut self, _target: &ManagedPtr<'gc>) {}
 }
 
 impl<'gc> MemoryOwner<'gc> {
