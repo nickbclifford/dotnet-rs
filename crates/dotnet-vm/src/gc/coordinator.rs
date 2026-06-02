@@ -1,3 +1,24 @@
+//! GC/Threading RAII guard conventions.
+//!
+//! This subsystem intentionally uses three different guard shapes. They are not
+//! interchangeable and should not be "normalized" into one style during
+//! refactors:
+//!
+//! 1. **Phantom-typed arm/disarm** (`CommandCompletionGuard<Armed/Disarmed>`;
+//!    `ResumeOnPanic<ResumeOnPanicArmed/ResumeOnPanicDisarmed>` in `threading/basic.rs`): use when the
+//!    normal path must explicitly transfer/disarm responsibility exactly once.
+//!    The type state makes an armed-drop side effect compile-time visible.
+//! 2. **Option-wrapped ordered drop** (`GcCycleGuard`): use when one guard owns
+//!    multiple resources with a strict panic-safe teardown order. Field
+//!    declaration order plus explicit `take()` in `Drop` enforces sequencing
+//!    (collection-session cleanup before STW resume).
+//! 3. **Inline local struct for sequential cleanup** (`GcFlagGuard` local to
+//!    `StopTheWorldGuard::drop`): use when cleanup must run *after* another
+//!    operation in the same `drop()` body, including panic unwind from that
+//!    operation, by relying on reverse local drop order.
+//!
+//! Choose the smallest pattern that encodes the required invariant.
+
 #[cfg(feature = "multithreading")]
 use crate::{
     sync::{HeldLockLevel, OrderedMutex, OrderedMutexGuard, Ordering, levels},

@@ -75,6 +75,11 @@ define_lock_order_dag! {
         CrossArenaRefs after CollectionLock,
         StaticWaitGraph after StaticInitMutex,
         SyncNextIndex after SyncBlocks
+        // SyncState intentionally has no in-edges. Audit note:
+        // - SyncBlock::state is acquired only inside `sync/threaded.rs` SyncBlock methods.
+        // - SyncBlockManager acquires `SyncBlocks`/`SyncNextIndex` only while allocating/looking up
+        //   Arc<SyncBlock>, and those guards are dropped before any SyncBlock method can run.
+        // Therefore `SyncBlock::state` is root-acquired (`AcquireAfter<Unlocked>`) today.
     }
 }
 

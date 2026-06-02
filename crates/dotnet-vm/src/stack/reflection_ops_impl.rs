@@ -268,17 +268,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         #[cfg(feature = "multithreading")]
         {
             let shared = self.shared();
-            match shared.shared_runtime_types.entry(target.clone()) {
+            let registry = &shared.reflection_registry;
+            match registry.runtime_types.entry(target.clone()) {
                 Entry::Occupied(entry) => {
                     shared.metrics.record_shared_runtime_types_cache_hit();
                     *entry.get()
                 }
                 Entry::Vacant(entry) => {
                     shared.metrics.record_shared_runtime_types_cache_miss();
-                    let idx = shared
-                        .next_runtime_type_index
-                        .fetch_add(1, Ordering::Relaxed);
-                    shared.shared_runtime_types_rev.insert(idx, target);
+                    let idx = registry.next_type_index.fetch_add(1, Ordering::Relaxed);
+                    registry.runtime_types_rev.insert(idx, target);
                     entry.insert(idx);
                     idx
                 }
@@ -301,7 +300,8 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         #[cfg(feature = "multithreading")]
         {
             self.shared()
-                .shared_runtime_types_rev
+                .reflection_registry
+                .runtime_types_rev
                 .get(&index)
                 .map(|e| e.clone())
                 .expect("invalid runtime type index")
@@ -321,12 +321,13 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         #[cfg(feature = "multithreading")]
         {
             let shared = self.shared();
+            let registry = &shared.reflection_registry;
             let key = (method.clone(), lookup.clone());
             let value = (method, lookup);
             shared_reflection_index_get_or_insert(
-                &shared.shared_runtime_methods,
-                &shared.shared_runtime_methods_rev,
-                &shared.next_runtime_method_index,
+                &registry.runtime_methods,
+                &registry.runtime_methods_rev,
+                &registry.next_method_index,
                 key,
                 value,
                 || shared.metrics.record_shared_runtime_methods_cache_hit(),
@@ -349,7 +350,7 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         {
             let shared = self.shared();
             shared_reflection_by_index(
-                &shared.shared_runtime_methods_rev,
+                &shared.reflection_registry.runtime_methods_rev,
                 index,
                 "invalid runtime method index",
             )
@@ -370,12 +371,13 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         #[cfg(feature = "multithreading")]
         {
             let shared = self.shared();
+            let registry = &shared.reflection_registry;
             let key = (field.clone(), lookup.clone());
             let value = (field, lookup);
             shared_reflection_index_get_or_insert(
-                &shared.shared_runtime_fields,
-                &shared.shared_runtime_fields_rev,
-                &shared.next_runtime_field_index,
+                &registry.runtime_fields,
+                &registry.runtime_fields_rev,
+                &registry.next_field_index,
                 key,
                 value,
                 || shared.metrics.record_shared_runtime_fields_cache_hit(),
@@ -395,7 +397,7 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         {
             let shared = self.shared();
             shared_reflection_by_index(
-                &shared.shared_runtime_fields_rev,
+                &shared.reflection_registry.runtime_fields_rev,
                 index,
                 "invalid runtime field index",
             )
@@ -552,6 +554,6 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc> {
-        ReflectionRegistry::new(self.local)
+        ReflectionRegistry::new(&self.local.reflection)
     }
 }

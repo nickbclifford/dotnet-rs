@@ -290,6 +290,36 @@ impl GlobalCaches {
     }
 }
 
+#[cfg(feature = "multithreading")]
+pub struct SharedReflectionRegistry {
+    pub runtime_types: DashMap<RuntimeType, usize>,
+    pub runtime_types_rev: DashMap<usize, RuntimeType>,
+    pub next_type_index: AtomicUsize,
+    pub runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
+    pub runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
+    pub next_method_index: AtomicUsize,
+    pub runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
+    pub runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
+    pub next_field_index: AtomicUsize,
+}
+
+#[cfg(feature = "multithreading")]
+impl SharedReflectionRegistry {
+    fn new() -> Self {
+        Self {
+            runtime_types: DashMap::new(),
+            runtime_types_rev: DashMap::new(),
+            next_type_index: AtomicUsize::new(0),
+            runtime_methods: DashMap::new(),
+            runtime_methods_rev: DashMap::new(),
+            next_method_index: AtomicUsize::new(0),
+            runtime_fields: DashMap::new(),
+            runtime_fields_rev: DashMap::new(),
+            next_field_index: AtomicUsize::new(0),
+        }
+    }
+}
+
 /// Thread-safe shared state that does not contain any GC-managed pointers.
 /// This state is shared across all execution threads and arenas.
 pub struct SharedGlobalState {
@@ -307,27 +337,8 @@ pub struct SharedGlobalState {
     pub last_instructions: Arc<Mutex<InstructionRingBuffer>>,
     pub abort_requested: Arc<AtomicBool>,
     pub gc_coordinator: Arc<GCCoordinator>,
-    /// Cache for shared reflection objects: RuntimeType -> index
     #[cfg(feature = "multithreading")]
-    pub shared_runtime_types: DashMap<RuntimeType, usize>,
-    #[cfg(feature = "multithreading")]
-    pub shared_runtime_types_rev: DashMap<usize, RuntimeType>,
-    #[cfg(feature = "multithreading")]
-    pub next_runtime_type_index: AtomicUsize,
-    /// Cache for shared method reflection objects: (Method, Lookup) -> index
-    #[cfg(feature = "multithreading")]
-    pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreading")]
-    pub shared_runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
-    #[cfg(feature = "multithreading")]
-    pub next_runtime_method_index: AtomicUsize,
-    /// Cache for shared field reflection objects: (Field, Lookup) -> index
-    #[cfg(feature = "multithreading")]
-    pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreading")]
-    pub shared_runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
-    #[cfg(feature = "multithreading")]
-    pub next_runtime_field_index: AtomicUsize,
+    pub reflection_registry: SharedReflectionRegistry,
     pub resolution_shared_cache: OnceLock<Arc<crate::context::ResolutionShared>>,
 }
 
@@ -430,23 +441,7 @@ impl SharedGlobalState {
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
             #[cfg(feature = "multithreading")]
-            shared_runtime_types: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            shared_runtime_types_rev: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            next_runtime_type_index: AtomicUsize::new(0),
-            #[cfg(feature = "multithreading")]
-            shared_runtime_methods: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            shared_runtime_methods_rev: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            next_runtime_method_index: AtomicUsize::new(0),
-            #[cfg(feature = "multithreading")]
-            shared_runtime_fields: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            shared_runtime_fields_rev: DashMap::new(),
-            #[cfg(feature = "multithreading")]
-            next_runtime_field_index: AtomicUsize::new(0),
+            reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),
         };
 
@@ -527,27 +522,27 @@ impl SharedGlobalState {
                 self.loader.method_cache_size(),
             ),
             #[cfg(feature = "multithreading")]
-            shared_runtime_types_size: cache_map_len(&self.shared_runtime_types),
+            shared_runtime_types_size: cache_map_len(&self.reflection_registry.runtime_types),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_types_bytes: estimated_dashmap_bytes(&self.shared_runtime_types),
+            shared_runtime_types_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_types),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_bytes: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_methods_size: cache_map_len(&self.shared_runtime_methods),
+            shared_runtime_methods_size: cache_map_len(&self.reflection_registry.runtime_methods),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_methods_bytes: estimated_dashmap_bytes(&self.shared_runtime_methods),
+            shared_runtime_methods_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_methods),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_bytes: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_fields_size: cache_map_len(&self.shared_runtime_fields),
+            shared_runtime_fields_size: cache_map_len(&self.reflection_registry.runtime_fields),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_fields_bytes: estimated_dashmap_bytes(&self.shared_runtime_fields),
+            shared_runtime_fields_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_fields),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_bytes: 0,
         }
@@ -589,10 +584,7 @@ impl Drop for SharedGlobalState {
     }
 }
 
-/// GC-managed state local to a single thread's arena.
-pub struct ArenaLocalState<'gc> {
-    pub heap: HeapManager<'gc>,
-    pub statics: Arc<StaticStorageManager>,
+pub struct ReflectionLocalState<'gc> {
     pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
     pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
     pub runtime_types_list: RefCell<Vec<RuntimeType>>,
@@ -600,16 +592,33 @@ pub struct ArenaLocalState<'gc> {
     pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
     pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
-    pub active_borrows: Cell<usize>,
 }
 
-// SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
-// This includes the `heap`, the global `statics`, and all `ObjectRef<'gc>` values stored in the
-// various RefCell-wrapped collections.
-unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
+impl<'gc> ReflectionLocalState<'gc> {
+    pub fn new() -> Self {
+        Self {
+            runtime_asms: RefCell::new(HashMap::new()),
+            runtime_types: RefCell::new(HashMap::new()),
+            runtime_types_list: RefCell::new(vec![]),
+            runtime_methods: RefCell::new(vec![]),
+            runtime_method_objs: RefCell::new(HashMap::new()),
+            runtime_fields: RefCell::new(vec![]),
+            runtime_field_objs: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+impl<'gc> Default for ReflectionLocalState<'gc> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// SAFETY: `ReflectionLocalState` traces every `ObjectRef<'gc>` stored in its reflection cache
+// maps. The companion vectors (`runtime_types_list`, `runtime_methods`, `runtime_fields`) contain
+// no GC-managed references.
+unsafe impl<'gc> Collect<'gc> for ReflectionLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        self.heap.trace(cc);
-        self.statics.trace(cc);
         for o in self.runtime_asms.borrow().values() {
             o.trace(cc);
         }
@@ -625,29 +634,41 @@ unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
     }
 }
 
+/// GC-managed state local to a single thread's arena.
+pub struct ArenaLocalState<'gc> {
+    pub heap: HeapManager<'gc>,
+    pub statics: Arc<StaticStorageManager>,
+    pub reflection: ReflectionLocalState<'gc>,
+    pub active_borrows: Cell<usize>,
+}
+
+// SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
+// This includes the `heap`, the global `statics`, and the nested `reflection` cache state.
+unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        self.heap.trace(cc);
+        self.statics.trace(cc);
+        self.reflection.trace(cc);
+    }
+}
+
 impl<'gc> ArenaLocalState<'gc> {
     pub fn new(statics: Arc<StaticStorageManager>) -> Self {
         Self {
             heap: HeapManager::new(),
             statics,
-            runtime_asms: RefCell::new(HashMap::new()),
-            runtime_types: RefCell::new(HashMap::new()),
-            runtime_types_list: RefCell::new(vec![]),
-            runtime_methods: RefCell::new(vec![]),
-            runtime_method_objs: RefCell::new(HashMap::new()),
-            runtime_fields: RefCell::new(vec![]),
-            runtime_field_objs: RefCell::new(HashMap::new()),
+            reflection: ReflectionLocalState::new(),
             active_borrows: Cell::new(0),
         }
     }
 }
 
 pub struct ReflectionRegistry<'a, 'gc> {
-    local: &'a ArenaLocalState<'gc>,
+    local: &'a ReflectionLocalState<'gc>,
 }
 
 impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
-    pub fn new(local: &'a ArenaLocalState<'gc>) -> Self {
+    pub fn new(local: &'a ReflectionLocalState<'gc>) -> Self {
         Self { local }
     }
 

@@ -23,6 +23,8 @@ use dotnet_utils::{
 use dotnet_value::object::ObjectPtr;
 use std::{
     collections::HashMap,
+    marker::PhantomData,
+    mem::ManuallyDrop,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
@@ -421,7 +423,7 @@ impl super::ThreadManagerBackend for ThreadManager {
         // Panic guard: if anything below panics before we hand ownership to
         // `StopTheWorldGuard`, resume threads so they are never left hanging.
         // Disarmed only on the successful return path via `panic_guard.disarm()`.
-        let mut panic_guard = ResumeOnPanic::new(self);
+        let panic_guard = ResumeOnPanic::new(self);
 
         let mut guard = loop {
             if let Some(g) = self.gc_coordination.try_lock() {
@@ -513,7 +515,7 @@ impl super::ThreadManagerBackend for ThreadManager {
         }
 
         // Disarm: StopTheWorldGuard takes over responsibility for resume.
-        panic_guard.disarm();
+        let _disarmed_guard = panic_guard.disarm();
         StopTheWorldGuard::new(self, guard, start_time)
     }
 
@@ -572,6 +574,24 @@ impl Drop for StopTheWorldGuard<'_> {
     }
 }
 
+/// Marker type for an armed [`ResumeOnPanic`] guard.
+pub(super) struct ResumeOnPanicArmed;
+
+/// Marker type for a disarmed [`ResumeOnPanic`] guard.
+pub(super) struct ResumeOnPanicDisarmed;
+
+pub(super) trait ResumeOnPanicState {
+    const RESUME_ON_DROP: bool;
+}
+
+impl ResumeOnPanicState for ResumeOnPanicArmed {
+    const RESUME_ON_DROP: bool = true;
+}
+
+impl ResumeOnPanicState for ResumeOnPanicDisarmed {
+    const RESUME_ON_DROP: bool = false;
+}
+
 /// RAII panic guard used inside [`ThreadManager::request_stop_the_world`].
 ///
 /// Calls [`ThreadManager::resume_threads`] on drop unless explicitly
@@ -584,18 +604,17 @@ impl Drop for StopTheWorldGuard<'_> {
 /// `Executor::perform_full_gc` composes this with
 /// `gc::coordinator::GcCycleGuard`, which guarantees `CollectionSession`
 /// cleanup runs before `StopTheWorldGuard` drop on unwind.
-pub(super) struct ResumeOnPanic<'m> {
+pub(super) struct ResumeOnPanic<'m, State: ResumeOnPanicState> {
     manager: &'m ThreadManager,
-    /// `true` once [`Self::disarm`] has been called; `Drop` is a no-op when set.
-    disarmed: bool,
+    _state: PhantomData<State>,
 }
 
-impl<'m> ResumeOnPanic<'m> {
+impl<'m> ResumeOnPanic<'m, ResumeOnPanicArmed> {
     /// Create a new armed guard for `manager`.
     pub(super) fn new(manager: &'m ThreadManager) -> Self {
         Self {
             manager,
-            disarmed: false,
+            _state: PhantomData,
         }
     }
 
@@ -603,16 +622,20 @@ impl<'m> ResumeOnPanic<'m> {
     ///
     /// Call this on the normal completion path once [`StopTheWorldGuard`] has
     /// taken over responsibility for resuming threads.
-    pub(super) fn disarm(&mut self) {
-        self.disarmed = true;
+    pub(super) fn disarm(self) -> ResumeOnPanic<'m, ResumeOnPanicDisarmed> {
+        let this = ManuallyDrop::new(self);
+        ResumeOnPanic {
+            manager: this.manager,
+            _state: PhantomData,
+        }
     }
 }
 
-impl Drop for ResumeOnPanic<'_> {
+impl<State: ResumeOnPanicState> Drop for ResumeOnPanic<'_, State> {
     fn drop(&mut self) {
-        if !self.disarmed {
-            // Scope exited without a `disarm()` call — either the caller
-            // panicked or forgot to transfer ownership to StopTheWorldGuard.
+        if State::RESUME_ON_DROP {
+            // Scope exited while still `Armed` — either the caller panicked
+            // or forgot to transfer ownership to StopTheWorldGuard.
             // Resume threads so none are left hanging at a safe point forever.
             self.manager.resume_threads();
         }
@@ -911,9 +934,9 @@ mod tests {
         manager.gc_stop_requested.store(true, Ordering::Release);
 
         {
-            let mut guard = ResumeOnPanic::new(&manager);
-            guard.disarm(); // disarm — StopTheWorldGuard takes ownership
-            // Drop: disarmed=true, so resume_threads is NOT called.
+            let guard = ResumeOnPanic::new(&manager);
+            let _disarmed_guard = guard.disarm(); // disarm — StopTheWorldGuard takes ownership
+            // Drop: disarmed state is a no-op, so resume_threads is NOT called.
         }
 
         // gc_stop_requested is still true: the guard was correctly disarmed and
