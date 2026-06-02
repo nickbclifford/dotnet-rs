@@ -1,0 +1,15 @@
+[profile.default]
+slow-timeout = { period = "180s", terminate-after = 2 }
+
+[test-groups]
+hang-probe = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = '''
+    test(integration_tests_impl::fixtures::test_allocation_pressure)
+    | test(integration_tests_impl::fixtures::test_gc_coordinator)
+    | test(integration_tests_impl::fixtures::test_multiple_arenas)
+    | test(integration_tests_impl::fixtures::test_stw_stress)
+'''
+test-group = "hang-probe"
+slow-timeout = { period = "60s", terminate-after = 2 }
