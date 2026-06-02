@@ -11,7 +11,11 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnet_utils::sync::Ordering;
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::ObjectRef,
+    pointer::ManagedPtr,
+};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
 use dotnetdll::prelude::BaseType;
@@ -167,6 +171,39 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+fn store_int_volatile<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    target_ptr: &ManagedPtr<'gc>,
+    value: &StackValue<'gc>,
+    width: usize,
+) -> StepResult {
+    let val = match value {
+        StackValue::Int32(i) => *i as u64,
+        actual => {
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "Int32".to_string(),
+                actual: format!("{actual:?}"),
+            }));
+        }
+    };
+
+    // SAFETY: Byte and Int16 volatile write paths both convert from Int32 and perform
+    // an atomic store using the dispatch-selected integer width.
+    unsafe {
+        RawMemoryOps::store_atomic(
+            ctx,
+            target_ptr.origin().clone(),
+            target_ptr.byte_offset(),
+            val,
+            width,
+            Ordering::Release,
+        )
+        .unwrap();
+    }
+
+    StepResult::Continue
+}
+
 /// System.Threading.Volatile::Write(ref T location, T value)
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write<T>(T&, T)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(bool&, bool)")]
@@ -204,51 +241,15 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
     match volatile_atomic_dispatch(target_type.get()) {
         VolatileAtomicTypeDispatch::Byte => {
-            let val = match value {
-                StackValue::Int32(i) => i as u64,
-                actual => {
-                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "Int32".to_string(),
-                        actual: format!("{actual:?}"),
-                    }));
-                }
-            };
-            // SAFETY: The write target came from a managed by-ref argument and this arm writes a
-            // single byte, matching the resolved element width.
-            unsafe {
-                RawMemoryOps::store_atomic(
-                    ctx,
-                    target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
-                    val,
-                    1,
-                    Ordering::Release,
-                )
-                .unwrap();
+            match store_int_volatile(ctx, &target_ptr, &value, 1) {
+                StepResult::Continue => {}
+                other => return other,
             }
         }
         VolatileAtomicTypeDispatch::Int16 => {
-            let val = match value {
-                StackValue::Int32(i) => i as u64,
-                actual => {
-                    return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "Int32".to_string(),
-                        actual: format!("{actual:?}"),
-                    }));
-                }
-            };
-            // SAFETY: The dispatch guarantees 16-bit storage and the source value is normalized to
-            // the corresponding 2-byte representation before the atomic store.
-            unsafe {
-                RawMemoryOps::store_atomic(
-                    ctx,
-                    target_ptr.origin().clone(),
-                    target_ptr.byte_offset(),
-                    val,
-                    2,
-                    Ordering::Release,
-                )
-                .unwrap();
+            match store_int_volatile(ctx, &target_ptr, &value, 2) {
+                StepResult::Continue => {}
+                other => return other,
             }
         }
         VolatileAtomicTypeDispatch::Word32 => {

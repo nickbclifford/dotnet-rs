@@ -34,6 +34,13 @@ fn pop_nonneg_usize<'gc, T: SpanIntrinsicHost<'gc>>(ctx: &mut T) -> Result<usize
     }
 }
 
+fn make_char_element_type<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+) -> Result<ConcreteType, StepResult> {
+    ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char)))
+        .map_err(|e| StepResult::Error(e.into()))
+}
+
 struct SpanSourceData {
     base_ptr: *mut u8,
     total_len: usize,
@@ -51,11 +58,7 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
             let heap = h.borrow();
             match &heap.storage {
                 HeapStorage::Str(s) => {
-                    let element_type =
-                        match ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char))) {
-                            Ok(v) => v,
-                            Err(e) => return Err(StepResult::Error(e.into())),
-                        };
+                    let element_type = make_char_element_type(ctx)?;
 
                     Ok(SpanSourceData {
                         // SAFETY: `heap` borrow pins the string storage for this scope; we only
@@ -87,10 +90,7 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
             let element_type = if !generics.method_generics.is_empty() {
                 generics.method_generics[0].clone()
             } else {
-                match ctx.make_concrete(&MethodType::Base(Box::new(BaseType::Char))) {
-                    Ok(v) => v,
-                    Err(e) => return Err(StepResult::Error(e.into())),
-                }
+                make_char_element_type(ctx)?
             };
 
             Ok(SpanSourceData {

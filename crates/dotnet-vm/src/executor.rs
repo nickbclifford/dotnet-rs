@@ -133,6 +133,31 @@ impl Executor {
         }
     }
 
+    fn collection_check(&mut self) -> Result<(bool, bool), VmError> {
+        self.with_arena(|arena| {
+            arena.mutate(|_, c| {
+                let full_collect = if c.stack.local.heap.needs_full_collect.get() {
+                    c.stack.local.heap.needs_full_collect.set(false);
+                    true
+                } else {
+                    false
+                };
+
+                #[cfg(feature = "multithreading")]
+                {
+                    let collection_requested =
+                        full_collect || c.stack.arena.needs_collection().load(Ordering::Acquire);
+                    (full_collect, collection_requested)
+                }
+
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    (full_collect, full_collect)
+                }
+            })
+        })
+    }
+
     pub fn tracer_enabled(&self) -> bool {
         self.shared.tracer_enabled.load(Ordering::Relaxed)
     }
@@ -373,36 +398,7 @@ impl Executor {
                 }
             }
 
-            #[cfg(feature = "multithreading")]
-            let (_full_collect, collection_requested) = match self.with_arena(|arena| {
-                arena.mutate(|_, c| {
-                    let full_collect = if c.stack.local.heap.needs_full_collect.get() {
-                        c.stack.local.heap.needs_full_collect.set(false);
-                        true
-                    } else {
-                        false
-                    };
-                    let collection_requested =
-                        full_collect || c.stack.arena.needs_collection().load(Ordering::Acquire);
-                    (full_collect, collection_requested)
-                })
-            }) {
-                Ok(v) => v,
-                Err(e) => break ExecutorResult::Error(e),
-            };
-
-            #[cfg(not(feature = "multithreading"))]
-            let (_full_collect, collection_requested) = match self.with_arena(|arena| {
-                arena.mutate(|_, c| {
-                    let full_collect = if c.stack.local.heap.needs_full_collect.get() {
-                        c.stack.local.heap.needs_full_collect.set(false);
-                        true
-                    } else {
-                        false
-                    };
-                    (full_collect, full_collect)
-                })
-            }) {
+            let (_full_collect, collection_requested) = match self.collection_check() {
                 Ok(v) => v,
                 Err(e) => break ExecutorResult::Error(e),
             };

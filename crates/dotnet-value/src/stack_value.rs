@@ -170,7 +170,7 @@ unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
 }
 
 #[inline]
-fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
+pub fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
     match v {
         StackValue::Int32(_) => "Int32",
         StackValue::Int64(_) => "Int64",
@@ -183,6 +183,32 @@ fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
         StackValue::TypedRef(_, _) => "TypedRef",
         #[cfg(feature = "multithreading")]
         StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
+    }
+}
+
+#[inline]
+fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
+    match v {
+        StackValue::Int32(i) => Ok(i as u32),
+        StackValue::NativeInt(i) => Ok(i as u32),
+        v => Err(ExecutionError::TypeMismatch {
+            expected: "shift amount (Int32 or NativeInt)".to_string(),
+            actual: stack_value_kind(&v).to_string(),
+        }),
+    }
+}
+
+#[inline]
+fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
+    if let Some(owner) = m.owner() {
+        unsafe {
+            owner
+                .0
+                .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m.offset.as_usize()))
+                .unwrap_or(std::ptr::null_mut())
+        }
+    } else {
+        m.offset.as_usize() as *mut u8
     }
 }
 
@@ -623,16 +649,7 @@ impl<'gc> StackValue<'gc> {
     }
 
     pub fn shr(self, other: Self, sgn: NumberSign) -> Result<Self, ExecutionError> {
-        let amount = match other {
-            StackValue::Int32(i) => i as u32,
-            StackValue::NativeInt(i) => i as u32,
-            v => {
-                return Err(ExecutionError::TypeMismatch {
-                    expected: "shift amount (Int32 or NativeInt)".to_string(),
-                    actual: stack_value_kind(&v).to_string(),
-                });
-            }
-        };
+        let amount = extract_shift_amount(other)?;
         shift_op!(self, amount, sgn, >>)
     }
 
@@ -810,33 +827,11 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
             (ManagedPtr(l), NativeInt(r)) => {
-                let l_ptr = if let Some(owner) = l.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(l.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    l.offset.as_usize() as *mut u8
-                };
+                let l_ptr = managed_ptr_to_raw(l);
                 (l_ptr as isize) == *r
             }
             (NativeInt(l), ManagedPtr(r)) => {
-                let r_ptr = if let Some(owner) = r.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(r.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    r.offset.as_usize() as *mut u8
-                };
+                let r_ptr = managed_ptr_to_raw(r);
                 *l == (r_ptr as isize)
             }
             (ObjectRef(l), ObjectRef(r)) => l == r,
@@ -858,33 +853,11 @@ impl<'gc> PartialOrd for StackValue<'gc> {
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
             (ManagedPtr(l), NativeInt(r)) => {
-                let l_ptr = if let Some(owner) = l.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(l.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    l.offset.as_usize() as *mut u8
-                };
+                let l_ptr = managed_ptr_to_raw(l);
                 (l_ptr as isize).partial_cmp(r)
             }
             (NativeInt(l), ManagedPtr(r)) => {
-                let r_ptr = if let Some(owner) = r.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(r.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    r.offset.as_usize() as *mut u8
-                };
+                let r_ptr = managed_ptr_to_raw(r);
                 l.partial_cmp(&(r_ptr as isize))
             }
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
@@ -955,30 +928,8 @@ impl<'gc> Sub for StackValue<'gc> {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-i))
             }))),
             (ManagedPtr(m1), ManagedPtr(m2)) => {
-                let v1 = if let Some(owner) = m1.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(m1.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    m1.offset.as_usize() as *mut u8
-                };
-                let v2 = if let Some(owner) = m2.owner() {
-                    unsafe {
-                        owner
-                            .0
-                            .map(|h: ObjectHandle<'gc>| {
-                                h.borrow().storage.raw_data_ptr().add(m2.offset.as_usize())
-                            })
-                            .unwrap_or(std::ptr::null_mut())
-                    }
-                } else {
-                    m2.offset.as_usize() as *mut u8
-                };
+                let v1 = managed_ptr_to_raw(&m1);
+                let v2 = managed_ptr_to_raw(&m2);
                 Ok(NativeInt((v1 as isize) - (v2 as isize)))
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
@@ -1017,16 +968,7 @@ impl<'gc> BitXor for StackValue<'gc> {
 impl<'gc> Shl for StackValue<'gc> {
     type Output = Result<Self, ExecutionError>;
     fn shl(self, rhs: Self) -> Self::Output {
-        let amount = match rhs {
-            StackValue::Int32(i) => i as u32,
-            StackValue::NativeInt(i) => i as u32,
-            v => {
-                return Err(ExecutionError::TypeMismatch {
-                    expected: "shift amount (Int32 or NativeInt)".to_string(),
-                    actual: stack_value_kind(&v).to_string(),
-                });
-            }
-        };
+        let amount = extract_shift_amount(rhs)?;
         match self {
             StackValue::Int32(i) => Ok(StackValue::Int32(i << amount)),
             StackValue::Int64(i) => Ok(StackValue::Int64(i << amount)),

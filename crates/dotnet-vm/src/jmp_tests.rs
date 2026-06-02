@@ -15,10 +15,9 @@ mod tests {
         binary::signature::kinds::CallingConvention,
         prelude::*,
         resolved::{
-            assembly::ExternalAssemblyReference,
             members::{Method, MethodSource, UserMethod},
             signature::ReturnType,
-            types::{ExternalTypeReference, ResolutionScope, TypeDefinition},
+            types::TypeDefinition,
         },
     };
     fn get_mock_loader() -> Arc<AssemblyLoader> {
@@ -42,18 +41,8 @@ mod tests {
     fn test_jmp_instruction() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("JmpTest.dll"));
-        res.assembly = Some(Assembly::new("JmpTestAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
-        let mut type_def = TypeDefinition::new(None, "JmpType");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
+        let (mut res, _, type_idx) =
+            make_test_assembly!("JmpTest.dll", "JmpTestAssembly", "JmpType");
         let sig = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -70,20 +59,15 @@ mod tests {
             ),
             varargs: None,
         };
-        let target_body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 2,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let target_body = make_test_method!(
+            max_stack: 2,
             instructions: vec![
                 Instruction::LoadArgument(0),
                 Instruction::LoadConstantInt32(10),
                 Instruction::Add,
                 Instruction::Return,
             ],
-            data_sections: vec![],
-        };
+        );
         let target_idx = res.push_method(
             type_idx,
             Method::new(
@@ -93,17 +77,12 @@ mod tests {
                 Some(target_body),
             ),
         );
-        let jumper_body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 0,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let jumper_body = make_test_method!(
+            max_stack: 0,
             instructions: vec![Instruction::Jump(MethodSource::User(
                 UserMethod::Definition(target_idx),
             ))],
-            data_sections: vec![],
-        };
+        );
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
@@ -197,18 +176,8 @@ mod tests {
     fn test_jmp_invalid_stack() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("JmpInvalid.dll"));
-        res.assembly = Some(Assembly::new("JmpInvalidAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
-        let mut type_def = TypeDefinition::new(None, "JmpInvalidType");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
+        let (mut res, _, type_idx) =
+            make_test_assembly!("JmpInvalid.dll", "JmpInvalidAssembly", "JmpInvalidType");
         let sig = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -223,29 +192,19 @@ mod tests {
                 Accessibility::Public,
                 sig.clone(),
                 "Target",
-                Some(body::Method {
-                    header: body::Header {
-                        maximum_stack_size: 1,
-                        local_variables: vec![],
-                        initialize_locals: true,
-                    },
+                Some(make_test_method!(
+                    max_stack: 1,
                     instructions: vec![Instruction::Return],
-                    data_sections: vec![],
-                }),
+                )),
             ),
         );
-        let jumper_body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 1,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let jumper_body = make_test_method!(
+            max_stack: 1,
             instructions: vec![
                 Instruction::LoadConstantInt32(42),
                 Instruction::Jump(MethodSource::User(UserMethod::Definition(target_idx))),
             ],
-            data_sections: vec![],
-        };
+        );
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
@@ -327,18 +286,8 @@ mod tests {
     fn test_jmp_inside_try() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("JmpTry.dll"));
-        res.assembly = Some(Assembly::new("JmpTryAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
-        let mut type_def = TypeDefinition::new(None, "JmpTryType");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
+        let (mut res, _, type_idx) =
+            make_test_assembly!("JmpTry.dll", "JmpTryAssembly", "JmpTryType");
         let sig = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -353,38 +302,27 @@ mod tests {
                 Accessibility::Public,
                 sig.clone(),
                 "Target",
-                Some(body::Method {
-                    header: body::Header {
-                        maximum_stack_size: 1,
-                        local_variables: vec![],
-                        initialize_locals: true,
-                    },
+                Some(make_test_method!(
+                    max_stack: 1,
                     instructions: vec![Instruction::Return],
-                    data_sections: vec![],
-                }),
+                )),
             ),
         );
-        let jumper_body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 1,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let jumper_body = make_test_method!(
+            max_stack: 1,
             instructions: vec![
                 Instruction::Jump(MethodSource::User(UserMethod::Definition(target_idx))),
                 Instruction::Return,
                 Instruction::Return,
             ],
-            data_sections: vec![body::DataSection::ExceptionHandlers(vec![
-                body::Exception {
-                    kind: body::ExceptionKind::Finally,
-                    try_offset: 0,
-                    try_length: 1,
-                    handler_offset: 2,
-                    handler_length: 1,
-                },
-            ])],
-        };
+            data_sections: vec![body::DataSection::ExceptionHandlers(vec![body::Exception {
+                kind: body::ExceptionKind::Finally,
+                try_offset: 0,
+                try_length: 1,
+                handler_offset: 2,
+                handler_length: 1,
+            }])],
+        );
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
@@ -469,18 +407,8 @@ mod tests {
     fn test_jmp_signature_mismatch() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("JmpSig.dll"));
-        res.assembly = Some(Assembly::new("JmpSigAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
-        let mut type_def = TypeDefinition::new(None, "JmpSigType");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
+        let (mut res, _, type_idx) =
+            make_test_assembly!("JmpSig.dll", "JmpSigAssembly", "JmpSigType");
         let sig_void = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -511,28 +439,18 @@ mod tests {
                 Accessibility::Public,
                 sig_int,
                 "Target",
-                Some(body::Method {
-                    header: body::Header {
-                        maximum_stack_size: 1,
-                        local_variables: vec![],
-                        initialize_locals: true,
-                    },
+                Some(make_test_method!(
+                    max_stack: 1,
                     instructions: vec![Instruction::LoadConstantInt32(1), Instruction::Return],
-                    data_sections: vec![],
-                }),
+                )),
             ),
         );
-        let jumper_body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 0,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let jumper_body = make_test_method!(
+            max_stack: 0,
             instructions: vec![Instruction::Jump(MethodSource::User(
                 UserMethod::Definition(target_idx),
             ))],
-            data_sections: vec![],
-        };
+        );
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(Accessibility::Public, sig_void, "Jumper", Some(jumper_body)),

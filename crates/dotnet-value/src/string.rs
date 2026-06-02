@@ -83,7 +83,7 @@ const STRING_INTERN_DEFAULT_MAX_ENTRIES: usize = 4096;
 
 type StringInternerCache = LruCache<Arc<[u16]>, Arc<[u16]>>;
 
-fn parse_env_bool(key: &str, default: bool) -> bool {
+pub fn parse_env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
         Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => true,

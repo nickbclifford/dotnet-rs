@@ -22,6 +22,8 @@ pub mod ptr_common;
 pub mod stack_value;
 pub mod storage;
 pub mod string;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 pub mod validation;
 #[cfg(test)]
 mod validation_tests;

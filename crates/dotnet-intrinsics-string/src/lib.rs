@@ -28,3 +28,12 @@ pub trait IntrinsicStringHost<'gc>: VmStringIntrinsicHost<'gc> {
         f: F,
     ) -> Result<R, IntrinsicError>;
 }
+
+#[inline]
+pub(crate) fn extend_from_utf16_ne_bytes(dest: &mut Vec<u16>, bytes: &[u8]) {
+    dest.extend(
+        bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
+    );
+}

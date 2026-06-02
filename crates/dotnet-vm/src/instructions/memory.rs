@@ -5,7 +5,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::error::ExecutionError;
-use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
+use dotnet_utils::{ByteOffset, StackSlotIndex, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
@@ -113,31 +113,15 @@ pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     let val = vm_pop!(ctx);
     let addr_val = vm_pop!(ctx);
 
-    if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, off)) = m.stack_slot_origin()
-        && off == ByteOffset::ZERO
-        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
-    {
+    if let Some(slot_idx) = stack_slot_origin_if_reference_slot(ctx, &addr_val) {
         let typed_val = dotnet_vm_ops::vm_try!(convert_to_stack_value(val, param0));
         ctx.set_slot(slot_idx, typed_val);
         return StepResult::Continue;
     }
 
-    // Check for null pointer before extracting origin/offset
-    if addr_val.is_null() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-
-    let (origin, offset): (PointerOrigin<'gc>, ByteOffset) = match addr_val {
-        StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
-        StackValue::ManagedPtr(m) => (m.origin().clone(), m.byte_offset()),
-        StackValue::UnmanagedPtr(u) => {
-            (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
-        }
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
+    let (origin, offset) = match resolve_indirect_origin_and_offset(ctx, addr_val) {
+        Ok(v) => v,
+        Err(step) => return step,
     };
 
     let layout = match param0 {
@@ -176,31 +160,15 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
 ) -> StepResult {
     let addr_val = vm_pop!(ctx);
 
-    if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, off)) = m.stack_slot_origin()
-        && off == ByteOffset::ZERO
-        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
-    {
+    if let Some(slot_idx) = stack_slot_origin_if_reference_slot(ctx, &addr_val) {
         let val = dotnet_vm_ops::vm_try!(convert_from_stack_value(ctx.get_slot(slot_idx), param0));
         ctx.push(val);
         return StepResult::Continue;
     }
 
-    // Check for null pointer before extracting origin/offset
-    if addr_val.is_null() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-
-    let (origin, offset): (PointerOrigin<'gc>, ByteOffset) = match addr_val {
-        StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
-        StackValue::ManagedPtr(m) => (m.origin().clone(), m.byte_offset()),
-        StackValue::UnmanagedPtr(u) => {
-            (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
-        }
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
+    let (origin, offset) = match resolve_indirect_origin_and_offset(ctx, addr_val) {
+        Ok(v) => v,
+        Err(step) => return step,
     };
 
     let layout = match param0 {
@@ -234,6 +202,40 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     };
     ctx.push(val);
     StepResult::Continue
+}
+
+fn stack_slot_origin_if_reference_slot<'gc, T: VmStackOps<'gc>>(
+    ctx: &T,
+    addr_val: &StackValue<'gc>,
+) -> Option<StackSlotIndex> {
+    if let StackValue::ManagedPtr(m) = addr_val
+        && let Some((slot_idx, off)) = m.stack_slot_origin()
+        && off == ByteOffset::ZERO
+        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
+    {
+        Some(slot_idx)
+    } else {
+        None
+    }
+}
+
+fn resolve_indirect_origin_and_offset<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    addr_val: StackValue<'gc>,
+) -> Result<(PointerOrigin<'gc>, ByteOffset), StepResult> {
+    if addr_val.is_null() {
+        return Err(ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG));
+    }
+
+    match addr_val {
+        StackValue::NativeInt(p) => Ok((PointerOrigin::Unmanaged, ByteOffset(p as usize))),
+        StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
+        StackValue::UnmanagedPtr(u) => {
+            Ok((PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)))
+        }
+        _ => Err(ctx
+            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG)),
+    }
 }
 
 fn convert_to_stack_value(

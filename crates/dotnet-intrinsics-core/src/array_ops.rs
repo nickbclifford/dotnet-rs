@@ -3,7 +3,7 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, ObjectRef, Vector},
 };
 use dotnet_vm_ops::{
     NULL_REF_MSG, StepResult,
@@ -13,6 +13,29 @@ const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.
 const NOT_ARRAY_MSG: &str = "Object must be of type Array.";
 const INDEX_ARG_TYPE_MSG: &str = "Index must be Int32, Int64, or Int32[].";
 const INDEX_ARRAY_TYPE_MSG: &str = "Indices must be provided as an Int32 array.";
+
+fn extract_first_index_from_indices_array<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    indices: &Vector<'gc>,
+) -> Result<usize, StepResult> {
+    if indices.layout.length == 0 {
+        return Err(ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The number of indices provided does not match the number of dimensions of the array.",
+        ));
+    }
+
+    // For now only support 1D access via the first index in the array.
+    if indices.get().len() < 4 {
+        return Err(ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG));
+    }
+
+    let Ok(bytes): Result<[u8; 4], _> = indices.get()[0..4].try_into() else {
+        return Err(ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG));
+    };
+
+    Ok(i32::from_ne_bytes(bytes) as usize)
+}
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
@@ -136,22 +159,10 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
                 return ctx
                     .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
-            if v.layout.length == 0 {
-                return ctx.throw_by_name_with_message(
-                    "System.ArgumentException",
-                    "The number of indices provided does not match the number of dimensions of the array.",
-                );
+            match extract_first_index_from_indices_array(ctx, v) {
+                Ok(index) => index,
+                Err(step) => return step,
             }
-            // For now only support 1D access via the first index in the array
-            if v.get().len() < 4 {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            }
-            let Ok(bytes): Result<[u8; 4], _> = v.get()[0..4].try_into() else {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            };
-            i32::from_ne_bytes(bytes) as usize
         }
         _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
     };
@@ -201,21 +212,10 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
                 return ctx
                     .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
             };
-            if v.layout.length == 0 {
-                return ctx.throw_by_name_with_message(
-                    "System.ArgumentException",
-                    "The number of indices provided does not match the number of dimensions of the array.",
-                );
+            match extract_first_index_from_indices_array(ctx, v) {
+                Ok(index) => index,
+                Err(step) => return step,
             }
-            if v.get().len() < 4 {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            }
-            let Ok(bytes): Result<[u8; 4], _> = v.get()[0..4].try_into() else {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            };
-            i32::from_ne_bytes(bytes) as usize
         }
         _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
     };

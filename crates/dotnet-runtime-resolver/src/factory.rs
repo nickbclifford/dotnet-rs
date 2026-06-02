@@ -10,7 +10,7 @@ use dotnet_types::{
 use dotnet_utils::{ByteOffset, gc::GCHandle};
 use dotnet_value::{
     StackValue,
-    layout::HasLayout,
+    layout::{FieldLayoutManager, HasLayout},
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
@@ -213,8 +213,7 @@ where
         generics: &GenericLookup,
     ) -> Result<FieldStorage, TypeResolutionError> {
         let layout = self.instance_field_layout_cached_with_lookup(td, generics)?;
-        let size = layout.size();
-        Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
+        Ok(self.new_field_storage(layout))
     }
 
     fn new_static_fields_with_lookup(
@@ -224,8 +223,23 @@ where
         generics: &GenericLookup,
     ) -> Result<FieldStorage, TypeResolutionError> {
         let layout = Arc::new(self.static_fields_with_lookup(td, generics)?);
+        Ok(self.new_field_storage(layout))
+    }
+
+    fn new_field_storage(&self, layout: Arc<FieldLayoutManager>) -> FieldStorage {
         let size = layout.size();
-        Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
+        FieldStorage::new(layout, vec![0; size.as_usize()])
+    }
+
+    fn resolve_pointer_inner_type(
+        &self,
+        inner: &Option<ConcreteType>,
+    ) -> Result<TypeDescription, TypeResolutionError> {
+        if let Some(source) = inner {
+            self.loader.find_concrete_type(source.clone())
+        } else {
+            self.loader.corlib_type("System.Void")
+        }
     }
 
     fn new_value_type_with_lookup<'gc>(
@@ -286,11 +300,7 @@ where
                 StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p.into_inner()))),
                 _ => {
                     let ptr = convert_num::<usize>(data)?;
-                    let inner_type = if let Some(source) = inner {
-                        self.loader.find_concrete_type(source.clone())?
-                    } else {
-                        self.loader.corlib_type("System.Void")?
-                    };
+                    let inner_type = self.resolve_pointer_inner_type(inner)?;
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
                         NonNull::new(sptr::from_exposed_addr_mut(ptr)),
                         inner_type,
@@ -479,11 +489,7 @@ where
                 usize::from_ne_bytes(data.try_into().unwrap()),
             ))),
             BaseType::ValuePointer(_modifiers, inner) => {
-                let inner_type = if let Some(source) = inner {
-                    self.loader.find_concrete_type(source.clone())?
-                } else {
-                    self.loader.corlib_type("System.Void")?
-                };
+                let inner_type = self.resolve_pointer_inner_type(inner)?;
 
                 if data.len() >= ManagedPtr::SIZE {
                     // SAFETY: `data.len() >= ManagedPtr::SIZE` is checked above, and the bytes

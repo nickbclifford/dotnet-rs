@@ -1,12 +1,13 @@
 use crate::{
     ReflectionIntrinsicHost,
-    types::{build_generic_lookup_from_runtime_type, populate_reflection_array},
+    types::{
+        build_generic_lookup_from_runtime_type, populate_reflection_array, string_from_heap_obj,
+    },
 };
 use dotnet_assemblies::SUPPORT_ASSEMBLY;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
-    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -196,6 +197,21 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
+fn get_runtime_method_metadata<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+    idx: usize,
+) -> ObjectRef<'gc> {
+    let desc = MethodDescription::new(
+        td.clone(),
+        lookup.clone(),
+        td.resolution.clone(),
+        MethodMemberIndex::Method(idx),
+    );
+    crate::common::get_runtime_method_obj(ctx, desc, lookup.clone())
+}
+
 pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -208,18 +224,7 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let name = match dotnet_vm_ops::vm_try!(name_obj.try_as_heap_storage(|s| match s {
-        HeapStorage::Str(s) => Ok(s.as_string()),
-        other => Err(format!("{other:?}")),
-    })) {
-        Ok(name) => name,
-        Err(actual) => {
-            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "String".to_string(),
-                actual,
-            }));
-        }
-    };
+    let name = dotnet_vm_ops::vm_try!(string_from_heap_obj(name_obj));
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
@@ -249,17 +254,7 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static {
-                let desc = MethodDescription::new(
-                    td.clone(),
-                    lookup.clone(),
-                    td.resolution.clone(),
-                    MethodMemberIndex::Method(idx),
-                );
-                found_method = Some(crate::common::get_runtime_method_obj(
-                    ctx,
-                    desc,
-                    lookup.clone(),
-                ));
+                found_method = Some(get_runtime_method_metadata(ctx, td, &lookup, idx));
                 break;
             }
         }
@@ -313,17 +308,7 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             if match_public && match_static {
-                let desc = MethodDescription::new(
-                    td.clone(),
-                    lookup.clone(),
-                    td.resolution.clone(),
-                    MethodMemberIndex::Method(idx),
-                );
-                found_constructor = Some(crate::common::get_runtime_method_obj(
-                    ctx,
-                    desc,
-                    lookup.clone(),
-                ));
+                found_constructor = Some(get_runtime_method_metadata(ctx, td, &lookup, idx));
                 break;
             }
         }
@@ -443,18 +428,7 @@ pub fn handle_get_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let name = match dotnet_vm_ops::vm_try!(name_obj.try_as_heap_storage(|s| match s {
-        HeapStorage::Str(s) => Ok(s.as_string()),
-        other => Err(format!("{other:?}")),
-    })) {
-        Ok(name) => name,
-        Err(actual) => {
-            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "String".to_string(),
-                actual,
-            }));
-        }
-    };
+    let name = dotnet_vm_ops::vm_try!(string_from_heap_obj(name_obj));
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;

@@ -303,6 +303,22 @@ fn read_pinvoke_return<'gc, T>(
     Ok(unsafe { ret.assume_init() })
 }
 
+fn narrow_and_push<'gc, T>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    call_data: &mut PInvokeCallData<'_, 'gc>,
+    arg_count: usize,
+    convert: impl FnOnce(T) -> StackValue<'gc>,
+) -> StepResult {
+    let value = match read_pinvoke_return::<T>(ctx, call_data) {
+        Ok(v) => convert(v),
+        Err(e) => return e,
+    };
+
+    let _ = ctx.pop_multiple(arg_count);
+    ctx.push(value);
+    StepResult::Continue
+}
+
 fn handle_pinvoke_return<'gc>(
     ctx: &mut dyn PInvokeContext<'gc>,
     method: &MethodDescription,
@@ -323,46 +339,54 @@ fn handle_pinvoke_return<'gc>(
             };
 
             let v = match t.get() {
-                BaseType::Boolean => match read_pinvoke_return::<u8>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
-                BaseType::Char => match read_pinvoke_return::<u16>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
-                BaseType::Int8 => match read_pinvoke_return::<i8>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
-                BaseType::UInt8 => match read_pinvoke_return::<u8>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
-                BaseType::Int16 => match read_pinvoke_return::<i16>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
-                BaseType::UInt16 => match read_pinvoke_return::<u16>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
+                BaseType::Boolean => {
+                    return narrow_and_push::<u8>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
+                BaseType::Char => {
+                    return narrow_and_push::<u16>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
+                BaseType::Int8 => {
+                    return narrow_and_push::<i8>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
+                BaseType::UInt8 => {
+                    return narrow_and_push::<u8>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
+                BaseType::Int16 => {
+                    return narrow_and_push::<i16>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
+                BaseType::UInt16 => {
+                    return narrow_and_push::<u16>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
                 BaseType::Int32 => match read_pinvoke_return::<i32>(ctx, call_data) {
                     Ok(v) => StackValue::Int32(v),
                     Err(e) => return e,
                 },
-                BaseType::UInt32 => match read_pinvoke_return::<u32>(ctx, call_data) {
-                    Ok(v) => StackValue::Int32(v as i32),
-                    Err(e) => return e,
-                },
+                BaseType::UInt32 => {
+                    return narrow_and_push::<u32>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int32(v as i32)
+                    });
+                }
                 BaseType::Int64 => match read_pinvoke_return::<i64>(ctx, call_data) {
                     Ok(v) => StackValue::Int64(v),
                     Err(e) => return e,
                 },
-                BaseType::UInt64 => match read_pinvoke_return::<u64>(ctx, call_data) {
-                    Ok(v) => StackValue::Int64(v as i64),
-                    Err(e) => return e,
-                },
+                BaseType::UInt64 => {
+                    return narrow_and_push::<u64>(ctx, call_data, arg_count, |v| {
+                        StackValue::Int64(v as i64)
+                    });
+                }
                 BaseType::Float32 => match read_pinvoke_return::<f32>(ctx, call_data) {
                     Ok(v) => StackValue::NativeFloat(v as f64),
                     Err(e) => return e,

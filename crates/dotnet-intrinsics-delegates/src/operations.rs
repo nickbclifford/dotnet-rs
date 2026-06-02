@@ -31,6 +31,58 @@ dotnet_vm_ops::trait_alias! {
         + MemoryOps<'gc>;
 }
 
+fn read_invocation_list_delegate<'gc, T: MemoryOps<'gc>>(
+    ctx: &T,
+    invocation_list: ObjectRef<'gc>,
+    index: usize,
+) -> ObjectRef<'gc> {
+    invocation_list.as_vector(|v| unsafe {
+        ObjectRef::read_branded(
+            &v.get()[index * ObjectRef::SIZE..],
+            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        )
+    })
+}
+
+fn push_delegate_with_invocation_list<'gc, T: DelegateEqualsHost<'gc>>(
+    ctx: &mut T,
+    source: ObjectRef<'gc>,
+    invocation_list: &[ObjectRef<'gc>],
+) -> StepResult {
+    let new_delegate = ctx.clone_object(source);
+
+    let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+    let delegate_concrete = ConcreteType::from(delegate_type);
+    let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, invocation_list.len()));
+    let array_obj = ObjectRef::new(
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        HeapStorage::Vec(Box::new(array_v)),
+    );
+    ctx.register_new_object(&array_obj);
+
+    array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
+        for (i, &el) in invocation_list.iter().enumerate() {
+            el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
+        }
+    });
+
+    let multicast_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
+    new_delegate.as_object_mut(
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        |instance| {
+            array_obj.write(
+                &mut instance
+                    .instance_storage
+                    .get_field_mut_local(multicast_type, "targets"),
+            );
+        },
+    );
+
+    ctx.push_obj(new_delegate);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
 pub fn delegate_get_target<'gc, T: DelegateEqualsHost<'gc>>(
     ctx: &mut T,
@@ -152,18 +204,8 @@ pub fn delegate_equals<'gc, T: DelegateEqualsHost<'gc>>(
             } else {
                 let mut equal = true;
                 for i in 0..this_len {
-                    let t1 = this_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(
-                            &v.get()[i * ObjectRef::SIZE..],
-                            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                        )
-                    });
-                    let t2 = other_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(
-                            &v.get()[i * ObjectRef::SIZE..],
-                            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                        )
-                    });
+                    let t1 = read_invocation_list_delegate(ctx, this_ref, i);
+                    let t2 = read_invocation_list_delegate(ctx, other_ref, i);
                     // We should probably call Equals recursively or compare info
                     // For now, let's just compare info of elements
                     let (i1, idx1) = get_delegate_info(ctx, t1);
@@ -237,41 +279,7 @@ pub fn delegate_combine<'gc, T: DelegateEqualsHost<'gc>>(
     combined.extend(list_a);
     combined.extend(list_b);
 
-    // Create new delegate of same type as a
-    let new_delegate = ctx.clone_object(a);
-
-    // Create new array for targets
-    let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
-    let delegate_concrete = ConcreteType::from(delegate_type);
-    let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
-    let array_obj = ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Vec(Box::new(array_v)),
-    );
-    ctx.register_new_object(&array_obj);
-
-    array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
-        for (i, &el) in combined.iter().enumerate() {
-            el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-        }
-    });
-
-    // Set 'targets' field on new_delegate
-    let multicast_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-    new_delegate.as_object_mut(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        |instance| {
-            array_obj.write(
-                &mut instance
-                    .instance_storage
-                    .get_field_mut_local(multicast_type, "targets"),
-            );
-        },
-    );
-
-    ctx.push_obj(new_delegate);
-    StepResult::Continue
+    push_delegate_with_invocation_list(ctx, a, &combined)
 }
 
 #[dotnet_intrinsic(
@@ -330,37 +338,7 @@ pub fn delegate_remove<'gc, T: DelegateEqualsHost<'gc>>(
         } else if new_list.len() == 1 {
             ctx.push_obj(new_list[0]);
         } else {
-            // Create new MulticastDelegate
-            let new_delegate = ctx.clone_object(source);
-            let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
-            let delegate_concrete = ConcreteType::from(delegate_type);
-            let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
-            let array_obj = ObjectRef::new(
-                ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                HeapStorage::Vec(Box::new(array_v)),
-            );
-            ctx.register_new_object(&array_obj);
-
-            array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
-                for (i, &el) in new_list.iter().enumerate() {
-                    el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-                }
-            });
-
-            let multicast_type =
-                dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-            new_delegate.as_object_mut(
-                ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                |instance| {
-                    array_obj.write(
-                        &mut instance
-                            .instance_storage
-                            .get_field_mut_local(multicast_type, "targets"),
-                    );
-                },
-            );
-
-            ctx.push_obj(new_delegate);
+            return push_delegate_with_invocation_list(ctx, source, &new_list);
         }
     } else {
         ctx.push_obj(source);

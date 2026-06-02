@@ -436,6 +436,14 @@ impl<'gc> ManagedPtr<'gc> {
         self.magic.validate(MANAGED_PTR_MAGIC as u64, "ManagedPtr");
     }
 
+    #[inline]
+    fn access_window(&self, source_len: usize, requested_size: usize) -> (usize, usize) {
+        let offset = self.byte_offset().as_usize();
+        let available = source_len.saturating_sub(offset);
+        let to_access = std::cmp::min(requested_size, available);
+        (offset, to_access)
+    }
+
     /// Safely accesses the data pointed to by this ManagedPtr.
     ///
     /// # Safety
@@ -461,15 +469,11 @@ impl<'gc> ManagedPtr<'gc> {
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _) => ptr.with_data(|data| {
-                let offset = self.byte_offset().as_usize();
-                let available = data.len().saturating_sub(offset);
-                let to_access = std::cmp::min(size, available);
+                let (offset, to_access) = self.access_window(data.len(), size);
                 f(&data[offset..offset + to_access])
             }),
             PointerOrigin::Transient(obj) => obj.with_data(|data| {
-                let offset = self.byte_offset().as_usize();
-                let available = data.len().saturating_sub(offset);
-                let to_access = std::cmp::min(size, available);
+                let (offset, to_access) = self.access_window(data.len(), size);
                 f(&data[offset..offset + to_access])
             }),
             _ => {

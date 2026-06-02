@@ -235,6 +235,16 @@ pub fn intrinsic_gen2_gc_callback_register<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+fn alloc_or_reuse_slot<T>(handles: &mut Vec<Option<T>>, value: T) -> usize {
+    if let Some(i) = handles.iter().position(|h| h.is_none()) {
+        handles[i] = Some(value);
+        i
+    } else {
+        handles.push(Some(value));
+        handles.len() - 1
+    }
+}
+
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)"
 )]
@@ -252,13 +262,7 @@ pub fn intrinsic_gchandle_internal_alloc<
     let handle_type = GCHandleType::from(handle_type);
     let index = {
         let mut handles = ctx.heap().gchandles.borrow_mut();
-        if let Some(i) = handles.iter().position(|h| h.is_none()) {
-            handles[i] = Some((obj, handle_type));
-            i
-        } else {
-            handles.push(Some((obj, handle_type)));
-            handles.len() - 1
-        }
+        alloc_or_reuse_slot(&mut handles, (obj, handle_type))
     };
 
     if handle_type == GCHandleType::Pinned {
@@ -434,13 +438,7 @@ pub fn intrinsic_dependent_handle_internal_alloc<'gc, T: TypedStackOps<'gc> + Me
 
     let index = {
         let mut handles = ctx.heap().dependent_handles.borrow_mut();
-        if let Some(i) = handles.iter().position(|h| h.is_none()) {
-            handles[i] = Some((target, dependent));
-            i
-        } else {
-            handles.push(Some((target, dependent)));
-            handles.len() - 1
-        }
+        alloc_or_reuse_slot(&mut handles, (target, dependent))
     };
 
     ctx.push_isize((index + 1) as isize);

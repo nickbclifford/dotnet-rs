@@ -218,3 +218,60 @@ macro_rules! vm_cold_panic {
         }
     };
 }
+
+#[cfg(test)]
+macro_rules! make_test_method {
+    (
+        max_stack: $max_stack:expr,
+        instructions: $instructions:expr
+        $(, locals: $locals:expr)?
+        $(, data_sections: $data_sections:expr)?
+        $(,)?
+    ) => {
+        dotnetdll::prelude::body::Method {
+            header: dotnetdll::prelude::body::Header {
+                maximum_stack_size: $max_stack,
+                local_variables: make_test_method!(@locals $($locals)?),
+                initialize_locals: true,
+            },
+            instructions: $instructions,
+            data_sections: make_test_method!(@data_sections $($data_sections)?),
+        }
+    };
+    (@locals $locals:expr) => {
+        $locals
+    };
+    (@locals) => {
+        vec![]
+    };
+    (@data_sections $data_sections:expr) => {
+        $data_sections
+    };
+    (@data_sections) => {
+        vec![]
+    };
+}
+
+#[cfg(test)]
+macro_rules! make_test_assembly {
+    ($module_name:expr, $assembly_name:expr, $type_name:expr) => {{
+        let mut res = dotnetdll::prelude::Resolution::new(dotnetdll::prelude::Module::new(
+            $module_name,
+        ));
+        res.assembly = Some(dotnetdll::prelude::Assembly::new($assembly_name));
+        let system_runtime = res.push_assembly_reference(
+            dotnetdll::resolved::assembly::ExternalAssemblyReference::new("System.Runtime"),
+        );
+        let object_type_ref = res.push_type_reference(
+            dotnetdll::resolved::types::ExternalTypeReference::new(
+                Some("System".into()),
+                "Object",
+                dotnetdll::resolved::types::ResolutionScope::Assembly(system_runtime),
+            ),
+        );
+        let mut type_def = dotnetdll::resolved::types::TypeDefinition::new(None, $type_name);
+        type_def.extends = Some(object_type_ref.into());
+        let type_idx = res.push_type_definition(type_def);
+        (res, system_runtime, type_idx)
+    }};
+}

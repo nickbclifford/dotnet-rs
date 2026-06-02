@@ -23,6 +23,39 @@ fn concrete_to_method_type(concrete: &ConcreteType) -> MethodType {
     MethodType::Base(Box::new(mapped))
 }
 
+fn instantiate_comparer<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>(
+    ctx: &mut T,
+    target_type: ConcreteType,
+    comparer_type_name: &str,
+) -> Result<ObjectRef<'gc>, VmError> {
+    let comparer_td = ctx.loader().corlib_type(comparer_type_name)?;
+
+    let comparer_method_type = MethodType::Base(Box::new(BaseType::Type {
+        source: TypeSource::Generic {
+            base: UserType::Definition(comparer_td.index),
+            parameters: vec![concrete_to_method_type(&target_type)],
+        },
+        value_kind: None,
+    }));
+
+    let comparer_lookup = GenericLookup::new(vec![target_type]);
+    // Resolve the generic comparer in the comparer type's owning resolution,
+    // not the caller frame's source resolution.
+    let comparer_concrete = comparer_lookup.make_concrete(
+        comparer_td.resolution.clone(),
+        comparer_method_type,
+        ctx.loader().as_ref(),
+    )?;
+    let comparer_closed_td = ctx.loader().find_concrete_type(comparer_concrete)?;
+
+    Ok(ObjectRef::new(
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        HeapStorage::Obj(Box::new(
+            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)?,
+        )),
+    ))
+}
+
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, T: TypedStackOps<'gc>>(
@@ -46,34 +79,11 @@ pub fn intrinsic_equality_comparer_get_default<
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type = generics.type_generics[0].clone();
-    let comparer_type_name = "DotnetRs.Comparers.Equality/GenericEqualityComparer`1";
-    let comparer_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type(comparer_type_name));
-
-    let comparer_method_type = MethodType::Base(Box::new(BaseType::Type {
-        source: TypeSource::Generic {
-            base: UserType::Definition(comparer_td.index),
-            parameters: vec![concrete_to_method_type(&target_type)],
-        },
-        value_kind: None,
-    }));
-    // Resolve the generic comparer in the comparer type's owning resolution,
-    // not the caller frame's source resolution.
-    let comparer_concrete = dotnet_vm_ops::vm_try!(generics.make_concrete(
-        comparer_td.resolution.clone(),
-        comparer_method_type,
-        ctx.loader().as_ref(),
+    let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
+        ctx,
+        target_type,
+        "DotnetRs.Comparers.Equality/GenericEqualityComparer`1",
     ));
-    let comparer_closed_td =
-        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(comparer_concrete));
-    let comparer_lookup = GenericLookup::new(vec![target_type]);
-
-    let instance = ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(Box::new(dotnet_vm_ops::vm_try!(
-            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
-        ))),
-    );
-
     ctx.push_obj(instance);
     StepResult::Continue
 }
@@ -87,33 +97,11 @@ pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + Typed
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type = generics.type_generics[0].clone();
-    let comparer_type_name = "DotnetRs.Comparers.Ordering/FallbackComparer`1";
-    let comparer_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type(comparer_type_name));
-
-    let comparer_method_type = MethodType::Base(Box::new(BaseType::Type {
-        source: TypeSource::Generic {
-            base: UserType::Definition(comparer_td.index),
-            parameters: vec![concrete_to_method_type(&target_type)],
-        },
-        value_kind: None,
-    }));
-    // Resolve in comparer type resolution context (not caller frame resolution).
-    let comparer_concrete = dotnet_vm_ops::vm_try!(generics.make_concrete(
-        comparer_td.resolution.clone(),
-        comparer_method_type,
-        ctx.loader().as_ref(),
+    let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
+        ctx,
+        target_type,
+        "DotnetRs.Comparers.Ordering/FallbackComparer`1",
     ));
-    let comparer_closed_td =
-        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(comparer_concrete));
-    let comparer_lookup = GenericLookup::new(vec![target_type]);
-
-    let instance = ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(Box::new(dotnet_vm_ops::vm_try!(
-            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)
-        ))),
-    );
-
     ctx.push_obj(instance);
     StepResult::Continue
 }

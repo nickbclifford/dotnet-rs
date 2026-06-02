@@ -206,7 +206,7 @@ impl ResolvedDebug for ConcreteType {
     }
 }
 
-pub(crate) fn member_to_method_type(
+pub fn member_to_method_type(
     src: &TypeSource<dotnetdll::prelude::MemberType>,
 ) -> MethodType {
     match src {
@@ -252,6 +252,26 @@ impl GenericLookup {
             type_generics: type_generics.into(),
             method_generics: Arc::new([]),
         }
+    }
+
+    fn lookup_method_generic_with_fallback_indices(&self, i: usize) -> Option<ConcreteType> {
+        let type_arity = self.type_generics.len();
+        let method_arity = self.method_generics.len();
+        let method_candidate_indices = [
+            Some(i),
+            i.checked_sub(type_arity),
+            i.checked_sub(type_arity + 1),
+            i.checked_sub(method_arity),
+            i.checked_sub(method_arity + 1),
+            i.checked_sub(1),
+        ];
+        for method_index in method_candidate_indices.into_iter().flatten() {
+            if let Some(ty) = self.method_generics.get(method_index).cloned() {
+                return Some(ty);
+            }
+        }
+
+        None
     }
 
     pub fn make_concrete(
@@ -382,20 +402,8 @@ impl GenericLookup {
                     // Mixed canonical forms observed in BCL paths can shift method indices by
                     // type arity and/or one-based offsets, so probe the small set of known
                     // encodings before failing.
-                    let type_arity = self.type_generics.len();
-                    let method_arity = self.method_generics.len();
-                    let method_candidate_indices = [
-                        Some(i),
-                        i.checked_sub(type_arity),
-                        i.checked_sub(type_arity + 1),
-                        i.checked_sub(method_arity),
-                        i.checked_sub(method_arity + 1),
-                        i.checked_sub(1),
-                    ];
-                    for method_index in method_candidate_indices.into_iter().flatten() {
-                        if let Some(ty) = self.method_generics.get(method_index).cloned() {
-                            return Ok(ty);
-                        }
+                    if let Some(ty) = self.lookup_method_generic_with_fallback_indices(i) {
+                        return Ok(ty);
                     }
 
                     Err(TypeResolutionError::GenericIndexOutOfBounds {
@@ -411,25 +419,14 @@ impl GenericLookup {
                     // Some BCL canonicalization paths encode method generic slots using
                     // mixed type+method numbering schemes. Probe common offset variants
                     // before failing hard.
-                    let type_arity = self.type_generics.len();
-                    let method_arity = self.method_generics.len();
-                    let method_candidate_indices = [
-                        Some(i),
-                        i.checked_sub(type_arity),
-                        i.checked_sub(type_arity + 1),
-                        i.checked_sub(method_arity),
-                        i.checked_sub(method_arity + 1),
-                        i.checked_sub(1),
-                    ];
-                    for method_index in method_candidate_indices.into_iter().flatten() {
-                        if let Some(ty) = self.method_generics.get(method_index).cloned() {
-                            return Ok(ty);
-                        }
+                    if let Some(ty) = self.lookup_method_generic_with_fallback_indices(i) {
+                        return Ok(ty);
                     }
 
                     // Some call paths carry type generic arguments while metadata reports
                     // MethodGeneric slots. Allow a fallback into type_generics for those
                     // mixed canonical forms.
+                    let method_arity = self.method_generics.len();
                     let type_candidate_indices = [
                         Some(i),
                         i.checked_sub(method_arity),
@@ -630,6 +627,23 @@ mod constraint_cycle_tests {
         });
         def.generic_parameters.push(param);
         def
+    }
+
+    fn make_cyclic_constraint_params(type_index: TypeIndex) -> Vec<Generic<'static, MemberType>> {
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        param.type_constraints.push(Constraint {
+            attributes: vec![],
+            custom_modifiers: vec![],
+            constraint_type: MemberType::Base(Box::new(BaseType::Type {
+                value_kind: None,
+                source: TypeSource::Generic {
+                    base: UserType::Definition(type_index),
+                    parameters: vec![MemberType::TypeGeneric(0)],
+                },
+            })),
+        });
+
+        vec![param]
     }
 
     /// A mock `TypeResolver` that counts every `locate_type` call and terminates
@@ -834,19 +848,7 @@ mod constraint_cycle_tests {
         let lookup = GenericLookup::new(vec![arg]);
 
         // Outer param T with constraint ICyclicConstraint<T> — creates the cycle.
-        let mut param: Generic<'static, MemberType> = Generic::new("T");
-        param.type_constraints.push(Constraint {
-            attributes: vec![],
-            custom_modifiers: vec![],
-            constraint_type: MemberType::Base(Box::new(BaseType::Type {
-                value_kind: None,
-                source: TypeSource::Generic {
-                    base: UserType::Definition(type_index),
-                    parameters: vec![MemberType::TypeGeneric(0)],
-                },
-            })),
-        });
-        let params: Vec<Generic<'static, MemberType>> = vec![param];
+        let params = make_cyclic_constraint_params(type_index);
 
         let result = lookup.validate_constraints(res, &resolver, &params, false);
         let final_count = *call_count.lock().unwrap();
@@ -889,19 +891,7 @@ mod constraint_cycle_tests {
         let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
         let lookup = GenericLookup::new(vec![arg]);
 
-        let mut param: Generic<'static, MemberType> = Generic::new("T");
-        param.type_constraints.push(Constraint {
-            attributes: vec![],
-            custom_modifiers: vec![],
-            constraint_type: MemberType::Base(Box::new(BaseType::Type {
-                value_kind: None,
-                source: TypeSource::Generic {
-                    base: UserType::Definition(type_index),
-                    parameters: vec![MemberType::TypeGeneric(0)],
-                },
-            })),
-        });
-        let params: Vec<Generic<'static, MemberType>> = vec![param];
+        let params = make_cyclic_constraint_params(type_index);
 
         let result = lookup.validate_constraints(res, &resolver, &params, false);
         let final_count = *call_count.lock().unwrap();

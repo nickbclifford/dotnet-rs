@@ -22,6 +22,7 @@ use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
+    string::parse_env_bool,
 };
 use gc_arena::{Collect, collect::Trace};
 use lru::LruCache;
@@ -69,17 +70,6 @@ fn parse_env_usize(key: &str) -> Option<usize> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v > 0)
-}
-
-fn parse_env_bool(key: &str, default: bool) -> bool {
-    match env::var(key) {
-        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => true,
-            "0" | "false" | "no" | "off" => false,
-            _ => default,
-        },
-        Err(_) => default,
-    }
 }
 
 #[inline]

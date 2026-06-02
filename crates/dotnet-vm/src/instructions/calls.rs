@@ -32,11 +32,11 @@ pub fn call<'gc, T: VmCallOps<'gc>>(
     }
 }
 
-#[dotnet_instruction(CallVirtual { param0 })]
-pub fn callvirt<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
-    // Use unified dispatch pipeline for virtual calls
-    // Only inspect `this` from the current stack state; avoid pop/push argument churn.
-
+fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    param0: &MethodSource,
+    tail_call: bool,
+) -> StepResult {
     // Determine number of arguments to extract this_type
     let (base_method, _) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
@@ -62,37 +62,25 @@ pub fn callvirt<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> Step
         }
     };
 
-    ctx.unified_dispatch(param0, Some(this_type), None)
+    if tail_call {
+        ctx.unified_dispatch_tail(param0, Some(this_type), None)
+    } else {
+        ctx.unified_dispatch(param0, Some(this_type), None)
+    }
+}
+
+#[dotnet_instruction(CallVirtual { param0 })]
+pub fn callvirt<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
+    // Use unified dispatch pipeline for virtual calls
+    // Only inspect `this` from the current stack state; avoid pop/push argument churn.
+    dispatch_callvirt(ctx, param0, false)
 }
 
 #[dotnet_instruction(CallVirtualTail(param0))]
 pub fn callvirt_tail<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     // Tail-prefixed callvirt: extract runtime this type (and perform null check), then request
     // tail dispatch.
-    let (base_method, _) = dotnet_vm_ops::vm_try!(
-        ctx.resolver()
-            .find_generic_method(param0, &ctx.current_context())
-    );
-    let num_args = 1 + base_method.method().signature.parameters.len();
-    let this_value = ctx.peek_stack_at(num_args - 1);
-
-    let this_type = match this_value {
-        StackValue::ObjectRef(ObjectRef(None)) => {
-            // Preserve previous callvirt semantics: arguments are consumed before an early throw.
-            let _ = ctx.pop_multiple(num_args);
-            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-        }
-        StackValue::ObjectRef(ObjectRef(Some(o))) => {
-            dotnet_vm_ops::vm_try!(ctx.current_context().get_heap_description(o))
-        }
-        StackValue::ManagedPtr(m) => m.inner_type(),
-        rest => {
-            let _ = ctx.pop_multiple(num_args);
-            return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
-        }
-    };
-
-    ctx.unified_dispatch_tail(param0, Some(this_type), None)
+    dispatch_callvirt(ctx, param0, true)
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]

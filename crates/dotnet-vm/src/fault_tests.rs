@@ -14,7 +14,6 @@ mod tests {
         binary::signature::kinds::CallingConvention,
         prelude::*,
         resolved::{
-            assembly::ExternalAssemblyReference,
             members::{ExternalMethodReference, Method, MethodReferenceParent, UserMethod},
             signature::ReturnType,
             types::{
@@ -66,18 +65,8 @@ mod tests {
     fn test_fault_handler_skipped_on_normal_exit() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("FaultTest.dll"));
-        res.assembly = Some(Assembly::new("FaultTestAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
-        let mut type_def = TypeDefinition::new(None, "FaultType");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
+        let (mut res, _, type_idx) =
+            make_test_assembly!("FaultTest.dll", "FaultTestAssembly", "FaultType");
         let sig = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -91,17 +80,8 @@ mod tests {
             ),
             varargs: None,
         };
-        let body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 1,
-                local_variables: vec![LocalVariable::Variable {
-                    custom_modifiers: vec![],
-                    pinned: false,
-                    by_ref: false,
-                    var_type: MethodType::Base(Box::new(BaseType::Int32)),
-                }],
-                initialize_locals: true,
-            },
+        let body = make_test_method!(
+            max_stack: 1,
             instructions: vec![
                 Instruction::LoadConstantInt32(42),
                 Instruction::StoreLocal(0),
@@ -112,16 +92,20 @@ mod tests {
                 Instruction::LoadLocal(0),
                 Instruction::Return,
             ],
-            data_sections: vec![body::DataSection::ExceptionHandlers(vec![
-                body::Exception {
-                    kind: body::ExceptionKind::Fault,
-                    try_offset: 0,
-                    try_length: 3,
-                    handler_offset: 3,
-                    handler_length: 3,
-                },
-            ])],
-        };
+            locals: vec![LocalVariable::Variable {
+                custom_modifiers: vec![],
+                pinned: false,
+                by_ref: false,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            }],
+            data_sections: vec![body::DataSection::ExceptionHandlers(vec![body::Exception {
+                kind: body::ExceptionKind::Fault,
+                try_offset: 0,
+                try_length: 3,
+                handler_offset: 3,
+                handler_length: 3,
+            }])],
+        );
         let method_idx = res.push_method(
             type_idx,
             Method::new(Accessibility::Public, sig.clone(), "TestMethod", Some(body)),
@@ -203,23 +187,13 @@ mod tests {
     fn test_fault_handler_executed_on_exception() {
         let loader = get_mock_loader();
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let mut res = Resolution::new(Module::new("FaultTestExc.dll"));
-        res.assembly = Some(Assembly::new("FaultTestExcAssembly"));
-        let system_runtime =
-            res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-        let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-            Some("System".into()),
-            "Object",
-            ResolutionScope::Assembly(system_runtime),
-        ));
+        let (mut res, system_runtime, type_idx) =
+            make_test_assembly!("FaultTestExc.dll", "FaultTestExcAssembly", "FaultTypeExc");
         let exception_type_ref = res.push_type_reference(ExternalTypeReference::new(
             Some("System".into()),
             "Exception",
             ResolutionScope::Assembly(system_runtime),
         ));
-        let mut type_def = TypeDefinition::new(None, "FaultTypeExc");
-        type_def.extends = Some(object_type_ref.into());
-        let type_idx = res.push_type_definition(type_def);
         let sig = MethodSignature {
             instance: false,
             explicit_this: false,
@@ -249,17 +223,8 @@ mod tests {
             signature: ctor_sig,
             attributes: vec![],
         });
-        let body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 2,
-                local_variables: vec![LocalVariable::Variable {
-                    custom_modifiers: vec![],
-                    pinned: false,
-                    by_ref: false,
-                    var_type: MethodType::Base(Box::new(BaseType::Int32)),
-                }],
-                initialize_locals: true,
-            },
+        let body = make_test_method!(
+            max_stack: 2,
             instructions: vec![
                 Instruction::NewObject(UserMethod::Reference(exc_ctor)),
                 Instruction::Throw,
@@ -270,6 +235,12 @@ mod tests {
                 Instruction::LoadLocal(0),
                 Instruction::Return,
             ],
+            locals: vec![LocalVariable::Variable {
+                custom_modifiers: vec![],
+                pinned: false,
+                by_ref: false,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            }],
             data_sections: vec![body::DataSection::ExceptionHandlers(vec![
                 body::Exception {
                     kind: body::ExceptionKind::Fault,
@@ -288,7 +259,7 @@ mod tests {
                     handler_length: 3,
                 },
             ])],
-        };
+        );
         let method_idx = res.push_method(
             type_idx,
             Method::new(

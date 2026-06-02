@@ -2,7 +2,10 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{DelegateInvokeHost, NULL_REF_MSG, helpers::get_multicast_targets_ref};
+use crate::{
+    DelegateInvokeHost, NULL_REF_MSG,
+    helpers::{get_delegate_info, get_multicast_targets_ref},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     error::{ExecutionError, VmError},
@@ -88,28 +91,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
         return StepResult::FramePushed;
     }
 
-    let (target, method_index) = delegate_ref.as_object(|instance| {
-        let delegate_type = ctx
-            .loader()
-            .corlib_type("System.Delegate")
-            .expect("System.Delegate must exist");
-
-        // Read Target field
-        let target = instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(delegate_type.clone(), "_target")
-            .unwrap()
-            .read();
-
-        // Read _method field
-        let method_index = instance
-            .instance_storage
-            .field::<usize>(delegate_type, "_method")
-            .unwrap()
-            .read();
-
-        (target, method_index)
-    });
+    let (target, method_index) = get_delegate_info(ctx, *delegate_ref);
 
     // Look up the actual method from the registry
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);

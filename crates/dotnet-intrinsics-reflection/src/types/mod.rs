@@ -1,6 +1,7 @@
 use crate::{NULL_REF_MSG, ReflectionIntrinsicHost};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -14,7 +15,7 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::prelude::{BaseType, MemberType, MethodMemberIndex, MethodType, TypeSource};
+use dotnetdll::prelude::MethodMemberIndex;
 
 pub mod type_construction;
 pub mod type_members;
@@ -181,22 +182,6 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
-pub(crate) fn member_to_method_type(src: &TypeSource<MemberType>) -> MethodType {
-    match src {
-        TypeSource::User(h) => MethodType::Base(Box::new(BaseType::Type {
-            source: TypeSource::User(*h),
-            value_kind: None,
-        })),
-        TypeSource::Generic { base, parameters } => MethodType::Base(Box::new(BaseType::Type {
-            source: TypeSource::Generic {
-                base: *base,
-                parameters: parameters.iter().cloned().map(MethodType::from).collect(),
-            },
-            value_kind: None,
-        })),
-    }
-}
-
 pub(crate) fn build_generic_lookup_from_runtime_type<T: LoaderOps>(
     ctx: &mut T,
     target_type: &RuntimeType,
@@ -210,6 +195,22 @@ pub(crate) fn build_generic_lookup_from_runtime_type<T: LoaderOps>(
             .into();
     }
     lookup
+}
+
+pub(crate) fn string_from_heap_obj<'gc>(name_obj: ObjectRef<'gc>) -> Result<String, VmError> {
+    let name = name_obj
+        .try_as_heap_storage(|s| match s {
+            HeapStorage::Str(s) => Ok(s.as_string()),
+            other => Err(format!("{other:?}")),
+        })
+        .map_err(VmError::from)?;
+
+    name.map_err(|actual| {
+        VmError::Execution(ExecutionError::TypeMismatch {
+            expected: "String".to_string(),
+            actual,
+        })
+    })
 }
 
 pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'gc>>(

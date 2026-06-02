@@ -294,41 +294,13 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
-        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
-
-        tracing::debug!(
-            "unified_dispatch: source={:?}, this_type={:?}",
+        self.unified_dispatch_common(
             source,
-            this_type
-        );
-
-        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
-        };
-
-        if this_type.is_some() {
-            self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);
-        }
-
-        let had_receiver = this_type.is_some();
-        let final_method = if let Some(this_type) = this_type {
-            match self
-                .resolver()
-                .resolve_virtual_method(resolved, this_type, &lookup, &context)
-            {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            }
-        } else {
-            resolved
-        };
-
-        if had_receiver {
-            self.rebind_lookup_to_resolved_method(&mut lookup, &final_method);
-        }
-
-        self.dispatch_method(final_method, lookup)
+            this_type,
+            ctx,
+            "unified_dispatch",
+            Self::dispatch_method,
+        )
     }
 
     #[inline]
@@ -338,41 +310,13 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
-        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
-
-        tracing::debug!(
-            "unified_dispatch_tail: source={:?}, this_type={:?}",
+        self.unified_dispatch_common(
             source,
-            this_type
-        );
-
-        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
-        };
-
-        if this_type.is_some() {
-            self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);
-        }
-
-        let had_receiver = this_type.is_some();
-        let final_method = if let Some(this_type) = this_type {
-            match self
-                .resolver()
-                .resolve_virtual_method(resolved, this_type, &lookup, &context)
-            {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            }
-        } else {
-            resolved
-        };
-
-        if had_receiver {
-            self.rebind_lookup_to_resolved_method(&mut lookup, &final_method);
-        }
-
-        self.dispatch_method_tail(final_method, lookup)
+            this_type,
+            ctx,
+            "unified_dispatch_tail",
+            Self::dispatch_method_tail,
+        )
     }
 
     fn rebind_lookup_for_ldftn(
@@ -420,6 +364,53 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    #[inline]
+    fn unified_dispatch_common(
+        &mut self,
+        source: &MethodSource,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+        dispatch_label: &str,
+        dispatch_fn: fn(&mut Self, MethodDescription, GenericLookup) -> StepResult,
+    ) -> StepResult {
+        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
+
+        tracing::debug!(
+            "{}: source={:?}, this_type={:?}",
+            dispatch_label,
+            source,
+            this_type
+        );
+
+        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+
+        if this_type.is_some() {
+            self.merge_receiver_lookup_for_virtual_dispatch(&resolved, &mut lookup);
+        }
+
+        let had_receiver = this_type.is_some();
+        let final_method = if let Some(this_type) = this_type {
+            match self
+                .resolver()
+                .resolve_virtual_method(resolved, this_type, &lookup, &context)
+            {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            }
+        } else {
+            resolved
+        };
+
+        if had_receiver {
+            self.rebind_lookup_to_resolved_method(&mut lookup, &final_method);
+        }
+
+        dispatch_fn(self, final_method, lookup)
+    }
+
     fn rebind_lookup_to_resolved_method(
         &self,
         lookup: &mut GenericLookup,
@@ -588,17 +579,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let mut args = std::mem::take(self.call_args_buffer);
 
         // Pop/discard the current frame and clear its stack slots.
-        let frame = self
-            .frame_stack
-            .pop()
-            .unwrap_or_else(|| panic_tail_call_requires_current_frame());
-        if self.tracer_enabled() {
-            let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.shared
-                .tracer
-                .trace_method_exit(self.frame_stack.len(), &method_name);
+        if !self.pop_and_recycle_frame_with_trace() {
+            panic_tail_call_requires_current_frame();
         }
-        self.frame_stack.recycle_frame(frame);
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack
@@ -697,17 +680,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // Discard the current frame and its locals/eval stack
         let old_top = self.evaluation_stack.top_of_stack();
 
-        let popped_frame = self
-            .frame_stack
-            .pop()
-            .unwrap_or_else(|| panic_jmp_requires_current_frame());
-        if self.tracer_enabled() {
-            let method_name = format!("{:?}", popped_frame.state.info_handle.source);
-            self.shared
-                .tracer
-                .trace_method_exit(self.frame_stack.len(), &method_name);
+        if !self.pop_and_recycle_frame_with_trace() {
+            panic_jmp_requires_current_frame();
         }
-        self.frame_stack.recycle_frame(popped_frame);
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack

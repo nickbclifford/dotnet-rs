@@ -1,81 +1,40 @@
 use crate::{
     object::{HeapStorage, ObjectRef},
     pointer::*,
+    test_helpers::with_test_gc_context,
 };
 use gc_arena::{Arena, Gc, Rootable};
 use sptr::Strict;
 use std::sync::{Mutex, OnceLock};
 
-#[cfg(feature = "memory-validation")]
-use dotnet_utils::sync::MANAGED_THREAD_ID;
-
-#[cfg(feature = "memory-validation")]
-struct ManagedThreadIdGuard {
-    previous: Option<crate::ArenaId>,
-}
-
-#[cfg(feature = "memory-validation")]
-impl ManagedThreadIdGuard {
-    fn set(id: crate::ArenaId) -> Self {
-        let previous = MANAGED_THREAD_ID.with(|thread_id| {
-            let prev = thread_id.get();
-            thread_id.set(Some(id));
-            prev
-        });
-        Self { previous }
-    }
-}
-
-#[cfg(feature = "memory-validation")]
-impl Drop for ManagedThreadIdGuard {
-    fn drop(&mut self) {
-        MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
-    }
-}
+use dotnet_utils::sync::Arc;
 
 fn static_reg_test_lock() -> &'static Mutex<()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
     L.get_or_init(|| Mutex::new(()))
 }
 
+fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc> {
+    let base_addr = obj.with_data(|d| d.as_ptr().expose_addr());
+    ManagedPtr::new(
+        nonnull_from_exposed_addr(base_addr),
+        TypeDescription::NULL,
+        Some(obj),
+        false,
+        Some(ByteOffset(0)),
+    )
+}
+
 #[test]
 #[cfg(feature = "memory-validation")]
 #[should_panic(expected = "ManagedPtr::offset: bounds violation")]
 fn test_managed_ptr_offset_oob() {
-    type TestRoot = Rootable![()];
-    let arena = Arena::<TestRoot>::new(|_mc| ());
-    #[cfg(feature = "multithreading")]
-    let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(feature = "memory-validation")]
-    let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
-    #[cfg(feature = "multithreading")]
-    let arena_handle = unsafe {
-        std::mem::transmute::<
-            &dotnet_utils::gc::ArenaHandleInner,
-            &'static dotnet_utils::gc::ArenaHandleInner,
-        >(_arena_handle_owner.as_inner())
-    };
-
-    arena.mutate(|gc, _root| {
-        let gc_handle = dotnet_utils::gc::GCHandle::new(
-            gc,
-            #[cfg(feature = "multithreading")]
-            arena_handle,
-            #[cfg(feature = "memory-validation")]
-            crate::ArenaId(0),
-        );
-
+    with_test_gc_context(|gc_handle| {
         // Create a small object (4 bytes for Int32)
         let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
         let obj = ObjectRef::new(gc_handle, storage);
 
-        let ptr = ManagedPtr::new(
-            obj.with_data(|d| NonNull::new(d.as_ptr().cast_mut())),
-            TypeDescription::NULL,
-            Some(obj),
-            false,
-            Some(ByteOffset(0)),
-        );
+        let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by much more than size of ValueType should panic
         unsafe {
@@ -86,39 +45,11 @@ fn test_managed_ptr_offset_oob() {
 
 #[test]
 fn test_managed_ptr_offset_valid() {
-    type TestRoot = Rootable![()];
-    let arena = Arena::<TestRoot>::new(|_mc| ());
-    #[cfg(feature = "multithreading")]
-    let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(feature = "memory-validation")]
-    let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
-    #[cfg(feature = "multithreading")]
-    let arena_handle = unsafe {
-        std::mem::transmute::<
-            &dotnet_utils::gc::ArenaHandleInner,
-            &'static dotnet_utils::gc::ArenaHandleInner,
-        >(_arena_handle_owner.as_inner())
-    };
-
-    arena.mutate(|gc, _root| {
-        let gc_handle = dotnet_utils::gc::GCHandle::new(
-            gc,
-            #[cfg(feature = "multithreading")]
-            arena_handle,
-            #[cfg(feature = "memory-validation")]
-            crate::ArenaId(0),
-        );
-
+    with_test_gc_context(|gc_handle| {
         let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
         let obj = ObjectRef::new(gc_handle, storage);
 
-        let ptr = ManagedPtr::new(
-            obj.with_data(|d| NonNull::new(d.as_ptr().cast_mut())),
-            TypeDescription::NULL,
-            Some(obj),
-            false,
-            Some(ByteOffset(0)),
-        );
+        let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by 4 bytes (end of object) should be valid
         unsafe {
@@ -130,29 +61,8 @@ fn test_managed_ptr_offset_valid() {
 #[test]
 fn test_managed_ptr_serialization_roundtrip() {
     let _guard = static_reg_test_lock().lock().unwrap();
-    type TestRoot = Rootable![()];
-    let arena = Arena::<TestRoot>::new(|_mc| ());
-    #[cfg(feature = "multithreading")]
-    let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(feature = "memory-validation")]
-    let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
-    #[cfg(feature = "multithreading")]
-    let arena_handle = unsafe {
-        std::mem::transmute::<
-            &dotnet_utils::gc::ArenaHandleInner,
-            &'static dotnet_utils::gc::ArenaHandleInner,
-        >(_arena_handle_owner.as_inner())
-    };
 
-    arena.mutate(|gc, _root| {
-        let gc_handle = dotnet_utils::gc::GCHandle::new(
-            gc,
-            #[cfg(feature = "multithreading")]
-            arena_handle,
-            #[cfg(feature = "memory-validation")]
-            crate::ArenaId(0),
-        );
-
+    with_test_gc_context(|gc_handle| {
         let mut buf = ManagedPtr::serialization_buffer();
 
         // 1. Unmanaged
@@ -288,28 +198,7 @@ fn test_gc_alignment() {
 
 #[test]
 fn test_managed_ptr_serialization_bugs_reproduction() {
-    type TestRoot = Rootable![()];
-    let arena = Arena::<TestRoot>::new(|_mc| ());
-    #[cfg(feature = "multithreading")]
-    let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(feature = "memory-validation")]
-    let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
-    #[cfg(feature = "multithreading")]
-    let arena_handle = unsafe {
-        std::mem::transmute::<
-            &dotnet_utils::gc::ArenaHandleInner,
-            &'static dotnet_utils::gc::ArenaHandleInner,
-        >(_arena_handle_owner.as_inner())
-    };
-
-    arena.mutate(|gc, _root| {
-        let _gc_handle = &dotnet_utils::gc::GCHandle::new(
-            gc,
-            #[cfg(feature = "multithreading")]
-            arena_handle,
-            #[cfg(feature = "memory-validation")]
-            crate::ArenaId(0),
-        );
+    with_test_gc_context(|_gc_handle| {
         let mut buf = [0u8; ManagedPtr::SIZE];
 
         // 1. Transient origin (Fixed behavior in Stage 1)

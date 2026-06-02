@@ -25,9 +25,66 @@ use dotnet_value::object::{Object, ObjectRef};
 use dotnetdll::prelude::{FieldSource, MethodType as DllMethodType, UserType};
 
 #[cfg(feature = "multithreading")]
-use dashmap::mapref::entry::Entry;
+use dashmap::{DashMap, mapref::entry::Entry};
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::Ordering;
+
+#[cfg(feature = "multithreading")]
+fn shared_reflection_index_get_or_insert<K, V, H, M>(
+    map: &DashMap<K, usize>,
+    rev_map: &DashMap<usize, V>,
+    next_index: &std::sync::atomic::AtomicUsize,
+    key: K,
+    value: V,
+    on_hit: H,
+    on_miss: M,
+) -> usize
+where
+    K: Eq + std::hash::Hash,
+    H: FnOnce(),
+    M: FnOnce(),
+{
+    match map.entry(key) {
+        Entry::Occupied(entry) => {
+            on_hit();
+            *entry.get()
+        }
+        Entry::Vacant(entry) => {
+            on_miss();
+            let idx = next_index.fetch_add(1, Ordering::Relaxed);
+            rev_map.insert(idx, value);
+            entry.insert(idx);
+            idx
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+fn shared_reflection_by_index<V: Clone>(
+    rev_map: &DashMap<usize, V>,
+    index: usize,
+    invalid_index_message: &'static str,
+) -> V {
+    rev_map
+        .get(&index)
+        .map(|entry| entry.clone())
+        .expect(invalid_index_message)
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn local_reflection_index_get_or_insert<V: PartialEq>(list: &mut Vec<V>, value: V) -> usize {
+    if let Some(existing) = list.iter().position(|entry| entry == &value) {
+        existing
+    } else {
+        list.push(value);
+        list.len() - 1
+    }
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn local_reflection_by_index<V: Clone>(list: &[V], index: usize) -> V {
+    list[index].clone()
+}
 
 impl<'a> dotnet_intrinsics_reflection::RuntimeTypeContext for ResolutionContext<'a> {
     fn reflection_locate_type(
@@ -265,37 +322,22 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         {
             let shared = self.shared();
             let key = (method.clone(), lookup.clone());
-            match shared.shared_runtime_methods.entry(key) {
-                Entry::Occupied(entry) => {
-                    shared.metrics.record_shared_runtime_methods_cache_hit();
-                    *entry.get()
-                }
-                Entry::Vacant(entry) => {
-                    shared.metrics.record_shared_runtime_methods_cache_miss();
-                    let idx = shared
-                        .next_runtime_method_index
-                        .fetch_add(1, Ordering::Relaxed);
-                    shared
-                        .shared_runtime_methods_rev
-                        .insert(idx, (method, lookup));
-                    entry.insert(idx);
-                    idx
-                }
-            }
+            let value = (method, lookup);
+            shared_reflection_index_get_or_insert(
+                &shared.shared_runtime_methods,
+                &shared.shared_runtime_methods_rev,
+                &shared.next_runtime_method_index,
+                key,
+                value,
+                || shared.metrics.record_shared_runtime_methods_cache_hit(),
+                || shared.metrics.record_shared_runtime_methods_cache_miss(),
+            )
         }
 
         #[cfg(not(feature = "multithreading"))]
         {
             let mut methods = self.reflection().methods_write();
-            if let Some(existing) = methods
-                .iter()
-                .position(|(m, g)| *m == method && *g == lookup)
-            {
-                existing
-            } else {
-                methods.push((method, lookup));
-                methods.len() - 1
-            }
+            local_reflection_index_get_or_insert(&mut methods, (method, lookup))
         }
     }
 
@@ -305,16 +347,18 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
     ) -> (MethodDescription, GenericLookup) {
         #[cfg(feature = "multithreading")]
         {
-            self.shared()
-                .shared_runtime_methods_rev
-                .get(&index)
-                .map(|e| e.clone())
-                .expect("invalid runtime method index")
+            let shared = self.shared();
+            shared_reflection_by_index(
+                &shared.shared_runtime_methods_rev,
+                index,
+                "invalid runtime method index",
+            )
         }
 
         #[cfg(not(feature = "multithreading"))]
         {
-            self.reflection().methods_read()[index].clone()
+            let methods = self.reflection().methods_read();
+            local_reflection_by_index(&methods, index)
         }
     }
 
@@ -327,50 +371,40 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         {
             let shared = self.shared();
             let key = (field.clone(), lookup.clone());
-            match shared.shared_runtime_fields.entry(key) {
-                Entry::Occupied(entry) => {
-                    shared.metrics.record_shared_runtime_fields_cache_hit();
-                    *entry.get()
-                }
-                Entry::Vacant(entry) => {
-                    shared.metrics.record_shared_runtime_fields_cache_miss();
-                    let idx = shared
-                        .next_runtime_field_index
-                        .fetch_add(1, Ordering::Relaxed);
-                    shared
-                        .shared_runtime_fields_rev
-                        .insert(idx, (field, lookup));
-                    entry.insert(idx);
-                    idx
-                }
-            }
+            let value = (field, lookup);
+            shared_reflection_index_get_or_insert(
+                &shared.shared_runtime_fields,
+                &shared.shared_runtime_fields_rev,
+                &shared.next_runtime_field_index,
+                key,
+                value,
+                || shared.metrics.record_shared_runtime_fields_cache_hit(),
+                || shared.metrics.record_shared_runtime_fields_cache_miss(),
+            )
         }
 
         #[cfg(not(feature = "multithreading"))]
         {
             let mut fields = self.reflection().fields_write();
-            if let Some(existing) = fields.iter().position(|(f, g)| *f == field && *g == lookup) {
-                existing
-            } else {
-                fields.push((field, lookup));
-                fields.len() - 1
-            }
+            local_reflection_index_get_or_insert(&mut fields, (field, lookup))
         }
     }
 
     fn reflection_runtime_field_by_index(&self, index: usize) -> (FieldDescription, GenericLookup) {
         #[cfg(feature = "multithreading")]
         {
-            self.shared()
-                .shared_runtime_fields_rev
-                .get(&index)
-                .map(|e| e.clone())
-                .expect("invalid runtime field index")
+            let shared = self.shared();
+            shared_reflection_by_index(
+                &shared.shared_runtime_fields_rev,
+                index,
+                "invalid runtime field index",
+            )
         }
 
         #[cfg(not(feature = "multithreading"))]
         {
-            self.reflection().fields_read()[index].clone()
+            let fields = self.reflection().fields_read();
+            local_reflection_by_index(&fields, index)
         }
     }
 
@@ -468,7 +502,7 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
             ctx.resolution.clone(),
             source.clone(),
             self.loader().as_ref(),
-        ) && let Some(rt) = dotnet_intrinsics_reflection::types::runtime_type_from_concrete(
+        ) && let Some(rt) = dotnet_types::runtime::runtime_type_from_concrete(
             self.loader().as_ref(),
             &concrete,
         ) {

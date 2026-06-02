@@ -125,10 +125,9 @@ use crate::{
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeResolver,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
-    runtime::RuntimeType,
+    runtime::{RuntimeType, runtime_type_from_concrete},
 };
 use dotnet_value::{
     StackValue,
@@ -136,7 +135,7 @@ use dotnet_value::{
     string::CLRString,
 };
 use dotnet_vm_ops::NULL_REF_MSG;
-use dotnetdll::prelude::{BaseType, TypeSource};
+
 use std::sync::Arc;
 
 pub mod constants;
@@ -492,62 +491,6 @@ fn object_to_string<
     let obj_ref = ObjectRef::new(ctx.gc_with_token(&ctx.no_active_borrows_token()), storage);
     ctx.push_obj(obj_ref);
     StepResult::Continue
-}
-
-fn runtime_type_from_concrete(
-    loader: &impl TypeResolver,
-    concrete: &ConcreteType,
-) -> Option<RuntimeType> {
-    match concrete.get() {
-        BaseType::Boolean => Some(RuntimeType::Boolean),
-        BaseType::Char => Some(RuntimeType::Char),
-        BaseType::Int8 => Some(RuntimeType::Int8),
-        BaseType::UInt8 => Some(RuntimeType::UInt8),
-        BaseType::Int16 => Some(RuntimeType::Int16),
-        BaseType::UInt16 => Some(RuntimeType::UInt16),
-        BaseType::Int32 => Some(RuntimeType::Int32),
-        BaseType::UInt32 => Some(RuntimeType::UInt32),
-        BaseType::Int64 => Some(RuntimeType::Int64),
-        BaseType::UInt64 => Some(RuntimeType::UInt64),
-        BaseType::Float32 => Some(RuntimeType::Float32),
-        BaseType::Float64 => Some(RuntimeType::Float64),
-        BaseType::IntPtr => Some(RuntimeType::IntPtr),
-        BaseType::UIntPtr => Some(RuntimeType::UIntPtr),
-        BaseType::Object => Some(RuntimeType::Object),
-        BaseType::String => Some(RuntimeType::String),
-        BaseType::Type {
-            source: TypeSource::User(user),
-            ..
-        } => loader
-            .locate_type(concrete.resolution(), *user)
-            .ok()
-            .map(RuntimeType::Type),
-        BaseType::Type {
-            source:
-                TypeSource::Generic {
-                    base: user,
-                    parameters,
-                },
-            ..
-        } => {
-            let td = loader.locate_type(concrete.resolution(), *user).ok()?;
-            let args = parameters
-                .iter()
-                .map(|p| runtime_type_from_concrete(loader, p))
-                .collect::<Option<Vec<_>>>()?;
-            Some(RuntimeType::Generic(td, args))
-        }
-        BaseType::Vector(_, inner) => {
-            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Vector(Box::new(t)))
-        }
-        BaseType::Array(inner, shape) => runtime_type_from_concrete(loader, inner)
-            .map(|t| RuntimeType::Array(Box::new(t), shape.rank as u32)),
-        BaseType::ValuePointer(_, Some(inner)) => {
-            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Pointer(Box::new(t)))
-        }
-        BaseType::ValuePointer(_, None) => Some(RuntimeType::IntPtr),
-        _ => None,
-    }
 }
 
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]

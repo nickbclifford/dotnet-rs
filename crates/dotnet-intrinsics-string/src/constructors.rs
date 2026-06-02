@@ -11,19 +11,10 @@ use dotnet_vm_ops::{
     ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
 
-/// System.String::FastAllocateString(int)
-#[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
-#[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr)")]
-#[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
-#[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr, IntPtr)")]
-pub fn intrinsic_string_fast_allocate_string<
-    'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
->(
+fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
+    method: &MethodDescription,
+) -> Result<usize, StepResult> {
     use dotnetdll::prelude::*;
 
     let params_count = method.method().signature.parameters.len();
@@ -52,26 +43,47 @@ pub fn intrinsic_string_fast_allocate_string<
     };
 
     if len_res < 0 {
-        return ctx.throw_by_name_with_message(
+        return Err(ctx.throw_by_name_with_message(
             "System.OverflowException",
             "Arithmetic operation resulted in an overflow.",
-        );
+        ));
     }
     let len = len_res as usize;
 
     // Defensive check: limit string size to 512MB characters
     if len > 0x2000_0000 {
-        return ctx.throw_by_name_with_message(
+        return Err(ctx.throw_by_name_with_message(
             "System.OutOfMemoryException",
             "Insufficient memory to continue the execution of the program.",
-        );
+        ));
     }
 
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
     if len > LARGE_STRING_THRESHOLD && ctx.check_gc_safe_point() {
-        return StepResult::Yield;
+        return Err(StepResult::Yield);
     }
+
+    Ok(len)
+}
+
+/// System.String::FastAllocateString(int)
+#[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
+#[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr)")]
+#[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
+#[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr, IntPtr)")]
+pub fn intrinsic_string_fast_allocate_string<
+    'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let len = match parse_string_length(ctx, &method) {
+        Ok(len) => len,
+        Err(step) => return step,
+    };
 
     let value = CLRString::new(vec![0u16; len]);
     ctx.push_string(value);
@@ -114,11 +126,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: TypedStackOps<'gc> + RawMemoryOp
                             let start = offset * 2;
                             let end = start + (chunk_len * 2);
                             if let Some(chunk_bytes) = bytes.get(start..end) {
-                                result.extend(
-                                    chunk_bytes
-                                        .chunks_exact(2)
-                                        .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
-                                );
+                                crate::extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
                             }
                         }
                         _ => break,

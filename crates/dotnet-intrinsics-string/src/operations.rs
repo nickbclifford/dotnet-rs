@@ -1,4 +1,6 @@
-use crate::{IntrinsicStringHost, NULL_REF_MSG, simd::probe_sequence_equal_u16};
+use crate::{
+    IntrinsicStringHost, NULL_REF_MSG, extend_from_utf16_ne_bytes, simd::probe_sequence_equal_u16,
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
@@ -6,7 +8,7 @@ use dotnet_types::{
 use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, Object, ObjectRef},
+    object::{HeapStorage, Object, ObjectHandle, ObjectRef},
     string::CLRString,
 };
 use dotnet_vm_ops::{
@@ -38,6 +40,24 @@ where
     }
 
     Ok(())
+}
+
+fn extend_from_string_chunk<'gc, T: RawMemoryOps<'gc>>(
+    ctx: &T,
+    handle: ObjectHandle<'gc>,
+    offset: usize,
+    chunk_len: usize,
+    dest: &mut Vec<u16>,
+) -> bool {
+    let _gc_scope = GcScopeGuard::enter(ctx.as_borrow_scope(), ctx.as_borrow_scope().gc_ready_token());
+    let inner = handle.borrow();
+    match &inner.storage {
+        HeapStorage::Str(s) => {
+            dest.extend_from_slice(&s[offset..offset + chunk_len]);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// System.String::Equals(string, string)
@@ -160,11 +180,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
                         let start = offset * 2;
                         let end = start + (chunk_len * 2);
                         if let Some(chunk_bytes) = slice.get(start..end) {
-                            dest.extend(
-                                chunk_bytes
-                                    .chunks_exact(2)
-                                    .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]])),
-                            );
+                            extend_from_utf16_ne_bytes(dest, chunk_bytes);
                         }
                     })
                 },
@@ -262,18 +278,8 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
 
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
-                {
-                    let _gc_scope = GcScopeGuard::enter(
-                        ctx.as_borrow_scope(),
-                        ctx.as_borrow_scope().gc_ready_token(),
-                    );
-                    let inner = handle.borrow();
-                    match &inner.storage {
-                        HeapStorage::Str(s) => {
-                            result.extend_from_slice(&s[offset..offset + chunk_len]);
-                        }
-                        _ => break,
-                    }
+                if !extend_from_string_chunk(ctx, *handle, offset, chunk_len, &mut result) {
+                    break;
                 }
                 offset += chunk_len;
                 if offset < len && ctx.check_gc_safe_point() {
@@ -333,18 +339,8 @@ pub fn intrinsic_string_copy_string_content<
     while offset < src_len {
         let chunk_len = std::cmp::min(CHUNK_SIZE, src_len - offset);
         let mut chunk_buf = Vec::with_capacity(chunk_len);
-        {
-            let _gc_scope = GcScopeGuard::enter(
-                ctx.as_borrow_scope(),
-                ctx.as_borrow_scope().gc_ready_token(),
-            );
-            let src_heap = src_handle.borrow();
-            match &src_heap.storage {
-                HeapStorage::Str(s) => {
-                    chunk_buf.extend_from_slice(&s[offset..offset + chunk_len]);
-                }
-                _ => break,
-            }
+        if !extend_from_string_chunk(ctx, src_handle, offset, chunk_len, &mut chunk_buf) {
+            break;
         }
 
         let mut err = false;

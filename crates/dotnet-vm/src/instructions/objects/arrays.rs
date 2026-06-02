@@ -24,6 +24,47 @@ const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.
 const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 
+macro_rules! pop_array_index {
+    ($ctx:expr) => {{
+        match vm_pop!($ctx) {
+            StackValue::Int32(i) => i as usize,
+            StackValue::NativeInt(i) => i as usize,
+            _ => {
+                return $ctx
+                    .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+            }
+        }
+    }};
+}
+
+macro_rules! check_array_obj {
+    ($ctx:expr, $array:expr) => {{
+        let array = $array;
+        let StackValue::ObjectRef(obj) = array else {
+            return $ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        };
+
+        if obj.0.is_none() {
+            return $ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+
+        obj
+    }};
+    ($ctx:expr, null_first, $array:expr) => {{
+        let array = $array;
+        if array.is_null() {
+            return $ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+        let StackValue::ObjectRef(obj) = array else {
+            return $ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        };
+
+        obj
+    }};
+}
+
 #[dotnet_instruction(LoadElement { param0 })]
 pub fn ldelem<
     'gc,
@@ -39,23 +80,8 @@ pub fn ldelem<
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
-    let index = match vm_pop!(ctx) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
-    };
-    let val = vm_pop!(ctx);
-    let StackValue::ObjectRef(obj) = val else {
-        return ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-    };
-
-    if obj.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let index = pop_array_index!(ctx);
+    let obj = check_array_obj!(ctx, vm_pop!(ctx));
 
     let res_ctx = ctx.current_context();
     let load_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
@@ -94,24 +120,8 @@ pub fn ldelem_primitive<
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {
-    let index = match vm_pop!(ctx) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
-    };
-    let array = vm_pop!(ctx);
-
-    let StackValue::ObjectRef(obj) = array else {
-        return ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-    };
-
-    if obj.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let index = pop_array_index!(ctx);
+    let obj = check_array_obj!(ctx, vm_pop!(ctx));
 
     let layout = match param0 {
         LoadType::Int8 => Scalar::Int8,
@@ -195,22 +205,8 @@ fn ldelema_internal<
     param0: &MethodType,
     readonly: bool,
 ) -> StepResult {
-    let index = match vm_pop!(ctx) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
-    };
-    let array = vm_pop!(ctx);
-    if array.is_null() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-    let StackValue::ObjectRef(obj) = array else {
-        return ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-    };
+    let index = pop_array_index!(ctx);
+    let obj = check_array_obj!(ctx, null_first, vm_pop!(ctx));
 
     let res_ctx = ctx.current_context();
     let concrete_t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
@@ -269,22 +265,8 @@ pub fn stelem<
     param0: &MethodType,
 ) -> StepResult {
     let value = vm_pop!(ctx);
-    let index = match vm_pop!(ctx) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
-    };
-    let array = vm_pop!(ctx);
-    if array.is_null() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-    let StackValue::ObjectRef(obj) = array else {
-        return ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-    };
+    let index = pop_array_index!(ctx);
+    let obj = check_array_obj!(ctx, null_first, vm_pop!(ctx));
 
     let res_ctx = ctx.current_context();
     let store_type = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(param0));
@@ -315,22 +297,8 @@ pub fn stelem_primitive<
     param0: StoreType,
 ) -> StepResult {
     let value = vm_pop!(ctx);
-    let index = match vm_pop!(ctx) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        _ => {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-        }
-    };
-    let array = vm_pop!(ctx);
-    if array.is_null() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-    let StackValue::ObjectRef(obj) = array else {
-        return ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
-    };
+    let index = pop_array_index!(ctx);
+    let obj = check_array_obj!(ctx, null_first, vm_pop!(ctx));
 
     let layout = match param0 {
         StoreType::Int8 => Scalar::Int8,

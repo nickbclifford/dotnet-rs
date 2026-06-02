@@ -1,10 +1,12 @@
 use crate::{
-    TypeDescription, TypeResolver, generics::ConcreteType, members::MethodDescription,
+    TypeDescription, TypeResolver,
+    generics::{ConcreteType, GenericLookup},
+    members::MethodDescription,
     resolution::ResolutionS,
 };
 use dotnetdll::{
     binary::signature::kinds::StandAloneCallingConvention,
-    prelude::{BaseType, CallingConvention, TypeSource, UserType, ValueKind},
+    prelude::{BaseType, CallingConvention, MethodType, TypeSource, UserType, ValueKind},
     resolved::signature::{MethodSignature, Parameter, ParameterType, ReturnType},
 };
 use gc_arena::static_collect;
@@ -34,6 +36,74 @@ impl Hash for RuntimeMethodSignature {
         self.return_type.hash(state);
         self.parameters.hash(state);
     }
+}
+
+pub fn runtime_type_from_concrete(
+    loader: &impl TypeResolver,
+    concrete: &ConcreteType,
+) -> Option<RuntimeType> {
+    match concrete.get() {
+        BaseType::Boolean => Some(RuntimeType::Boolean),
+        BaseType::Char => Some(RuntimeType::Char),
+        BaseType::Int8 => Some(RuntimeType::Int8),
+        BaseType::UInt8 => Some(RuntimeType::UInt8),
+        BaseType::Int16 => Some(RuntimeType::Int16),
+        BaseType::UInt16 => Some(RuntimeType::UInt16),
+        BaseType::Int32 => Some(RuntimeType::Int32),
+        BaseType::UInt32 => Some(RuntimeType::UInt32),
+        BaseType::Int64 => Some(RuntimeType::Int64),
+        BaseType::UInt64 => Some(RuntimeType::UInt64),
+        BaseType::Float32 => Some(RuntimeType::Float32),
+        BaseType::Float64 => Some(RuntimeType::Float64),
+        BaseType::IntPtr => Some(RuntimeType::IntPtr),
+        BaseType::UIntPtr => Some(RuntimeType::UIntPtr),
+        BaseType::Object => Some(RuntimeType::Object),
+        BaseType::String => Some(RuntimeType::String),
+        BaseType::Type {
+            source: TypeSource::User(user),
+            ..
+        } => loader
+            .locate_type(concrete.resolution(), *user)
+            .ok()
+            .map(RuntimeType::Type),
+        BaseType::Type {
+            source:
+                TypeSource::Generic {
+                    base: user,
+                    parameters,
+                },
+            ..
+        } => {
+            let td = loader.locate_type(concrete.resolution(), *user).ok()?;
+            let args = parameters
+                .iter()
+                .map(|p| runtime_type_from_concrete(loader, p))
+                .collect::<Option<Vec<_>>>()?;
+            Some(RuntimeType::Generic(td, args))
+        }
+        BaseType::Vector(_, inner) => {
+            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Vector(Box::new(t)))
+        }
+        BaseType::Array(inner, shape) => runtime_type_from_concrete(loader, inner)
+            .map(|t| RuntimeType::Array(Box::new(t), shape.rank as u32)),
+        BaseType::ValuePointer(_, Some(inner)) => {
+            runtime_type_from_concrete(loader, inner).map(|t| RuntimeType::Pointer(Box::new(t)))
+        }
+        BaseType::ValuePointer(_, None) => Some(RuntimeType::IntPtr),
+        _ => None,
+    }
+}
+
+pub fn runtime_type_from_method_type(
+    loader: &impl TypeResolver,
+    source_resolution: ResolutionS,
+    method_type: &MethodType,
+    lookup: &GenericLookup,
+) -> Option<RuntimeType> {
+    let concrete = lookup
+        .make_concrete(source_resolution, method_type.clone(), loader)
+        .ok()?;
+    runtime_type_from_concrete(loader, &concrete)
 }
 
 runtime_type_impls! {

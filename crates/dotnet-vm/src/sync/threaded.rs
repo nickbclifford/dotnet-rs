@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    sync::{Arc, Condvar, LockResult, OrderedMutex, SyncBlockOps, levels},
+    sync::{Arc, Condvar, LockResult, OrderedMutex, OrderedMutexGuard, SyncBlockOps, levels},
     threading::ThreadManagerOps,
 };
 use dotnet_metrics::RuntimeMetrics;
@@ -22,6 +22,11 @@ pub struct SyncBlock {
     condvar: Condvar,
 }
 
+enum EnterState<'a> {
+    Acquired,
+    Contended(OrderedMutexGuard<'a, levels::SyncState, SyncBlockState>),
+}
+
 impl SyncBlock {
     pub(super) fn new() -> Self {
         Self {
@@ -31,6 +36,30 @@ impl SyncBlock {
             }),
             condvar: Condvar::new(),
         }
+    }
+
+    fn mark_entered(
+        state: &mut OrderedMutexGuard<'_, levels::SyncState, SyncBlockState>,
+        thread_id: ArenaId,
+    ) {
+        state.owner_thread_id = thread_id;
+        state.recursion_count = 1;
+    }
+
+    fn lock_and_try_enter(&self, thread_id: ArenaId) -> EnterState<'_> {
+        let mut state = self.state.lock();
+
+        if state.owner_thread_id == thread_id {
+            state.recursion_count += 1;
+            return EnterState::Acquired;
+        }
+
+        if state.owner_thread_id == ArenaId::INVALID {
+            Self::mark_entered(&mut state, thread_id);
+            return EnterState::Acquired;
+        }
+
+        EnterState::Contended(state)
     }
 }
 
@@ -51,23 +80,19 @@ impl super::SyncBlockOps for SyncBlock {
 
     fn enter(&self, thread_id: ArenaId, metrics: &RuntimeMetrics) {
         use std::time::Instant;
-        let mut state = self.state.lock();
 
-        if state.owner_thread_id == thread_id {
-            state.recursion_count += 1;
-            return;
+        let mut state = match self.lock_and_try_enter(thread_id) {
+            EnterState::Acquired => return,
+            EnterState::Contended(state) => state,
+        };
+
+        let start_wait = Instant::now();
+        while state.owner_thread_id != ArenaId::INVALID {
+            self.condvar.wait(state.raw_mut());
         }
+        metrics.record_lock_contention(start_wait.elapsed());
 
-        if state.owner_thread_id != ArenaId::INVALID {
-            let start_wait = Instant::now();
-            while state.owner_thread_id != ArenaId::INVALID {
-                self.condvar.wait(state.raw_mut());
-            }
-            metrics.record_lock_contention(start_wait.elapsed());
-        }
-
-        state.owner_thread_id = thread_id;
-        state.recursion_count = 1;
+        Self::mark_entered(&mut state, thread_id);
     }
 
     fn enter_with_timeout(
@@ -82,38 +107,32 @@ impl super::SyncBlockOps for SyncBlock {
             return super::SyncBlockOps::try_enter(self, thread_id);
         }
 
-        let mut state = self.state.lock();
-
-        if state.owner_thread_id == thread_id {
-            state.recursion_count += 1;
-            return true;
-        }
+        let mut state = match self.lock_and_try_enter(thread_id) {
+            EnterState::Acquired => return true,
+            EnterState::Contended(state) => state,
+        };
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-
-        if state.owner_thread_id != ArenaId::INVALID {
-            let start_wait = Instant::now();
-            while state.owner_thread_id != ArenaId::INVALID {
-                let now = Instant::now();
-                if now >= deadline {
-                    return false;
-                }
-
-                let remaining = deadline - now;
-                let timed_out = self
-                    .condvar
-                    .wait_for(state.raw_mut(), remaining)
-                    .timed_out();
-
-                if timed_out && state.owner_thread_id != ArenaId::INVALID {
-                    return false;
-                }
+        let start_wait = Instant::now();
+        while state.owner_thread_id != ArenaId::INVALID {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
             }
-            metrics.record_lock_contention(start_wait.elapsed());
-        }
 
-        state.owner_thread_id = thread_id;
-        state.recursion_count = 1;
+            let remaining = deadline - now;
+            let timed_out = self
+                .condvar
+                .wait_for(state.raw_mut(), remaining)
+                .timed_out();
+
+            if timed_out && state.owner_thread_id != ArenaId::INVALID {
+                return false;
+            }
+        }
+        metrics.record_lock_contention(start_wait.elapsed());
+
+        Self::mark_entered(&mut state, thread_id);
         true
     }
 
@@ -127,18 +146,10 @@ impl super::SyncBlockOps for SyncBlock {
         use std::time::Instant;
 
         loop {
-            let mut state = self.state.lock();
-
-            if state.owner_thread_id == thread_id {
-                state.recursion_count += 1;
-                return LockResult::Success;
-            }
-
-            if state.owner_thread_id == ArenaId::INVALID {
-                state.owner_thread_id = thread_id;
-                state.recursion_count = 1;
-                return LockResult::Success;
-            }
+            let mut state = match self.lock_and_try_enter(thread_id) {
+                EnterState::Acquired => return LockResult::Success,
+                EnterState::Contended(state) => state,
+            };
 
             // Owner is someone else, we need to wait
             let start_wait = Instant::now();
@@ -148,8 +159,7 @@ impl super::SyncBlockOps for SyncBlock {
             let _ = self.condvar.wait_for(state.raw_mut(), timeout);
 
             if state.owner_thread_id == ArenaId::INVALID {
-                state.owner_thread_id = thread_id;
-                state.recursion_count = 1;
+                Self::mark_entered(&mut state, thread_id);
                 metrics.record_lock_contention(start_wait.elapsed());
                 return LockResult::Success;
             }
@@ -175,18 +185,10 @@ impl super::SyncBlockOps for SyncBlock {
         loop {
             let now = Instant::now();
 
-            let mut state = self.state.lock();
-
-            if state.owner_thread_id == thread_id {
-                state.recursion_count += 1;
-                return LockResult::Success;
-            }
-
-            if state.owner_thread_id == ArenaId::INVALID {
-                state.owner_thread_id = thread_id;
-                state.recursion_count = 1;
-                return LockResult::Success;
-            }
+            let mut state = match self.lock_and_try_enter(thread_id) {
+                EnterState::Acquired => return LockResult::Success,
+                EnterState::Contended(state) => state,
+            };
 
             if now >= deadline {
                 return LockResult::Timeout;
@@ -200,8 +202,7 @@ impl super::SyncBlockOps for SyncBlock {
             let _ = self.condvar.wait_for(state.raw_mut(), wait_duration);
 
             if state.owner_thread_id == ArenaId::INVALID {
-                state.owner_thread_id = thread_id;
-                state.recursion_count = 1;
+                Self::mark_entered(&mut state, thread_id);
                 metrics.record_lock_contention(start_wait.elapsed());
                 return LockResult::Success;
             }

@@ -147,6 +147,15 @@ unsafe fn all_ascii_whitespace_sse2(chars: &[u16]) -> Option<bool> {
         offset += X86_LANES_U16;
     }
 
+    scalar_ascii_whitespace_fallback(chars, offset)
+}
+
+#[cfg(all(
+    feature = "simd",
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[inline]
+fn scalar_ascii_whitespace_fallback(chars: &[u16], offset: usize) -> Option<bool> {
     for &ch in &chars[offset..] {
         if ch > 0x7F {
             return None;
@@ -227,16 +236,7 @@ unsafe fn all_ascii_whitespace_neon(chars: &[u16]) -> Option<bool> {
         offset += AARCH64_LANES_U16;
     }
 
-    for &ch in &chars[offset..] {
-        if ch > 0x7F {
-            return None;
-        }
-        if !matches!(ch, 0x20 | 0x09..=0x0D) {
-            return Some(false);
-        }
-    }
-
-    Some(true)
+    scalar_ascii_whitespace_fallback(chars, offset)
 }
 
 #[cfg(test)]

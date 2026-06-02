@@ -489,6 +489,14 @@ mod lease_tests {
         Arc::new(AtomicBool::new(false))
     }
 
+    fn active_lease_count(id: ArenaId) -> usize {
+        let guard = VALID_ARENAS.read();
+        guard
+            .get(&id)
+            .map(|s| s.active_leases.load(AtomicOrdering::Acquire))
+            .unwrap_or(0)
+    }
+
     // ------------------------------------------------------------------
     // try_acquire_lease on unregistered arena returns None
     // ------------------------------------------------------------------
@@ -554,34 +562,16 @@ mod lease_tests {
         let l2 = try_acquire_lease(id).unwrap();
         let l3 = try_acquire_lease(id).unwrap();
 
-        let count = {
-            let guard = VALID_ARENAS.read();
-            guard
-                .get(&id)
-                .map(|s| s.active_leases.load(AtomicOrdering::Acquire))
-                .unwrap_or(0)
-        };
+        let count = active_lease_count(id);
         assert_eq!(count, 3);
 
         drop(l1);
         drop(l2);
-        let count2 = {
-            let guard = VALID_ARENAS.read();
-            guard
-                .get(&id)
-                .map(|s| s.active_leases.load(AtomicOrdering::Acquire))
-                .unwrap_or(0)
-        };
+        let count2 = active_lease_count(id);
         assert_eq!(count2, 1);
 
         drop(l3);
-        let count3 = {
-            let guard = VALID_ARENAS.read();
-            guard
-                .get(&id)
-                .map(|s| s.active_leases.load(AtomicOrdering::Acquire))
-                .unwrap_or(0)
-        };
+        let count3 = active_lease_count(id);
         assert_eq!(count3, 0);
 
         unregister_arena(id);

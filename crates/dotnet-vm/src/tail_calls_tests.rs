@@ -12,10 +12,9 @@ use dotnetdll::{
     binary::signature::kinds::CallingConvention,
     prelude::*,
     resolved::{
-        assembly::ExternalAssemblyReference,
         members::{Method, MethodSource, UserMethod},
         signature::ReturnType,
-        types::{ExternalTypeReference, ResolutionScope, TypeDefinition, UserType},
+        types::{TypeDefinition, UserType},
     },
 };
 
@@ -78,21 +77,8 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
 
     // Build a minimal Resolution with one type, an entrypoint, and a chain of methods.
     // Each chain method tail-calls (or normal-calls) the next and then returns.
-    let mut res = Resolution::new(Module::new("TailChain.dll"));
-    res.assembly = Some(Assembly::new("TailChainAssembly"));
-
-    // Add references for inheritance and basic types.
-    let system_runtime =
-        res.push_assembly_reference(ExternalAssemblyReference::new("System.Runtime"));
-    let object_type_ref = res.push_type_reference(ExternalTypeReference::new(
-        Some("System".into()),
-        "Object",
-        ResolutionScope::Assembly(system_runtime),
-    ));
-
-    let mut type_def = TypeDefinition::new(None, "TailChainType");
-    type_def.extends = Some(object_type_ref.into());
-    let type_idx = res.push_type_definition(type_def);
+    let (mut res, _, type_idx) =
+        make_test_assembly!("TailChain.dll", "TailChainAssembly", "TailChainType");
 
     let void_sig = MethodSignature {
         instance: false,
@@ -103,15 +89,10 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         varargs: None,
     };
 
-    let end_body = body::Method {
-        header: body::Header {
-            maximum_stack_size: 1,
-            local_variables: vec![],
-            initialize_locals: true,
-        },
+    let end_body = make_test_method!(
+        max_stack: 1,
         instructions: vec![Instruction::Return],
-        data_sections: vec![],
-    };
+    );
 
     let mut next_method_idx = res.push_method(
         type_idx,
@@ -124,12 +105,8 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     );
 
     for i in (0..chain_len).rev() {
-        let body = body::Method {
-            header: body::Header {
-                maximum_stack_size: 1,
-                local_variables: vec![],
-                initialize_locals: true,
-            },
+        let body = make_test_method!(
+            max_stack: 1,
             instructions: vec![
                 Instruction::Call {
                     tail_call,
@@ -137,8 +114,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
                 },
                 Instruction::Return,
             ],
-            data_sections: vec![],
-        };
+        );
 
         next_method_idx = res.push_method(
             type_idx,
@@ -151,20 +127,8 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         );
     }
 
-    let main_sig = MethodSignature {
-        instance: false,
-        explicit_this: false,
-        calling_convention: CallingConvention::Default,
-        parameters: vec![],
-        return_type: ReturnType(vec![], None),
-        varargs: None,
-    };
-    let main_body = body::Method {
-        header: body::Header {
-            maximum_stack_size: 1,
-            local_variables: vec![],
-            initialize_locals: true,
-        },
+    let main_body = make_test_method!(
+        max_stack: 1,
         instructions: vec![
             Instruction::Call {
                 tail_call: false,
@@ -172,11 +136,15 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
             },
             Instruction::Return,
         ],
-        data_sections: vec![],
-    };
+    );
     let main_idx = res.push_method(
         type_idx,
-        Method::new(Accessibility::Public, main_sig, "Main", Some(main_body)),
+        Method::new(
+            Accessibility::Public,
+            void_sig.clone(),
+            "Main",
+            Some(main_body),
+        ),
     );
 
     let res_s = loader.register_owned_assembly(res);

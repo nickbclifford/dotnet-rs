@@ -9,6 +9,7 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
+    object::Object,
     pointer::ManagedPtr,
 };
 use dotnet_vm_data::StepResult;
@@ -65,6 +66,21 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     )
 }
 
+fn read_span_length_or_push_value_equality<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    span: &Object<'gc>,
+    fallback_equal: i32,
+) -> Result<i32, StepResult> {
+    match read_span_length(span) {
+        Ok(length) => Ok(length),
+        Err(_) => {
+            ctx.pop_multiple(2);
+            ctx.push_i32(fallback_equal);
+            Err(StepResult::Continue)
+        }
+    }
+}
+
 #[dotnet_intrinsic(
     "static bool System.MemoryExtensions::SequenceEqual<T>(System.ReadOnlySpan<T>, System.ReadOnlySpan<T>)"
 )]
@@ -89,21 +105,14 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
     let element_type = &generics.method_generics[0];
 
     // Check length
-    let a_len = match read_span_length(&a) {
+    let fallback_equal = (a_val == b_val) as i32;
+    let a_len = match read_span_length_or_push_value_equality(ctx, &a, fallback_equal) {
         Ok(l) => l,
-        Err(_) => {
-            ctx.pop_multiple(2);
-            ctx.push_i32((a_val == b_val) as i32);
-            return StepResult::Continue;
-        }
+        Err(step) => return step,
     };
-    let b_len = match read_span_length(&b) {
+    let b_len = match read_span_length_or_push_value_equality(ctx, &b, fallback_equal) {
         Ok(l) => l,
-        Err(_) => {
-            ctx.pop_multiple(2);
-            ctx.push_i32((a_val == b_val) as i32);
-            return StepResult::Continue;
-        }
+        Err(step) => return step,
     };
 
     if a_len != b_len {

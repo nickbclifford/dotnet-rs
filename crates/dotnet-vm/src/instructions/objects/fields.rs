@@ -23,6 +23,7 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
+    stack_value::stack_value_kind,
 };
 use dotnetdll::prelude::*;
 use std::{
@@ -175,19 +176,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         let frame = ctx.current_frame();
         let method = &frame.state.info_handle.source;
         let ip = frame.state.ip;
-        let value_kind = match &value {
-            StackValue::Int32(_) => "Int32",
-            StackValue::Int64(_) => "Int64",
-            StackValue::NativeInt(_) => "NativeInt",
-            StackValue::NativeFloat(_) => "NativeFloat",
-            StackValue::ObjectRef(_) => "ObjectRef",
-            StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
-            StackValue::ManagedPtr(_) => "ManagedPtr",
-            StackValue::ValueType(_) => "ValueType",
-            StackValue::TypedRef(_, _) => "TypedRef",
-            #[cfg(feature = "multithreading")]
-            StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
-        };
+        let value_kind = stack_value_kind(&value);
 
         eprintln!(
             "[GCDBG] stfld CultureData: method={}.{} ip={} field={} offset={} layout_tag={} value_kind={}",

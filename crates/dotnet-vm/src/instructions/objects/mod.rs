@@ -64,6 +64,19 @@ pub(crate) fn get_ptr_context<'gc, T: ExceptionOps<'gc>>(
     get_ptr_info(ctx, val)
 }
 
+fn object_io_bytes_mut<'a>(
+    inline_buffer: &'a mut [u8; OBJECT_IO_INLINE_BUFFER_SIZE],
+    heap_buffer: &'a mut Vec<u8>,
+    size: usize,
+) -> &'a mut [u8] {
+    if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
+        &mut inline_buffer[..size]
+    } else {
+        heap_buffer.resize(size, 0);
+        heap_buffer.as_mut_slice()
+    }
+}
+
 #[dotnet_instruction(NewObject(ctor))]
 pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepResult {
     let (mut method, lookup) = dotnet_vm_ops::vm_try!(
@@ -302,12 +315,7 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let mut heap_buffer = Vec::new();
     let size = layout.size().as_usize();
 
-    let source_bytes: &mut [u8] = if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
-        &mut inline_buffer[..size]
-    } else {
-        heap_buffer.resize(size, 0);
-        heap_buffer.as_mut_slice()
-    };
+    let source_bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
 
     if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
         return ctx
@@ -355,12 +363,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
         let mut heap_buffer = Vec::new();
         let size = layout.size().as_usize();
-        let bytes: &mut [u8] = if size <= OBJECT_IO_INLINE_BUFFER_SIZE {
-            &mut inline_buffer[..size]
-        } else {
-            heap_buffer.resize(size, 0);
-            heap_buffer.as_mut_slice()
-        };
+        let bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
         dotnet_vm_ops::vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(bytes);
 
         if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, bytes) } {

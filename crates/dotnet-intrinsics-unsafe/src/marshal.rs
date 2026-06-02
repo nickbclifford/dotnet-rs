@@ -6,7 +6,7 @@ use dotnet_types::{
 };
 use dotnet_value::{
     StackValue,
-    layout::{HasLayout, LayoutManager},
+    layout::{FieldLayoutManager, HasLayout, LayoutManager},
 };
 use dotnet_vm_ops::{
     StepResult,
@@ -22,6 +22,19 @@ pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> Stack
         let ptr = val.as_ptr();
         let result_ptr = unsafe { ptr.offset(byte_offset) };
         StackValue::NativeInt(result_ptr as isize)
+    }
+}
+
+fn compute_offset_and_layout<'gc, T: UnsafeIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    layout: &FieldLayoutManager,
+    field_name: &str,
+) -> StepResult {
+    if let Some(field) = layout.get_field_by_name(field_name) {
+        ctx.push_isize(field.position.as_usize() as isize);
+        StepResult::Continue
+    } else {
+        ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.")
     }
 }
 
@@ -90,23 +103,13 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(concrete_type.clone()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        if let Some(field) = flm.get_field_by_name(&field_name) {
-            ctx.push_isize(field.position.as_usize() as isize);
-            return StepResult::Continue;
-        } else {
-            return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
-        }
+        return compute_offset_and_layout(ctx, flm, &field_name);
     }
 
     if concrete_type.is_class(ctx.loader().as_ref()) {
         let td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
         let flm = dotnet_vm_ops::vm_try!(ctx.instance_field_layout(td));
-        if let Some(field) = flm.get_field_by_name(&field_name) {
-            ctx.push_isize(field.position.as_usize() as isize);
-            return StepResult::Continue;
-        } else {
-            return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
-        }
+        return compute_offset_and_layout(ctx, &flm, &field_name);
     }
 
     ctx.throw_by_name_with_message(

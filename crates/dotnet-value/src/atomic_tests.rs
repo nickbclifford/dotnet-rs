@@ -1,30 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{LoadType, StackValue, StoreType};
-    #[cfg(feature = "memory-validation")]
-    use dotnet_utils::sync::MANAGED_THREAD_ID;
     use dotnet_utils::sync::Ordering as AtomicOrdering;
-    #[cfg(feature = "memory-validation")]
-    struct ManagedThreadIdGuard {
-        previous: Option<dotnet_utils::ArenaId>,
-    }
-    #[cfg(feature = "memory-validation")]
-    impl ManagedThreadIdGuard {
-        fn set(id: dotnet_utils::ArenaId) -> Self {
-            let previous = MANAGED_THREAD_ID.with(|thread_id| {
-                let prev = thread_id.get();
-                thread_id.set(Some(id));
-                prev
-            });
-            Self { previous }
-        }
-    }
-    #[cfg(feature = "memory-validation")]
-    impl Drop for ManagedThreadIdGuard {
-        fn drop(&mut self) {
-            MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
-        }
-    }
     #[repr(align(8))]
     struct Aligned8([u8; 8]);
     #[test]
@@ -140,30 +117,13 @@ mod tests {
         ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
     )]
     fn test_atomic_object_load_store() {
-        use crate::object::{HeapStorage, ObjectRef};
-        use gc_arena::{Arena, Rootable};
-        type TestRoot = Rootable![()];
-        let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreading")]
-        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0));
-        #[cfg(feature = "memory-validation")]
-        let _thread_id_guard = ManagedThreadIdGuard::set(dotnet_utils::ArenaId(0));
-        #[cfg(feature = "multithreading")]
-        let arena_handle = unsafe {
-            std::mem::transmute::<
-                &dotnet_utils::gc::ArenaHandleInner,
-                &'static dotnet_utils::gc::ArenaHandleInner,
-            >(_arena_handle_owner.as_inner())
+        use crate::{
+            object::{HeapStorage, ObjectRef},
+            test_helpers::with_test_gc_context,
         };
-        arena.mutate(|gc, _root| {
+
+        with_test_gc_context(|gc_handle| {
             let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
-            let gc_handle = dotnet_utils::gc::GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                arena_handle,
-                #[cfg(feature = "memory-validation")]
-                dotnet_utils::ArenaId(0),
-            );
             let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = Aligned8([0u8; 8]);
             let ptr = buffer.0.as_mut_ptr();

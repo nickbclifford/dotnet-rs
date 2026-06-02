@@ -62,6 +62,61 @@ impl AssemblyLoader {
         }
     }
 
+    fn parse_and_find_type_definition_index<'a>(
+        &self,
+        resolution: &ResolutionS,
+        full_name: &'a str,
+        include_nested_fallback: bool,
+    ) -> (&'a str, &'a str, Option<usize>) {
+        let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
+            (&full_name[..idx], &full_name[idx + 1..])
+        } else {
+            ("", full_name)
+        };
+
+        if let Some(index) = resolution
+            .definition()
+            .type_definitions
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.name == name && t.namespace.as_deref().unwrap_or("") == namespace)
+            .map(|(index, _)| index)
+        {
+            return (namespace, name, Some(index));
+        }
+
+        let nested_index = if include_nested_fallback {
+            self.find_nested_type_definition_index(resolution, full_name)
+        } else {
+            None
+        };
+
+        (namespace, name, nested_index)
+    }
+
+    fn find_nested_type_definition_index(
+        &self,
+        resolution: &ResolutionS,
+        full_name: &str,
+    ) -> Option<usize> {
+        if !(full_name.contains('+') || full_name.contains('/')) {
+            return None;
+        }
+
+        let normalized_target = full_name.replace('/', "+");
+        for (index, t) in resolution.definition().type_definitions.iter().enumerate() {
+            if t.encloser.is_some() {
+                let type_index = resolution.definition().type_definition_index(index)?;
+                let td = TypeDescription::new(resolution.clone(), type_index);
+                if td.type_name().replace('/', "+") == normalized_target {
+                    return Some(index);
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn find_in_assembly(
         &self,
         assembly: &ExternalAssemblyReference,
@@ -75,52 +130,31 @@ impl AssemblyLoader {
             .get_assembly_with_version(assembly.name.as_ref(), Some(assembly.version))
             .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
 
-        let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
-            (&full_name[..idx], &full_name[idx + 1..])
-        } else {
-            ("", full_name)
-        };
+        let (namespace, name, type_def_index) =
+            self.parse_and_find_type_definition_index(&res, full_name, false);
 
-        match res
-            .definition()
-            .type_definitions
-            .iter()
-            .find(|t| t.name == name && t.namespace.as_deref().unwrap_or("") == namespace)
-        {
-            None => {
-                for e in &res.definition().exported_types {
-                    if e.name == name && e.namespace.as_deref().unwrap_or("") == namespace {
-                        return self.find_exported_type(res, e);
-                    }
-                }
-                Err(TypeResolutionError::TypeNotFound(format!(
-                    "could not find type {} in assembly {}",
-                    full_name, assembly.name
-                )))
-            }
-            Some(t) => {
-                let index = res
-                    .definition()
-                    .type_definitions
-                    .iter()
-                    .position(|td| ptr::eq(td, t))
-                    .ok_or_else(|| {
-                        TypeResolutionError::TypeNotFound(
-                            "Internal error: type definition not found in its own assembly"
-                                .to_string(),
-                        )
-                    })?;
-                let type_index =
-                    res.definition()
-                        .type_definition_index(index)
-                        .ok_or_else(|| {
-                            TypeResolutionError::TypeNotFound(
-                                "Internal error: invalid type definition index".to_string(),
-                            )
-                        })?;
-                Ok(TypeDescription::new(res, type_index))
+        if let Some(index) = type_def_index {
+            let type_index = res
+                .definition()
+                .type_definition_index(index)
+                .ok_or_else(|| {
+                    TypeResolutionError::TypeNotFound(
+                        "Internal error: invalid type definition index".to_string(),
+                    )
+                })?;
+            return Ok(TypeDescription::new(res, type_index));
+        }
+
+        for e in &res.definition().exported_types {
+            if e.name == name && e.namespace.as_deref().unwrap_or("") == namespace {
+                return self.find_exported_type(res, e);
             }
         }
+
+        Err(TypeResolutionError::TypeNotFound(format!(
+            "could not find type {} in assembly {}",
+            full_name, assembly.name
+        )))
     }
 
     pub fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
@@ -183,28 +217,11 @@ impl AssemblyLoader {
         resolution: ResolutionS,
         full_name: &str,
     ) -> Option<TypeDescription> {
-        let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
-            (&full_name[..idx], &full_name[idx + 1..])
-        } else {
-            ("", full_name)
-        };
+        let (namespace, name, type_def_index) =
+            self.parse_and_find_type_definition_index(&resolution, full_name, false);
 
-        if let Some(t) = resolution
-            .definition()
-            .type_definitions
-            .iter()
-            .find(|t| t.name == name && t.namespace.as_deref().unwrap_or("") == namespace)
-        {
-            let index = resolution
-                .definition()
-                .type_definitions
-                .iter()
-                .position(|td| ptr::eq(td, t))
-                .unwrap();
-            let type_index = resolution
-                .definition()
-                .type_definition_index(index)
-                .unwrap();
+        if let Some(index) = type_def_index {
+            let type_index = resolution.definition().type_definition_index(index).unwrap();
             return Some(TypeDescription::new(resolution, type_index));
         }
 
@@ -214,21 +231,11 @@ impl AssemblyLoader {
             }
         }
 
-        // Fallback for nested types or cases where namespace/name splitting is complex
-        if full_name.contains('+') || full_name.contains('/') {
-            let normalized_target = full_name.replace('/', "+");
-            for (index, t) in resolution.definition().type_definitions.iter().enumerate() {
-                if t.encloser.is_some() {
-                    let type_index = resolution
-                        .definition()
-                        .type_definition_index(index)
-                        .unwrap();
-                    let td = TypeDescription::new(resolution.clone(), type_index);
-                    if td.type_name().replace('/', "+") == normalized_target {
-                        return Some(td);
-                    }
-                }
-            }
+        let (_, _, nested_type_index) =
+            self.parse_and_find_type_definition_index(&resolution, full_name, true);
+        if let Some(index) = nested_type_index {
+            let type_index = resolution.definition().type_definition_index(index).unwrap();
+            return Some(TypeDescription::new(resolution, type_index));
         }
 
         None

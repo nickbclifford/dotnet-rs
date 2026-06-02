@@ -11,6 +11,7 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
+    stack_value::stack_value_kind,
     storage::FieldStorage,
 };
 use std::{
@@ -88,37 +89,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let dest_layout = self.get_layout_from_owner(owner);
 
             // SAFETY: with_data_mut provides exclusive access for the duration of the closure.
-            // write_value_internal will copy the data.  The panic-flush guard
-            // preserves unwind safety while allowing normal-path batching.
-            let _flush_guard = WriteBarrierPanicFlushGuard;
-            WB_LOCAL_BUF.with(|buf| {
-                let mut b = buf.borrow_mut();
-                let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
-                owner.with_data_mut(gc, |data| {
-                    let base = data.as_mut_ptr();
-                    let len = data.len();
-                    let ptr = base.wrapping_add(offset.0);
-                    validate_atomic_access(ptr as *const u8, false);
-
-                    // 1. Bounds Check
-                    self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
-
-                    // 2. Integrity Check
-                    self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
-
-                    // 3. Perform Write
-                    unsafe {
-                        self.write_value_internal_with_recorder(
-                            gc,
-                            ptr,
-                            Some(owner),
-                            value,
-                            layout,
-                            &mut recorder,
-                        )
-                    }
-                })
-            })
+            // write_value_internal will copy the data.
+            self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
             if ptr.is_null() {
@@ -613,6 +585,46 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         })
     }
 
+    fn write_heap_value_with_barrier(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: MemoryOwner<'gc>,
+        offset: ByteOffset,
+        value: StackValue<'gc>,
+        layout: &LayoutManager,
+        dest_layout: Option<LayoutManager>,
+    ) -> Result<(), MemoryAccessError> {
+        // The panic-flush guard drains WB_LOCAL_BUF only during unwinding;
+        // normal-path writes batch until threshold or safepoint flush.
+        let _flush_guard = WriteBarrierPanicFlushGuard;
+        WB_LOCAL_BUF.with(|buf| {
+            let mut b = buf.borrow_mut();
+            let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_mut_ptr();
+                let len = data.len();
+                let ptr = base.wrapping_add(offset.0);
+                validate_atomic_access(ptr as *const u8, false);
+
+                self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
+                self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
+
+                // SAFETY: bounds/integrity are validated above; owner/data originate from
+                // a live heap object and with_data_mut guarantees exclusive access.
+                unsafe {
+                    self.write_value_internal_with_recorder(
+                        gc,
+                        ptr,
+                        Some(owner),
+                        value,
+                        layout,
+                        &mut recorder,
+                    )
+                }
+            })
+        })
+    }
+
     /// Writes a value to a heap-allocated object, ensuring memory bounds,
     /// layout integrity, and GC write barriers.
     ///
@@ -642,19 +654,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     if let HeapStorage::Obj(o) = storage
                         && o.description.type_name() == "System.Globalization.CultureData"
                     {
-                        let value_kind = match &value {
-                            StackValue::Int32(_) => "Int32",
-                            StackValue::Int64(_) => "Int64",
-                            StackValue::NativeInt(_) => "NativeInt",
-                            StackValue::NativeFloat(_) => "NativeFloat",
-                            StackValue::ObjectRef(_) => "ObjectRef",
-                            StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
-                            StackValue::ManagedPtr(_) => "ManagedPtr",
-                            StackValue::ValueType(_) => "ValueType",
-                            StackValue::TypedRef(_, _) => "TypedRef",
-                            #[cfg(feature = "multithreading")]
-                            StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
-                        };
+                        let value_kind = stack_value_kind(&value);
 
                         eprintln!(
                             "[GCDBG] CultureData write overlap: offset={} size={} layout_tag={} value_kind={}",
@@ -699,33 +699,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
         }
 
-        // The panic-flush guard drains WB_LOCAL_BUF only during unwinding;
-        // normal-path writes batch until threshold or safepoint flush.
-        let _flush_guard = WriteBarrierPanicFlushGuard;
-        WB_LOCAL_BUF.with(|buf| {
-            let mut b = buf.borrow_mut();
-            let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
-            owner.with_data_mut(gc, |data| {
-                let base = data.as_mut_ptr();
-                let len = data.len();
-                let ptr = base.wrapping_add(offset.0);
-                validate_atomic_access(ptr as *const u8, false);
-
-                self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
-                self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
-
-                unsafe {
-                    self.write_value_internal_with_recorder(
-                        gc,
-                        ptr,
-                        Some(owner),
-                        value,
-                        layout,
-                        &mut recorder,
-                    )
-                }
-            })
-        })
+        self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
     }
 
     /// Writes a value to unmanaged or static memory (e.g. stack, static fields, unmanaged pointers).

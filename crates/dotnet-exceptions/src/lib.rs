@@ -1,12 +1,13 @@
 //! Exception handling runtime for two-pass ECMA-335 style SEH.
 use dotnet_types::{
+    TypeDescription,
     error::{TypeResolutionError, VmError},
     members::MethodDescription,
 };
 use dotnet_utils::{StackSlotIndex, gc::GCHandle};
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
 };
 use dotnet_vm_ops::{
@@ -16,6 +17,64 @@ use dotnet_vm_ops::{
 };
 use dotnetdll::prelude::*;
 use std::{cmp::Reverse, collections::HashMap, ops::Range};
+
+fn read_exception_string_field<'gc>(
+    obj: &Object<'gc>,
+    gc: &GCHandle<'gc>,
+    exception_type: &TypeDescription,
+    field_name: &str,
+) -> Option<String> {
+    if !obj
+        .instance_storage
+        .has_field(exception_type.clone(), field_name)
+    {
+        return None;
+    }
+
+    let field_bytes = obj
+        .instance_storage
+        .get_field_local(exception_type.clone(), field_name);
+    // SAFETY: field_bytes contains a valid ObjectRef from the object's storage.
+    let field_ref = unsafe { ObjectRef::read_branded(&field_bytes, gc) };
+    let field_inner = field_ref.0?;
+
+    let storage = &field_inner.borrow().storage;
+    if let HeapStorage::Str(clr_str) = storage {
+        Some(clr_str.as_string())
+    } else {
+        None
+    }
+}
+
+fn write_exception_string_field<'gc>(
+    ctx: &mut dyn ExceptionContext<'gc>,
+    gc: GCHandle<'gc>,
+    obj: &Object<'gc>,
+    exception_type: &TypeDescription,
+    field_name: &str,
+    value: String,
+) {
+    if !obj
+        .instance_storage
+        .has_field(exception_type.clone(), field_name)
+    {
+        return;
+    }
+
+    let clr_str = CLRString::from(value);
+    let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
+    ctx.register_new_object(&str_obj);
+
+    let mut field_data = obj
+        .instance_storage
+        .get_field_mut_local(exception_type.clone(), field_name);
+    let val = StackValue::ObjectRef(str_obj);
+    // SAFETY: field_data is a valid mutable slice of the object's instance storage,
+    // and val is a valid StackValue::ObjectRef.
+    unsafe {
+        val.store(field_data.as_mut_ptr(), StoreType::Object);
+    }
+}
 
 /// Extracts human-readable information from a managed exception object.
 pub fn extract_managed_exception<'gc>(
@@ -40,38 +99,8 @@ pub fn extract_managed_exception<'gc>(
         .expect("Failed to resolve System.Exception type");
 
     exception.as_object(|obj| {
-        if obj
-            .instance_storage
-            .has_field(exception_type.clone(), "_message")
-        {
-            let message_bytes = obj
-                .instance_storage
-                .get_field_local(exception_type.clone(), "_message");
-            // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
-            let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
-            if let Some(msg_inner) = message_ref.0 {
-                let storage = &msg_inner.borrow().storage;
-                if let HeapStorage::Str(clr_str) = storage {
-                    message = Some(clr_str.as_string());
-                }
-            }
-        }
-        if obj
-            .instance_storage
-            .has_field(exception_type.clone(), "_stackTraceString")
-        {
-            let st_bytes = obj
-                .instance_storage
-                .get_field_local(exception_type.clone(), "_stackTraceString");
-            // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
-            let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
-            if let Some(st_inner) = st_ref.0 {
-                let storage = &st_inner.borrow().storage;
-                if let HeapStorage::Str(clr_str) = storage {
-                    stack_trace = Some(clr_str.as_string());
-                }
-            }
-        }
+        message = read_exception_string_field(obj, gc, &exception_type, "_message");
+        stack_trace = read_exception_string_field(obj, gc, &exception_type, "_stackTraceString");
     });
 
     ManagedException {
@@ -186,22 +215,8 @@ impl ExceptionHandlingSystem {
         let mut existing_trace = None;
         if preserve_stack_trace {
             exception.as_object(|obj| {
-                if obj
-                    .instance_storage
-                    .has_field(exception_type.clone(), "_stackTraceString")
-                {
-                    let st_bytes = obj
-                        .instance_storage
-                        .get_field_local(exception_type.clone(), "_stackTraceString");
-                    // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
-                    let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, &gc) };
-                    if let Some(st_inner) = st_ref.0 {
-                        let storage = &st_inner.borrow().storage;
-                        if let HeapStorage::Str(clr_str) = storage {
-                            existing_trace = Some(clr_str.as_string());
-                        }
-                    }
-                }
+                existing_trace =
+                    read_exception_string_field(obj, &gc, &exception_type, "_stackTraceString");
             });
         }
 
@@ -250,24 +265,14 @@ impl ExceptionHandlingSystem {
             }
 
             exception.as_object(|obj| {
-                if obj
-                    .instance_storage
-                    .has_field(exception_type.clone(), "_stackTraceString")
-                {
-                    let clr_str = CLRString::from(trace);
-                    let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
-                    ctx.register_new_object(&str_obj);
-
-                    let mut field_data = obj
-                        .instance_storage
-                        .get_field_mut_local(exception_type.clone(), "_stackTraceString");
-                    let val = StackValue::ObjectRef(str_obj);
-                    // SAFETY: field_data is a valid mutable slice of the object's instance storage,
-                    // and val is a valid StackValue::ObjectRef.
-                    unsafe {
-                        val.store(field_data.as_mut_ptr(), StoreType::Object);
-                    }
-                }
+                write_exception_string_field(
+                    ctx,
+                    gc,
+                    obj,
+                    &exception_type,
+                    "_stackTraceString",
+                    trace,
+                );
             });
         }
 

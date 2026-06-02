@@ -259,6 +259,40 @@ impl AssemblyLoader {
         }
     }
 
+    fn load_and_register(
+        &self,
+        name: &str,
+        check_exists: bool,
+    ) -> Result<ResolutionS, AssemblyLoadError> {
+        let mut file = PathBuf::from(&self.assembly_root);
+        file.push(format!("{name}.dll"));
+
+        if check_exists && !file.exists() {
+            return Err(AssemblyLoadError::FileNotFound(format!(
+                "could not find assembly {name} in root {}",
+                self.assembly_root
+            )));
+        }
+
+        let resolution = self.load_resolution_from_file(file)?;
+        match &resolution.assembly {
+            None => {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    "no assembly present in external module".to_string(),
+                ));
+            }
+            Some(a) => {
+                let mut external = self.external.write();
+                external.insert(a.name.to_string(), Some(resolution.clone()));
+                if a.name.as_ref() != name {
+                    external.insert(name.to_string(), Some(resolution.clone()));
+                }
+            }
+        }
+
+        Ok(resolution)
+    }
+
     pub fn get_assembly(&self, name: &str) -> Result<ResolutionS, AssemblyLoadError> {
         self.get_assembly_with_version(name, None)
     }
@@ -282,52 +316,8 @@ impl AssemblyLoader {
 
         let res = { self.external.read().get(name).cloned() };
         let resolution = match res {
-            None => {
-                let mut file = PathBuf::from(&self.assembly_root);
-                file.push(format!("{name}.dll"));
-                if !file.exists() {
-                    return Err(AssemblyLoadError::FileNotFound(format!(
-                        "could not find assembly {name} in root {}",
-                        self.assembly_root
-                    )));
-                }
-                let resolution = self.load_resolution_from_file(file)?;
-                match &resolution.assembly {
-                    None => {
-                        return Err(AssemblyLoadError::InvalidFormat(
-                            "no assembly present in external module".to_string(),
-                        ));
-                    }
-                    Some(a) => {
-                        let mut external = self.external.write();
-                        external.insert(a.name.to_string(), Some(resolution.clone()));
-                        if a.name.as_ref() != name {
-                            external.insert(name.to_string(), Some(resolution.clone()));
-                        }
-                    }
-                }
-                resolution
-            }
-            Some(None) => {
-                let mut file = PathBuf::from(&self.assembly_root);
-                file.push(format!("{name}.dll"));
-                let resolution = self.load_resolution_from_file(file)?;
-                match &resolution.assembly {
-                    None => {
-                        return Err(AssemblyLoadError::InvalidFormat(
-                            "no assembly present in external module".to_string(),
-                        ));
-                    }
-                    Some(a) => {
-                        let mut external = self.external.write();
-                        external.insert(a.name.to_string(), Some(resolution.clone()));
-                        if a.name.as_ref() != name {
-                            external.insert(name.to_string(), Some(resolution.clone()));
-                        }
-                    }
-                }
-                resolution
-            }
+            None => self.load_and_register(name, true)?,
+            Some(None) => self.load_and_register(name, false)?,
             Some(Some(res)) => res,
         };
 

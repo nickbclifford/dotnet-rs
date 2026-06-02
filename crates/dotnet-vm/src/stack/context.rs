@@ -63,6 +63,36 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     #[inline]
+    pub(crate) fn trace_method_exit_for_frame(&self, frame: &dotnet_vm_ops::StackFrame<'gc>) {
+        if self.tracer_enabled() {
+            let method_name = format!("{:?}", frame.state.info_handle.source);
+            self.shared
+                .tracer
+                .trace_method_exit(self.frame_stack.len(), &method_name);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn pop_and_recycle_frame_with_trace(&mut self) -> bool {
+        let Some(frame) = self.frame_stack.pop() else {
+            return false;
+        };
+
+        self.trace_method_exit_for_frame(&frame);
+        self.frame_stack.recycle_frame(frame);
+        true
+    }
+
+    #[inline]
+    fn cctor_type_desc_and_lookup(
+        frame: &dotnet_vm_ops::StackFrame<'gc>,
+    ) -> (TypeDescription, GenericLookup) {
+        let type_desc = frame.state.info_handle.source.parent.clone();
+        let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
+        (type_desc, cctor_generics)
+    }
+
+    #[inline]
     pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             if frame.stack_height == crate::StackSlotIndex(0) {
@@ -221,16 +251,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             }
         };
 
-        if self.tracer_enabled() {
-            let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.shared
-                .tracer
-                .trace_method_exit(self.frame_stack.len(), &method_name);
-        }
+        self.trace_method_exit_for_frame(&frame);
 
         if frame.state.info_handle.is_cctor {
-            let type_desc = frame.state.info_handle.source.parent.clone();
-            let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
+            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
             self.shared
                 .statics
                 .mark_initialized(type_desc, &cctor_generics);
@@ -304,8 +328,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("unwind_frame called with empty stack");
 
         if frame.state.info_handle.is_cctor {
-            let type_desc = frame.state.info_handle.source.parent.clone();
-            let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
+            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
             self.shared
                 .statics
                 .mark_failed(type_desc.clone(), &cctor_generics);
