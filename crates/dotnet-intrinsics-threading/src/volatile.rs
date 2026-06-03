@@ -19,7 +19,6 @@ use dotnet_value::{
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
 use dotnetdll::prelude::BaseType;
-use gc_arena::Gc;
 
 /// System.Threading.Volatile::Read<T>(ref T location)
 #[dotnet_intrinsic("static T System.Threading.Volatile::Read<T>(T&)")]
@@ -41,7 +40,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     debug_assert_eq!(
         ObjectRef::SIZE,
         std::mem::size_of::<usize>(),
@@ -159,11 +158,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 )
                 .unwrap()
             };
-            let obj = if val == 0 {
-                ObjectRef(None)
-            } else {
-                ObjectRef(Some(unsafe { Gc::from_ptr(val as usize as *const _) }))
-            };
+            // SAFETY: `val` was read atomically from an object-reference slot and `gc`
+            // brands the reconstructed handle to the current arena lifetime.
+            let obj = unsafe { ObjectRef::read_branded(&val.to_ne_bytes(), &gc) };
             ctx.push_obj(obj);
         }
     }
@@ -330,8 +327,11 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef
             let val_raw = match value {
-                StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize as u64,
-                StackValue::ObjectRef(ObjectRef(None)) => 0,
+                StackValue::ObjectRef(obj_ref) => {
+                    let mut encoded = [0u8; ObjectRef::SIZE];
+                    obj_ref.write(&mut encoded);
+                    usize::from_ne_bytes(encoded) as u64
+                }
                 StackValue::NativeInt(i) => i as u64,
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
@@ -341,8 +341,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 }
             };
             let size = ObjectRef::SIZE;
-            // SAFETY: This branch stores one object-reference-sized slot atomically; source values
-            // are converted to raw pointer-sized integers before the write.
+            // SAFETY: This branch stores one object-reference-sized slot atomically; ObjectRef values
+            // are serialized through `ObjectRef::write` to preserve any runtime tagging protocol.
             unsafe {
                 RawMemoryOps::store_atomic(
                     ctx,

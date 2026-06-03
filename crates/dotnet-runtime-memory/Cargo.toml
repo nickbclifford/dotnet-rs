@@ -10,7 +10,6 @@ dotnet-value = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 dotnet-metrics = { workspace = true, optional = true }
 gc-arena = { workspace = true }
-sptr = { workspace = true }
 smallvec = { workspace = true }
 slab = { workspace = true }
 

@@ -4,7 +4,6 @@ use crate::{
     test_helpers::with_test_gc_context,
 };
 use gc_arena::{Arena, Gc, Rootable};
-use sptr::Strict;
 use std::sync::{Mutex, OnceLock};
 
 use dotnet_utils::sync::Arc;
@@ -15,7 +14,7 @@ fn static_reg_test_lock() -> &'static Mutex<()> {
 }
 
 fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc> {
-    let base_addr = obj.with_data(|d| d.as_ptr().expose_addr());
+    let base_addr = obj.with_data(|d| d.as_ptr().expose_provenance());
     ManagedPtr::new(
         nonnull_from_exposed_addr(base_addr),
         TypeDescription::NULL,
@@ -102,7 +101,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         // 3. Heap
         let s = crate::string::CLRString::from("test");
         let obj = ObjectRef::new(gc_handle, HeapStorage::Str(s));
-        let base_addr = obj.with_data(|d| d.as_ptr().expose_addr());
+        let base_addr = obj.with_data(|d| d.as_ptr().expose_provenance());
         let offset = 2;
         let ptr_heap = ManagedPtr::new(
             nonnull_from_exposed_addr(base_addr + offset),
@@ -149,7 +148,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         {
             use crate::object::ObjectPtr;
             let ptr_raw = obj.with_data(|d| d.as_ptr());
-            let base_addr = ptr_raw.expose_addr();
+            let base_addr = ptr_raw.expose_provenance();
             // SAFETY: `obj` is kept alive for the duration of this test closure.
             // We only use this raw pointer to validate serialization/deserialization logic.
             let ptr_lock = Gc::as_ptr(obj.0.unwrap())

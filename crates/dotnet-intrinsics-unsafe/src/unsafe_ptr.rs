@@ -30,7 +30,7 @@ pub fn intrinsic_unsafe_as_pointer<
     let val = ctx.pop();
     let ptr = match val {
         StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
-        StackValue::NativeInt(i) => i as *mut u8,
+        StackValue::NativeInt(i) => std::ptr::with_exposed_provenance_mut::<u8>(i as usize),
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
         _ => {
@@ -521,7 +521,12 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let val = ctx.pop();
     let (ptr, pinned, origin, offset_base) = match val {
-        StackValue::NativeInt(p) => (p as *mut u8, false, PointerOrigin::Unmanaged, None),
+        StackValue::NativeInt(p) => (
+            std::ptr::with_exposed_provenance_mut::<u8>(p as usize),
+            false,
+            PointerOrigin::Unmanaged,
+            None,
+        ),
         StackValue::ManagedPtr(m) => (
             unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
             m.is_pinned(),

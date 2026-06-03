@@ -63,6 +63,27 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
 #[inline(always)]
 pub fn validate_atomic_access(_ptr: *const u8, _is_atomic: bool) {}
 
+#[cfg(feature = "memory-validation")]
+pub fn remove_atomic_locations_in_range(base_ptr: *const u8, len: usize) {
+    if len == 0 {
+        return;
+    }
+
+    let start = base_ptr.addr();
+    let end = start.saturating_add(len);
+
+    ATOMIC_LOCATIONS.with(|locations| {
+        locations.borrow_mut().retain(|location| {
+            let addr = location.addr();
+            addr < start || addr >= end
+        });
+    });
+}
+
+#[cfg(not(feature = "memory-validation"))]
+#[inline(always)]
+pub fn remove_atomic_locations_in_range(_base_ptr: *const u8, _len: usize) {}
+
 /// Unified atomic memory access operations.
 ///
 /// This trait provides a consistent interface for atomic loads and stores
@@ -225,10 +246,10 @@ impl AtomicAccess for StandardAtomicAccess {
         // Although the trait requires alignment, we use unaligned reads
         // during the transition period to avoid UB if alignment is missed.
         match size {
-            1 => unsafe { ptr::read_unaligned(ptr) as u64 },
-            2 => unsafe { ptr::read_unaligned(ptr as *const u16) as u64 },
-            4 => unsafe { ptr::read_unaligned(ptr as *const u32) as u64 },
-            8 => unsafe { ptr::read_unaligned(ptr as *const u64) },
+            1 => unsafe { ptr.read_unaligned() as u64 },
+            2 => unsafe { (ptr as *const u16).read_unaligned() as u64 },
+            4 => unsafe { (ptr as *const u32).read_unaligned() as u64 },
+            8 => unsafe { (ptr as *const u64).read_unaligned() },
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
                 panic!("Unsupported atomic size: {}", size);
@@ -243,10 +264,10 @@ impl AtomicAccess for StandardAtomicAccess {
         // Although the trait requires alignment, we use unaligned writes
         // during the transition period to avoid UB if alignment is missed.
         match size {
-            1 => unsafe { ptr::write_unaligned(ptr, value as u8) },
-            2 => unsafe { ptr::write_unaligned(ptr as *mut u16, value as u16) },
-            4 => unsafe { ptr::write_unaligned(ptr as *mut u32, value as u32) },
-            8 => unsafe { ptr::write_unaligned(ptr as *mut u64, value) },
+            1 => unsafe { ptr.write_unaligned(value as u8) },
+            2 => unsafe { (ptr as *mut u16).write_unaligned(value as u16) },
+            4 => unsafe { (ptr as *mut u32).write_unaligned(value as u32) },
+            8 => unsafe { (ptr as *mut u64).write_unaligned(value) },
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
                 panic!("Unsupported atomic size: {}", size);
@@ -387,7 +408,7 @@ mod tests {
     #[test]
     fn test_orderings() {
         let mut val = 0u64;
-        let ptr = &mut val as *mut u64 as *mut u8;
+        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
 
         unsafe {
             // Valid load orderings
@@ -407,7 +428,7 @@ mod tests {
     #[should_panic(expected = "Invalid load ordering")]
     fn test_invalid_load_ordering() {
         let val = 0u64;
-        let ptr = &val as *const u64 as *const u8;
+        let ptr = std::ptr::from_ref(&val).cast::<u8>();
         unsafe {
             StandardAtomicAccess::load_atomic(ptr, 8, Ordering::Release);
         }
@@ -418,7 +439,7 @@ mod tests {
     #[should_panic(expected = "Invalid store ordering")]
     fn test_invalid_store_ordering() {
         let mut val = 0u64;
-        let ptr = &mut val as *mut u64 as *mut u8;
+        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
         unsafe {
             StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::Acquire);
         }
@@ -428,7 +449,7 @@ mod tests {
     #[cfg(feature = "memory-validation")]
     fn test_mixed_access_validation() {
         let mut val = 0u64;
-        let ptr = &mut val as *mut u64 as *mut u8;
+        let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
         unsafe {
             // This should not panic, but it will populate ATOMIC_LOCATIONS
             StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::SeqCst);

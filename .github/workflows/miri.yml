@@ -17,12 +17,16 @@ jobs:
     name: Miri (${{ matrix.crate }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      MIRIFLAGS: "-Zmiri-strict-provenance"
     strategy:
       fail-fast: false
       matrix:
         include:
           - crate: dotnet-value
             args: '-- --test-threads=1'
+          # dotnet-utils is kept out of the strict-provenance matrix for now:
+          # its cross-arena stress test currently trips Miri in upstream parking_lot_core.
           - crate: dotnet-assemblies
             args: '-- --test-threads=1'
           - crate: dotnet-vm
@@ -50,5 +54,4 @@ jobs:
           sudo apt-get install -y libffi-dev
 
       - name: Run Miri (${{ matrix.crate }})
-        continue-on-error: true
         run: cargo +nightly miri test -p ${{ matrix.crate }} ${{ matrix.args }}

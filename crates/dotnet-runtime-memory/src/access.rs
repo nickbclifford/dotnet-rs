@@ -92,7 +92,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // write_value_internal will copy the data.
             self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing to unmanaged null pointer".into(),
@@ -145,7 +145,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })
         } else {
-            let ptr = sptr::from_exposed_addr::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading from unmanaged null pointer".into(),
@@ -232,7 +232,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 })
             })
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing bytes to unmanaged null pointer".into(),
@@ -277,7 +277,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(())
             })
         } else {
-            let ptr = sptr::from_exposed_addr::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading bytes from unmanaged null pointer".into(),
@@ -335,7 +335,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 .map_err(CompareExchangeError::Mismatch)
             })
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             // SAFETY: Caller guarantees `offset` encodes a valid unmanaged address
             // when `owner` is None.
             unsafe {
@@ -377,7 +377,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
             })
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: exchange_atomic to unmanaged null pointer".into(),
@@ -423,7 +423,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 )
             })
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: exchange_add_atomic to unmanaged null pointer".into(),
@@ -461,7 +461,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
             })
         } else {
-            let ptr = sptr::from_exposed_addr::<u8>(offset.as_usize());
+            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: load_atomic from unmanaged null pointer".into(),
@@ -503,7 +503,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(())
             })
         } else {
-            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: store_atomic to unmanaged null pointer".into(),
@@ -668,7 +668,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             StackValue::ObjectRef(ObjectRef(Some(h))) => {
                                 eprintln!(
                                     "[GCDBG] CultureData write ObjectRef raw_ptr=0x{:016X}",
-                                    gc_arena::Gc::as_ptr(*h) as usize
+                                    gc_arena::Gc::as_ptr(*h).expose_provenance()
                                 );
                             }
                             StackValue::ObjectRef(ObjectRef(None)) => {
@@ -677,7 +677,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             StackValue::UnmanagedPtr(p) => {
                                 eprintln!(
                                     "[GCDBG] CultureData write UnmanagedPtr raw_ptr=0x{:016X}",
-                                    p.0.as_ptr() as usize
+                                    p.0.as_ptr().expose_provenance()
                                 );
                             }
                             StackValue::ValueType(v) => {
@@ -783,7 +783,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
             }
             PointerOrigin::CrossArenaObjectRef(p, target_tid) if *target_tid != owner_tid => {
-                recorder.buffer.push((*target_tid, p.as_ptr() as usize));
+                recorder
+                    .buffer
+                    .push((*target_tid, p.as_ptr().expose_provenance()));
                 maybe_flush_write_barrier_entries(recorder.buffer);
             }
             _ => {}
@@ -835,7 +837,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // SAFETY: `ptr` is non-null (checked immediately below) and has been
         // validated by the caller (`write_unaligned` / `write_to_heap` paths
         // perform bounds and integrity checks before reaching here).
-        // All `ptr::write_unaligned` calls are sound because `ptr` is valid for
+        // All `write_unaligned` calls are sound because `ptr` is valid for
         // the write size and unaligned writes are explicitly allowed.
         unsafe {
             if ptr.is_null() {
@@ -850,39 +852,39 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 LayoutManager::Scalar(s) => match s {
                     Scalar::Int8 => {
                         let v = extract_int(value)? as i8;
-                        ptr::write_unaligned(ptr as *mut i8, v);
+                        (ptr as *mut i8).write_unaligned(v);
                     }
                     Scalar::UInt8 => {
                         let v = extract_int(value)? as u8;
-                        ptr::write_unaligned(ptr, v);
+                        ptr.write_unaligned(v);
                     }
                     Scalar::Int16 => {
                         let v = extract_int(value)? as i16;
-                        ptr::write_unaligned(ptr as *mut i16, v);
+                        (ptr as *mut i16).write_unaligned(v);
                     }
                     Scalar::UInt16 => {
                         let v = extract_int(value)? as u16;
-                        ptr::write_unaligned(ptr as *mut u16, v);
+                        (ptr as *mut u16).write_unaligned(v);
                     }
                     Scalar::Int32 => {
                         let v = extract_int(value)?;
-                        ptr::write_unaligned(ptr as *mut i32, v);
+                        (ptr as *mut i32).write_unaligned(v);
                     }
                     Scalar::Int64 => {
                         let v = extract_long(value)?;
-                        ptr::write_unaligned(ptr as *mut i64, v);
+                        (ptr as *mut i64).write_unaligned(v);
                     }
                     Scalar::NativeInt => {
                         let v = extract_native_int(value)?;
-                        ptr::write_unaligned(ptr as *mut isize, v);
+                        (ptr as *mut isize).write_unaligned(v);
                     }
                     Scalar::Float32 => {
                         let v = extract_float(value)? as f32;
-                        ptr::write_unaligned(ptr as *mut f32, v);
+                        (ptr as *mut f32).write_unaligned(v);
                     }
                     Scalar::Float64 => {
                         let v = extract_float(value)?;
-                        ptr::write_unaligned(ptr as *mut f64, v);
+                        (ptr as *mut f64).write_unaligned(v);
                     }
                     Scalar::ManagedPtr => {
                         if let StackValue::ManagedPtr(m) = value {
@@ -992,6 +994,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     }
 
     #[cfg(feature = "multithreading")]
+    /// Recursively records GC references reachable from `layout` rooted at `ptr`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` points into live object memory and is valid to read as
+    /// initialized `FieldStorage` bytes for `layout` (including all recursively visited subfields).
+    /// No concurrent mutation may occur while this scan is in progress; it is only valid during
+    /// stop-the-world (STW) execution where writers are excluded.
     unsafe fn record_refs_recursive_with_recorder(
         &self,
         gc: GCHandle<'gc>,
@@ -1077,6 +1087,15 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     }
 
     #[cfg(feature = "multithreading")]
+    /// Records GC references that may overlap the byte range [`range_start`, `range_end`) within
+    /// `layout` rooted at `ptr`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure `ptr` is the base of a live allocation for `layout`, and that the
+    /// scanned byte range refers only to initialized field-storage bytes that may be interpreted as
+    /// GC-reference-containing fields. No concurrent mutation may race this scan; callers must
+    /// provide stop-the-world (STW) exclusion while recording.
     unsafe fn record_refs_in_range_with_recorder(
         &self,
         gc: GCHandle<'gc>,
@@ -1178,24 +1197,22 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             Ok(match layout {
                 LayoutManager::Scalar(s) => match s {
-                    Scalar::Int8 => StackValue::Int32(ptr::read_unaligned(ptr as *const i8) as i32),
-                    Scalar::UInt8 => StackValue::Int32(ptr::read_unaligned(ptr) as i32),
-                    Scalar::Int16 => {
-                        StackValue::Int32(ptr::read_unaligned(ptr as *const i16) as i32)
-                    }
+                    Scalar::Int8 => StackValue::Int32((ptr as *const i8).read_unaligned() as i32),
+                    Scalar::UInt8 => StackValue::Int32(ptr.read_unaligned() as i32),
+                    Scalar::Int16 => StackValue::Int32((ptr as *const i16).read_unaligned() as i32),
                     Scalar::UInt16 => {
-                        StackValue::Int32(ptr::read_unaligned(ptr as *const u16) as i32)
+                        StackValue::Int32((ptr as *const u16).read_unaligned() as i32)
                     }
-                    Scalar::Int32 => StackValue::Int32(ptr::read_unaligned(ptr as *const i32)),
-                    Scalar::Int64 => StackValue::Int64(ptr::read_unaligned(ptr as *const i64)),
+                    Scalar::Int32 => StackValue::Int32((ptr as *const i32).read_unaligned()),
+                    Scalar::Int64 => StackValue::Int64((ptr as *const i64).read_unaligned()),
                     Scalar::NativeInt => {
-                        StackValue::NativeInt(ptr::read_unaligned(ptr as *const isize))
+                        StackValue::NativeInt((ptr as *const isize).read_unaligned())
                     }
                     Scalar::Float32 => {
-                        StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f32) as f64)
+                        StackValue::NativeFloat((ptr as *const f32).read_unaligned() as f64)
                     }
                     Scalar::Float64 => {
-                        StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f64))
+                        StackValue::NativeFloat((ptr as *const f64).read_unaligned())
                     }
                     Scalar::ObjectRef => {
                         let mut buf = [0u8; ObjectRef::SIZE];

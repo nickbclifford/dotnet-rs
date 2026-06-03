@@ -292,7 +292,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != tracing_id {
-                        let ptr = Gc::as_ptr(h) as usize;
+                        let ptr = Gc::as_ptr(h).expose_provenance();
                         if !record_cross_arena_ref(owner_id, ptr) {
                             return;
                         }
@@ -381,7 +381,7 @@ impl<'gc> ObjectRef<'gc> {
             );
         }
         if let Some(handle) = self.0 {
-            let ptr = Gc::as_ptr(handle) as usize;
+            let ptr = Gc::as_ptr(handle).expose_provenance();
             if visited.insert(ptr) {
                 let inner = handle.borrow();
                 inner.validate_resurrection_invariants();
@@ -435,7 +435,13 @@ impl<'gc> ObjectRef<'gc> {
                     // Sign-extend from 16-bit to correctly handle ArenaId::INVALID (u64::MAX)
                     let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
                     let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
-                    let real_ptr = real_ptr_val as *const ThreadSafeLock<ObjectInner<'static>>;
+                    // `ptr_val` was produced by `ObjectRef::write` from a pointer whose
+                    // provenance was explicitly exposed. Reconstitute that pointer through
+                    // the exposed-provenance API so strict-provenance Miri can model the
+                    // tag-stripping round trip.
+                    let real_ptr = std::ptr::with_exposed_provenance::<
+                        ThreadSafeLock<ObjectInner<'static>>,
+                    >(real_ptr_val);
 
                     // Acquire a lease to pin the arena while we reconstruct the Gc pointer.
                     // This ensures the memory remains valid during magic check and construction.
@@ -446,7 +452,7 @@ impl<'gc> ObjectRef<'gc> {
                     let _lease = lease;
 
                     // Also record it if we are tracing
-                    record_cross_arena_ref(owner_id, real_ptr as usize);
+                    record_cross_arena_ref(owner_id, real_ptr.expose_provenance());
 
                     // Continue with the untagged pointer to construct the ObjectRef
                     let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
@@ -454,12 +460,13 @@ impl<'gc> ObjectRef<'gc> {
                     #[cfg(any(feature = "memory-validation", debug_assertions))]
                     {
                         use std::mem::align_of;
-                        if !(real_ptr as usize)
+                        let real_ptr_addr = real_ptr.addr();
+                        if !real_ptr_addr
                             .is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>())
                         {
                             panic!(
                                 "ObjectRef::read: Pointer {:#x} is not aligned",
-                                real_ptr as usize
+                                real_ptr_addr
                             );
                         }
 
@@ -482,7 +489,10 @@ impl<'gc> ObjectRef<'gc> {
                 return ObjectRef(None);
             }
 
-            let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
+            // Non-tagged object references are likewise serialized as exposed addresses by
+            // `ObjectRef::write`; recover them without a bare integer-to-pointer cast.
+            let ptr =
+                std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'gc>>>(ptr_val);
 
             if ptr.is_null() {
                 ObjectRef(None)
@@ -526,7 +536,7 @@ impl<'gc> ObjectRef<'gc> {
         let ptr_val: usize = match self.0 {
             None => 0,
             Some(s) => {
-                let ptr = Gc::as_ptr(s) as usize;
+                let ptr = Gc::as_ptr(s).expose_provenance();
                 #[cfg(feature = "multithreading")]
                 {
                     // Encode arena ownership with Tag 5 for every managed owner.
@@ -545,7 +555,7 @@ impl<'gc> ObjectRef<'gc> {
                         // we encode its ID into the tagged reference.
                         if let Some(_lease) = try_acquire_lease(owner_id) {
                             // Store pointer + owner arena id in a stable tagged form.
-                            // Store the 16-byte ArenaId in the upper bits of the pointer.
+                            // Store the 16-bit ArenaId in the upper bits of the pointer.
                             // We assume 48-bit addressing (standard on current 64-bit OSs).
                             debug_assert_eq!(
                                 ptr & 0xFFFF000000000000,

@@ -15,7 +15,6 @@ dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 libffi = "5.0.0"
 libloading = "0.9.0"
-sptr = "0.3"
 tracing = { workspace = true }
 
 [features]

@@ -18,7 +18,6 @@ use dotnet_utils::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Gc, collect::Trace};
-use sptr::Strict;
 use std::{
     cmp::Ordering,
     fmt::Debug,
@@ -495,7 +494,7 @@ impl<'gc> StackValue<'gc> {
 
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
-            Self::NativeInt(i) => sptr::from_exposed_addr_mut(*i as usize),
+            Self::NativeInt(i) => std::ptr::with_exposed_provenance_mut(*i as usize),
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
             Self::ManagedPtr(m) | Self::TypedRef(m, _) => {
                 if m.is_null() {
@@ -730,7 +729,7 @@ impl<'gc> StackValue<'gc> {
             LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
             LoadType::IntPtr => Self::NativeInt(val as isize),
             LoadType::Object => {
-                let ptr = sptr::from_exposed_addr::<ThreadSafeLock<object::ObjectInner<'gc>>>(
+                let ptr = std::ptr::with_exposed_provenance::<ThreadSafeLock<object::ObjectInner<'gc>>>(
                     val as usize,
                 );
                 let obj = if ptr.is_null() {
@@ -772,7 +771,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Object => {
                 let obj = self.as_object_ref();
                 let val = match obj.0 {
-                    Some(h) => Gc::as_ptr(h).expose_addr(),
+                    Some(h) => Gc::as_ptr(h).expose_provenance(),
                     None => 0,
                 };
                 (val as u64, ObjectRef::SIZE)

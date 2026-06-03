@@ -7,7 +7,6 @@ use dashmap::DashMap;
 use dotnet_types::{TypeDescription, generics::GenericLookup};
 use dotnet_utils::ManagedByteOffset;
 use gc_arena::{Collect, collect::Trace, static_collect};
-use sptr::Strict;
 use std::{
     cmp::Ordering as CmpOrdering,
     fmt::{self, Debug, Formatter},
@@ -29,7 +28,7 @@ pub use origin::*;
 
 #[inline]
 pub(crate) fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
-    NonNull::new(sptr::from_exposed_addr_mut::<u8>(addr))
+    NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(addr))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,7 +251,7 @@ impl<'gc> ManagedPtr<'gc> {
             Err(_) => {
                 // For unmanaged pointers we preserve full-width absolute address in `_value`.
                 // Any managed origin offset that exceeds u32 is unsupported by the compact form.
-                let resolved = value.map(|p| p.as_ptr().expose_addr()).unwrap_or(0);
+                let resolved = value.map(|p| p.as_ptr().expose_provenance()).unwrap_or(0);
                 panic!(
                     "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
                     offset.as_usize(),
@@ -268,7 +267,7 @@ impl<'gc> ManagedPtr<'gc> {
             if self.has_unmanaged_inline_offset() {
                 ByteOffset(self.offset.as_usize())
             } else {
-                ByteOffset(self._value.map_or(0, |p| p.as_ptr().expose_addr()))
+                ByteOffset(self._value.map_or(0, |p| p.as_ptr().expose_provenance()))
             }
         } else {
             ByteOffset(self.offset.as_usize())
@@ -487,7 +486,7 @@ impl<'gc> ManagedPtr<'gc> {
                     // Static data pointer or absolute pointer - use cached value
                     self._value.expect("ManagedPtr::with_data: null pointer")
                 };
-                let slice = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), size) };
+                let slice = unsafe { NonNull::slice_from_raw_parts(ptr, size).as_ref() };
                 f(slice)
             }
         }
@@ -545,8 +544,12 @@ impl<'gc> ManagedPtr<'gc> {
 
     /// # Safety
     ///
-    /// The caller must ensure that the resulting pointer is within the bounds of the same
-    /// allocated object as the original pointer.
+    /// This performs a raw pointer offset using wrapping arithmetic, so creating the intermediate
+    /// pointer value is UB-free even if it leaves allocation bounds. However, callers must ensure
+    /// the resulting `ManagedPtr` is only used in ways that are valid for the same allocation
+    /// provenance as the original pointer (for example, any eventual dereference must be in
+    /// bounds and properly aligned for the accessed type). When `memory-validation` is enabled,
+    /// an additional bounds check traps diagnostically, but that check is not a correctness guard.
     pub unsafe fn offset(self, bytes: isize) -> Self {
         #[cfg(feature = "memory-validation")]
         self.validate_offset(bytes);
@@ -572,9 +575,10 @@ impl<'gc> ManagedPtr<'gc> {
                 && packed_offset.as_usize() == new_offset.as_usize(),
         );
         m.offset = packed_offset;
-        m._value = m
-            ._value
-            .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().offset(bytes)) });
+        m._value = m._value.map(|p| {
+            NonNull::new(p.as_ptr().wrapping_offset(bytes))
+                .expect("ManagedPtr::offset produced null pointer")
+        });
         m
     }
 

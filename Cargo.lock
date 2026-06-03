@@ -547,7 +547,6 @@ dependencies = [
  "gc-arena",
  "libffi",
  "libloading",
- "sptr",
  "tracing",
 ]
 
@@ -563,7 +562,6 @@ dependencies = [
  "gc-arena",
  "slab",
  "smallvec",
- "sptr",
 ]
 
 [[package]]
@@ -576,7 +574,6 @@ dependencies = [
  "dotnet-value",
  "dotnetdll",
  "hashbrown 0.15.3",
- "sptr",
  "tracing",
 ]
 
@@ -631,7 +628,6 @@ dependencies = [
  "hashbrown 0.15.3",
  "lru",
  "smallvec",
- "sptr",
  "static_assertions",
  "thiserror",
 ]
@@ -676,7 +672,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "sptr",
  "syn 2.0.101",
  "thiserror",
  "tracing",
@@ -1348,12 +1343,6 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
-
-[[package]]
-name = "sptr"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b9b39299b249ad65f3b7e96443bad61c02ca5cd3589f46cb6d610a0fd6c0d6a"
 
 [[package]]
 name = "static_assertions"

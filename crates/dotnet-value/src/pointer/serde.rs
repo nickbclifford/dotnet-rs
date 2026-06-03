@@ -7,7 +7,6 @@ use crate::{
 };
 use dotnet_types::error::PointerDeserializationError;
 use gc_arena::Mutation;
-use sptr::Strict;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
@@ -138,7 +137,7 @@ impl<'gc> ManagedPtr<'gc> {
                     // making it safe even if memory contains garbage or is half-written.
                     #[cfg(feature = "multithreading")]
                     {
-                        let lock_ptr = sptr::from_exposed_addr::<
+                        let lock_ptr = std::ptr::with_exposed_provenance::<
                             ThreadSafeLock<crate::object::ObjectInner<'static>>,
                         >(word0 & !7);
 
@@ -174,7 +173,7 @@ impl<'gc> ManagedPtr<'gc> {
                                 (*inner_ptr).storage.raw_data_ptr()
                             }
                         };
-                        let base_addr = base_ptr.expose_addr();
+                        let base_addr = base_ptr.expose_provenance();
 
                         Ok(ManagedPtrInfo {
                             address: if base_ptr.is_null() {
@@ -279,12 +278,12 @@ impl<'gc> ManagedPtr<'gc> {
             PointerOrigin::Stack(slot_idx) => {
                 let w0: usize =
                     1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (byte_offset.as_usize() << 33);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
+                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
                 (w0, w1)
             }
             PointerOrigin::Heap(owner) => {
                 let w0 = match owner.0 {
-                    Some(h) => gc_arena::Gc::as_ptr(h).expose_addr(),
+                    Some(h) => gc_arena::Gc::as_ptr(h).expose_provenance(),
                     None => 0,
                 };
                 let w1 = byte_offset.as_usize();
@@ -303,17 +302,17 @@ impl<'gc> ManagedPtr<'gc> {
                     | (1 << 3)
                     | ((id as usize & 0xFFFFFFFF) << 6)
                     | (byte_offset.as_usize() << 38);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
+                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
                 (w0, w1)
             }
             PointerOrigin::Unmanaged => {
                 let w0: usize = 0;
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
+                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
                 (w0, w1)
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let w0: usize = ptr.as_ptr().expose_addr() | 5;
+                let w0: usize = ptr.as_ptr().expose_provenance() | 5;
                 // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
                 // This avoids dereferencing the pointer during deserialization/GC.
                 let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
@@ -323,7 +322,7 @@ impl<'gc> ManagedPtr<'gc> {
             }
             PointerOrigin::Transient(_) => {
                 let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
+                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
                 (w0, w1)
             }
         };

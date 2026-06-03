@@ -16,7 +16,6 @@ use dotnet_value::{
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
-use sptr::Strict;
 use std::{any, error::Error, ptr::NonNull, sync::Arc};
 
 impl<C, L> ResolverService<C, L>
@@ -302,7 +301,7 @@ where
                     let ptr = convert_num::<usize>(data)?;
                     let inner_type = self.resolve_pointer_inner_type(inner)?;
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(sptr::from_exposed_addr_mut(ptr)),
+                        NonNull::new(std::ptr::with_exposed_provenance_mut(ptr)),
                         inner_type,
                         None,
                         false,
@@ -503,7 +502,7 @@ where
                     ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(sptr::from_exposed_addr_mut(ptr)),
+                        NonNull::new(std::ptr::with_exposed_provenance_mut(ptr)),
                         inner_type,
                         None,
                         false,
@@ -563,7 +562,7 @@ where
                     let addr_bytes = buf[0..ObjectRef::SIZE].try_into().unwrap();
                     let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().unwrap();
                     let addr = usize::from_ne_bytes(addr_bytes);
-                    let type_ptr = sptr::from_exposed_addr::<TypeDescription>(
+                    let type_ptr = std::ptr::with_exposed_provenance::<TypeDescription>(
                         usize::from_ne_bytes(type_bytes),
                     );
 
@@ -582,7 +581,7 @@ where
                     };
 
                     let m = ManagedPtr::new(
-                        NonNull::new(sptr::from_exposed_addr_mut(addr)),
+                        NonNull::new(std::ptr::with_exposed_provenance_mut(addr)),
                         (*type_desc).clone(),
                         None,
                         false,
@@ -683,7 +682,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
                 any::type_name::<T>()
             ))
         }),
-        StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_addr().try_into().map_err(|_| {
+        StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_provenance().try_into().map_err(|_| {
             TypeResolutionError::InvalidLayout(format!(
                 "failed to convert unmanaged pointer into {}",
                 any::type_name::<T>()
@@ -691,7 +690,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
         }),
         StackValue::ManagedPtr(p) => {
             let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-            ptr.expose_addr().try_into().map_err(|_| {
+            ptr.expose_provenance().try_into().map_err(|_| {
                 TypeResolutionError::InvalidLayout(format!(
                     "failed to convert managed pointer into {}",
                     any::type_name::<T>()

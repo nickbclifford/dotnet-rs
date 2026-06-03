@@ -8,7 +8,7 @@ use dotnet_utils::sync::{
     MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 use dotnet_utils::{
-    atomic::Atomic,
+    atomic::{Atomic, remove_atomic_locations_in_range},
     sync::{Arc, Ordering},
     validate_alignment,
 };
@@ -248,6 +248,19 @@ impl PartialEq for FieldStorage {
         }
 
         self.with_data(|lhs| other.with_data(|rhs| lhs == rhs))
+    }
+}
+
+impl Drop for FieldStorage {
+    fn drop(&mut self) {
+        #[cfg(feature = "multithreading")]
+        let data: &mut Vec<u8> = self.data.get_mut();
+
+        #[cfg(not(feature = "multithreading"))]
+        // SAFETY: `drop` has exclusive access to `self`, so no outstanding borrows remain.
+        let data: &mut Vec<u8> = unsafe { &mut *self.data.data_ptr() };
+
+        remove_atomic_locations_in_range(data.as_ptr(), data.len());
     }
 }
 

@@ -110,7 +110,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             let ref_tid = unsafe { (*h.as_ptr()).owner_id() };
             if ref_tid != self.arena_id {
                 self.buffer
-                    .push((ref_tid, gc_arena::Gc::as_ptr(h) as usize));
+                    .push((ref_tid, gc_arena::Gc::as_ptr(h).expose_provenance()));
                 maybe_flush_write_barrier_entries(self.buffer);
             }
         }
@@ -119,7 +119,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
     pub fn record_managed_ptr(&mut self, target: &ManagedPtr<'gc>) {
         match target.origin() {
             PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
-                self.buffer.push((*ref_tid, p.as_ptr() as usize));
+                self.buffer.push((*ref_tid, p.as_ptr().expose_provenance()));
                 maybe_flush_write_barrier_entries(self.buffer);
             }
             PointerOrigin::Heap(r) => {

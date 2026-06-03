@@ -740,15 +740,15 @@ fn external_call_impl<'gc>(
                                 .raw_data_ptr()
                                 .add(p.byte_offset().as_usize());
                             local_guards.push(guard);
-                            sptr::Strict::expose_addr(ptr)
+                            ptr.expose_provenance()
                         } else {
                             p.byte_offset().as_usize()
                         }
                     } else {
-                        p.with_data(0, |data| sptr::Strict::expose_addr(data.as_ptr()))
+                        p.with_data(0, |data| data.as_ptr().expose_provenance())
                     }
                 };
-                let type_ptr = sptr::Strict::expose_addr(Arc::as_ptr(t));
+                let type_ptr = Arc::as_ptr(t).expose_provenance();
                 bytes[0..ObjectRef::SIZE].copy_from_slice(&addr.to_ne_bytes());
                 bytes[ObjectRef::SIZE..ManagedPtr::SIZE].copy_from_slice(&type_ptr.to_ne_bytes());
 
@@ -818,7 +818,7 @@ fn external_call_impl<'gc>(
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                sptr::from_exposed_addr_mut::<u8>(p.byte_offset().as_usize())
+                                std::ptr::with_exposed_provenance_mut::<u8>(p.byte_offset().as_usize())
                             }
                         } else {
                             p.with_data(0, |data| data.as_ptr().cast_mut())
