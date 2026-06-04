@@ -1,5 +1,20 @@
+//! Runtime resolver services for type, method, and field lookups.
+//!
+//! This crate centralizes metadata-driven resolution and caching that the VM
+//! depends on while executing IL. Internally, functionality is split across
+//! `types.rs` (type hierarchy and trait/value-type queries), `methods.rs`
+//! (method dispatch and override resolution), `layout.rs` (instance/type layout
+//! caching), and `factory.rs` (construction helpers). The public `resolution`
+//! module exposes resolution data structures used by call sites.
+//!
+//! `LayoutFactory` is re-exported as the crate's layout-construction entry point,
+//! and `ResolverThreadSafety` provides a feature-gated thread-safety boundary:
+//! with `multithreading`, adapters must be `Send + Sync`; otherwise the bound is
+//! relaxed for single-threaded configurations.
+//!
+//! For design context and cache behavior details, see
+//! `docs/TYPE_RESOLUTION_AND_CACHING.md`.
 #![allow(clippy::mutable_key_type)]
-//! Type, method, and field resolution with cache and layout adapters.
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,

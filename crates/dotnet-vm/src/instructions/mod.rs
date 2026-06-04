@@ -33,21 +33,21 @@
 //!
 //! ```ignore
 //! #[dotnet_instruction]
-//! pub fn instruction_name<'gc>(
-//!     ctx: &mut dyn VesOps<'gc>,
-//!     operand: OperandType,
-//! ) -> Result<StepResult> {
-//!     // 1. Pop operands from evaluation stack
-//!     let value = ctx.pop_i32()?;
+//! pub fn instruction_name<'gc, T: VesOps<'gc>>(
+//!     ctx: &mut T,
+//!     instr: &Instruction,
+//! ) -> StepResult {
+//!     // 1. Decode operands from the instruction when needed
+//!     let operand = decode_operand(instr);
 //!
 //!     // 2. Perform operation
-//!     let result = compute(value);
+//!     let result = compute(operand);
 //!
 //!     // 3. Push result to evaluation stack
 //!     ctx.push_i32(result);
 //!
 //!     // 4. Return control flow result
-//!     Ok(StepResult::Continue)
+//!     StepResult::Continue
 //! }
 //! ```
 //!
@@ -56,7 +56,7 @@
 //! Handlers return [`StepResult`](crate::StepResult) to indicate control flow:
 //! - `Continue`: Proceed to next instruction
 //! - `Return`: Return from current method
-//! - `Throw`: Unwind for exception handling
+//! - `Exception`: Unwind for exception handling
 //! - `Yield`: Pause execution (e.g., for GC safe point)
 //!
 //! # Trait-Based Design
@@ -71,14 +71,15 @@
 //!
 //! ```ignore
 //! use dotnet_macros::dotnet_instruction;
+//! use dotnetdll::prelude::Instruction;
 //! use crate::{StepResult, stack::ops::VesOps};
 //!
 //! #[dotnet_instruction]
-//! pub fn add<'gc>(ctx: &mut dyn VesOps<'gc>) -> Result<StepResult> {
-//!     let b = ctx.pop_i32()?;
-//!     let a = ctx.pop_i32()?;
-//!     ctx.push_i32(a.wrapping_add(b));
-//!     Ok(StepResult::Continue)
+//! pub fn add<'gc, T: VesOps<'gc>>(ctx: &mut T, _instr: &Instruction) -> StepResult {
+//!     // Pop operands, perform addition, and push the result.
+//!     // (exact stack-value helpers depend on the handler implementation)
+//!     let _ = ctx;
+//!     StepResult::Continue
 //! }
 //! ```
 #[macro_use]

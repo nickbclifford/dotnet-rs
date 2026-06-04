@@ -149,10 +149,10 @@ When a multicast delegate target throws, exception handling must interact with t
 Virtual dispatch on generic types requires resolving the method with the correct generic instantiation. The virtual dispatch cache key includes the concrete type to handle this.
 
 ### Intrinsic Dispatch ↔ Build System
-The intrinsic PHF table (generated at build time) and the runtime `IntrinsicRegistry` must agree on key format. Both use `dotnet-macros-core::ParsedSignature` for consistency (see `BUILD_TIME_CODE_GENERATION.md`).
+The intrinsic PHF table (generated at build time) and the runtime `IntrinsicRegistry` must agree on key format. Both use `dotnet-macros-core::ParsedSignature` for consistency (see [Build-Time Code Generation](BUILD_TIME_CODE_GENERATION.md)).
 
 ### Method Call ↔ Static Initialization
-Any method call may trigger static field initialization (`.cctor`) for the declaring type. This is checked during method resolution and can cause recursive initialization or cross-thread waiting (see `TYPE_RESOLUTION_AND_CACHING.md`).
+Any method call may trigger static field initialization (`.cctor`) for the declaring type. This is checked during method resolution and can cause recursive initialization or cross-thread waiting (see [Type Resolution and Caching](TYPE_RESOLUTION_AND_CACHING.md)).
 
 ## Method Resolution and Pointers
 

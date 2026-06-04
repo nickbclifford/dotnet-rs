@@ -1,9 +1,29 @@
-//! Threading/monitor/interlocked intrinsic handlers and host traits.
+//! Threading intrinsic handlers for monitor/lock and atomic runtime operations.
 //!
-//! Atomic and Interlocked intrinsic handlers in this crate call the following
-//! [`RawMemoryOps`] methods directly: [`RawMemoryOps::compare_exchange_atomic`],
+//! This crate contains `#[dotnet_intrinsic]` handlers for
+//! `System.Threading.Monitor`, `System.Threading.Interlocked`, and
+//! `System.Threading.Volatile` call paths.
+//!
+//! Atomic/interlocked handlers call the following [`RawMemoryOps`] methods
+//! directly: [`RawMemoryOps::compare_exchange_atomic`],
 //! [`RawMemoryOps::exchange_atomic`], [`RawMemoryOps::exchange_add_atomic`],
 //! [`RawMemoryOps::load_atomic`], and [`RawMemoryOps::store_atomic`].
+//!
+//! ## Host Trait
+//!
+//! VM contexts integrate this crate through [`ThreadingIntrinsicHost<'gc>`],
+//! which composes [`VmThreadingIntrinsicHost<'gc>`], [`MonitorHost<'gc>`],
+//! [`RawMemoryOps<'gc>`], and [`StackSlotWriteHost<'gc>`].
+//!
+//! [`MonitorHost<'gc>`] defines the monitor-specific synchronization hooks used
+//! by `Monitor.Enter`/`TryEnter`/`Exit` handlers: sync-block lookup/creation
+//! (`monitor_get_sync_block_for_object`,
+//! `monitor_get_or_create_sync_block_for_object`), acquisition (`monitor_try_enter`,
+//! `monitor_enter_safe`, `monitor_enter_with_timeout_safe`), and release
+//! (`monitor_exit`).
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for how intrinsic handlers are
+//! discovered and wired into generated dispatch tables.
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingIntrinsicHost as VmThreadingIntrinsicHost};

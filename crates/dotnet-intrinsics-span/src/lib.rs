@@ -1,5 +1,29 @@
-//! Span and ReadOnlySpan intrinsic handlers plus span host abstractions.
+//! Span and `ReadOnlySpan` intrinsic handlers plus span host abstractions.
 //!
+//! This crate provides `#[dotnet_intrinsic]` handlers for span construction,
+//! slicing/conversion, pointer-based accessors, and equality/length/indexer
+//! operations used by `System.Span<T>`, `System.ReadOnlySpan<T>`, and
+//! `System.MemoryExtensions` call paths.
+//!
+//! ## Host Trait
+//!
+//! VM contexts integrating this crate implement [`SpanIntrinsicHost<'gc>`], a
+//! composed trait alias that extends
+//! `dotnet_vm_ops::ops::SpanIntrinsicHost<'gc>` with span-specific host seams.
+//! In particular:
+//!
+//! - [`LayoutQueryHost`] supplies `span_type_layout`, allowing handlers to
+//!   query element layout for generic `T` and compute span lengths/offsets.
+//! - [`SpanPointerIntrospectionHost`] supplies `span_ptr_info`, allowing
+//!   handlers to recover pointer origin plus byte offset from stack values when
+//!   materializing byref-based span operations.
+//!
+//! Additional extension traits in this crate (`SpanObjectFactoryHost` and
+//! `SpanRuntimeHost`) provide runtime object construction and dynamic dispatch
+//! hooks used by conversion and helper routines.
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
+//! handlers are discovered and wired into generated intrinsic dispatch tables.
 use dotnet_types::{
     TypeDescription,
     error::{ExecutionError, TypeResolutionError},

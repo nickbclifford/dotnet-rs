@@ -5,8 +5,8 @@
 //! Runtime execution data types are hosted in `dotnet-vm-data`.
 //! Canonical imports should come from `dotnet_vm_data` directly.
 //! Compatibility re-exports remain here for downstream crates.
-//! P2.S4 decision: remain a separate crate from `dotnet-vm-data` for now, while
-//! preserving a future compatibility-shim migration path if consolidation is justified.
+//! This crate is intentionally separate from `dotnet-vm-data` to allow downstream
+//! crates to depend on operation traits without pulling in any VM data structures.
 mod macros;
 pub mod ops;
 

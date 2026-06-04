@@ -106,7 +106,7 @@ sequenceDiagram
 ## Canonical GC/Threading Lock Order
 
 This GC document uses the same canonical lock contract as
-`docs/THREADING_AND_SYNCHRONIZATION.md`. The GC-critical chain is:
+[Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md). The GC-critical chain is:
 
 | Order | Lock | Primary path |
 |------|------|--------------|

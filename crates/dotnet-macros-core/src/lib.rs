@@ -1,7 +1,27 @@
 //! # dotnet-macros-core
 //!
-//! Core logic for macro expansion used by `dotnet-macros`.
-//! This crate contains the parsing and transformation logic for .NET signatures.
+//! Shared compile-time parsing and mapping logic for macro expansion and build
+//! script code generation.
+//!
+//! This crate is a **build-time dependency**, not a runtime VM dependency. It
+//! is consumed by `dotnet-macros` (proc-macro expansion) and by
+//! `dotnet-vm`'s `build.rs` support code so both sides parse instruction and
+//! intrinsic metadata the same way.
+//!
+//! ## Core types
+//!
+//! - [`ParsedSignature`]: parses .NET method signatures from attribute strings
+//!   into normalized class/method/parameter components.
+//! - [`ParsedFieldSignature`]: parses .NET field signatures for field intrinsic
+//!   and metadata mapping flows.
+//! - [`InstructionMapping`]: represents unit/tuple/struct instruction-variant
+//!   mapping syntax used by instruction-handler macros.
+//! - [`ParsedInstruction`]: validates an instruction handler against an
+//!   [`InstructionMapping`] and records the argument metadata used to generate
+//!   dispatch match arms.
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for the end-to-end code generation
+//! pipeline that uses these shared parsers.
 use quote::quote;
 use std::collections::HashSet;
 use syn::{

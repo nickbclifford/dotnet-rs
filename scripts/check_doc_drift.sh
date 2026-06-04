@@ -52,6 +52,43 @@ CHECKS=(
   "THREADING_AND_SYNCHRONIZATION.md|SyncBlockManager|*.rs"
   "THREADING_AND_SYNCHRONIZATION.md|TRACER_CHANNEL_CAPACITY|*.rs"
   "THREADING_AND_SYNCHRONIZATION.md|LockResult|*.rs"
+  "THREADING_AND_SYNCHRONIZATION.md|ThreadManagerOps|*.rs"
+  "THREADING_AND_SYNCHRONIZATION.md|SyncBlockOps|*.rs"
+  "THREADING_AND_SYNCHRONIZATION.md|execute_gc_command_for_current_thread|*.rs"
+  "THREADING_AND_SYNCHRONIZATION.md|record_found_cross_arena_refs|*.rs"
+
+  # --- BUILD_TIME_CODE_GENERATION.md ---
+  "BUILD_TIME_CODE_GENERATION.md|process_instruction_file|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|generate_instruction_table|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|process_intrinsic_file|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|generate_intrinsic_phf|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|ParsedSignature|*.rs"
+
+  # --- FUZZING.md ---
+  "FUZZING.md|FuzzProgram|*.rs"
+  "FUZZING.md|FuzzInstruction|*.rs"
+  "FUZZING.md|execute_cil_program|*.rs"
+  "FUZZING.md|ManagedPtrInfo|*.rs"
+  "FUZZING.md|AtomicAccess|*.rs"
+
+  # --- EXCEPTION_HANDLING.md ---
+  "EXCEPTION_HANDLING.md|ExceptionHandlingSystem|*.rs"
+  "EXCEPTION_HANDLING.md|ManagedException|*.rs"
+  "EXCEPTION_HANDLING.md|SearchState|*.rs"
+  "EXCEPTION_HANDLING.md|UnwindState|*.rs"
+  "EXCEPTION_HANDLING.md|ExceptionState|*.rs"
+
+  # --- DELEGATES_AND_DISPATCH.md ---
+  "DELEGATES_AND_DISPATCH.md|MulticastState|*.rs"
+  "DELEGATES_AND_DISPATCH.md|try_delegate_dispatch|*.rs"
+  "DELEGATES_AND_DISPATCH.md|unified_dispatch|*.rs"
+
+  # --- TYPE_RESOLUTION_AND_CACHING.md ---
+  "TYPE_RESOLUTION_AND_CACHING.md|GlobalCaches|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|ResolutionContext|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|GenericLookup|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|StaticStorageManager|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|VmLayoutFactory|*.rs"
 
   # --- ARCHITECTURE.md ---
   "ARCHITECTURE.md|dotnet-vm|*.toml"

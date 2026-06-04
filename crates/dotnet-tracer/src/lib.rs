@@ -1,6 +1,8 @@
-//! IO-optimized runtime state debug tracer for the .NET VM
+//! Structured logging and diagnostics for the dotnet-rs VM.
 //!
-//! This module now provides a backward-compatible wrapper around `tracing`.
+//! This crate wraps the `tracing` ecosystem, providing a bounded back-pressure channel
+//! (`TRACER_CHANNEL_CAPACITY = 8_192`) for VM trace events. Configure via the
+//! `DOTNET_RS_TRACE` environment variable (e.g. `info`, `dotnet_vm=debug`).
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use dotnet_metrics::RuntimeMetrics;
 use gc_arena::static_collect;

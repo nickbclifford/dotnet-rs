@@ -8,7 +8,8 @@
 //! - **Stack System** (`stack/`): Evaluation stack, call frames, and operational traits.
 //! - **Instruction Set** (`instructions/`): Handlers for CIL instructions.
 //! - **Intrinsics** (`intrinsics/`): Native implementations of BCL methods.
-//! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
+//! - **GC Coordination** (`gc/`): Stop-the-world coordinator and per-thread arena management.
+//!   Heap allocation and memory access services are provided by the `dotnet-runtime-memory` crate.
 //! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
 #![allow(clippy::mutable_key_type)]

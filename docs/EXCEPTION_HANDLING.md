@@ -29,6 +29,29 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 - **`Unwinding(UnwindState)`**: Second pass — executing `finally`/`fault` blocks encountered between the throw site and the target handler. Tracks an `UnwindTarget`.
 - **`ExecutingHandler(UnwindState)`**: The matched handler is running (catch block body).
 
+### Two-Pass Flow and State Transitions
+
+```mermaid
+flowchart LR
+    N[None] -->|throw/rethrow opcode returns StepResult::Exception| T[Throwing]
+    T -->|begin_throwing seeds search\nStepResult::Exception| S[Searching]
+
+    S -->|matching catch found\nStepResult::Exception| U[Unwinding]
+    S -->|matching filter found\nStepResult::Exception| F[Filtering]
+    F -->|endfilter(1)\nStepResult::Exception| U
+    F -->|endfilter(0)\nStepResult::Exception| S
+
+    U -->|finally/fault execution\nStepResult::Exception| H[ExecutingHandler]
+    H -->|endfinally/leave/ret may continue unwind\nStepResult::Exception| U
+    U -->|handler reached or leave target reached\nstate updated, resume dispatch| N
+
+    S -->|no handler in any frame| M[StepResult::MethodThrew]
+```
+
+### `ExceptionState` and `StepResult` Relationship
+
+`ExceptionHandlingSystem::handle_exception` is intentionally conservative: while driving `Throwing`, `Searching`, and `Unwinding`, it primarily returns `StepResult::Exception` so the dispatch loop re-enters exception handling after each state mutation (instead of batching normal instruction execution). `StepResult::MethodThrew` is emitted only when `Searching` exhausts all handlers and the exception is truly unhandled. `StepResult::Return` is used in a narrow unwind sentinel path (`UnwindTarget::Instruction(usize::MAX)`) to finish frame returns through the normal return machinery. `StepResult::Continue` is not emitted by the core exception state machine; it appears only while normal instruction dispatch is executing code in `Filtering` or `ExecutingHandler` states.
+
 ### Key Types
 
 - **`HandlerAddress`**: Cursor into the handler search space — tracks frame index and handler index.
@@ -62,6 +85,12 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 - The `endfilter` opcode (`crates/dotnet-vm/src/instructions/exceptions.rs`) calls `ExceptionOps::endfilter` (`crates/dotnet-vm/src/stack/exception_ops_impl.rs`), which restores suspended state and continues either unwinding (`result == 1`) or searching (`result == 0`).
 - This means the dispatch loop must handle re-entrant exception states.
 
+### Known Edge Cases
+
+- **Nested exceptions while already handling another exception**: `begin_throwing` preempts the current exception mode and starts a new `Searching` phase for the new exception. When the prior mode was `Filtering` (or a `Searching` state already tied to a nested filter), the prior filter context is carried in `SearchState::nested_filter` so it can be resumed if the nested exception is not handled.
+- **Exceptions thrown inside `finally`/`fault` handlers**: when a `throw` happens while `ExecutingHandler` is running, the VM transitions to `Throwing` for the new exception and starts a new search/unwind sequence; the new exception becomes the active one.
+- **Exceptions thrown inside filters**: filter execution runs with suspended upper frames/stacks. If an exception escapes the filter and is unhandled, `search_for_handler` starts a special unwind (`UnwindTarget::Instruction(usize::MAX)`) and then `complete_nested_filter_unwind` restores suspended state and resumes searching for the original exception after the filter handler.
+
 ### `leave` Instruction
 - The `leave` instruction (used to exit try/catch blocks) triggers the unwind mechanism to run finally blocks, even though no exception is active. It uses `UnwindTarget::Instruction` instead of `UnwindTarget::Handler`.
 
@@ -76,15 +105,11 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 
 ## Implementation Details
 
+### Metadata Parsing (`parse`)
+
+`dotnet_exceptions::parse` (`crates/dotnet-exceptions/src/lib.rs`) converts `dotnetdll::body::Exception` metadata rows into runtime `ProtectedSection`/`Handler` structures used by each `MethodInfo` frame. For each metadata row, it reads `try_offset`/`try_length` and `handler_offset`/`handler_length` and normalizes them into half-open ranges (`start..start+length`) over instruction offsets. It maps `ExceptionKind::TypedException` to `HandlerKind::Catch` via `ResolutionOps::make_concrete`, maps `ExceptionKind::Filter { offset }` to `HandlerKind::Filter { clause_offset }`, and passes through `Finally`/`Fault` directly. Handlers are grouped by identical try-range into a single `ProtectedSection`, then sorted inner-most-first (`Reverse(try_start)`, then `try_end`) so search prefers the most specific protected region before outer regions.
+
 ### Rethrow Stack Trace Preservation
 - **`crates/dotnet-vm-data/src/exceptions.rs`**: `ExceptionState::Throwing` includes a `bool` flag for trace preservation.
 - **`crates/dotnet-vm/src/stack/exception_ops_impl.rs`**: `rethrow()` sets this flag to `true`, while `throw()` sets it to `false`.
 - **`crates/dotnet-exceptions/src/lib.rs`**: `begin_throwing()` reads this flag and optionally skips stack trace generation if an existing trace is present and preservation is requested.
-
-## Notes for Future Documentation
-
-- [ ] Add sequence diagrams for the two-pass exception model (throw/search/filter/unwind flow and where control returns to normal dispatch)
-- [ ] Document the relationship between `ExceptionState` transitions and `StepResult` variants (which states emit `Continue`, `Exception`, `MethodThrew`, or handler-jump control)
-- [x] Explain how `rethrow` preserves stack traces vs `throw` resetting them
-- [ ] Document edge cases: nested exceptions, exceptions in finally blocks, exceptions in filters (expected state transitions and whether prior unwind/search state is preserved or replaced)
-- [ ] Detail the `parse` function that converts dotnetdll metadata to `ProtectedSection`/`Handler` (input metadata shape, normalization rules, and offset mapping assumptions)

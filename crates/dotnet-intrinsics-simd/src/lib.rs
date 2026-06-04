@@ -1,7 +1,23 @@
-//! Runtime-facing SIMD intrinsic capability probes and host contract.
+//! Runtime-facing SIMD intrinsic handlers and capability probes.
 //!
-//! This crate hosts initial `.NET System.Runtime.Intrinsics` probes that map
-//! VM capability checks onto intrinsic getter handlers.
+//! This crate provides `#[dotnet_intrinsic]` handlers for selected
+//! `System.Runtime.Intrinsics` capability APIs and centralizes SIMD capability
+//! probing logic used by VM dispatch.
+//!
+//! Hardware acceleration probes are currently conservative: both
+//! [`vector128_is_hardware_accelerated`] and
+//! [`vector256_is_hardware_accelerated`] return `false` until the broader
+//! `Vector128`/`Vector256` intrinsic surface is implemented.
+//!
+//! ## Host Trait
+//!
+//! VM contexts integrating these handlers implement [`SimdIntrinsicHost<'gc>`].
+//! This alias currently forwards directly to
+//! `dotnet_vm_ops::ops::SimdIntrinsicHost<'gc>` and serves as this crate's
+//! host-trait integration point for SIMD intrinsic dispatch.
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
+//! handlers are discovered and wired into generated intrinsic dispatch tables.
 use dotnet_vm_ops::ops::SimdIntrinsicHost as VmSimdIntrinsicHost;
 
 pub mod handlers;

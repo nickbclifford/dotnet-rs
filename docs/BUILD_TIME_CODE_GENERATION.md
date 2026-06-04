@@ -259,10 +259,3 @@ The fixture build contract is env-driven:
 When `DOTNET_USE_PREBUILT_FIXTURES=1` is active, prebuilt validation takes precedence and
 `build.rs` does not run dotnet restore/build.
 
-## Notes for Future Documentation
-
-- [x] Document the exact PHF key format with examples
-- [x] Explain how `IntrinsicMetadata` and `filter_name` affect dispatch
-- [x] Show the generated table code (example output from a build)
-- [x] Document error handling when a handler is missing for an opcode
-- [x] Explain the `cargo:rerun-if-changed` directives and incremental compilation behavior

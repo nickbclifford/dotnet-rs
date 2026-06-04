@@ -1,3 +1,15 @@
+//! # dotnet-build-tools
+//!
+//! Shared helpers for deterministic build-script input scanning and caching.
+//! Used by `dotnet-cli/build.rs` and `dotnet-assemblies/build.rs` to avoid
+//! re-running MSBuild/dotnet restore when fixture inputs have not changed.
+//!
+//! ## Key Functions
+//!
+//! - [`cargo_profile_target_dir_from_out_dir`]: derives the Cargo target-profile
+//!   directory from `OUT_DIR`.
+//! - Fixture hash and input discovery utilities used by fixture caching tools.
+
 use std::{
     collections::hash_map::DefaultHasher,
     fs,

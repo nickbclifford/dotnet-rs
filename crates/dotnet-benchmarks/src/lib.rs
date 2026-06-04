@@ -1,3 +1,14 @@
+//! # dotnet-benchmarks
+//!
+//! Criterion benchmark harness and fixture pipeline for end-to-end runtime performance measurement.
+//!
+//! ## Benchmark Cases
+//!
+//! - [`JSON_BENCHMARK`]: JSON parsing and serialization throughput.
+//! - [`ARITHMETIC_BENCHMARK`]: Tight arithmetic loop — baseline execution throughput.
+//! - [`GC_BENCHMARK`]: Allocation pressure and GC throughput.
+//!
+//! See `docs/BENCHMARK_WORKFLOW.md` for PGO and profile guidance.
 #![allow(clippy::arc_with_non_send_sync)]
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult, state, sync::Arc};

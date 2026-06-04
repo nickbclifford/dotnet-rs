@@ -46,27 +46,50 @@ pub(crate) const fn sentinel_type_index() -> TypeIndex {
     type_index_from_usize(0)
 }
 
+/// Resolves metadata type references into runtime [`TypeDescription`] handles.
+///
+/// Implementors provide the core lookup contract used by the VM when converting
+/// names, metadata tokens, and concrete generic signatures into resolved type
+/// descriptors.
 pub trait TypeResolver {
+    /// Looks up a core-library type by its short metadata name.
+    ///
+    /// This is typically used for well-known framework types (for example,
+    /// `System.Object`) that are expected to exist in corlib.
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, error::TypeResolutionError>;
+
+    /// Resolves a metadata [`UserType`] token within the provided resolution scope.
     fn locate_type(
         &self,
         resolution: ResolutionS,
         handle: UserType,
     ) -> Result<TypeDescription, error::TypeResolutionError>;
+
+    /// Resolves an already-concrete generic type into a runtime type descriptor.
     fn find_concrete_type(
         &self,
         ty: generics::ConcreteType,
     ) -> Result<TypeDescription, error::TypeResolutionError>;
 
+    /// Normalizes incoming type names before resolution.
+    ///
+    /// The default implementation returns `name` unchanged.
     fn canonical_type_name<'a>(&'a self, name: &'a str) -> &'a str {
         name
     }
 }
 
+/// A resolved reference to a .NET type definition.
+///
+/// The descriptor combines an assembly resolution scope with an index into that
+/// scope's type-definition table. [`TypeDescription::NULL`] is the sentinel for
+/// unresolved or intentionally absent type handles.
 #[repr(C)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TypeDescription {
+    /// Assembly or module scope that owns the resolved type definition.
     pub resolution: ResolutionS,
+    /// Index of the type definition within [`Self::resolution`].
     pub index: TypeIndex,
 }
 
@@ -83,15 +106,23 @@ impl<'a> Arbitrary<'a> for TypeDescription {
 static_collect!(TypeDescription);
 
 impl TypeDescription {
+    /// Sentinel descriptor used when a type has not been resolved from metadata.
     pub const NULL: Self = Self {
         resolution: ResolutionS::NULL,
         index: sentinel_type_index(),
     };
 
+    /// Creates a new runtime type descriptor from a resolution scope and type index.
     pub fn new(resolution: ResolutionS, index: TypeIndex) -> Self {
         Self { resolution, index }
     }
 
+    /// Returns the metadata type definition for this resolved type descriptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this handle is null or uninitialized (for example,
+    /// [`TypeDescription::NULL`]).
     pub fn definition(&self) -> &'static TypeDefinition<'static> {
         if self.is_null() {
             // invariant: TypeDescription::definition() must only be called on resolved, non-null metadata handles.
@@ -100,6 +131,7 @@ impl TypeDescription {
         &self.resolution.definition()[self.index]
     }
 
+    /// Returns `true` when this value is the null/sentinel type descriptor.
     pub const fn is_null(&self) -> bool {
         self.resolution.is_null()
     }
@@ -120,10 +152,12 @@ impl Debug for TypeDescription {
 }
 
 impl TypeDescription {
+    /// Returns whether this type is marked with the metadata `beforefieldinit` flag.
     pub fn before_field_init(&self) -> bool {
         self.definition().flags.before_field_init
     }
 
+    /// Returns the static type initializer (`.cctor`) if one is defined.
     pub fn static_initializer(&self) -> Option<MethodDescription> {
         self.definition()
             .methods
@@ -147,6 +181,7 @@ impl TypeDescription {
             })
     }
 
+    /// Returns a display name for this type, including containing type names when nested.
     pub fn type_name(&self) -> String {
         if self.is_null() {
             return "UNRESOLVED_TYPE_DEF".to_string();
@@ -158,6 +193,7 @@ impl TypeDescription {
             .nested_type_name(self.resolution.definition())
     }
 
+    /// Returns the underlying primitive member type when this type is an enum.
     pub fn is_enum(&self) -> Option<&MemberType> {
         match &self.definition().extends {
             Some(TypeSource::User(u))

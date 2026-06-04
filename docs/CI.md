@@ -286,8 +286,8 @@ Never suppress leaks that originate in `dotnet-rs` crates.
 
 ## See Also
 
-- [`VALIDATION_FEATURES.md`](VALIDATION_FEATURES.md)
-- [`FUZZING.md`](FUZZING.md)
-- [`BENCHMARK_WORKFLOW.md`](BENCHMARK_WORKFLOW.md)
-- [`THREADING_AND_SYNCHRONIZATION.md`](THREADING_AND_SYNCHRONIZATION.md)
-- [`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md)
+- [Validation Features](VALIDATION_FEATURES.md)
+- [Fuzzing](FUZZING.md)
+- [Benchmark Workflow](BENCHMARK_WORKFLOW.md)
+- [Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md)
+- [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md)

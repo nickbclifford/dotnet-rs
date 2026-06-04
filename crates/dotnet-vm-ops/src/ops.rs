@@ -28,14 +28,57 @@ use dotnet_vm_data::{MethodState, StepResult};
 use std::sync::Arc;
 
 pub trait EvalStackOps<'gc> {
+    /// Pushes `value` onto the evaluation stack.
     fn push(&mut self, value: StackValue<'gc>);
+
+    /// Removes and returns the top stack value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the evaluation stack is empty. Use this only in handlers that
+    /// have already validated stack depth.
     fn pop(&mut self) -> StackValue<'gc>;
+
+    /// Removes and returns the top stack value.
+    ///
+    /// Returns `Err(VmError)` if the evaluation stack is empty. Prefer this in
+    /// handlers where underflow should be reported as bytecode/runtime error
+    /// instead of panicking.
     fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError>;
+
+    /// Removes `count` values from the stack and returns them in stack order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if fewer than `count` values are available.
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
+
+    /// Returns the top `count` values without removing them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if fewer than `count` values are available.
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
+
+    /// Returns the top value if present, or `None` if the stack is empty.
     fn peek(&self) -> Option<StackValue<'gc>>;
+
+    /// Returns the top stack value without removing it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the evaluation stack is empty. Use [`Self::peek`] for a
+    /// non-panicking alternative.
     fn peek_stack(&self) -> StackValue<'gc>;
+
+    /// Returns the value at `offset` from the top (`0` is the current top).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stack is empty or `offset` is out of bounds.
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
+
+    /// Returns the current stack height as a slot index.
     fn top_of_stack(&self) -> StackSlotIndex;
 }
 
@@ -133,9 +176,30 @@ pub trait ExceptionOps<'gc> {
         inner: ObjectRef<'gc>,
     ) -> StepResult;
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult;
+
+    /// Re-throws the currently active exception.
+    ///
+    /// Preserves the original exception context and stack trace rather than
+    /// resetting `_stackTraceString` as a fresh throw would.
     fn rethrow(&mut self) -> StepResult;
+
+    /// Exits the current protected region and transfers control to `target_ip`.
+    ///
+    /// Used by the CIL `leave` instruction. This queues any intervening
+    /// `finally`/`fault` handlers and forces the exception-unwind path even when
+    /// no active exception object is being propagated.
     fn leave(&mut self, target_ip: usize) -> StepResult;
+
+    /// Marks the end of a `finally` or `fault` handler.
+    ///
+    /// Resumes any pending unwind or continues control flow toward a `leave`
+    /// target once cleanup work is complete.
     fn endfinally(&mut self) -> StepResult;
+
+    /// Marks the end of a `filter` clause.
+    ///
+    /// A `result` of `1` selects the associated handler for execution.
+    /// A `result` of `0` continues the handler search.
     fn endfilter(&mut self, result: i32) -> StepResult;
     fn ret(&mut self) -> StepResult;
 }

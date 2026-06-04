@@ -20,7 +20,7 @@ use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
 use dotnetdll::prelude::BaseType;
 
-/// System.Threading.Volatile::Read<T>(ref T location)
+/// `System.Threading.Volatile::Read<T>(ref T location)`
 #[dotnet_intrinsic("static T System.Threading.Volatile::Read<T>(T&)")]
 #[dotnet_intrinsic("static bool System.Threading.Volatile::Read(bool&)")]
 #[dotnet_intrinsic("static sbyte System.Threading.Volatile::Read(sbyte&)")]

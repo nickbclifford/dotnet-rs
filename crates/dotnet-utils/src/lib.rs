@@ -1,7 +1,27 @@
 //! # dotnet-utils
 //!
 //! Shared utilities for the dotnet-rs project, including GC handles,
-//! synchronization primitives, and memory alignment helpers.
+//! synchronization primitives, scope-tracking helpers, and memory alignment
+//! checks.
+//!
+//! ## Core Exports
+//!
+//! - **GC-scope protocol:** [`GcScopeGuard`], [`BorrowScopeOps`], and
+//!   [`GcReadyToken`] coordinate GC-critical scope entry/exit and enforce the
+//!   "GC-ready" precondition for operations that must run outside nested
+//!   borrow scopes.
+//! - **Strongly-typed runtime indices:** [`ArenaId`], [`LocalIndex`], and
+//!   [`FieldIndex`] (plus related wrappers in [`newtypes`]) keep arena IDs,
+//!   local slots, and field offsets type-safe across crate boundaries.
+//! - **Feature-gated synchronization aliases:** [`sync::Mutex`] and
+//!   [`sync::RwLock`] unify single-threaded (`RefCell`-backed) and
+//!   multithreaded (`parking_lot`-backed) lock behavior behind one API.
+//! - **GC utility module:** [`gc::GCHandle`] plus the `gc::GCCommand` and
+//!   `gc::cross_arena` multithreading surfaces provide the low-level hooks used
+//!   by arena coordination and stop-the-world flows.
+//!
+//! See `docs/GC_AND_MEMORY_SAFETY.md` for the end-to-end GC and memory-safety
+//! model.
 use std::{
     fmt::{Debug, Formatter},
     mem::align_of,
@@ -24,6 +44,7 @@ impl Debug for DebugStr {
     }
 }
 
+/// Returns `true` when `ptr` satisfies the alignment required for `field_size` bytes.
 pub fn is_ptr_aligned_to_field(ptr: *const u8, field_size: usize) -> bool {
     match field_size {
         1 => true, // u8 is always aligned
@@ -34,6 +55,7 @@ pub fn is_ptr_aligned_to_field(ptr: *const u8, field_size: usize) -> bool {
     }
 }
 
+/// Asserts that `ptr` is aligned to `align` bytes when `memory-validation` is enabled.
 #[cfg(feature = "memory-validation")]
 pub fn validate_alignment(ptr: *const u8, align: usize) {
     if !(ptr as usize).is_multiple_of(align) {
@@ -44,6 +66,7 @@ pub fn validate_alignment(ptr: *const u8, align: usize) {
     }
 }
 
+/// No-op alignment hook used when `memory-validation` is disabled.
 #[cfg(not(feature = "memory-validation"))]
 #[inline(always)]
 pub fn validate_alignment(_ptr: *const u8, _align: usize) {}

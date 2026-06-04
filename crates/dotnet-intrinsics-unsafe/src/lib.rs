@@ -1,5 +1,25 @@
-//! Unsafe and marshalling intrinsic handlers with explicit safety host seams.
+//! Unsafe, pointer, and marshalling intrinsic handlers with explicit host seams.
 //!
+//! This crate provides `#[dotnet_intrinsic]` handlers for low-level runtime
+//! APIs including `System.Runtime.CompilerServices.Unsafe`,
+//! `System.Buffer`/`System.SpanHelpers`, and
+//! `System.Runtime.InteropServices.Marshal`.
+//!
+//! ## Host Trait
+//!
+//! VM contexts integrating this crate implement [`UnsafeIntrinsicHost<'gc>`].
+//! That trait extends [`VmUnsafeIntrinsicHost<'gc>`] from `dotnet-vm-ops`
+//! with crate-specific hooks used by unsafe/marshalling handlers:
+//!
+//! - `unsafe_type_layout` and `unsafe_resolve_runtime_type` for runtime
+//!   type/layout lookup.
+//! - `unsafe_check_read_safety` and `unsafe_lookup_owner_layout_and_base` for
+//!   pointer safety checks and owner/base recovery.
+//! - `unsafe_get_last_pinvoke_error` and `unsafe_set_last_pinvoke_error` for
+//!   `Marshal.GetLastPInvokeError`/`Marshal.SetLastPInvokeError` state.
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
+//! handlers are discovered and wired into generated intrinsic dispatch tables.
 use dotnet_types::{
     error::{ExecutionError, MemoryAccessError, TypeResolutionError},
     generics::ConcreteType,

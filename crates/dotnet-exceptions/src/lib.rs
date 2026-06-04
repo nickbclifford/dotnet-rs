@@ -1,4 +1,16 @@
-//! Exception handling runtime for two-pass ECMA-335 style SEH.
+//! Exception handling runtime for two-pass ECMA-335-style structured exception handling.
+//!
+//! The runtime follows the ECMA-335 two-pass model:
+//! 1. **Search pass** scans enclosing protected sections to find a matching `catch`/`filter`.
+//! 2. **Unwind pass** runs `finally`/`fault` handlers while unwinding frames toward the target.
+//!
+//! [`ExceptionHandlingSystem`] drives these transitions via [`ExceptionHandlingSystem::handle_exception`],
+//! with internal phase entry points in `begin_throwing`, `search_for_handler`, and `unwind`.
+//!
+//! This crate also parses and executes exception metadata using core VES types from
+//! `dotnet-vm-ops`, including [`ExceptionState`], [`ProtectedSection`], and [`Handler`].
+//! See `docs/EXCEPTION_HANDLING.md` for a full design walkthrough.
+
 use dotnet_types::{
     TypeDescription,
     error::{TypeResolutionError, VmError},

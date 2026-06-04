@@ -1,6 +1,30 @@
 #![allow(clippy::mutable_key_type)]
 //! Reflection intrinsic handlers and runtime reflection host interfaces.
 //!
+//! This crate provides `#[dotnet_intrinsic]` handlers for reflection-heavy
+//! runtime surfaces (`System.Type`, `System.RuntimeType`,
+//! `System.Reflection.MethodInfo`, and related metadata helpers), along with
+//! shared conversion/caching utilities used by those handlers.
+//!
+//! [`RuntimeTypeContext`] is the signature-resolution seam used by
+//! `common::make_runtime_type`: callers provide type lookup and generic-owner
+//! context (`reflection_locate_type`, `reflection_type_owner`,
+//! `reflection_method_owner`) so metadata signatures can be converted into
+//! concrete [`RuntimeType`] values.
+//!
+//! ## Host Trait
+//!
+//! VM contexts integrating this crate implement [`ReflectionIntrinsicHost`],
+//! which combines the baseline VM contract
+//! (`dotnet_vm_ops::ops::ReflectionIntrinsicHost<'gc>`) with this crate's
+//! [`ResolutionContextHost`] and [`ReflectionRegistryHost`] extension traits.
+//! Together, these traits provide stack/exception operations, reflection type
+//! construction, invocation hooks, and runtime-object caching/index registries
+//! needed by reflection intrinsics.
+//!
+//! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
+//! handlers in this crate are discovered and wired into generated intrinsic
+//! dispatch tables.
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
