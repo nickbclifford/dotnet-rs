@@ -72,7 +72,10 @@ pub fn remove_atomic_locations_in_range(base_ptr: *const u8, len: usize) {
     let start = base_ptr.addr();
     let end = start.saturating_add(len);
 
-    ATOMIC_LOCATIONS.with(|locations| {
+    // Use try_with so that if ATOMIC_LOCATIONS has already been destroyed during
+    // TLS teardown (e.g. when GCArena drops its objects after ATOMIC_LOCATIONS
+    // was already destroyed), we silently skip cleanup rather than panicking.
+    let _ = ATOMIC_LOCATIONS.try_with(|locations| {
         locations.borrow_mut().retain(|location| {
             let addr = location.addr();
             addr < start || addr >= end
