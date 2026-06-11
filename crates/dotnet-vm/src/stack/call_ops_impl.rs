@@ -261,7 +261,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             let shared = self.shared.clone();
             dotnet_pinvoke::external_call(self, method, &shared.pinvoke)
         } else {
-            if method.method().body.is_none() {
+            if method.body().is_none() {
                 if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     self,
                     method.clone(),
@@ -545,7 +545,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return dotnet_pinvoke::external_call(self, method, &shared.pinvoke);
         }
 
-        if method.method().body.is_none() {
+        if method.body().is_none() {
             // Delegate dispatch may emulate a call without a managed body; do not attempt to
             // tail-call optimize it.
             return self.dispatch_method(method, lookup);

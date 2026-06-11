@@ -150,7 +150,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
 
     let parent = method.parent.clone();
     let object_type = parent.clone();
-    if let (None, Some(ts)) = (&method.method().body, &parent.definition().extends) {
+    if let (None, Some(ts)) = (method.body(), &parent.definition().extends) {
         let (ut, _) = decompose_type_source::<MemberType>(ts);
         let type_name = ut.type_name(parent.resolution.definition());
         // delegate types are only allowed to have these base types

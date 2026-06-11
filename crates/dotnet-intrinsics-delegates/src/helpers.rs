@@ -43,7 +43,7 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
     lookup: &GenericLookup,
 ) -> Option<StepResult> {
     // Quick check: only handle methods without bodies
-    if method.method().body.is_some() {
+    if method.body().is_some() {
         return None;
     }
 

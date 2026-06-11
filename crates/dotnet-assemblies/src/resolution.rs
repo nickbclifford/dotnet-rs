@@ -803,7 +803,18 @@ pub(crate) fn load_resolution_core(
         // It contains 'len' bytes of data from 'buf'.
         unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
-    let res = Resolution::parse(byte_slice, ReadOptions::default()).map_err(|e| {
+    // Decode method bodies lazily: a VM run typically executes only a fraction of the methods in
+    // a loaded assembly (especially System.Private.CoreLib), so deferring IL decoding to first
+    // execution via `Resolution::method_body` (see `MethodDescription::body`) avoids decoding
+    // bodies that are never run.
+    let res = Resolution::parse(
+        byte_slice,
+        ReadOptions {
+            lazy_method_bodies: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| {
         AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e))
     })?;
 

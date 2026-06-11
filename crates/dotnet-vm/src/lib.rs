@@ -90,7 +90,7 @@ pub fn build_method_info(
         Some(Arc::downgrade(&shared)),
     );
 
-    if let Some(body) = &method.method().body {
+    if let Some(body) = method.body() {
         let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {
             use body::DataSection::*;

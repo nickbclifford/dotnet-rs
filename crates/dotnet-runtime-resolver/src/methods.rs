@@ -160,9 +160,12 @@ where
         // Delegate Invoke/BeginInvoke/EndInvoke methods are runtime-synthesized and have no
         // concrete virtual override entries in metadata tables.
         let method_name = &*base_method.method().name;
-        if base_method.method().body.is_none()
-            && matches!(method_name, "Invoke" | "BeginInvoke" | "EndInvoke")
+        // Order matters under lazy method-body decoding: the cheap name/type predicates are checked
+        // first so `body()` (which decodes IL on first access) only fires for delegate-named methods
+        // on delegate types, not on every virtual-method resolution.
+        if matches!(method_name, "Invoke" | "BeginInvoke" | "EndInvoke")
             && self.is_delegate_type_in_hierarchy(&this_type)
+            && base_method.body().is_none()
         {
             self.caches.record_vmt_key_clones(3);
             self.caches.set_vmt_cached(

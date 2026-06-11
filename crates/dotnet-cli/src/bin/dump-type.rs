@@ -92,13 +92,13 @@ fn main() {
             };
             if full_name == args.type_name {
                 println!("Found type at index: {}", i);
-                found_type = Some(type_def);
+                found_type = Some((i, type_def));
                 break;
             }
         }
 
-        if let Some(type_def) = found_type {
-            print_type_info(resolution, type_def);
+        if let Some((type_index, type_def)) = found_type {
+            print_type_info(resolution, type_def, type_index);
             return;
         }
 
@@ -147,8 +147,9 @@ fn main() {
 }
 
 fn print_type_info(
-    _resolution: dotnet_types::resolution::ResolutionS,
+    resolution: dotnet_types::resolution::ResolutionS,
     type_def: &dotnetdll::prelude::TypeDefinition,
+    type_index: usize,
 ) {
     println!("\nFields:");
     for field in &type_def.fields {
@@ -158,16 +159,26 @@ fn print_type_info(
         );
     }
 
+    // Assemblies are loaded with lazy method bodies, so `Method::body` is always `None`.
+    // Decode each body on demand via `Resolution::method_body`.
+    let res = resolution.definition();
+    let parent = res
+        .type_definition_index(type_index)
+        .expect("type index out of range");
+
     println!("\nMethods:");
-    for method in &type_def.methods {
+    for (method_idx, method) in res.enumerate_methods(parent) {
         println!("  - {}: {:?}", method.name, method.signature);
-        if let Some(body) = &method.body {
-            println!("    Instructions:");
-            for instr in &body.instructions {
-                println!("      {:?}", instr);
+        match res.method_body(method_idx) {
+            Ok(body) => {
+                println!("    Instructions:");
+                for instr in &body.instructions {
+                    println!("      {:?}", instr);
+                }
             }
-        } else {
-            println!("    (No body)");
+            Err(_) => {
+                println!("    (No body)");
+            }
         }
     }
 

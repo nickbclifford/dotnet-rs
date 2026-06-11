@@ -340,7 +340,7 @@ impl<'gc> ExecutionEngine<'gc> {
                 return intrinsic_not_found_step_result(&method);
             }
 
-            if method.method().body.is_none() {
+            if method.body().is_none() {
                 if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     &mut ctx,
                     method.clone(),

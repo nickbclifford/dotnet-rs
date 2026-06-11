@@ -1,5 +1,5 @@
 use crate::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
-use dotnetdll::prelude::{Field, Method, MethodMemberIndex, ResolvedDebug};
+use dotnetdll::prelude::{body, Field, Method, MethodIndex, MethodMemberIndex, ResolvedDebug};
 use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
@@ -58,6 +58,65 @@ impl MethodDescription {
 
     pub fn resolution(&self) -> ResolutionS {
         self.method_resolution.clone()
+    }
+
+    /// Reconstructs the `dotnetdll` [`MethodIndex`] for this method.
+    ///
+    /// `MethodDescription` stores a [`MethodMemberIndex`] plus the declaring [`TypeDescription`]
+    /// (whose `index` is a public `TypeIndex`), but `MethodIndex`'s fields are `pub(crate)` in
+    /// `dotnetdll`, so it cannot be built directly. We rebuild it from `(TypeIndex, MethodMemberIndex)`
+    /// using only public `Resolution` constructors. The indices originate from a valid resolution,
+    /// so every lookup here is expected to succeed.
+    pub fn method_index(&self) -> MethodIndex {
+        let res = self.method_resolution.definition();
+        let parent = self.parent.index;
+        match self.method_member_index {
+            MethodMemberIndex::Method(i) => {
+                res.method_index(parent, i).expect("method index out of range")
+            }
+            MethodMemberIndex::PropertyGetter(i) => {
+                let p = res.property_index(parent, i).expect("property index out of range");
+                res.property_getter_index(p).expect("property has no getter")
+            }
+            MethodMemberIndex::PropertySetter(i) => {
+                let p = res.property_index(parent, i).expect("property index out of range");
+                res.property_setter_index(p).expect("property has no setter")
+            }
+            MethodMemberIndex::PropertyOther { property, other } => {
+                let p = res.property_index(parent, property).expect("property index out of range");
+                res.property_other_index(p, other).expect("property other index out of range")
+            }
+            MethodMemberIndex::EventAdd(i) => {
+                let e = res.event_index(parent, i).expect("event index out of range");
+                res.event_add_index(e)
+            }
+            MethodMemberIndex::EventRemove(i) => {
+                let e = res.event_index(parent, i).expect("event index out of range");
+                res.event_remove_index(e)
+            }
+            MethodMemberIndex::EventRaise(i) => {
+                let e = res.event_index(parent, i).expect("event index out of range");
+                res.event_raise_index(e).expect("event has no raise method")
+            }
+            MethodMemberIndex::EventOther { event, other } => {
+                let e = res.event_index(parent, event).expect("event index out of range");
+                res.event_other_index(e, other).expect("event other index out of range")
+            }
+        }
+    }
+
+    /// Returns the decoded IL body for this method, or `None` if it has none.
+    ///
+    /// Delegates to [`Resolution::method_body`](dotnetdll::prelude::Resolution::method_body), which
+    /// works in both eager and lazy parse modes (in lazy mode the body is decoded and cached on
+    /// first access). `None` covers abstract methods, methods with no IL (`rva == 0`), and — in
+    /// lazy mode — a deferred IL decode error. Prefer this over `self.method().body`, which is
+    /// always `None` when the owning resolution was parsed with `lazy_method_bodies`.
+    pub fn body(&self) -> Option<&'static body::Method> {
+        self.method_resolution
+            .definition()
+            .method_body(self.method_index())
+            .ok()
     }
 }
 

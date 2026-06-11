@@ -39,10 +39,17 @@ impl AssemblyLoader {
             // with exactly 'len' bytes from SUPPORT_LIBRARY.
             unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
-        let support_res_raw =
-            Resolution::parse(byte_slice, ReadOptions::default()).map_err(|e| {
-                AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
-            })?;
+        // Lazy method-body decoding, consistent with the main loader path (see `resolution.rs`).
+        let support_res_raw = Resolution::parse(
+            byte_slice,
+            ReadOptions {
+                lazy_method_bodies: true,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| {
+            AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
+        })?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
         // SAFETY: We manually track this leaked box in MetadataArena to reclaim it on drop.
