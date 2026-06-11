@@ -164,11 +164,10 @@ impl<'gc> ExecutionEngine<'gc> {
         self.stack.execution.original_stack_height =
             self.stack.execution.evaluation_stack.top_of_stack();
 
-        // Record for local ring buffer (provides more context on timeout/panic)
-        let resolution = self.stack.state().info_handle.source.resolution();
-        self.ring_buffer.push(ip, i.show(resolution.definition()));
+        self.ring_buffer.push(ip, i.name());
 
         if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
+            let resolution = self.stack.state().info_handle.source.resolution();
             let instr_text = i.show(resolution.definition());
             vm_trace_instruction!(self.stack, ip, &instr_text);
         }
@@ -377,7 +376,7 @@ impl<'gc> ExecutionEngine<'gc> {
         if ctx.frame_stack.current_frame().stack_height > StackSlotIndex(0) {
             let frame = ctx.frame_stack.current_frame();
             let invoke_method = frame.state.info_handle.source.clone();
-            let has_return_value = invoke_method.method().signature.return_type.1.is_some();
+            let has_return_value = invoke_method.signature().return_type.1.is_some();
 
             let next_index = frame.multicast_state.as_ref().unwrap().next_index;
             if next_index < targets_len && has_return_value {

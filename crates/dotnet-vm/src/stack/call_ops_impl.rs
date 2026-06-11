@@ -234,7 +234,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         // ECMA-335 §II.10.5.3.3: Types without beforefieldinit must be initialized on
         // static method calls, instance calls for value types, and constructor calls.
         if !method.parent.before_field_init() {
-            let is_static = !method.method().signature.instance;
+            let is_static = !method.signature().instance;
             let is_value_type = dotnet_vm_ops::vm_try!(
                 method.parent.clone().is_value_type(&self.current_context())
             );
@@ -447,7 +447,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // Virtual/interface calls can originate from non-generic call sites (e.g. IEnumerator)
         // while the receiver object itself is a closed generic type. Preserve that receiver
         // generic context for downstream field/type resolution when caller lookup is empty.
-        let num_args = 1 + resolved.method().signature.parameters.len();
+        let num_args = 1 + resolved.signature().parameters.len();
         let this_value = self.peek_stack_at(num_args - 1);
 
         let receiver_lookup = match this_value {
@@ -611,7 +611,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        let target_sig = &method.method().signature;
+        let target_sig = method.signature();
         let (arg_count, args_base, clear_from) = {
             let frame = self.frame_stack.current_frame();
 

@@ -23,7 +23,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     invoke_method: MethodDescription,
     _lookup: &GenericLookup,
 ) -> StepResult {
-    let num_invoke_args = invoke_method.method().signature.parameters.len();
+    let num_invoke_args = invoke_method.signature().parameters.len();
 
     // Stack order: [delegate_instance, arg0, arg1, ..., argN]
     // pop_multiple returns them in order they were on stack.
@@ -97,7 +97,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
 
     // Push arguments back onto stack
-    if target_method.method().signature.instance {
+    if target_method.signature().instance {
         ctx.push(StackValue::ObjectRef(target));
     }
 

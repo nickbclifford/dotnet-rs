@@ -480,16 +480,20 @@ impl AssemblyLoader {
         &self,
         parent_type: &TypeDescription,
         method_ref: &ExternalMethodReference,
+        method_ref_idx: MethodRefIndex,
         resolution: ResolutionS,
         lookup: &GenericLookup,
     ) -> Option<MethodDescription> {
         let corelib_res = self.get_assembly("System.Private.CoreLib").ok()?;
         let corelib_parent = self.try_find_in_assembly(corelib_res, &parent_type.type_name())?;
-
+        let sig = resolution
+            .definition()
+            .method_ref_signature(method_ref_idx)
+            .ok()?;
         self.find_method_in_type_with_substitution(
             corelib_parent,
             &method_ref.name,
-            &method_ref.signature,
+            sig,
             resolution,
             lookup,
             false,
@@ -526,21 +530,32 @@ impl AssemblyLoader {
                 let parent_type = self.locate_type(resolution.clone(), d.parent_type().into())?;
                 let method = &resolution[d];
 
+                // `MethodIndex::member` is pub(crate) in dotnetdll with no public accessor.
+                // Use the ptr-scan helper to recover the correct `MethodMemberIndex` variant.
+                let member_index = Self::method_member_index_from_index(resolution.definition(), d);
+
                 // Prefer support-stub `System.Array.Copy` implementations for definition-bound
                 // CoreLib calls (e.g., HashSet.Resize), but keep other definition dispatches
                 // on their original declaring type to avoid broad behavior changes.
                 let parent_type_name = parent_type.type_name();
                 let canonical_parent = self.canonical_type_name(&parent_type_name);
+                let method_sig = MethodDescription::new(
+                    parent_type.clone(),
+                    GenericLookup::default(),
+                    resolution.clone(),
+                    member_index,
+                )
+                .signature();
                 let should_redirect_array_copy = canonical_parent == "System.Array"
                     && method.name == "Copy"
-                    && !method.signature.instance;
+                    && !method_sig.instance;
 
                 if should_redirect_array_copy
                     && let Some(stub_type) = self.stubs.get(canonical_parent)
                     && let Some(stub_method) = self.find_method_in_type_with_substitution(
                         stub_type.clone(),
                         &method.name,
-                        &method.signature,
+                        method_sig,
                         resolution.clone(),
                         generic_inst,
                         false,
@@ -548,10 +563,6 @@ impl AssemblyLoader {
                 {
                     return Ok(stub_method);
                 }
-
-                // `MethodIndex::member` is pub(crate) in dotnetdll with no public accessor.
-                // Use the ptr-scan helper to recover the correct `MethodMemberIndex` variant.
-                let member_index = Self::method_member_index_from_index(resolution.definition(), d);
                 Ok(MethodDescription::new(
                     parent_type,
                     GenericLookup::default(),
@@ -597,10 +608,18 @@ impl AssemblyLoader {
                         let mut lookup_for_substitution = parent_generics.clone();
                         lookup_for_substitution.method_generics =
                             generic_inst.method_generics.clone();
+                        let ref_sig = resolution
+                            .definition()
+                            .method_ref_signature(r)
+                            .map_err(|e| {
+                                TypeResolutionError::MethodNotFound(format!(
+                                    "failed to decode method ref signature: {e}"
+                                ))
+                            })?;
                         match self.find_method_in_type_with_substitution(
                             parent_type.clone(),
                             &method_ref.name,
-                            &method_ref.signature,
+                            ref_sig,
                             resolution.clone(),
                             &lookup_for_substitution,
                             false,
@@ -615,6 +634,7 @@ impl AssemblyLoader {
                                     .try_resolve_method_via_corelib_fallback(
                                         &parent_type,
                                         method_ref,
+                                        r,
                                         resolution.clone(),
                                         &lookup_for_substitution,
                                     )
@@ -625,9 +645,10 @@ impl AssemblyLoader {
 
                                 Err(TypeResolutionError::MethodNotFound(format!(
                                     "could not find {} in type {}",
-                                    method_ref
-                                        .signature
-                                        .show_with_name(resolution.definition(), &method_ref.name),
+                                    ref_sig.show_with_name(
+                                        resolution.definition(),
+                                        &method_ref.name
+                                    ),
                                     parent_type.type_name()
                                 )))
                             }
@@ -811,6 +832,7 @@ pub(crate) fn load_resolution_core(
         byte_slice,
         ReadOptions {
             lazy_method_bodies: true,
+            lazy_method_signatures: true,
             ..Default::default()
         },
     )

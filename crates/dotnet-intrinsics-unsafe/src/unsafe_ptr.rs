@@ -496,7 +496,7 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, T: UnsafeIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let param_type = &method.method().signature.parameters[0].1;
+    let param_type = &method.signature().parameters[0].1;
     if let ParameterType::Value(MethodType::Base(b)) = param_type
         && matches!(**b, BaseType::ValuePointer(_, _))
     {

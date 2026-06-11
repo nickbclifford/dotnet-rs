@@ -237,7 +237,7 @@ impl ExceptionHandlingSystem {
 
             let format_params = |method: &MethodDescription| {
                 let mut params_str = String::new();
-                for (i, param) in method.method().signature.parameters.iter().enumerate() {
+                for (i, param) in method.signature().parameters.iter().enumerate() {
                     if i > 0 {
                         params_str.push_str(", ");
                     }

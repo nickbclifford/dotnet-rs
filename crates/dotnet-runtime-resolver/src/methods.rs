@@ -286,19 +286,19 @@ where
                 if allow_variance {
                     comparer.signatures_compatible_with_variance(
                         &method.method_resolution,
-                        &method.method().signature,
+                        method.signature(),
                         Some(&method.parent_generics),
                         &decl.method_resolution,
-                        &decl.method().signature,
+                        decl.signature(),
                         Some(&decl.parent_generics),
                     )
                 } else {
                     comparer.signatures_equal(
                         &method.method_resolution,
-                        &method.method().signature,
+                        method.signature(),
                         Some(&method.parent_generics),
                         &decl.method_resolution,
-                        &decl.method().signature,
+                        decl.signature(),
                         Some(&decl.parent_generics),
                     )
                 }
@@ -323,7 +323,7 @@ where
         if let Some(this_method) = self.loader.find_method_in_type_internal(
             this_type.clone(),
             &method.method().name,
-            &method.method().signature,
+            method.signature(),
             method.resolution(),
             Some(&signature_lookup),
             Some(generics),

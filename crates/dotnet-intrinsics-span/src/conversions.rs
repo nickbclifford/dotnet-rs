@@ -126,7 +126,7 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let param_count = method.method().signature.parameters.len();
+    let param_count = method.signature().parameters.len();
 
     // AsSpan can have 1, 2, or 3 parameters:
     // - AsSpan(string) - whole string
@@ -213,7 +213,7 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     offset += ByteOffset(byte_start);
     let len = actual_length;
 
-    let span_type_concrete = match &method.method().signature.return_type.1 {
+    let span_type_concrete = match &method.signature().return_type.1 {
         Some(ParameterType::Value(t)) => {
             dotnet_vm_ops::vm_try!(generics.make_concrete(
                 method.resolution(),

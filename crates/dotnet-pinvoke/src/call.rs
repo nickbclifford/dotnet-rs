@@ -325,7 +325,7 @@ fn handle_pinvoke_return<'gc>(
     arg_count: usize,
     call_data: &mut PInvokeCallData<'_, 'gc>,
 ) -> StepResult {
-    match &method.method().signature.return_type.1 {
+    match &method.signature().return_type.1 {
         None => {
             if let Err(e) = invoke_ffi_call_with_write_backs(ctx, call_data, std::ptr::null_mut()) {
                 return e;
@@ -534,7 +534,7 @@ fn external_call_impl<'gc>(
     #[cfg(feature = "multithreading")]
     let mut cross_arena_guards = Vec::new();
 
-    let arg_count = method.method().signature.parameters.len();
+    let arg_count = method.signature().parameters.len();
     let stack_values = ctx.peek_multiple(arg_count);
 
     let res = method.resolution();
@@ -595,7 +595,7 @@ fn external_call_impl<'gc>(
 
     let mut args: Vec<Type> = vec![];
     {
-        for Parameter(_, p) in &method.method().signature.parameters {
+        for Parameter(_, p) in &method.signature().parameters {
             args.push(match param_to_type(p, ctx) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
@@ -603,7 +603,7 @@ fn external_call_impl<'gc>(
         }
     }
 
-    let return_type = match &method.method().signature.return_type.1 {
+    let return_type = match &method.signature().return_type.1 {
         None => Type::void(),
         Some(s) => match param_to_type(s, ctx) {
             Ok(v) => v,
@@ -618,7 +618,7 @@ fn external_call_impl<'gc>(
     // Pass 1: Prepare buffers
     for (i, (v, Parameter(_, p_type))) in stack_values
         .iter()
-        .zip(&method.method().signature.parameters)
+        .zip(&method.signature().parameters)
         .enumerate()
     {
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };

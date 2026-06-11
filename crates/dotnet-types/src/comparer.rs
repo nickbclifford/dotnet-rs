@@ -625,38 +625,45 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         allow_variance: bool,
     ) -> Option<MethodDescription> {
         let def = desc.definition();
+        let def_res = desc.resolution.definition();
 
         macro_rules! check {
             ($method:expr, $member_index:expr) => {
                 let m = $method;
-                if m.name == name
-                    && m.signature.parameters.len() == signature.parameters.len()
-                    && (if allow_variance {
-                        self.signatures_compatible_with_variance(
-                            &sig_res,
-                            signature,
-                            sig_generics,
-                            &desc.resolution,
-                            &m.signature,
-                            type_generics,
-                        )
-                    } else {
-                        self.signatures_equal(
-                            &sig_res,
-                            signature,
-                            sig_generics,
-                            &desc.resolution,
-                            &m.signature,
-                            type_generics,
-                        )
-                    })
-                {
-                    return Some(MethodDescription::new(
-                        desc.clone(),
-                        type_generics.cloned().unwrap_or_default(),
-                        desc.resolution.clone(),
-                        $member_index,
-                    ));
+                if m.name == name {
+                    let m_idx =
+                        MethodDescription::index_for(def_res, desc.index, $member_index);
+                    let m_sig = def_res
+                        .method_signature(m_idx)
+                        .expect("failed to decode method signature");
+                    if m_sig.parameters.len() == signature.parameters.len()
+                        && (if allow_variance {
+                            self.signatures_compatible_with_variance(
+                                &sig_res,
+                                signature,
+                                sig_generics,
+                                &desc.resolution,
+                                m_sig,
+                                type_generics,
+                            )
+                        } else {
+                            self.signatures_equal(
+                                &sig_res,
+                                signature,
+                                sig_generics,
+                                &desc.resolution,
+                                m_sig,
+                                type_generics,
+                            )
+                        })
+                    {
+                        return Some(MethodDescription::new(
+                            desc.clone(),
+                            type_generics.cloned().unwrap_or_default(),
+                            desc.resolution.clone(),
+                            $member_index,
+                        ));
+                    }
                 }
             };
         }

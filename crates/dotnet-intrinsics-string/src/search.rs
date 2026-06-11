@@ -28,7 +28,7 @@ pub fn intrinsic_string_index_of<
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let (c, start_at) = if method.method().signature.parameters.len() == 1 {
+    let (c, start_at) = if method.signature().parameters.len() == 1 {
         let c = ctx.pop_i32();
         (c as u16, 0usize)
     } else {
@@ -67,7 +67,7 @@ pub fn intrinsic_string_substring<
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let (start_at, length) = if method.method().signature.parameters.len() == 1 {
+    let (start_at, length) = if method.signature().parameters.len() == 1 {
         let start_at = ctx.peek_stack().as_i32();
         (start_at as usize, None)
     } else {

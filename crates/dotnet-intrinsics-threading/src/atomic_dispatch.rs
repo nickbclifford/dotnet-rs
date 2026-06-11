@@ -32,7 +32,7 @@ pub(crate) fn resolve_atomic_ref_target_type<'gc, T: ThreadingIntrinsicHost<'gc>
     generics: &GenericLookup,
     intrinsic_name: &str,
 ) -> Result<ConcreteType, TypeResolutionError> {
-    let params = &method.method().signature.parameters;
+    let params = &method.signature().parameters;
     let Parameter(_, first_param_type) = &params[0];
 
     if let ParameterType::Ref(inner) = first_param_type {

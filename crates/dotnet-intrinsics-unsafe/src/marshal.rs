@@ -71,7 +71,7 @@ pub fn intrinsic_marshal_size_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let concrete_type = if method.method().signature.parameters.is_empty() {
+    let concrete_type = if method.signature().parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();
@@ -94,7 +94,7 @@ pub fn intrinsic_marshal_offset_of<'gc, T: UnsafeIntrinsicHost<'gc>>(
     use dotnet_value::with_string;
     let field_name_val = ctx.pop();
     let field_name = with_string!(ctx, field_name_val, |s| s.as_string());
-    let concrete_type = if method.method().signature.parameters.len() == 1 {
+    let concrete_type = if method.signature().parameters.len() == 1 {
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();

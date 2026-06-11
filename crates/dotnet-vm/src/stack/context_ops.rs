@@ -837,24 +837,24 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                             .loader
                             .corlib_type("System.Object")
                             .expect("System.Object must exist in corlib");
-                        let (idx, _) = object_type
+                        let method_desc = object_type
                             .definition()
                             .methods
                             .iter()
                             .enumerate()
-                            .find(|(_, m)| {
-                                m.name == "Finalize"
-                                    && m.virtual_member
-                                    && m.signature.parameters.is_empty()
+                            .find_map(|(i, m)| {
+                                if !m.virtual_member || m.name != "Finalize" {
+                                    return None;
+                                }
+                                let d = MethodDescription::new(
+                                    object_type.clone(),
+                                    GenericLookup::default(),
+                                    object_type.resolution.clone(),
+                                    MethodMemberIndex::Method(i),
+                                );
+                                d.signature().parameters.is_empty().then_some(d)
                             })
                             .expect("System.Object::Finalize not found");
-
-                        let method_desc = MethodDescription::new(
-                            object_type.clone(),
-                            GenericLookup::default(),
-                            object_type.resolution.clone(),
-                            MethodMemberIndex::Method(idx),
-                        );
 
                         Some((
                             self.resolver()

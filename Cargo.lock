@@ -368,6 +368,7 @@ dependencies = [
  "dotnet-utils",
  "dotnetdll",
  "gc-arena",
+ "hashbrown 0.17.1",
  "thiserror",
  "tracing",
 ]
@@ -727,7 +728,7 @@ dependencies = [
 [[package]]
 name = "dotnetdll"
 version = "0.1.4"
-source = "git+https://github.com/nickbclifford/dotnetdll#8ccfc0c8cf404bbfdd513919992888cfcc8d36fd"
+source = "git+https://github.com/nickbclifford/dotnetdll#999d6c9d67ec0573573315d89d6c164f7d490ca0"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -747,7 +748,7 @@ dependencies = [
 [[package]]
 name = "dotnetdll-macros"
 version = "0.1.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#8ccfc0c8cf404bbfdd513919992888cfcc8d36fd"
+source = "git+https://github.com/nickbclifford/dotnetdll#999d6c9d67ec0573573315d89d6c164f7d490ca0"
 dependencies = [
  "heck",
  "proc-macro2",

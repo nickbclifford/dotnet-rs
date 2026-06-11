@@ -79,15 +79,25 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             new_lookup.type_generics = parameters.clone().into();
         }
 
-        if let Some(idx) = target_td.definition().methods.iter().position(|m| {
-            m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty()
-        }) {
-            let desc = MethodDescription::new(
-                target_td.clone(),
-                new_lookup.clone(),
-                target_td.resolution.clone(),
-                MethodMemberIndex::Method(idx),
-            );
+        if let Some(desc) = target_td
+            .definition()
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                if m.name != ".ctor" {
+                    return None;
+                }
+                let d = MethodDescription::new(
+                    target_td.clone(),
+                    new_lookup.clone(),
+                    target_td.resolution.clone(),
+                    MethodMemberIndex::Method(i),
+                );
+                let sig = d.signature();
+                (sig.instance && sig.parameters.is_empty()).then_some(d)
+            })
+        {
 
             let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
             dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
@@ -207,18 +217,25 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
     let instance =
         dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(td.clone(), &new_lookup));
 
-    if let Some(idx) = td.definition().methods.iter().position(|m| {
-        m.runtime_special_name
-            && m.name == ".ctor"
-            && m.signature.instance
-            && m.signature.parameters.is_empty()
-    }) {
-        let desc = MethodDescription::new(
-            td.clone(),
-            new_lookup.clone(),
-            td.resolution.clone(),
-            MethodMemberIndex::Method(idx),
-        );
+    if let Some(desc) = td
+        .definition()
+        .methods
+        .iter()
+        .enumerate()
+        .find_map(|(i, m)| {
+            if !m.runtime_special_name || m.name != ".ctor" {
+                return None;
+            }
+            let d = MethodDescription::new(
+                td.clone(),
+                new_lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(i),
+            );
+            let sig = d.signature();
+            (sig.instance && sig.parameters.is_empty()).then_some(d)
+        })
+    {
 
         let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
         dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));

@@ -101,21 +101,32 @@ fn test_memory_extensions_slow_path_signature_uses_read_only_span() {
         .expect("System.MemoryExtensions should resolve");
     let res = td.resolution.definition();
 
-    let slow_path = td
+    let (slow_path_idx, _) = td
         .definition()
         .methods
         .iter()
-        .find(|m| m.name == "SequenceEqualSlowPath")
+        .enumerate()
+        .find(|(_, m)| m.name == "SequenceEqualSlowPath")
         .expect("SequenceEqualSlowPath should exist in System.MemoryExtensions");
 
+    use dotnet_types::members::MethodDescription;
+    use dotnetdll::prelude::MethodMemberIndex;
+    let slow_path_desc = MethodDescription::new(
+        td.clone(),
+        dotnet_types::generics::GenericLookup::default(),
+        td.resolution.clone(),
+        MethodMemberIndex::Method(slow_path_idx),
+    );
+    let sig = slow_path_desc.signature();
+
     assert_eq!(
-        slow_path.signature.parameters.len(),
+        sig.parameters.len(),
         2,
         "SequenceEqualSlowPath should take two parameters"
     );
 
-    let p0 = slow_path.signature.parameters[0].show(res);
-    let p1 = slow_path.signature.parameters[1].show(res);
+    let p0 = sig.parameters[0].show(res);
+    let p1 = sig.parameters[1].show(res);
     assert!(
         p0.contains("ReadOnlySpan") && p1.contains("ReadOnlySpan"),
         "Expected ReadOnlySpan parameters, got ({p0}, {p1})"

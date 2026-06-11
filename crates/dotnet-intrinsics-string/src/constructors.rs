@@ -17,9 +17,9 @@ fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemor
 ) -> Result<usize, StepResult> {
     use dotnetdll::prelude::*;
 
-    let params_count = method.method().signature.parameters.len();
+    let params_count = method.signature().parameters.len();
     let len_res = if params_count == 1 {
-        let param = &method.method().signature.parameters[0].1;
+        let param = &method.signature().parameters[0].1;
         match param {
             ParameterType::Value(MethodType::Base(b))
                 if matches!(b.as_ref(), BaseType::IntPtr | BaseType::UIntPtr) =>
@@ -31,7 +31,7 @@ fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemor
     } else {
         // Overload with length as first param, MethodTable* as second param
         let _p_mt = ctx.pop();
-        let param = &method.method().signature.parameters[0].1;
+        let param = &method.signature().parameters[0].1;
         match param {
             ParameterType::Value(MethodType::Base(b))
                 if matches!(b.as_ref(), BaseType::IntPtr | BaseType::UIntPtr) =>

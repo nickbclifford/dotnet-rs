@@ -11,6 +11,7 @@ use dotnet_types::{
 use dotnet_utils::sync::{AtomicU64, RwLock};
 use dotnetdll::prelude::*;
 use gc_arena::static_collect;
+use hashbrown::DefaultHashBuilder;
 use std::{
     collections::HashMap,
     fs,
@@ -78,9 +79,10 @@ pub fn parse_version(s: &str) -> Option<Version> {
 }
 
 #[inline]
-fn cache_map_len<K, V>(map: &DashMap<K, V>) -> usize
+fn cache_map_len<K, V, S>(map: &DashMap<K, V, S>) -> usize
 where
     K: Eq + Hash,
+    S: std::hash::BuildHasher + Clone,
 {
     // `DashMap::len` locks all shards; centralize use for cache metrics call paths.
     map.len()
@@ -99,7 +101,7 @@ pub struct AssemblyLoader {
     pub(crate) corlib_cache: DashMap<String, TypeDescription>,
     pub(crate) type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
     pub(crate) method_cache:
-        DashMap<(ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>), MethodDescription>,
+        DashMap<(ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>), MethodDescription, DefaultHashBuilder>,
     pub type_cache_hits: AtomicU64,
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
@@ -162,7 +164,7 @@ impl AssemblyLoader {
             reverse_stubs: HashMap::new(),
             corlib_cache: DashMap::new(),
             type_cache: DashMap::new(),
-            method_cache: DashMap::new(),
+            method_cache: DashMap::with_hasher(DefaultHashBuilder::default()),
             type_cache_hits: AtomicU64::new(0),
             type_cache_misses: AtomicU64::new(0),
             method_cache_hits: AtomicU64::new(0),

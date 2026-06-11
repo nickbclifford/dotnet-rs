@@ -284,11 +284,11 @@ impl IntrinsicRegistry {
     ) -> Option<&'a str> {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
-        let is_static = !method.method().signature.instance;
-        let arity = if method.method().signature.instance {
-            method.method().signature.parameters.len() + 1
+        let is_static = !method.signature().instance;
+        let arity = if method.signature().instance {
+            method.signature().parameters.len() + 1
         } else {
-            method.method().signature.parameters.len()
+            method.signature().parameters.len()
         };
         let raw_type_name = method.parent.type_name();
         let canonical_name = loader.canonical_type_name(&raw_type_name);
@@ -403,10 +403,10 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
 
     #[cfg(feature = "bench-instrumentation")]
     {
-        let arity = if method.method().signature.instance {
-            method.method().signature.parameters.len() + 1
+        let arity = if method.signature().instance {
+            method.signature().parameters.len() + 1
         } else {
-            method.method().signature.parameters.len()
+            method.signature().parameters.len()
         };
         let signature = format!(
             "{}::{}#{}",

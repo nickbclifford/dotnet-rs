@@ -44,6 +44,7 @@ impl AssemblyLoader {
             byte_slice,
             ReadOptions {
                 lazy_method_bodies: true,
+                lazy_method_signatures: true,
                 ..Default::default()
             },
         )

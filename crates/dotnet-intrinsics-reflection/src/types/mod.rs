@@ -130,7 +130,7 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let method_name = &*method.method().name;
-    let param_count = method.method().signature.parameters.len();
+    let param_count = method.signature().parameters.len();
 
     match (method_name, param_count) {
         ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, generics),
@@ -243,7 +243,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let method_name = &*method.method().name;
-    let param_count = method.method().signature.parameters.len();
+    let param_count = method.signature().parameters.len();
 
     match (method_name, param_count) {
         ("GetActivationInfo", 5) => {
@@ -301,18 +301,6 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 ));
             }
 
-            let ctor_idx = td.definition().methods.iter().position(|m| {
-                m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty()
-            });
-
-            let Some(ctor_idx) = ctor_idx else {
-                let message = format!(
-                    "Could not find parameterless constructor for {}.",
-                    td.type_name()
-                );
-                return ctx.throw_by_name_with_message("System.MissingMethodException", &message);
-            };
-
             let lookup = if let RuntimeType::Generic(_, type_generics) = &rt {
                 GenericLookup::new(
                     type_generics
@@ -323,16 +311,34 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             } else {
                 ctx.reflection_empty_generics()
             };
-            let method_idx = crate::common::get_runtime_method_index(
-                ctx,
-                MethodDescription::new(
-                    td.clone(),
-                    lookup.clone(),
-                    td.resolution.clone(),
-                    MethodMemberIndex::Method(ctor_idx),
-                ),
-                lookup,
-            );
+            let ctor_desc = td
+                .definition()
+                .methods
+                .iter()
+                .enumerate()
+                .find_map(|(i, m)| {
+                    if m.name != ".ctor" {
+                        return None;
+                    }
+                    let d = MethodDescription::new(
+                        td.clone(),
+                        lookup.clone(),
+                        td.resolution.clone(),
+                        MethodMemberIndex::Method(i),
+                    );
+                    let sig = d.signature();
+                    (sig.instance && sig.parameters.is_empty()).then_some(d)
+                });
+
+            let Some(ctor_desc) = ctor_desc else {
+                let message = format!(
+                    "Could not find parameterless constructor for {}.",
+                    td.type_name()
+                );
+                return ctx.throw_by_name_with_message("System.MissingMethodException", &message);
+            };
+
+            let method_idx = crate::common::get_runtime_method_index(ctx, ctor_desc, lookup);
 
             let method_val = StackValue::NativeInt(method_idx as isize);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);

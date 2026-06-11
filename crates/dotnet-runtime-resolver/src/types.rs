@@ -165,8 +165,17 @@ where
                 return false;
             }
 
-            def.methods.iter().any(|m| {
-                m.name == "Finalize" && m.virtual_member && m.signature.parameters.is_empty()
+            def.methods.iter().enumerate().any(|(i, m)| {
+                if !m.virtual_member || m.name != "Finalize" {
+                    return false;
+                }
+                let d = dotnet_types::members::MethodDescription::new(
+                    td.clone(),
+                    dotnet_types::generics::GenericLookup::default(),
+                    td.resolution.clone(),
+                    dotnetdll::prelude::MethodMemberIndex::Method(i),
+                );
+                d.signature().parameters.is_empty()
             })
         };
 

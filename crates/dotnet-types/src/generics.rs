@@ -162,12 +162,19 @@ impl ConcreteType {
                 return false;
             }
 
-            for method in def.methods.iter() {
+            for (idx, method) in def.methods.iter().enumerate() {
                 if method.name == ".ctor"
-                    && method.signature.parameters.is_empty()
                     && method.accessibility == MemberAccessibility::Access(Accessibility::Public)
                 {
-                    return true;
+                    let desc = crate::members::MethodDescription::new(
+                        td.clone(),
+                        crate::generics::GenericLookup::default(),
+                        td.resolution.clone(),
+                        dotnetdll::prelude::MethodMemberIndex::Method(idx),
+                    );
+                    if desc.signature().parameters.is_empty() {
+                        return true;
+                    }
                 }
             }
         }

@@ -5,7 +5,7 @@ use crate::{
     gc::coordinator::*,
     stack::{
         CallStack, GCArena,
-        ops::{VesOps, VmCallOps, VmReflectionOps},
+        ops::{VesOps, VmCallOps},
     },
     state::{ArenaLocalState, SharedGlobalState},
     threading::ThreadManagerOps,
@@ -194,8 +194,8 @@ impl Executor {
             shared.gc_coordinator.register_arena(handle.clone());
         }
 
-        // Set thread id in arena and pre-initialize reflection
-        arena.mutate_root(|gc, c| {
+        // Set thread id in arena
+        arena.mutate_root(|_gc, c| {
             c.stack.thread_id.set(thread_id);
             #[cfg(feature = "multithreading")]
             {
@@ -205,21 +205,6 @@ impl Executor {
                     .bind_collection_pressure_flag(&stack_arena);
                 c.stack.arena = stack_arena;
             }
-
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                // SAFETY: `arena_inner_gc` is only used while mutating this thread's arena
-                // root, where the arena handle and GC token are in sync.
-                unsafe {
-                    c.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
-
-            let mut ctx = c.stack.ves_context(gc_handle);
-            ctx.pre_initialize_reflection();
         });
 
         #[cfg(feature = "multithreading")]

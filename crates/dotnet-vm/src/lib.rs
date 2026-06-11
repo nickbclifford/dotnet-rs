@@ -102,12 +102,13 @@ pub fn build_method_info(
             }
         }
 
+        let sig = method.signature();
         Ok(MethodInfo {
             is_cctor: method.method().runtime_special_name
                 && method.method().name == ".cctor"
-                && !method.method().signature.instance
-                && method.method().signature.parameters.is_empty(),
-            signature: &method.method().signature,
+                && !sig.instance
+                && sig.parameters.is_empty(),
+            signature: sig,
             locals: &body.header.local_variables,
             max_stack: body.header.maximum_stack_size,
             exceptions: dotnet_exceptions::parse(exceptions, &ctx)?
@@ -120,7 +121,7 @@ pub fn build_method_info(
     } else {
         Ok(MethodInfo {
             is_cctor: false,
-            signature: &method.method().signature,
+            signature: method.signature(),
             locals: &[],
             max_stack: 0,
             exceptions: vec![],

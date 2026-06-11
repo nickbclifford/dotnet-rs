@@ -42,7 +42,7 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
-    let num_args = 1 + base_method.method().signature.parameters.len();
+    let num_args = 1 + base_method.signature().parameters.len();
     let this_value = ctx.peek_stack_at(num_args - 1);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
@@ -120,7 +120,7 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
     if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
         td,
         &method.method().name,
-        &method.method().signature,
+        method.signature(),
         method.resolution(),
         &lookup,
         false,
@@ -146,7 +146,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     );
 
     // Pop all arguments (this + parameters)
-    let num_args = 1 + base_method.method().signature.parameters.len();
+    let num_args = 1 + base_method.signature().parameters.len();
     let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = dotnet_vm_ops::vm_try!(ctx.make_concrete(constraint));
@@ -165,7 +165,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
         if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type.clone(),
             &base_method.method().name,
-            &base_method.method().signature,
+            base_method.signature(),
             base_method.resolution(),
             &lookup,
             false,
@@ -265,7 +265,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
         if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
             &base_method.method().name,
-            &base_method.method().signature,
+            base_method.signature(),
             base_method.resolution(),
             &lookup,
             false,

@@ -708,10 +708,10 @@ pub fn intrinsic_eventsource_disabled<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    if !_method.method().signature.parameters.is_empty() {
+    if !_method.signature().parameters.is_empty() {
         // Instance overloads consume `this` plus explicit parameters.
-        ctx.pop_multiple(1 + _method.method().signature.parameters.len());
-    } else if _method.method().signature.instance {
+        ctx.pop_multiple(1 + _method.signature().parameters.len());
+    } else if _method.signature().instance {
         ctx.pop();
     }
     ctx.push_i32(0);
@@ -726,7 +726,7 @@ pub fn intrinsic_sr_get_resource_string<'gc, T: TypedStackOps<'gc>>(
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let arity = method.method().signature.parameters.len();
+    let arity = method.signature().parameters.len();
     let key = if arity == 2 {
         let fallback = ctx.pop();
         let key = ctx.pop();

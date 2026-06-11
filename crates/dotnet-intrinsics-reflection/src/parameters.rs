@@ -32,7 +32,7 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
             let obj = ctx.pop_obj();
             let (m_desc, lookup, position) =
                 dotnet_vm_ops::vm_try!(resolve_runtime_parameter(ctx, obj));
-            let param_type = &m_desc.method().signature.parameters[position].1;
+            let param_type = &m_desc.signature().parameters[position].1;
 
             let rt = match param_type {
                 ParameterType::Value(t) => {

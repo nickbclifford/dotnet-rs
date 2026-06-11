@@ -83,7 +83,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let method_name = &*method.method().name;
-    let param_count = method.method().signature.parameters.len();
+    let param_count = method.signature().parameters.len();
 
     let result = match (method_name, param_count) {
         ("GetName" | "get_Name", 0) => {
@@ -135,7 +135,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 crate::common::get_runtime_method_index(ctx, method.clone(), lookup.clone())
                     as usize;
 
-            let param_count = method.method().signature.parameters.len();
+            let param_count = method.signature().parameters.len();
 
             let pi_type = ctx
                 .loader()
@@ -205,7 +205,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             let mut args = Vec::new();
-            if method.method().signature.instance {
+            if method.signature().instance {
                 args.push(this_obj);
             }
 
@@ -302,7 +302,7 @@ fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: &MethodDescription,
     lookup: &GenericLookup,
 ) -> RuntimeType {
-    match &method.method().signature.return_type.1 {
+    match &method.signature().return_type.1 {
         Some(ParameterType::Value(t)) | Some(ParameterType::Ref(t)) => {
             ctx.reflection_make_runtime_type_for_method(method.clone(), lookup, t)
         }
@@ -440,7 +440,7 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
             element_bytes
                 .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
-            let param_type = &method.method().signature.parameters[i].1;
+            let param_type = &method.signature().parameters[i].1;
             let arg = unbox_param_to_stack_value(ctx, arg_obj, param_type, lookup, i)?;
             args.push(arg);
         }

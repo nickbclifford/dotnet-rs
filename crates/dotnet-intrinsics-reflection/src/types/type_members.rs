@@ -32,8 +32,8 @@ pub fn intrinsic_assembly_get_custom_attributes<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let num_args = method.method().signature.parameters.len()
-        + if method.method().signature.instance {
+    let num_args = method.signature().parameters.len()
+        + if method.signature().instance {
             1
         } else {
             0
@@ -63,8 +63,8 @@ pub fn intrinsic_attribute_get_custom_attributes<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let num_args = method.method().signature.parameters.len()
-        + if method.method().signature.instance {
+    let num_args = method.signature().parameters.len()
+        + if method.signature().instance {
             1
         } else {
             0

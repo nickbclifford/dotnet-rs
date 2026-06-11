@@ -1,5 +1,8 @@
 use crate::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
-use dotnetdll::prelude::{body, Field, Method, MethodIndex, MethodMemberIndex, ResolvedDebug};
+use dotnetdll::prelude::{
+    body, Field, ManagedMethod, Method, MethodIndex, MethodMemberIndex, MethodType, Resolution,
+    ResolvedDebug, TypeIndex,
+};
 use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
@@ -60,17 +63,22 @@ impl MethodDescription {
         self.method_resolution.clone()
     }
 
-    /// Reconstructs the `dotnetdll` [`MethodIndex`] for this method.
+    /// Maps a `(TypeIndex, MethodMemberIndex)` pair to the corresponding [`MethodIndex`].
     ///
-    /// `MethodDescription` stores a [`MethodMemberIndex`] plus the declaring [`TypeDescription`]
-    /// (whose `index` is a public `TypeIndex`), but `MethodIndex`'s fields are `pub(crate)` in
-    /// `dotnetdll`, so it cannot be built directly. We rebuild it from `(TypeIndex, MethodMemberIndex)`
-    /// using only public `Resolution` constructors. The indices originate from a valid resolution,
-    /// so every lookup here is expected to succeed.
-    pub fn method_index(&self) -> MethodIndex {
-        let res = self.method_resolution.definition();
-        let parent = self.parent.index;
-        match self.method_member_index {
+    /// `MethodIndex`'s fields are `pub(crate)` in `dotnetdll`, so it cannot be built directly.
+    /// We rebuild it from `(TypeIndex, MethodMemberIndex)` using only public `Resolution`
+    /// constructors. The indices originate from a valid resolution, so every lookup is expected
+    /// to succeed.
+    ///
+    /// Exposed as an associated function so callers that already have a `&Resolution` and
+    /// `TypeIndex` can decode a method signature without constructing a throwaway
+    /// `MethodDescription` first.
+    pub fn index_for(
+        res: &'static Resolution<'static>,
+        parent: TypeIndex,
+        member: MethodMemberIndex,
+    ) -> MethodIndex {
+        match member {
             MethodMemberIndex::Method(i) => {
                 res.method_index(parent, i).expect("method index out of range")
             }
@@ -105,6 +113,15 @@ impl MethodDescription {
         }
     }
 
+    /// Reconstructs the `dotnetdll` [`MethodIndex`] for this method.
+    pub fn method_index(&self) -> MethodIndex {
+        Self::index_for(
+            self.method_resolution.definition(),
+            self.parent.index,
+            self.method_member_index,
+        )
+    }
+
     /// Returns the decoded IL body for this method, or `None` if it has none.
     ///
     /// Delegates to [`Resolution::method_body`](dotnetdll::prelude::Resolution::method_body), which
@@ -117,6 +134,19 @@ impl MethodDescription {
             .definition()
             .method_body(self.method_index())
             .ok()
+    }
+
+    /// Returns the decoded signature for this method.
+    ///
+    /// Delegates to [`Resolution::method_signature`](dotnetdll::prelude::Resolution::method_signature),
+    /// which works in both eager and lazy parse modes (in lazy mode the signature is decoded and
+    /// cached on first access). Prefer this over `self.signature()`, which returns a
+    /// placeholder when the owning resolution was parsed with `lazy_method_signatures`.
+    pub fn signature(&self) -> &'static ManagedMethod<MethodType> {
+        self.method_resolution
+            .definition()
+            .method_signature(self.method_index())
+            .expect("failed to decode method signature")
     }
 }
 
@@ -133,7 +163,7 @@ impl Debug for MethodDescription {
         write!(
             f,
             "{}",
-            self.method().signature.show_with_name(
+            self.signature().show_with_name(
                 self.resolution().definition(),
                 format!("{}::{}", self.parent.type_name(), self.method().name)
             )

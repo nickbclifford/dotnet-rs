@@ -164,17 +164,18 @@ impl TypeDescription {
             .iter()
             .enumerate()
             .find_map(|(idx, m)| {
-                if m.runtime_special_name
-                    && m.name == ".cctor"
-                    && !m.signature.instance
-                    && m.signature.parameters.is_empty()
-                {
-                    Some(MethodDescription::new(
-                        self.clone(),
-                        GenericLookup::default(),
-                        self.resolution.clone(),
-                        MethodMemberIndex::Method(idx),
-                    ))
+                if !m.runtime_special_name || m.name != ".cctor" {
+                    return None;
+                }
+                let desc = MethodDescription::new(
+                    self.clone(),
+                    GenericLookup::default(),
+                    self.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
+                let sig = desc.signature();
+                if !sig.instance && sig.parameters.is_empty() {
+                    Some(desc)
                 } else {
                     None
                 }

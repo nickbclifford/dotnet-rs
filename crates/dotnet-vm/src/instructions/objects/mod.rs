@@ -181,7 +181,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
     let parent_name = method.parent.definition().type_name();
     if parent_name == "System.IntPtr"
         && method_name == ".ctor"
-        && method.method().signature.parameters.len() == 1
+        && method.signature().parameters.len() == 1
     {
         let val = vm_pop!(ctx);
         let native_val = match val {
@@ -202,7 +202,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
             let is_value_type =
                 dotnet_vm_ops::vm_try!(ctx.resolver().is_value_type(method.parent.clone()));
             if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
-                let arg_count = method.method().signature.parameters.len();
+                let arg_count = method.signature().parameters.len();
                 let args = ctx.pop_multiple(arg_count);
 
                 let res_ctx = ctx
