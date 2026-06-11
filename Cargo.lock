@@ -303,6 +303,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -573,7 +592,7 @@ dependencies = [
  "dotnet-utils",
  "dotnet-value",
  "dotnetdll",
- "hashbrown 0.15.3",
+ "hashbrown 0.17.1",
  "tracing",
 ]
 
@@ -625,7 +644,7 @@ dependencies = [
  "dotnet-utils",
  "dotnetdll",
  "gc-arena",
- "hashbrown 0.15.3",
+ "hashbrown 0.17.1",
  "lru",
  "smallvec",
  "static_assertions",
@@ -664,7 +683,7 @@ dependencies = [
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
- "hashbrown 0.15.3",
+ "hashbrown 0.17.1",
  "lru",
  "parking_lot",
  "phf",
@@ -707,8 +726,8 @@ dependencies = [
 
 [[package]]
 name = "dotnetdll"
-version = "0.1.2"
-source = "git+https://github.com/nickbclifford/dotnetdll#6ed6a105658a007939416789562adc2893342ad0"
+version = "0.1.4"
+source = "git+https://github.com/nickbclifford/dotnetdll#8ccfc0c8cf404bbfdd513919992888cfcc8d36fd"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -717,6 +736,8 @@ dependencies = [
  "num-traits",
  "object 0.38.0",
  "paste",
+ "rayon",
+ "rustc-hash",
  "scroll",
  "scroll-buffer",
  "thiserror",
@@ -726,7 +747,7 @@ dependencies = [
 [[package]]
 name = "dotnetdll-macros"
 version = "0.1.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#6ed6a105658a007939416789562adc2893342ad0"
+source = "git+https://github.com/nickbclifford/dotnetdll#8ccfc0c8cf404bbfdd513919992888cfcc8d36fd"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -767,12 +788,6 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
-
-[[package]]
-name = "foldhash"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
@@ -833,11 +848,6 @@ name = "hashbrown"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "84b26c544d002229e640969970a2e74021aadf6e2f96372b9c58eff97de08eb3"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.1.5",
-]
 
 [[package]]
 name = "hashbrown"
@@ -845,7 +855,18 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
- "foldhash 0.2.0",
+ "foldhash",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
 ]
 
 [[package]]
@@ -960,11 +981,11 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lru"
-version = "0.13.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "227748d55f2f0ab4735d87fd623798cb6b664512fe979705f829c9f81c934465"
+checksum = "8a860605968fce16869fd239cf4237a82f3ac470723415db603b0e8b6c8d4fb9"
 dependencies = [
- "hashbrown 0.15.3",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -1172,6 +1193,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1214,6 +1255,12 @@ name = "rustc-demangle"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
 
 [[package]]
 name = "ruzstd"

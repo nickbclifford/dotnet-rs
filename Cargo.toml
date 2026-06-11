@@ -61,12 +61,12 @@ dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f53718357b741ed4027560f14e90836" }
 parking_lot = "0.12"
 dashmap = "6.1"
-hashbrown = "0.15"
+hashbrown = "0.17"
 tracing = "0.1"
 thiserror = "2.0"
 smallvec = "1.13"
 slab = "0.4"
-lru = "0.13"
+lru = "0.18"
 
 # Benchmark profile guidance:
 # - Use `bench-thin` for fast benchmark iteration.
@@ -81,3 +81,13 @@ lto = "thin"
 inherits = "bench"
 lto = "fat"
 codegen-units = 1
+
+# Profiling profile for perf/flamegraph captures (see `scripts/profile_perf.sh`).
+# Keeps the `bench-fat` optimization settings but emits full DWARF debug info and
+# leaves symbols unstripped so perf can unwind stacks and resolve function names,
+# including inlined frames. Kept separate from `bench-fat` so plain timing runs
+# are not burdened with debuginfo link cost.
+[profile.profiling]
+inherits = "bench-fat"
+debug = "full"
+strip = false
