@@ -14,7 +14,8 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use dotnet_benchmarks::{
-    ARITHMETIC_BENCHMARK, BenchHarness, BenchmarkCase, JSON_BENCHMARK, assemblies_path, cold_run,
+    ARITHMETIC_BENCHMARK, BenchHarness, BenchmarkCase, JSON_BENCHMARK, LOAD_DOMINATED_BENCHMARK,
+    assemblies_path, cold_run,
 };
 use dotnetdll::prelude::ReadOptions;
 
@@ -58,6 +59,9 @@ fn run_case(c: &mut Criterion, case: BenchmarkCase) {
 fn cold_start(c: &mut Criterion) {
     run_case(c, ARITHMETIC_BENCHMARK);
     run_case(c, JSON_BENCHMARK);
+    // Load-dominated: framework working set parse with trivial execution.
+    // Primary regression guard for rayon thread-pool tuning — cold−warm ≈ pure load cost.
+    run_case(c, LOAD_DOMINATED_BENCHMARK);
 }
 
 criterion_group! {

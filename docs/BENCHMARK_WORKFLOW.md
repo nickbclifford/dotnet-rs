@@ -15,6 +15,55 @@ Recommended quick validation command:
 cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sample-size 10
 ```
 
+## Metadata-Load Parallelism (`RAYON_NUM_THREADS`)
+
+dotnetdll uses rayon to parallelize per-assembly metadata decoding. On many-core machines the
+fork/join and work-stealing overhead can dominate actual decode work. `dotnet-cli` caps the global
+rayon pool at `min(available_parallelism, 4)` by default — measured optimum on a 24-core machine
+(§ measured results below). Override with `RAYON_NUM_THREADS` to test other values.
+
+**Measured thread-count sweep (24-core, `load_framework_set/lazy`):**
+
+| threads | 1 | 2 | 4 (default) | 8 | 24 |
+|---------|---|---|-------------|---|----|
+| parse time | 34.5 ms | 30.6 ms | **28.1 ms** | 28.6 ms | 32.5 ms |
+
+All-cores default is ~12% slower than 4–8; single-thread is ~20% slower (corlib is large enough to
+benefit from a few threads).
+
+### Validate the thread-cap default (P1 regression guard)
+
+The `cold_start/load_dominated` bench forces loading the full framework working set while executing
+almost nothing. Cold − warm ≈ pure metadata-load cost, making it the tightest regression signal:
+
+```bash
+# Baseline: default cap (min(parallelism, 4))
+cargo bench -p dotnet-benchmarks --bench cold_start -- 'load_dominated/lazy'
+
+# Compare against all-cores (should be ~12% slower on many-core hosts)
+RAYON_NUM_THREADS=24 cargo bench -p dotnet-benchmarks --bench cold_start -- 'load_dominated/lazy'
+
+# Confirm single-thread penalty (should be ~20–30% slower)
+RAYON_NUM_THREADS=1 cargo bench -p dotnet-benchmarks --bench cold_start -- 'load_dominated/lazy'
+```
+
+### Raw parse thread sweep
+
+Isolates the dotnetdll decode pipeline (no I/O, no execution):
+
+```bash
+# Unset = production default (capped at 4 by dotnet-cli init)
+cargo bench -p dotnet-benchmarks --bench metadata_load -- --warm-up-time 2 --measurement-time 4
+
+# Sweep a specific thread count and filter to the load-sensitive case
+RAYON_NUM_THREADS=4  cargo bench -p dotnet-benchmarks --bench metadata_load -- --warm-up-time 1 --measurement-time 3 'load_framework_set/lazy'
+RAYON_NUM_THREADS=8  cargo bench -p dotnet-benchmarks --bench metadata_load -- --warm-up-time 1 --measurement-time 3 'load_framework_set/lazy'
+RAYON_NUM_THREADS=24 cargo bench -p dotnet-benchmarks --bench metadata_load -- --warm-up-time 1 --measurement-time 3 'load_framework_set/lazy'
+```
+
+Note: `metadata_load` does **not** respect the `dotnet-cli` pool cap — it calls `Resolution::parse`
+directly. Use `RAYON_NUM_THREADS` explicitly to control thread count in that bench.
+
 ## Optional Perf/Flamegraph Traces
 
 Use `scripts/profile_perf.sh` on Linux to capture `perf.data` for focused

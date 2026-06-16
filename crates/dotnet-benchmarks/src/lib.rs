@@ -110,7 +110,16 @@ pub const REFLECTION_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 14] = [
+/// Load-dominated fixture: forces the full framework working set (System.Text.Json + deps) but
+/// executes almost nothing. Cold − warm ≈ pure metadata-load cost. Primary regression guard for
+/// rayon thread-pool tuning (P1).
+pub const LOAD_DOMINATED_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "load_dominated",
+    source: "fixtures/load_dominated/LoadDominated_0.cs",
+    expected_exit_code: 0,
+};
+
+pub const BENCHMARK_CASES: [BenchmarkCase; 15] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
@@ -125,6 +134,7 @@ pub const BENCHMARK_CASES: [BenchmarkCase; 14] = [
     STRING_BENCHMARK,
     STACK_BENCHMARK,
     REFLECTION_BENCHMARK,
+    LOAD_DOMINATED_BENCHMARK,
 ];
 
 pub struct BenchHarness {
