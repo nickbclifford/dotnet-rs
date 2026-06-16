@@ -797,19 +797,20 @@ pub(crate) fn load_resolution_core(
             e
         ))
     })?;
-    let mut buf = vec![];
-    file.read_to_end(&mut buf)
-        .map_err(|e| AssemblyLoadError::Io(format!("failed to read file: {}", e)))?;
 
-    // Ensure alignment by copying to a Vec<u64> backing (8-byte alignment)
-    let len = buf.len();
+    // Read directly into an 8-byte-aligned Vec<u64>, skipping the intermediate Vec<u8>
+    // that a read_to_end + copy approach would require (saves ~12 MB for corlib).
+    let len = file
+        .metadata()
+        .map_err(|e| AssemblyLoadError::Io(format!("failed to read file metadata: {}", e)))?
+        .len() as usize;
     let cap = len.div_ceil(8);
     let mut aligned: Vec<u64> = vec![0u64; cap];
-    // SAFETY: source and destination are valid for 'len' bytes.
-    // 'aligned' is newly allocated with sufficient capacity.
-    unsafe {
-        ptr::copy_nonoverlapping(buf.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
-    }
+    // SAFETY: aligned has `cap * 8 >= len` bytes; the u8 slice is valid for that range.
+    let byte_buf =
+        unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, len) };
+    file.read_exact(byte_buf)
+        .map_err(|e| AssemblyLoadError::Io(format!("failed to read file: {}", e)))?;
 
     let aligned_boxed = aligned.into_boxed_slice();
     let aligned_ptr = Box::into_raw(aligned_boxed);
@@ -821,8 +822,8 @@ pub(crate) fn load_resolution_core(
 
     // Create the byte slice view
     let byte_slice =
-        // SAFETY: 'aligned_slice' is valid for its entire length.
-        // It contains 'len' bytes of data from 'buf'.
+        // SAFETY: 'aligned_slice' is valid for its entire length; it contains 'len' bytes read
+        // from the file.
         unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
     // `options` controls lazy vs eager decoding. The default (see `AssemblyLoader::read_options`)

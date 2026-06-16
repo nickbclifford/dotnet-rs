@@ -406,6 +406,7 @@ dependencies = [
  "dotnet-vm",
  "dotnetdll",
  "parking_lot",
+ "rayon",
 ]
 
 [[package]]
@@ -732,7 +733,7 @@ dependencies = [
 [[package]]
 name = "dotnetdll"
 version = "0.2.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#ac2fcb31c5f824092bee87ee43ccc5b007c4b3a4"
+source = "git+https://github.com/nickbclifford/dotnetdll#cfc2769eaf27ddd750ee9d305c2c90570344ead9"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -752,7 +753,7 @@ dependencies = [
 [[package]]
 name = "dotnetdll-macros"
 version = "0.1.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#ac2fcb31c5f824092bee87ee43ccc5b007c4b3a4"
+source = "git+https://github.com/nickbclifford/dotnetdll#cfc2769eaf27ddd750ee9d305c2c90570344ead9"
 dependencies = [
  "heck",
  "proc-macro2",
