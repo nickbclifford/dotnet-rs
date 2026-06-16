@@ -20,6 +20,8 @@ cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sam
 Use `scripts/profile_perf.sh` on Linux to capture `perf.data` for focused
 runtime analysis. The script builds the selected target first, then profiles the
 test or benchmark executable directly so build work does not pollute the trace.
+Defaults are tuned for denser captures (`--frequency 3997`, bench
+`--sample-size 30`) so flamegraphs have finer resolution.
 
 Both modes build with the dedicated `profiling` Cargo profile (inherits
 `bench-fat`, adds `debug = "full"` and `strip = false`) and force frame pointers
@@ -55,7 +57,7 @@ Default behavior:
 The Criterion benchmark is a better steady-state target for flamegraph analysis:
 
 ```bash
-./scripts/profile_perf.sh bench --name json --sample-size 10
+./scripts/profile_perf.sh bench --name json --sample-size 30
 ```
 
 Default behavior:
@@ -70,16 +72,18 @@ Default behavior:
 Each run writes:
 
 - `perf.data`: raw perf profile for external flamegraph explorers.
-- `perf.script`: text dump from `perf script -F +pid`, ready to load directly in
-  the [Firefox Profiler](https://profiler.firefox.com) (drag the file into the UI).
-- `stacks.folded` and `flamegraph.svg`: optional outputs when Inferno or Brendan
-  Gregg flamegraph tools are installed.
+- `perf.script`: text dump from `perf script -F +pid --no-inline`, ready to load
+  directly in the [Firefox Profiler](https://profiler.firefox.com) (drag the file into the UI).
+- `perf.inline.script`: inline-expanded text dump from `perf script -F +pid`,
+  used as the source for folded stacks to capture more frame detail.
+- `stacks.folded` and `flamegraph.svg`: optional outputs (generated from
+  `perf.inline.script`) when Inferno or Brendan Gregg flamegraph tools are installed.
 - `command.txt`: run metadata and the discovered executable path.
 
 Common options:
 
 ```bash
-./scripts/profile_perf.sh bench --name json --frequency 499 --call-graph fp
+./scripts/profile_perf.sh bench --name json --frequency 3997 --call-graph fp
 ./scripts/profile_perf.sh fixture --name system_text_json --features validation-all
 ./scripts/profile_perf.sh bench --name json -- --measurement-time 5
 ```

@@ -12,7 +12,7 @@
 #![allow(clippy::arc_with_non_send_sync)]
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult, state, sync::Arc};
-use dotnetdll::prelude::{EntryPoint, MethodMemberIndex};
+use dotnetdll::prelude::{EntryPoint, MethodMemberIndex, ReadOptions};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -273,6 +273,70 @@ impl BenchHarness {
             metrics: executor.get_runtime_metrics_snapshot(),
         }
     }
+}
+
+/// Cold-start run: builds a *fresh* `AssemblyLoader` (so `System.Private.CoreLib` and every
+/// framework dependency are re-parsed and re-resolved from scratch), parses the entry DLL with
+/// the given `options`, and executes to completion. Unlike [`BenchHarness::run_dll`], nothing is
+/// cached across calls — this is what measures end-to-end metadata-load cost (parse + on-demand
+/// lazy decode during execution) for a real workload.
+///
+/// `options` is applied to every assembly the loader parses, letting callers compare lazy vs
+/// eager decoding for the whole assembly graph.
+pub fn cold_run(assemblies_path: &str, dll_path: &Path, options: ReadOptions) -> u8 {
+    let mut loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path.to_string())
+        .expect("failed to create AssemblyLoader");
+    loader.set_read_options(options);
+    let loader = Arc::new(loader);
+
+    let resolution = loader
+        .load_resolution_from_file(dll_path)
+        .expect("failed to load benchmark fixture assembly");
+
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&loader)));
+    let mut executor = vm::Executor::new(shared);
+
+    let entry_method = match resolution.entry_point {
+        Some(EntryPoint::Method(m)) => m,
+        Some(EntryPoint::File(f)) => panic!(
+            "expected entry-point method, found file: {}",
+            resolution[f].name
+        ),
+        None => panic!("expected benchmark fixture to contain an entry point"),
+    };
+
+    let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
+        .expect("failed to locate entry method index");
+
+    let entrypoint = MethodDescription::new(
+        td,
+        vm::GenericLookup::default(),
+        resolution,
+        MethodMemberIndex::Method(method_index),
+    );
+    executor
+        .entrypoint(entrypoint)
+        .expect("failed to initialize benchmark entrypoint");
+
+    match executor.run() {
+        ExecutorResult::Exited(code) => code,
+        ExecutorResult::Threw(exc) => panic!("benchmark fixture threw managed exception: {exc}"),
+        ExecutorResult::Error(err) => panic!("benchmark fixture failed with VM error: {err}"),
+    }
+}
+
+/// The .NET shared-framework path used by the benchmark harness.
+pub fn assemblies_path() -> String {
+    dotnet_assemblies::find_dotnet_app_path()
+        .expect("could not find .NET shared path")
+        .to_str()
+        .expect("failed to convert path to UTF-8")
+        .to_string()
 }
 
 pub fn case_by_name(name: &str) -> Option<BenchmarkCase> {

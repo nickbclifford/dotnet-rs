@@ -10,7 +10,7 @@ set -euo pipefail
 MODE=""
 NAME=""
 OUTPUT_DIR=""
-FREQUENCY="997"
+FREQUENCY="3997"
 # Frame pointer unwinding is reliable at the default kernel.perf_event_paranoid
 # level (2) and doesn't require mlock budget. DWARF mode looks appealing but
 # silently drops all stacks on the default mlock_kb=516 budget. Frame pointers
@@ -19,7 +19,7 @@ CALL_GRAPH="fp"
 CARGO_PROFILE=""
 FEATURES=""
 NO_DEFAULT_FEATURES=0
-SAMPLE_SIZE="10"
+SAMPLE_SIZE="30"
 EXTRA_ARGS=()
 
 print_usage() {
@@ -35,18 +35,18 @@ Modes:
 Common options:
   --name <name>           Fixture substring or benchmark case (default: system_text_json for fixture, json for bench)
   --output-dir <path>     Output directory (default: target/perf-traces/<mode>-<name>/<timestamp>)
-  --frequency <hz>        perf sample frequency (default: 997)
+  --frequency <hz>        perf sample frequency (default: 3997)
   --call-graph <mode>     perf call graph mode (default: fp)
   --features <features>   Cargo features to enable
   --no-default-features   Disable Cargo default features
   --profile <profile>     Cargo profile (default: profiling — full debug info + bench-fat opts)
-  --sample-size <n>       Criterion sample size for bench mode (default: 10)
+  --sample-size <n>       Criterion sample size for bench mode (default: 30)
   --extra-args [--] ...   Forward remaining args to the test/bench executable
   -h, --help              Show this message
 
 Examples:
   $0 fixture --name system_text_json
-  $0 bench --name json --sample-size 10
+  $0 bench --name json --sample-size 30
   $0 bench --name json -- --measurement-time 5
 USAGE
 }
@@ -196,6 +196,7 @@ write_metadata() {
 postprocess_perf_data() {
   local perf_data="$OUTPUT_DIR/perf.data"
   local perf_script="$OUTPUT_DIR/perf.script"
+  local perf_inline_script="$OUTPUT_DIR/perf.inline.script"
   local folded="$OUTPUT_DIR/stacks.folded"
   local svg="$OUTPUT_DIR/flamegraph.svg"
 
@@ -213,8 +214,18 @@ postprocess_perf_data() {
     return
   fi
 
+  # Keep a second script with inline expansion enabled for richer folded stacks
+  # and finer flamegraphs.
+  if DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
+     perf script -i "$perf_data" -F +pid > "$perf_inline_script" 2> "$OUTPUT_DIR/perf-inline-script.stderr"; then
+    echo "[perf] wrote $perf_inline_script (inline-expanded)"
+  else
+    echo "[perf] inline-expanded perf script failed; see $OUTPUT_DIR/perf-inline-script.stderr" >&2
+    perf_inline_script="$perf_script"
+  fi
+
   if command -v inferno-collapse-perf >/dev/null 2>&1; then
-    inferno-collapse-perf "$perf_script" > "$folded"
+    inferno-collapse-perf "$perf_inline_script" > "$folded"
     echo "[perf] wrote $folded"
 
     if command -v inferno-flamegraph >/dev/null 2>&1; then
@@ -222,7 +233,7 @@ postprocess_perf_data() {
       echo "[perf] wrote $svg"
     fi
   elif command -v stackcollapse-perf.pl >/dev/null 2>&1; then
-    stackcollapse-perf.pl "$perf_script" > "$folded"
+    stackcollapse-perf.pl "$perf_inline_script" > "$folded"
     echo "[perf] wrote $folded"
 
     if command -v flamegraph.pl >/dev/null 2>&1; then
