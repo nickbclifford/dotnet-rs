@@ -2,6 +2,19 @@ use clap::Parser;
 use dotnet_assemblies::{AssemblyLoader, find_dotnet_sdk_path};
 use std::path::PathBuf;
 
+fn init_rayon_pool() {
+    let n = std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get().min(4))
+                .unwrap_or(1)
+        });
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+}
+
 #[derive(Parser, Debug)]
 #[command(
     author,
@@ -50,6 +63,7 @@ fn resolve_assembly_path(name: &str) -> PathBuf {
 }
 
 fn main() {
+    init_rayon_pool();
     let args = Args::parse();
 
     let sdk_path = find_dotnet_sdk_path().expect("could not find .NET SDK path");

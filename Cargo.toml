@@ -59,6 +59,7 @@ dotnet-exceptions = { path = "crates/dotnet-exceptions", default-features = fals
 dotnet-pinvoke = { path = "crates/dotnet-pinvoke", default-features = false }
 dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f53718357b741ed4027560f14e90836" }
+rayon = "1"
 parking_lot = "0.12"
 dashmap = "6.1"
 hashbrown = "0.17"
