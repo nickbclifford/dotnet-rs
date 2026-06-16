@@ -16,19 +16,24 @@ FREQUENCY="3997"
 # fp:   reliable at any kernel.perf_event_mlock_kb setting because frame-pointer
 #       unwinding requires no auxiliary locked memory.  All Rust code is compiled
 #       with -Cforce-frame-pointers=yes so our frames unwind cleanly.  The gap:
-#       system libraries (libc, ld.so) are shipped WITHOUT frame pointers, so
-#       any sample whose leaf instruction is inside libc shows up as "[unknown]"
-#       in perf script output — the stack terminates at the libc boundary.
-#       These frames are typically allocator internals (realloc, _int_malloc,
-#       malloc_consolidate) called from Vec growth.  perf report resolves them
-#       correctly because it uses DWARF; the Firefox Profiler / perf script path
-#       does not.  Remaining "[unknown] ([unknown])" frames with ffffffffa…
-#       addresses are PMU interrupt-skid artefacts (the hardware fires the counter
-#       during a user→kernel transition); they require PEBS and cannot be resolved
-#       with any call-graph flag.
+#       system libraries (libc, ld.so) are shipped WITHOUT frame pointers, so when
+#       a sample's leaf is inside libc the unwind STOPS at the libc boundary and
+#       loses the Rust callers above it (you lose "who called malloc").  Use dwarf
+#       when allocator attribution matters.  Remaining "[unknown] ([unknown])"
+#       frames with ffffffffa… addresses are PMU interrupt-skid artefacts (the
+#       hardware fires the counter during a user→kernel transition); they require
+#       PEBS and cannot be resolved with any call-graph flag.
+#
+# NOTE on libc *symbol names* (a separate axis from unwinding): libc's internal
+#      functions (_int_malloc, __memmove_avx512_unaligned_erms, …) live only in
+#      the debuginfo .symtab, not the stripped on-disk .dynsym.  perf never pulls
+#      those names from debuginfod — NOT in `perf script` and NOT even in `perf
+#      report` — so they print as "[unknown]" or a raw offset regardless of call
+#      graph mode.  resolve_perf_syms.py (run in postprocess) closes that gap with
+#      +dsoff + addr2line against the debuginfod-cached debug file.
 #
 # dwarf: walks DWARF .eh_frame/.debug_frame instead of frame pointers, so it
-#        unwinds cleanly through libc and fully resolves the allocator frames.
+#        unwinds cleanly through libc and keeps the allocator's Rust callers.
 #        Requires kernel.perf_event_mlock_kb ≥ 8192 (default is 516).
 #        One-time setup (persists until next boot):
 #          sudo sysctl kernel.perf_event_mlock_kb=65536
@@ -38,12 +43,24 @@ FREQUENCY="3997"
 #        ~250 frames at 32 bytes/frame, well above dotnet-rs stack depth.
 #        dwarf,16384 is an option for deeply recursive test cases.
 #
-# auto: (set below) picks dwarf,8192 when mlock_kb ≥ 8192, fp otherwise.
+# auto: (set below) picks fp — dense and overflow-free, with libc leaf names recovered in
+#       post-processing.  dwarf is opt-in (--call-graph dwarf,8192) for callchains through libc.
 CALL_GRAPH="auto"
 CARGO_PROFILE=""
 FEATURES=""
 NO_DEFAULT_FEATURES=0
 SAMPLE_SIZE="30"
+PREWARM=1
+# Capture backend: "auto" (default), "perf", or "samply".
+#   samply: frame-pointer sampling profiler with a native Firefox Profiler backend.  The build
+#           sets -Cforce-frame-pointers=yes, so it unwinds the full stack cheaply at every
+#           sample — far denser captures than perf's throttled DWARF path, with near-zero empty
+#           stacks, and it symbolicates libc/system libs via debuginfod itself.  Needs
+#           kernel.perf_event_paranoid <= 1.
+#   perf:   perf record → perf script → resolve_perf_syms.py → inferno.  Works at paranoid 2;
+#           produces a self-contained perf.script text dump and a perf.data for other tools.
+# auto picks samply when it is installed and paranoid allows it, else perf.
+BACKEND="auto"
 EXTRA_ARGS=()
 
 print_usage() {
@@ -65,6 +82,12 @@ Common options:
   --no-default-features   Disable Cargo default features
   --profile <profile>     Cargo profile (default: profiling — full debug info + bench-fat opts)
   --sample-size <n>       Criterion sample size for bench mode (default: 30)
+  --backend <name>        Capture backend: auto (default), perf, or samply. auto prefers
+                          samply (denser, fully-symbolicated, native Firefox Profiler) when
+                          it is installed and kernel.perf_event_paranoid <= 1, else perf.
+  --no-prewarm            Skip the untraced warm-up run (which builds the fixture DLL and
+                          warms caches OUTSIDE the trace; without it, a first-time `dotnet
+                          build` subprocess pollutes the capture — usually keep it on)
   --extra-args [--] ...   Forward remaining args to the test/bench executable
   -h, --help              Show this message
 
@@ -143,6 +166,14 @@ parse_args() {
         SAMPLE_SIZE="$2"
         shift 2
         ;;
+      --backend)
+        BACKEND="$2"
+        shift 2
+        ;;
+      --no-prewarm)
+        PREWARM=0
+        shift
+        ;;
       --extra-args)
         shift
         if [[ $# -gt 0 && "$1" == "--" ]]; then
@@ -178,8 +209,12 @@ cargo_feature_args() {
 }
 
 ensure_tools() {
-  command -v perf >/dev/null 2>&1 || fail "perf not found on PATH"
   command -v cargo >/dev/null 2>&1 || fail "cargo not found on PATH"
+  if [[ "$BACKEND" == "samply" ]]; then
+    command -v samply >/dev/null 2>&1 || fail "samply not found on PATH (cargo install samply)"
+  else
+    command -v perf >/dev/null 2>&1 || fail "perf not found on PATH"
+  fi
 }
 
 make_run_dir() {
@@ -217,36 +252,56 @@ write_metadata() {
   } > "$metadata"
 }
 
+# Emit `perf script` for $1 (perf.data) with the fields we need, falling back gracefully on
+# older perf that lacks `+dsoff`.  Remaining args (e.g. --no-inline) are forwarded.
+#  +pid    — the pid field the Firefox Profiler importer requires.
+#  +dsoff  — each frame's DSO-relative offset, so resolve_perf_syms.py can recover stripped
+#            system-library symbol names (libc/ld.so internals) from debuginfod.  perf itself
+#            never pulls those names from debuginfod — not in `perf script` and not even in
+#            `perf report` — so without this they stay `[unknown]`.
+emit_perf_script() {
+  local data="$1"
+  shift
+  DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
+    perf script -i "$data" -F +pid,+dsoff "$@" 2>/dev/null && return 0
+  DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
+    perf script -i "$data" -F +pid "$@"
+}
+
 postprocess_perf_data() {
   local perf_data="$OUTPUT_DIR/perf.data"
   local perf_script="$OUTPUT_DIR/perf.script"
   local perf_inline_script="$OUTPUT_DIR/perf.inline.script"
   local folded="$OUTPUT_DIR/stacks.folded"
   local svg="$OUTPUT_DIR/flamegraph.svg"
+  local resolver
+  resolver="$(dirname "$0")/resolve_perf_syms.py"
 
-  # `-F +pid` appends the pid field the Firefox Profiler importer requires.
-  # `--no-inline` suppresses DWARF inline expansion: with fat LTO every physical
-  # frame sits inside inlined code, so the default expansion produces only
-  # `(inlined)` entries with no root frame to anchor them in Firefox Profiler.
-  # DEBUGINFOD_URLS is set here but NOTE: `perf script` only uses the ELF symbol
-  # table for name lookup, not DWARF; debuginfod does not help for libc internals
-  # in this output.  Use `perf report` (which uses DWARF) for full resolution, or
-  # recapture with --call-graph dwarf after setting mlock_kb ≥ 8192.
-  if DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
-     perf script -i "$perf_data" -F +pid --no-inline > "$perf_script" 2> "$OUTPUT_DIR/perf-script.stderr"; then
-    echo "[perf] wrote $perf_script (load directly in Firefox Profiler: https://profiler.firefox.com)"
+  # Resolution + quality reporting is a best-effort filter: if python3 or the resolver is
+  # missing we fall back to writing raw `perf script` output unchanged.
+  local resolve=("cat")
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$resolver" ]]; then
+    resolve=(python3 "$resolver" --perf-data "$perf_data" --target-comm "${TARGET_COMM:-}")
+  fi
+
+  # `--no-inline` keeps one physical frame per line: with fat LTO every physical frame sits
+  # inside inlined code, so the default expansion produces only `(inlined)` entries with no
+  # root frame to anchor them in Firefox Profiler.  Stats (the [quality] lines) are printed
+  # to the terminal from this pass.
+  if emit_perf_script "$perf_data" --no-inline | "${resolve[@]}" > "$perf_script" 2> "$OUTPUT_DIR/quality.txt"; then
+    [[ -s "$OUTPUT_DIR/quality.txt" ]] && cat "$OUTPUT_DIR/quality.txt" >&2
+    echo "[perf] wrote $perf_script (symbol-resolved; load directly in Firefox Profiler: https://profiler.firefox.com)"
   else
-    echo "[perf] perf script failed; see $OUTPUT_DIR/perf-script.stderr" >&2
+    echo "[perf] perf script failed" >&2
     return
   fi
 
-  # Keep a second script with inline expansion enabled for richer folded stacks
-  # and finer flamegraphs.
-  if DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
-     perf script -i "$perf_data" -F +pid > "$perf_inline_script" 2> "$OUTPUT_DIR/perf-inline-script.stderr"; then
+  # Second script with inline expansion enabled for richer folded stacks and finer
+  # flamegraphs.  Same resolution; quality summary suppressed (identical to the pass above).
+  if emit_perf_script "$perf_data" | "${resolve[@]}" 2>/dev/null > "$perf_inline_script"; then
     echo "[perf] wrote $perf_inline_script (inline-expanded)"
   else
-    echo "[perf] inline-expanded perf script failed; see $OUTPUT_DIR/perf-inline-script.stderr" >&2
+    echo "[perf] inline-expanded perf script failed" >&2
     perf_inline_script="$perf_script"
   fi
 
@@ -266,6 +321,9 @@ postprocess_perf_data() {
       flamegraph.pl "$folded" > "$svg"
       echo "[perf] wrote $svg"
     fi
+  else
+    echo "[perf] no flamegraph tool found — install one for an SVG: cargo install inferno"
+    echo "[perf]   (perf.script already loads in the Firefox Profiler without it)"
   fi
 }
 
@@ -275,6 +333,10 @@ run_perf() {
   local target_name="$1"
   shift
   local perf_data="$OUTPUT_DIR/perf.data"
+
+  # The process comm perf records; resolve_perf_syms.py uses it to flag samples that landed
+  # in OTHER processes (subprocess pollution).  perf truncates comm to 15 chars.
+  TARGET_COMM="$(basename "$exe")"
 
   write_metadata "$exe" "$target_name"
 
@@ -300,6 +362,40 @@ run_perf() {
 
   echo "[perf] wrote $perf_data"
   postprocess_perf_data
+}
+
+run_samply() {
+  local exe="$1"
+  shift
+  local target_name="$1"
+  shift
+  local profile="$OUTPUT_DIR/profile.json.gz"
+
+  TARGET_COMM="$(basename "$exe")"
+  write_metadata "$exe" "$target_name"
+
+  echo "[samply] output: $OUTPUT_DIR"
+  echo "[samply] executable: $exe"
+  echo "[samply] target: $target_name"
+
+  # samply unwinds with frame pointers (the build sets -Cforce-frame-pointers=yes), so it
+  # needs no call-graph / mlock / ring-buffer tuning and short-lived threads still unwind
+  # cleanly.  --save-only writes a self-contained profile; symbolication (binary debuginfo +
+  # libc/system libs via debuginfod) happens lazily when the profile is loaded in the UI.
+  DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
+    samply record --save-only -o "$profile" --rate "$FREQUENCY" -- "$exe" "$@"
+
+  echo "[samply] wrote $profile"
+  echo "[samply] view it (opens the Firefox Profiler, symbolicates on load): samply load $profile"
+}
+
+# Dispatch to the selected capture backend.  Both implementations take (exe, target_name, args…).
+run_capture() {
+  if [[ "$BACKEND" == "samply" ]]; then
+    run_samply "$@"
+  else
+    run_perf "$@"
+  fi
 }
 
 run_fixture_mode() {
@@ -350,7 +446,14 @@ run_fixture_mode() {
     export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-4}"
   fi
 
-  run_perf "$exe" "$test_name" "$test_name" --exact --nocapture --test-threads=1 "${EXTRA_ARGS[@]}"
+  # Warm up untraced: materialize on-demand fixture DLLs and warm the file cache so the
+  # traced run does not pay (and record) a one-time `dotnet build` or cold-cache I/O.
+  if [[ "$PREWARM" -eq 1 ]]; then
+    echo "[profile] pre-warming (untraced) so fixture build / cold I/O stays out of the trace"
+    "$exe" "$test_name" --exact --nocapture --test-threads=1 "${EXTRA_ARGS[@]}" >/dev/null 2>&1 || true
+  fi
+
+  run_capture "$exe" "$test_name" "$test_name" --exact --nocapture --test-threads=1 "${EXTRA_ARGS[@]}"
 }
 
 run_bench_mode() {
@@ -377,11 +480,28 @@ run_bench_mode() {
   exe="$(extract_executable "$cargo_json" "end_to_end")"
   [[ -n "$exe" && -x "$exe" ]] || fail "could not discover end_to_end benchmark executable from $cargo_json"
 
-  run_perf "$exe" "$bench_case" "$bench_case" --sample-size "$SAMPLE_SIZE" "${EXTRA_ARGS[@]}"
+  # Warm up untraced.  The harness lazily runs a one-time `dotnet build` to compile the
+  # fixture .cs into a DLL on the first iteration; if that lands inside `perf record` the
+  # whole MSBuild/Roslyn/CoreCLR process tree is captured (dozens of unwindable managed
+  # threads) and drowns the actual interpreter signal.  Running the case briefly here builds
+  # the DLL to its on-disk cache so the traced run finds it fresh and never shells out.
+  if [[ "$PREWARM" -eq 1 ]]; then
+    echo "[profile] pre-warming (untraced) so the fixture's dotnet build stays out of the trace"
+    "$exe" "$bench_case" --warm-up-time 0.3 --measurement-time 0.3 --sample-size 10 >/dev/null 2>&1 || true
+  fi
+
+  # `--bench` is essential: run directly without it, a Criterion binary executes in libtest
+  # "test mode" (one iteration per case, to support `cargo test`) and barely runs the workload
+  # — yielding a sparse, startup-dominated trace.  `cargo bench` passes `--bench` for us; when
+  # we exec the binary ourselves we must pass it explicitly to get the real measurement loop.
+  run_capture "$exe" "$bench_case" --bench "$bench_case" --sample-size "$SAMPLE_SIZE" "${EXTRA_ARGS[@]}"
 }
 
 parse_args "$@"
-ensure_tools
+case "$BACKEND" in
+  auto|perf|samply) ;;
+  *) fail "unknown backend: $BACKEND (expected auto, perf, or samply)" ;;
+esac
 if ! [[ "$FREQUENCY" =~ ^[0-9]+$ ]]; then
   fail "--frequency must be an integer"
 fi
@@ -389,28 +509,54 @@ if ! [[ "$SAMPLE_SIZE" =~ ^[0-9]+$ ]]; then
   fail "--sample-size must be an integer"
 fi
 
-# Resolve "auto" call-graph mode: use dwarf when mlock budget allows it.
-if [[ "$CALL_GRAPH" == "auto" ]]; then
-  mlock_kb="$(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo 516)"
-  if [[ "$mlock_kb" -ge 8192 ]]; then
-    CALL_GRAPH="dwarf,8192"
-    # At 3997 Hz, 8192 bytes/sample × 25 rayon+test threads ≈ 800 MB/s of DWARF
-    # data — the ring buffer drains in milliseconds and 90%+ of samples are lost.
-    # The default frequency only makes sense for fp mode (samples are ~200 bytes).
-    # For DWARF, cap at 299 Hz: even with 25 threads that's ~60 MB/s, which a
-    # 1 MB ring buffer (-m 256) handles for a 200 ms fixture run.
-    # Users who pass --frequency explicitly get their value; we only override the
-    # default of 3997, which is never appropriate for DWARF.
+# Resolve "auto" backend before ensure_tools so we verify the recorder we will actually use.
+# Prefer samply (frame-pointer unwinding → far denser, fully-symbolicated captures) when it is
+# installed and perf_event_paranoid allows it; otherwise fall back to the perf path.
+if [[ "$BACKEND" == "auto" ]]; then
+  paranoid="$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)"
+  if command -v samply >/dev/null 2>&1 && [[ "$paranoid" =~ ^-?[0-9]+$ && "$paranoid" -le 1 ]]; then
+    BACKEND="samply"
+    echo "[profile] backend=samply (frame-pointer unwinding, native Firefox Profiler; paranoid=$paranoid)"
+  else
+    BACKEND="perf"
+    if command -v samply >/dev/null 2>&1; then
+      echo "[profile] backend=perf — samply needs kernel.perf_event_paranoid<=1 (currently ${paranoid})"
+      echo "[profile]   make it permanent: echo 'kernel.perf_event_paranoid=1' | sudo tee /etc/sysctl.d/99-perf.conf"
+    else
+      echo "[profile] backend=perf — install samply for a denser, fully-symbolicated capture: cargo install samply"
+    fi
+  fi
+fi
+
+ensure_tools
+
+# Call-graph resolution (perf backend only).
+if [[ "$BACKEND" == "perf" ]]; then
+  # auto → fp.  Frame-pointer unwinding is the right default: the build sets
+  # -Cforce-frame-pointers=yes so every dotnet-rs frame unwinds, fp samples are tiny (~200 B)
+  # so the ring buffer never overflows even on a dense bench (measured 0% empty stacks at
+  # 3997 Hz), and resolve_perf_syms.py names libc/system leaves afterward.  DWARF only adds the
+  # ability to unwind the Rust callers ABOVE a libc-internal leaf, but its 8 KiB/sample stack
+  # dumps force a low rate and overflow on dense workloads — measured 80% empty / 87%
+  # unresolved on `bench json`.  So DWARF is opt-in, not the default.
+  if [[ "$CALL_GRAPH" == "auto" ]]; then
+    CALL_GRAPH="fp"
+    echo "[perf] call-graph=fp (dense, no ring-buffer loss; libc leaves named in post-processing)"
+    echo "[perf]   (pass --call-graph dwarf,8192 to unwind callchains THROUGH libc — much lower density)"
+  fi
+  # When DWARF is explicitly requested, keep it usable: it needs a large mlock budget and a low
+  # sample rate or it drops most stacks.
+  if [[ "$CALL_GRAPH" == dwarf* ]]; then
+    mlock_kb="$(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo 516)"
+    if [[ "$mlock_kb" -lt 8192 ]]; then
+      echo "[perf] WARNING: DWARF needs kernel.perf_event_mlock_kb>=8192 (currently ${mlock_kb}); stacks will be truncated"
+      echo "[perf]   sudo sysctl kernel.perf_event_mlock_kb=65536"
+    fi
     if [[ "$FREQUENCY" == "3997" ]]; then
       FREQUENCY="299"
-      echo "[perf] DWARF mode: auto-lowering frequency 3997→299 Hz to prevent ring buffer overflow"
-      echo "[perf]   (use --frequency to override; ~60 samples per thread over a 200 ms fixture run)"
+      echo "[perf] DWARF mode: lowering frequency 3997→299 Hz to limit ring-buffer overflow (--frequency overrides)"
     fi
-    echo "[perf] mlock_kb=${mlock_kb} — using call-graph dwarf,8192 (full libc symbol resolution)"
-  else
-    CALL_GRAPH="fp"
-    echo "[perf] mlock_kb=${mlock_kb} < 8192 — using call-graph fp (libc internals will be [unknown])"
-    echo "[perf] To enable DWARF: sudo sysctl kernel.perf_event_mlock_kb=65536"
+    echo "[perf] call-graph=${CALL_GRAPH} — note: still expect heavy sample loss on dense workloads"
   fi
 fi
 

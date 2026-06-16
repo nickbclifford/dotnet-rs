@@ -64,39 +64,64 @@ RAYON_NUM_THREADS=24 cargo bench -p dotnet-benchmarks --bench metadata_load -- -
 Note: `metadata_load` does **not** respect the `dotnet-cli` pool cap — it calls `Resolution::parse`
 directly. Use `RAYON_NUM_THREADS` explicitly to control thread count in that bench.
 
+## Pick the right target: `bench`, not `fixture`
+
+**For flamegraphs, profile the `bench` target, not the `fixture`.** A fixture is a one-shot
+correctness test that starts, runs for ~50 ms, and exits — the capture is dominated by process
+startup (`ld.so`), the dynamic linker, and teardown, with only a handful of usable samples of
+actual interpreter work. DWARF mode further caps the rate at 299 Hz, so a 50 ms run yields
+~14 usable samples. The Criterion `bench` runs the workload in a steady-state loop for seconds,
+giving thousands of dense, unwindable samples.
+
+`profile_perf.sh` prints a `[quality]` summary after every capture (also saved to
+`quality.txt`) and **warns** when a trace is too short, idle-dominated, or polluted by another
+process. Use `fixture` mode only to inspect a specific correctness test, and expect the warning.
+
+## Subprocess pollution (the dominant cause of "empty frames")
+
+The benchmark harness lazily runs a one-time `dotnet build` to compile each fixture `.cs` into a
+DLL on its first iteration. If that build lands inside `perf record`, the entire MSBuild / Roslyn
+(`VBCSCompiler`) / CoreCLR process tree is captured — dozens of managed threads that DWARF cannot
+unwind — and it can be **70%+ of the samples**, drowning the real signal and showing as empty or
+`[unknown]` stacks.
+
+`profile_perf.sh` prevents this automatically: it does an **untraced pre-warm run** before
+recording, so the fixture DLL is built to its on-disk cache and the traced run finds it fresh and
+never shells out. (`--no-prewarm` opts out.) The `[quality]` line reports `foreign-process=N%` and
+warns if a subprocess slipped into the trace anyway.
+
 ## Resolving `[unknown]` frames in perf traces
 
-Three categories of `[unknown]` appear in `perf script` output; each has a different cause and fix:
+Three categories of `[unknown]` appear in `perf script` output; each has a different cause:
 
-### 1. Libc internals (~25% of samples in a typical dotnet-rs trace)
+### 1. Libc internal symbol names — resolved automatically
 
-**Cause:** libc is shipped without frame pointers, so `--call-graph fp` stops at the
-libc boundary. The leaf frame shows as `[unknown]` from `/usr/lib/libc.so.6`. These are
-nearly always allocator internals (`_int_malloc`, `malloc_consolidate`, `_int_free`)
-called from Rust's `Vec` growth path (`alloc::raw_vec::finish_grow → realloc`).
+**Cause:** libc's internal functions (`_int_malloc`, `__memmove_avx512_unaligned_erms`,
+`__libc_malloc2`, …) live only in the debuginfo `.symtab`, not in the stripped on-disk
+`.dynsym`. perf never pulls these names from debuginfod — **not in `perf script`, and not even in
+`perf report`** (a common misconception: `perf report` resolves *exported* libc symbols like
+`malloc`/`free`, but internal ones still show as raw offsets). This is independent of frame-pointer
+vs DWARF unwinding.
 
-**Fix:** Use DWARF call-graph mode, which walks `.eh_frame`/`.debug_frame` instead of
-frame pointers. Requires `kernel.perf_event_mlock_kb ≥ 8192` (default is 516).
+**Fix (automatic):** `profile_perf.sh` post-processes with `scripts/resolve_perf_syms.py`, which
+re-runs `perf script` with `+dsoff` (DSO-relative offsets), maps each DSO to its build-id via
+`perf buildid-list`, fetches the debug file with `debuginfod-find`, and resolves offsets with
+`addr2line`/`eu-addr2line`. Resolved names replace `[unknown]` in both `perf.script` and the
+folded stacks. It is best-effort: if `python3`, `debuginfod-find`, or `addr2line` is missing, the
+raw output is passed through unchanged. (`DEBUGINFOD_URLS` defaults to
+`https://debuginfod.archlinux.org`.)
 
-One-time setup (survives until reboot):
+Separately, if you want libc's *Rust callers* preserved when a sample's leaf is inside libc (e.g.
+"who called `malloc`"), pass `--call-graph dwarf,8192` — frame-pointer mode stops at the libc
+boundary. This is opt-in (fp is the default; see "Call graph" above) and trades away most of the
+sample density. DWARF requires `kernel.perf_event_mlock_kb ≥ 8192` (default is 516):
+
 ```bash
-sudo sysctl kernel.perf_event_mlock_kb=65536
+sudo sysctl kernel.perf_event_mlock_kb=65536          # until reboot
+# or permanently in /etc/sysctl.d/99-perf.conf:  kernel.perf_event_mlock_kb = 65536
 ```
 
-Permanent (create `/etc/sysctl.d/99-perf.conf`):
-```
-kernel.perf_event_mlock_kb = 65536
-```
-
-Once set, `profile_perf.sh` auto-detects the higher budget and switches to
-`--call-graph dwarf,8192`. You can also pass it explicitly:
-```bash
-./scripts/profile_perf.sh fixture --name system_text_json --call-graph dwarf,8192
-```
-
-**Workaround without sudo:** `perf report` already uses DWARF and resolves these frames
-correctly from the existing `perf.data` — use it for analysis even when `perf.script`
-shows `[unknown]`.
+(The samply backend sidesteps this entirely — it keeps libc callers *and* stays dense.)
 
 ### 2. PMU interrupt-skid frames (~7% of samples)
 
@@ -119,29 +144,39 @@ artefact of measuring it with a regular PMU, not a real cost to fix.
 
 ## Optional Perf/Flamegraph Traces
 
-Use `scripts/profile_perf.sh` on Linux to capture `perf.data` for focused
-runtime analysis. The script builds the selected target first, then profiles the
-test or benchmark executable directly so build work does not pollute the trace.
-Defaults are tuned for denser captures (`--frequency 3997`, bench
-`--sample-size 30`) so flamegraphs have finer resolution.
+Use `scripts/profile_perf.sh` on Linux to capture a profile for focused runtime analysis. The
+script builds the selected target first, then profiles the test or benchmark executable directly
+so build work does not pollute the trace.
 
-Both modes build with the dedicated `profiling` Cargo profile (inherits
-`bench-fat`, adds `debug = "full"` and `strip = false`) and force frame pointers
-via `RUSTFLAGS=-Cforce-frame-pointers=yes`. This guarantees that perf and
-external flamegraph explorers can unwind stacks and resolve symbols — including
-inlined frames — on optimized code.
+Both modes build with the dedicated `profiling` Cargo profile (inherits `bench-fat`, adds
+`debug = "full"` and `strip = false`) and force frame pointers via
+`RUSTFLAGS=-Cforce-frame-pointers=yes`, so every dotnet-rs frame — including inlined ones —
+unwinds on optimized code.
 
-The script defaults to `call-graph auto`, which picks `dwarf,8192` when
-`kernel.perf_event_mlock_kb ≥ 8192` and falls back to `fp` otherwise. With `fp`,
-all dotnet-rs frames unwind correctly (compiled with `-Cforce-frame-pointers=yes`)
-but libc internals appear as `[unknown]`; see the "Resolving `[unknown]` frames"
-section above for setup. Pass `--call-graph fp` to force frame-pointer mode even
-when mlock_kb is large.
+### Backend: samply (default) or perf
+
+`--backend auto` (the default) picks **samply** when it is installed and
+`kernel.perf_event_paranoid ≤ 1`, otherwise the **perf** path. On a dense `bench json` both now
+capture ~44k clean main-thread samples; samply additionally symbolicates libc/system libraries
+itself and serves the Firefox Profiler natively (see the samply section below). Force a backend
+with `--backend perf` / `--backend samply`.
+
+### Call graph: fp (default) vs dwarf — perf backend
+
+The perf path defaults to **`fp`** (frame-pointer) unwinding. This is the right default: our
+frames all unwind (forced frame pointers), fp samples are tiny so the ring buffer never overflows
+even on a dense benchmark (measured **0% empty stacks** at 3997 Hz), and libc/system leaf names
+are recovered in post-processing. **DWARF is *not* the default** — its 8 KiB-per-sample stack
+dumps force a low rate and drop most stacks on a real workload (measured **80% empty / 87%
+unresolved** on `bench json`). Use `--call-graph dwarf,8192` only when you specifically need the
+call tree *through* libc (e.g. who-called-`malloc`), and accept the density hit; it needs
+`kernel.perf_event_mlock_kb ≥ 8192` (`sudo sysctl kernel.perf_event_mlock_kb=65536`).
 
 ### System.Text.Json Fixture Trace
 
-The CLI integration fixture is useful when you want to inspect the exact
-correctness test for `System.Text.Json`:
+The CLI integration fixture is useful only to **inspect** the exact correctness test for
+`System.Text.Json` — it is a one-shot run and a poor flamegraph target (expect the low-sample
+`[quality]` warning; use the bench for flamegraphs):
 
 ```bash
 ./scripts/profile_perf.sh fixture --name system_text_json
@@ -156,7 +191,7 @@ Default behavior:
 
 ### JSON Benchmark Trace
 
-The Criterion benchmark is a better steady-state target for flamegraph analysis:
+The Criterion benchmark is the **recommended** steady-state target for flamegraph analysis:
 
 ```bash
 ./scripts/profile_perf.sh bench --name json --sample-size 30
@@ -165,6 +200,7 @@ The Criterion benchmark is a better steady-state target for flamegraph analysis:
 Default behavior:
 
 - Builds `dotnet-benchmarks` `end_to_end` with the `profiling` profile.
+- Pre-warms untraced so the fixture's `dotnet build` stays out of the trace.
 - Profiles only the benchmark process, not compilation.
 - Runs Criterion with the `json` filter.
 - Writes artifacts under `target/perf-traces/bench-json/<timestamp>/`.
@@ -174,12 +210,15 @@ Default behavior:
 Each run writes:
 
 - `perf.data`: raw perf profile for external flamegraph explorers.
-- `perf.script`: text dump from `perf script -F +pid --no-inline`, ready to load
-  directly in the [Firefox Profiler](https://profiler.firefox.com) (drag the file into the UI).
-- `perf.inline.script`: inline-expanded text dump from `perf script -F +pid`,
-  used as the source for folded stacks to capture more frame detail.
-- `stacks.folded` and `flamegraph.svg`: optional outputs (generated from
-  `perf.inline.script`) when Inferno or Brendan Gregg flamegraph tools are installed.
+- `perf.script`: symbol-resolved text dump (`perf script -F +pid,+dsoff --no-inline` piped
+  through `resolve_perf_syms.py`), ready to load directly in the
+  [Firefox Profiler](https://profiler.firefox.com) (drag the file into the UI). System-library
+  internals (libc/ld.so) are resolved to real names rather than `[unknown]`.
+- `perf.inline.script`: inline-expanded, also symbol-resolved; source for the folded stacks.
+- `stacks.folded` and `flamegraph.svg`: generated from `perf.inline.script` via Inferno (or
+  Brendan Gregg tools). Install with `cargo install inferno` if absent.
+- `quality.txt`: the `[quality]` summary (sample count, period-weighted unresolved-leaf %,
+  foreign-process %, and any warnings).
 - `command.txt`: run metadata and the discovered executable path.
 
 Common options:
@@ -188,11 +227,33 @@ Common options:
 ./scripts/profile_perf.sh bench --name json --frequency 3997 --call-graph fp
 ./scripts/profile_perf.sh fixture --name system_text_json --features validation-all
 ./scripts/profile_perf.sh bench --name json -- --measurement-time 5
+./scripts/profile_perf.sh bench --name json --no-prewarm   # opt out of the warm-up run
 ```
 
 If `perf record` fails with a permissions error, check the local
 `kernel.perf_event_paranoid` setting or run the script in an environment where
 perf events are permitted.
+
+## Alternative: samply (native Firefox Profiler backend)
+
+[`samply`](https://github.com/mstange/samply) (`cargo install samply`) is a Rust sampling profiler
+that records and serves the Firefox Profiler UI directly, and symbolicates system libraries from
+debuginfod out of the box — so it needs neither `perf script` conversion nor `resolve_perf_syms.py`.
+It is a good cross-check against the perf path.
+
+```bash
+# build first (reuse the profiling profile + frame pointers), then record the bench binary:
+RUSTFLAGS=-Cforce-frame-pointers=yes cargo bench --profile profiling -p dotnet-benchmarks \
+  --bench end_to_end --no-run
+EXE=$(ls -t target/profiling/deps/end_to_end-* | grep -v '\.d$' | head -1)
+# pre-build the fixture untraced (same reason as profile_perf.sh's pre-warm), then record:
+"$EXE" json --warm-up-time 0.3 --measurement-time 0.3 --sample-size 10 >/dev/null 2>&1
+samply record -- "$EXE" --bench json --measurement-time 4
+```
+
+Caveat: samply needs `kernel.perf_event_paranoid ≤ 1` (the perf path here works at the default
+`2`). One-time: `echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid`. The same
+fixture-pre-build and target-choice guidance applies (record the bench, not the fixture).
 
 ## Optional Two-Pass PGO Workflow
 
