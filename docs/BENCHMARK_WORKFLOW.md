@@ -64,6 +64,59 @@ RAYON_NUM_THREADS=24 cargo bench -p dotnet-benchmarks --bench metadata_load -- -
 Note: `metadata_load` does **not** respect the `dotnet-cli` pool cap — it calls `Resolution::parse`
 directly. Use `RAYON_NUM_THREADS` explicitly to control thread count in that bench.
 
+## Resolving `[unknown]` frames in perf traces
+
+Three categories of `[unknown]` appear in `perf script` output; each has a different cause and fix:
+
+### 1. Libc internals (~25% of samples in a typical dotnet-rs trace)
+
+**Cause:** libc is shipped without frame pointers, so `--call-graph fp` stops at the
+libc boundary. The leaf frame shows as `[unknown]` from `/usr/lib/libc.so.6`. These are
+nearly always allocator internals (`_int_malloc`, `malloc_consolidate`, `_int_free`)
+called from Rust's `Vec` growth path (`alloc::raw_vec::finish_grow → realloc`).
+
+**Fix:** Use DWARF call-graph mode, which walks `.eh_frame`/`.debug_frame` instead of
+frame pointers. Requires `kernel.perf_event_mlock_kb ≥ 8192` (default is 516).
+
+One-time setup (survives until reboot):
+```bash
+sudo sysctl kernel.perf_event_mlock_kb=65536
+```
+
+Permanent (create `/etc/sysctl.d/99-perf.conf`):
+```
+kernel.perf_event_mlock_kb = 65536
+```
+
+Once set, `profile_perf.sh` auto-detects the higher budget and switches to
+`--call-graph dwarf,8192`. You can also pass it explicitly:
+```bash
+./scripts/profile_perf.sh fixture --name system_text_json --call-graph dwarf,8192
+```
+
+**Workaround without sudo:** `perf report` already uses DWARF and resolves these frames
+correctly from the existing `perf.data` — use it for analysis even when `perf.script`
+shows `[unknown]`.
+
+### 2. PMU interrupt-skid frames (~7% of samples)
+
+**Cause:** The hardware PMU counter fires the overflow interrupt during a user→kernel
+transition (syscall entry / interrupt return). The CPU records the current instruction
+pointer which lands just inside kernel text (`ffffffffa…`). These appear as
+`[unknown] ([unknown])` because perf cannot associate the address with any DSO or symbol.
+
+**Fix:** Requires PEBS (Precise Event-Based Sampling), an Intel hardware feature that
+latches the exact retired instruction rather than the interrupted instruction. Not
+configurable from software without hardware support. On supported CPUs:
+```bash
+./scripts/profile_perf.sh fixture --name system_text_json \
+  --call-graph dwarf,8192 -e cpu/cycles/ppp  # 'ppp' = PEBS precise level 3
+```
+
+**Reality:** ~7% of main-thread cycles are in syscalls (mmap/mprotect from Vec growth
+hitting the allocator). This is expected allocation pressure; the skid frames are an
+artefact of measuring it with a regular PMU, not a real cost to fix.
+
 ## Optional Perf/Flamegraph Traces
 
 Use `scripts/profile_perf.sh` on Linux to capture `perf.data` for focused
@@ -78,12 +131,12 @@ via `RUSTFLAGS=-Cforce-frame-pointers=yes`. This guarantees that perf and
 external flamegraph explorers can unwind stacks and resolve symbols — including
 inlined frames — on optimized code.
 
-Captures use `--call-graph fp` (frame pointer unwinding) by default. `dwarf`
-mode looks appealing for deep stacks but silently drops all frames on the default
-`kernel.perf_event_paranoid=2` / `perf_event_mlock_kb=516` kernel configuration.
-Since the profiling profile forces frame pointers into every frame, `fp` mode is
-the reliable choice. Pass `--call-graph dwarf,16384` explicitly if you need
-inlined-frame resolution and have tuned the kernel accordingly.
+The script defaults to `call-graph auto`, which picks `dwarf,8192` when
+`kernel.perf_event_mlock_kb ≥ 8192` and falls back to `fp` otherwise. With `fp`,
+all dotnet-rs frames unwind correctly (compiled with `-Cforce-frame-pointers=yes`)
+but libc internals appear as `[unknown]`; see the "Resolving `[unknown]` frames"
+section above for setup. Pass `--call-graph fp` to force frame-pointer mode even
+when mlock_kb is large.
 
 ### System.Text.Json Fixture Trace
 

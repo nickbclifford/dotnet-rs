@@ -11,11 +11,35 @@ MODE=""
 NAME=""
 OUTPUT_DIR=""
 FREQUENCY="3997"
-# Frame pointer unwinding is reliable at the default kernel.perf_event_paranoid
-# level (2) and doesn't require mlock budget. DWARF mode looks appealing but
-# silently drops all stacks on the default mlock_kb=516 budget. Frame pointers
-# work here because we compile with -Cforce-frame-pointers=yes.
-CALL_GRAPH="fp"
+# Call-graph mode: "fp" (default) or "dwarf[,size]".
+#
+# fp:   reliable at any kernel.perf_event_mlock_kb setting because frame-pointer
+#       unwinding requires no auxiliary locked memory.  All Rust code is compiled
+#       with -Cforce-frame-pointers=yes so our frames unwind cleanly.  The gap:
+#       system libraries (libc, ld.so) are shipped WITHOUT frame pointers, so
+#       any sample whose leaf instruction is inside libc shows up as "[unknown]"
+#       in perf script output — the stack terminates at the libc boundary.
+#       These frames are typically allocator internals (realloc, _int_malloc,
+#       malloc_consolidate) called from Vec growth.  perf report resolves them
+#       correctly because it uses DWARF; the Firefox Profiler / perf script path
+#       does not.  Remaining "[unknown] ([unknown])" frames with ffffffffa…
+#       addresses are PMU interrupt-skid artefacts (the hardware fires the counter
+#       during a user→kernel transition); they require PEBS and cannot be resolved
+#       with any call-graph flag.
+#
+# dwarf: walks DWARF .eh_frame/.debug_frame instead of frame pointers, so it
+#        unwinds cleanly through libc and fully resolves the allocator frames.
+#        Requires kernel.perf_event_mlock_kb ≥ 8192 (default is 516).
+#        One-time setup (persists until next boot):
+#          sudo sysctl kernel.perf_event_mlock_kb=65536
+#        Or permanently via /etc/sysctl.d/99-perf.conf:
+#          kernel.perf_event_mlock_kb = 65536
+#        dwarf,8192 captures 8 KiB of user stack per sample — enough for
+#        ~250 frames at 32 bytes/frame, well above dotnet-rs stack depth.
+#        dwarf,16384 is an option for deeply recursive test cases.
+#
+# auto: (set below) picks dwarf,8192 when mlock_kb ≥ 8192, fp otherwise.
+CALL_GRAPH="auto"
 CARGO_PROFILE=""
 FEATURES=""
 NO_DEFAULT_FEATURES=0
@@ -204,8 +228,10 @@ postprocess_perf_data() {
   # `--no-inline` suppresses DWARF inline expansion: with fat LTO every physical
   # frame sits inside inlined code, so the default expansion produces only
   # `(inlined)` entries with no root frame to anchor them in Firefox Profiler.
-  # DEBUGINFOD_URLS fetches split debug info for system libraries (libc etc.)
-  # via Arch Linux's public debuginfod server so their symbols resolve.
+  # DEBUGINFOD_URLS is set here but NOTE: `perf script` only uses the ELF symbol
+  # table for name lookup, not DWARF; debuginfod does not help for libc internals
+  # in this output.  Use `perf report` (which uses DWARF) for full resolution, or
+  # recapture with --call-graph dwarf after setting mlock_kb ≥ 8192.
   if DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
      perf script -i "$perf_data" -F +pid --no-inline > "$perf_script" 2> "$OUTPUT_DIR/perf-script.stderr"; then
     echo "[perf] wrote $perf_script (load directly in Firefox Profiler: https://profiler.firefox.com)"
@@ -256,9 +282,19 @@ run_perf() {
   echo "[perf] executable: $exe"
   echo "[perf] target: $target_name"
 
+  # fp mode: 128-page (512 KiB) ring buffer is sufficient at 3997 Hz.
+  # dwarf mode: 8192 bytes/sample × 299 Hz × ~6 threads ≈ 14 MB/s; a 256-page
+  # (1 MiB) ring buffer holds ~70 ms of burst before the consumer catches up.
+  # mlock budget: 2 × 1 MiB × ~6 CPUs = 12 MiB — well within 64 MiB budget.
+  local mmap_pages=128
+  if [[ "$CALL_GRAPH" == dwarf* ]]; then
+    mmap_pages=256
+  fi
+
   perf record \
     -o "$perf_data" \
     -F "$FREQUENCY" \
+    -m "$mmap_pages" \
     --call-graph "$CALL_GRAPH" \
     -- "$exe" "$@"
 
@@ -305,6 +341,15 @@ run_fixture_mode() {
   local test_name
   test_name="$tests"
 
+  # In DWARF mode, cap rayon's global pool to match what the production CLI does
+  # via P1 (run_cli init).  The integration-test binary bypasses run_cli, so
+  # without this all cores are used — multiplying the DWARF sample data rate by
+  # 24× and causing massive ring buffer overflow.  Set here, not in the binary,
+  # to avoid hardcoding a production-only env var in test code.
+  if [[ "$CALL_GRAPH" == dwarf* ]]; then
+    export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-4}"
+  fi
+
   run_perf "$exe" "$test_name" "$test_name" --exact --nocapture --test-threads=1 "${EXTRA_ARGS[@]}"
 }
 
@@ -342,6 +387,31 @@ if ! [[ "$FREQUENCY" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$SAMPLE_SIZE" =~ ^[0-9]+$ ]]; then
   fail "--sample-size must be an integer"
+fi
+
+# Resolve "auto" call-graph mode: use dwarf when mlock budget allows it.
+if [[ "$CALL_GRAPH" == "auto" ]]; then
+  mlock_kb="$(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo 516)"
+  if [[ "$mlock_kb" -ge 8192 ]]; then
+    CALL_GRAPH="dwarf,8192"
+    # At 3997 Hz, 8192 bytes/sample × 25 rayon+test threads ≈ 800 MB/s of DWARF
+    # data — the ring buffer drains in milliseconds and 90%+ of samples are lost.
+    # The default frequency only makes sense for fp mode (samples are ~200 bytes).
+    # For DWARF, cap at 299 Hz: even with 25 threads that's ~60 MB/s, which a
+    # 1 MB ring buffer (-m 256) handles for a 200 ms fixture run.
+    # Users who pass --frequency explicitly get their value; we only override the
+    # default of 3997, which is never appropriate for DWARF.
+    if [[ "$FREQUENCY" == "3997" ]]; then
+      FREQUENCY="299"
+      echo "[perf] DWARF mode: auto-lowering frequency 3997→299 Hz to prevent ring buffer overflow"
+      echo "[perf]   (use --frequency to override; ~60 samples per thread over a 200 ms fixture run)"
+    fi
+    echo "[perf] mlock_kb=${mlock_kb} — using call-graph dwarf,8192 (full libc symbol resolution)"
+  else
+    CALL_GRAPH="fp"
+    echo "[perf] mlock_kb=${mlock_kb} < 8192 — using call-graph fp (libc internals will be [unknown])"
+    echo "[perf] To enable DWARF: sudo sysctl kernel.perf_event_mlock_kb=65536"
+  fi
 fi
 
 DEFAULT_LABEL="${NAME:-}"
