@@ -4,19 +4,30 @@ use dotnetdll::prelude::{
     TypeSource, UserType,
 };
 use gc_arena::{Collect, collect::Trace};
+use lru::LruCache;
 use std::{
+    cell::RefCell,
     collections::HashSet,
     fmt::{Debug, Formatter},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
 #[cfg(feature = "generic-constraint-validation")]
 use dotnetdll::resolved::generic::Generic;
-#[cfg(feature = "generic-constraint-validation")]
-use std::cell::RefCell;
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
+
+// Cap per-thread cache at 512 entries — enough to cover commonly recurring closed generics.
+const MAKE_LOOKUP_CACHE_CAPACITY: usize = 512;
+
+thread_local! {
+    static MAKE_LOOKUP_CACHE: RefCell<LruCache<ConcreteType, Arc<[ConcreteType]>>> =
+        RefCell::new(LruCache::new(
+            NonZeroUsize::new(MAKE_LOOKUP_CACHE_CAPACITY).unwrap(),
+        ));
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {
@@ -187,10 +198,16 @@ impl ConcreteType {
             ..
         } = self.get()
         {
-            GenericLookup {
-                type_generics: parameters.clone().into(),
-                method_generics: Arc::new([]),
-            }
+            let type_generics = MAKE_LOOKUP_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some(cached) = cache.get(self) {
+                    return cached.clone();
+                }
+                let arc: Arc<[ConcreteType]> = parameters.clone().into();
+                cache.put(self.clone(), arc.clone());
+                arc
+            });
+            GenericLookup::from_type_arc(type_generics)
         } else {
             GenericLookup::default()
         }
@@ -257,6 +274,15 @@ impl GenericLookup {
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {
         Self {
             type_generics: type_generics.into(),
+            method_generics: Arc::new([]),
+        }
+    }
+
+    /// Construct a lookup from an already-owned `Arc<[ConcreteType]>`, avoiding the
+    /// `Vec → Arc` allocation that `new` incurs.
+    pub fn from_type_arc(type_generics: Arc<[ConcreteType]>) -> Self {
+        Self {
+            type_generics,
             method_generics: Arc::new([]),
         }
     }

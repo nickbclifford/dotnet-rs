@@ -70,7 +70,7 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                     unreachable!("Nullable must be a type");
                 };
                 let (_, generics) = decompose_type_source(source);
-                let lookup = GenericLookup::new(generics.clone());
+                let lookup = GenericLookup::new(generics);
                 let ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
                 let instance = dotnet_vm_ops::vm_try!(ctx_with_generics.new_object(td));
 
@@ -120,8 +120,8 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                                 .find_concrete_type(target_ct.clone())
                                 .map_err(|_| ())?;
 
-                            let (_, generics) = decompose_type_source(source);
-                            let lookup = GenericLookup::new(generics.clone());
+                            // Reuse the generics vec from the extract-T step above.
+                            let lookup = GenericLookup::new(generics);
                             let ctx_with_generics =
                                 res_ctx.for_type_with_generics(target_td.clone(), &lookup);
 
@@ -247,14 +247,14 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
             unreachable!("Nullable must be a type");
         };
         let (_, generics) = decompose_type_source(source);
-        let lookup = GenericLookup::new(generics.clone());
+        let lookup = GenericLookup::new(generics);
         let res_ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
 
         let instance = dotnet_vm_ops::vm_try!(res_ctx_with_generics.new_object(td));
 
         if let Some(h) = obj.0 {
             // Boxed T exists.
-            let inner_t: &ConcreteType = generics
+            let inner_t: &ConcreteType = lookup.type_generics
                 .first()
                 .expect("Nullable must have generic parameter");
             let concrete_inner_t = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(inner_t.clone()));

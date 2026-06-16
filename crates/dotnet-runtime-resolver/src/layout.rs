@@ -50,10 +50,10 @@ impl LayoutFactory {
             }
         }
 
-        for attr in &td.definition().attributes {
+        for attr in td.resolution.definition().type_attributes(td.index).unwrap_or_default() {
             let Ok(ctor) = resolver
                 .loader
-                .locate_attribute(td.resolution.clone(), attr)
+                .locate_attribute(td.resolution.clone(), &attr)
             else {
                 continue;
             };

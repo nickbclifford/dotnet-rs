@@ -90,16 +90,26 @@ pub fn run_cli() -> ExitCode {
 
     let result = executor.run();
     match result {
-        ExecutorResult::Exited(i) => {
-            std::process::exit(i as i32);
-        }
+        ExecutorResult::Exited(i) => exit_fast(i as i32),
         ExecutorResult::Threw(exc) => {
             eprintln!("{}", exc);
-            ExitCode::from(1)
+            exit_fast(1);
         }
         ExecutorResult::Error(e) => {
             eprintln!("Internal VM error: {}", e);
-            ExitCode::from(1)
+            exit_fast(1);
         }
     }
+}
+
+/// Flush stdio and exit without running destructors.
+///
+/// Skipping Drop on arena / cache structures is pure overhead for a CLI process that is
+/// about to exit anyway.  The in-process integration-test harness never calls `run_cli`,
+/// so leaking is contained to real one-shot CLI subprocesses.
+fn exit_fast(code: i32) -> ! {
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code)
 }

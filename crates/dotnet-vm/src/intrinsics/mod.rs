@@ -371,8 +371,13 @@ pub fn is_intrinsic_field(
     }
 
     // Check for IntrinsicAttribute
-    for a in &field.field().attributes {
-        if let Ok(ctor) = loader.locate_attribute(field.parent.resolution.clone(), a)
+    let res = field.parent.resolution.definition();
+    let field_attrs = res
+        .field_index(field.parent.index, field.index)
+        .and_then(|idx| res.field_attributes(idx).ok())
+        .unwrap_or_default();
+    for a in field_attrs {
+        if let Ok(ctor) = loader.locate_attribute(field.parent.resolution.clone(), &a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
             return true;

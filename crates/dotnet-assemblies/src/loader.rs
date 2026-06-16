@@ -109,6 +109,21 @@ pub struct AssemblyLoader {
     pub(crate) metadata: Arc<MetadataArena>,
     pub(crate) redirects: DashMap<String, Vec<BindingRedirect>>,
     pub(crate) strict_versioning: bool,
+    /// `ReadOptions` applied to every assembly parsed via `load_resolution_from_file`.
+    /// Defaults to fully lazy (bodies, signatures, attributes); see `default_read_options`.
+    pub(crate) read_options: ReadOptions,
+}
+
+/// The default (fully lazy) parse options. A VM run typically executes only a fraction of the
+/// methods in a loaded assembly, so deferring decode work to first use avoids parsing bodies,
+/// signatures, and attributes that are never touched.
+pub fn default_read_options() -> ReadOptions {
+    ReadOptions {
+        lazy_method_bodies: true,
+        lazy_method_signatures: true,
+        lazy_attributes: true,
+        ..Default::default()
+    }
 }
 static_collect!(AssemblyLoader);
 
@@ -172,6 +187,7 @@ impl AssemblyLoader {
             metadata: Arc::new(MetadataArena::new()),
             redirects: DashMap::new(),
             strict_versioning: std::env::var("DOTNET_STRICT_VERSIONING").is_ok(),
+            read_options: default_read_options(),
         };
 
         this.add_support_library()?;
@@ -196,11 +212,22 @@ impl AssemblyLoader {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<ResolutionS, AssemblyLoadError> {
-        crate::resolution::load_resolution_core(path, &self.metadata)
+        crate::resolution::load_resolution_core(path, &self.metadata, self.read_options)
     }
 
     pub fn set_strict_versioning(&mut self, strict: bool) {
         self.strict_versioning = strict;
+    }
+
+    /// Returns the `ReadOptions` applied to assemblies parsed by this loader.
+    pub fn read_options(&self) -> ReadOptions {
+        self.read_options
+    }
+
+    /// Overrides the `ReadOptions` used for subsequent `load_resolution_from_file` calls.
+    /// Primarily a benchmarking/diagnostics knob for comparing lazy vs eager decoding.
+    pub fn set_read_options(&mut self, options: ReadOptions) {
+        self.read_options = options;
     }
 
     pub fn load_redirects(&self) -> Result<(), AssemblyLoadError> {

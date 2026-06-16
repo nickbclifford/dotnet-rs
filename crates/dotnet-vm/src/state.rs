@@ -576,8 +576,9 @@ impl dotnet_runtime_memory::MemorySharedStateHost for SharedGlobalState {
 
 impl Drop for SharedGlobalState {
     fn drop(&mut self) {
-        let stats = self.get_cache_stats();
+        // Only pay the DashMap shard-lock cost when the tracer is actually consuming the stats.
         if self.tracer_enabled.load(Ordering::Relaxed) {
+            let stats = self.get_cache_stats();
             self.tracer
                 .msg(TraceLevel::Info, 0, format_args!("{}", stats));
         }

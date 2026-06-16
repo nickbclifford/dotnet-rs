@@ -85,12 +85,10 @@ where
             tracing::debug!("find_generic_method: parent_type={:?}", t);
             let parent = self.make_concrete(ctx.resolution().clone(), ctx.generics(), t)?;
             tracing::debug!("find_generic_method: parent_type concrete={:?}", parent);
-            if let BaseType::Type {
-                source: TypeSource::Generic { parameters, .. },
-                ..
-            } = parent.get()
-            {
-                new_lookup.type_generics = parameters.clone().into();
+            // Use make_lookup() which goes through the thread-local LRU cache.
+            let parent_lookup = parent.make_lookup();
+            if !parent_lookup.type_generics.is_empty() {
+                new_lookup.type_generics = parent_lookup.type_generics;
             }
             parent_type = Some(parent);
         }

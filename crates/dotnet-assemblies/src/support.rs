@@ -39,12 +39,15 @@ impl AssemblyLoader {
             // with exactly 'len' bytes from SUPPORT_LIBRARY.
             unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
-        // Lazy method-body decoding, consistent with the main loader path (see `resolution.rs`).
+        // Lazy decoding consistent with the main loader path (see `resolution.rs`). Attributes are
+        // accessed below via `type_attributes()` rather than the eager field, so lazy_attributes is
+        // safe here.
         let support_res_raw = Resolution::parse(
             byte_slice,
             ReadOptions {
                 lazy_method_bodies: true,
                 lazy_method_signatures: true,
+                lazy_attributes: true,
                 ..Default::default()
             },
         )
@@ -66,7 +69,15 @@ impl AssemblyLoader {
         }
 
         for (index, t) in support_res.type_definitions.iter().enumerate() {
-            for a in &t.attributes {
+            let type_index = support_res.type_definition_index(index).ok_or_else(|| {
+                AssemblyLoadError::InvalidFormat(
+                    "failed to find type definition index".to_string(),
+                )
+            })?;
+            let attrs = support_res
+                .type_attributes(type_index)
+                .map_err(|e| AssemblyLoadError::InvalidFormat(format!("{e}")))?;
+            for a in attrs {
                 // the target stub attribute is internal to the support library,
                 // so the constructor reference will always be a Definition variant
                 let parent = match a.constructor {
@@ -89,12 +100,6 @@ impl AssemblyLoader {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
                                 if name == "InPlaceOf" =>
                             {
-                                let type_index =
-                                    support_res.type_definition_index(index).ok_or_else(|| {
-                                        AssemblyLoadError::InvalidFormat(
-                                            "failed to find type definition index".to_string(),
-                                        )
-                                    })?;
                                 let support_type_name = t.type_name();
                                 self.stubs.insert(
                                     target.to_string(),

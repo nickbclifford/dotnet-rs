@@ -15,5 +15,5 @@ mod validation_tests;
 #[cfg(test)]
 mod version_tests;
 
-pub use loader::{AssemblyLoader, SUPPORT_ASSEMBLY};
+pub use loader::{AssemblyLoader, SUPPORT_ASSEMBLY, default_read_options};
 pub use resolution::{find_dotnet_app_path, find_dotnet_sdk_path};

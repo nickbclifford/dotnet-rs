@@ -152,8 +152,13 @@ pub fn classify_intrinsic(
     }
 
     // 3. Check for IntrinsicAttribute
-    for a in &method.method().attributes {
-        if let Ok(ctor) = loader.locate_attribute(method.resolution(), a)
+    let method_attrs = method
+        .resolution()
+        .definition()
+        .method_attributes(method.method_index())
+        .unwrap_or_default();
+    for a in method_attrs {
+        if let Ok(ctor) = loader.locate_attribute(method.resolution(), &a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
             // If we're here, it means the intrinsic was NOT found in the registry (step 1).

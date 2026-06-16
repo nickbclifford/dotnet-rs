@@ -787,6 +787,7 @@ impl<'a> Resolver<'a> for &'a AssemblyLoader {
 pub(crate) fn load_resolution_core(
     path: impl AsRef<Path>,
     arena: &Arc<MetadataArena>,
+    options: ReadOptions,
 ) -> Result<ResolutionS, AssemblyLoadError> {
     let path_ref = path.as_ref();
     let mut file = fs::File::open(path_ref).map_err(|e| {
@@ -824,19 +825,12 @@ pub(crate) fn load_resolution_core(
         // It contains 'len' bytes of data from 'buf'.
         unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
-    // Decode method bodies lazily: a VM run typically executes only a fraction of the methods in
-    // a loaded assembly (especially System.Private.CoreLib), so deferring IL decoding to first
-    // execution via `Resolution::method_body` (see `MethodDescription::body`) avoids decoding
-    // bodies that are never run.
-    let res = Resolution::parse(
-        byte_slice,
-        ReadOptions {
-            lazy_method_bodies: true,
-            lazy_method_signatures: true,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| {
+    // `options` controls lazy vs eager decoding. The default (see `AssemblyLoader::read_options`)
+    // is fully lazy: a VM run typically executes only a fraction of the methods in a loaded
+    // assembly (especially System.Private.CoreLib), so deferring IL decoding to first execution
+    // via `Resolution::method_body` (see `MethodDescription::body`) avoids decoding bodies that
+    // are never run.
+    let res = Resolution::parse(byte_slice, options).map_err(|e| {
         AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e))
     })?;
 

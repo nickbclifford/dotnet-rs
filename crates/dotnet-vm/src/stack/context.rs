@@ -88,7 +88,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         frame: &dotnet_vm_ops::StackFrame<'gc>,
     ) -> (TypeDescription, GenericLookup) {
         let type_desc = frame.state.info_handle.source.parent.clone();
-        let cctor_generics = GenericLookup::new(frame.generic_inst.type_generics.to_vec());
+        // Reuse the existing Arc<[ConcreteType]> directly — no Vec allocation.
+        let cctor_generics = GenericLookup::from_type_arc(frame.generic_inst.type_generics.clone());
         (type_desc, cctor_generics)
     }
 
