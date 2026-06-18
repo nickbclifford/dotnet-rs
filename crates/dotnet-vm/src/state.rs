@@ -585,6 +585,15 @@ impl Drop for SharedGlobalState {
     }
 }
 
+/// Thread-local reflection caches stored inside the GC arena root.
+///
+/// The `RefCell` fields here are intentional and load-bearing for the `gc_arena` model:
+/// `Collect::trace` is called with `&self`, and reflection operations frequently reach this
+/// state through shared borrows (for example trait methods that only take `&self`). We still
+/// need to mutate these caches on that path, so interior mutability is required.
+///
+/// In other words, these `RefCell`s are not borrow-checker convenience; they are what allows
+/// this type to be both `Collect`-traceable and writable from shared arena access patterns.
 pub struct ReflectionLocalState<'gc> {
     pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
     pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,

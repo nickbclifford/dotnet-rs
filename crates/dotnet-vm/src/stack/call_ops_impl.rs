@@ -62,6 +62,16 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         VesContext::return_frame(self)
     }
 
+    #[inline]
+    fn pop_call_args_into_buffer(&mut self, count: usize) {
+        VesContext::pop_call_args_into_buffer(self, count);
+    }
+
+    #[inline]
+    fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>> {
+        self.call_args_buffer
+    }
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,

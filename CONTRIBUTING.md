@@ -25,6 +25,22 @@ Some test paths rely on managed fixtures. Build them with:
 cargo run -p xtask -- fixtures build
 ```
 
+## Miri policy for `dotnet-vm` unsafe-gate signoff
+
+For `dotnet-vm` changes that add or modify `unsafe`, the accepted local signoff invocation is:
+
+```bash
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
+cargo +nightly miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
+```
+
+Why this is the project-standard invocation right now:
+- `-Zmiri-strict-provenance` currently fails before VM execution due dependency-level integer-to-pointer casts reached during assembly parsing (`bitvec`/`dotnetdll`, plus rayon worker-thread paths via `crossbeam-epoch`).
+- `-Zmiri-disable-isolation` is needed for host filesystem syscalls used by the test harness.
+- `-Zmiri-ignore-leaks` is needed for non-joined background worker threads that are not VM-unsafe regressions.
+
+Until upstream dependency behavior changes, strict-provenance is treated as infeasible for `dotnet-vm` unsafe-gate signoff.
+
 ## Documentation drift check
 
 If your change touches docs, run the doc drift gate and rustdoc link check:

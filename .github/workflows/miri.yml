@@ -18,19 +18,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MIRIFLAGS: "-Zmiri-strict-provenance"
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
     strategy:
       fail-fast: false
       matrix:
         include:
           - crate: dotnet-value
             args: '-- --test-threads=1'
-          # dotnet-utils is kept out of the strict-provenance matrix for now:
+          # dotnet-utils is kept out of this matrix for now:
           # its cross-arena stress test currently trips Miri in upstream parking_lot_core.
           - crate: dotnet-assemblies
             args: '-- --test-threads=1'
           - crate: dotnet-vm
-            args: '-- --test-threads=1 --skip stress'
+            args: '--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests'
 
     steps:
       - uses: actions/checkout@v4

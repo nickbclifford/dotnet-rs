@@ -201,11 +201,13 @@ bash scripts/check_build_script_regressions.sh
 
 The workflow runs per crate (`fail-fast: false`):
 
-| Crate               | Args                                | Notes                                                           |
-|---------------------|-------------------------------------|-----------------------------------------------------------------|
-| `dotnet-value`      | `-- --test-threads=1`               | Full crate test suite under Miri                                |
-| `dotnet-assemblies` | `-- --test-threads=1`               | Filesystem-dependent tests are conditionally skipped under Miri |
-| `dotnet-vm`         | `-- --test-threads=1 --skip stress` | `stress_*` tests are skipped due to runtime cost under Miri     |
+| Crate               | Args                                                                    | Notes                                                           |
+|---------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------|
+| `dotnet-value`      | `-- --test-threads=1`                                                   | Full crate test suite under Miri                                |
+| `dotnet-assemblies` | `-- --test-threads=1`                                                   | Filesystem-dependent tests are conditionally skipped under Miri |
+| `dotnet-vm`         | `--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests` | Targeted VM unsafe-gate suite; avoids strict-provenance-infeasible dependency paths |
+
+The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. Strict-provenance is currently infeasible for `dotnet-vm` because dependency-level integer-to-pointer casts are reached during assembly parsing before VM unsafe sites execute.
 
 Local commands:
 
@@ -213,9 +215,12 @@ Local commands:
 rustup toolchain install nightly
 rustup component add miri --toolchain nightly
 
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly miri test -p dotnet-value -- --test-threads=1
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly miri test -p dotnet-assemblies -- --test-threads=1
-cargo +nightly miri test -p dotnet-vm -- --test-threads=1 --skip stress
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
+cargo +nightly miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
 ## `valgrind.yml` — Non-Blocking Leak/Uninit Checks

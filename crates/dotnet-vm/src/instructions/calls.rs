@@ -147,7 +147,8 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.signature().parameters.len();
-    let mut args = ctx.pop_multiple(num_args);
+    ctx.pop_call_args_into_buffer(num_args);
+    let mut args = std::mem::take(ctx.call_args_buffer_mut());
 
     let constraint_type_source = dotnet_vm_ops::vm_try!(ctx.make_concrete(constraint));
     let constraint_type: TypeDescription = dotnet_vm_ops::vm_try!(
@@ -285,9 +286,10 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
 
     let method = dotnet_vm_ops::vm_try!(method);
 
-    for arg in args {
+    for arg in args.drain(..) {
         ctx.push(arg);
     }
+    *ctx.call_args_buffer_mut() = args;
 
     // Note: CallVirtualConstrained uses dispatch_method directly
     // instead of unified_dispatch because it performs custom method resolution

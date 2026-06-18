@@ -149,6 +149,9 @@ pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
 pub trait VmCallOps<'gc> {
     fn return_frame(&mut self) -> StepResult;
 
+    fn pop_call_args_into_buffer(&mut self, count: usize);
+    fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>>;
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
