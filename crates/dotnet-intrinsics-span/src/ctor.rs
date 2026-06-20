@@ -10,6 +10,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, UnmanagedPtr},
 };
+use dotnetdll::prelude::ParameterType;
 use dotnet_vm_data::StepResult;
 use std::ptr::NonNull;
 
@@ -17,7 +18,7 @@ use std::ptr::NonNull;
 #[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(void*, int)")]
 pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let length = ctx.pop_i32();
@@ -34,8 +35,15 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
 
-    // Span<T>(void*, int) is only valid for types that do not contain references
-    if element_layout.is_or_contains_refs() {
+    // The no-references restriction only applies to the genuine `Span<T>(void*, int)`
+    // overload, whose first parameter is a by-value pointer. Arity-based intrinsic dispatch
+    // also routes `Span<T>(ref T, int)` (used by `MemoryMarshal.CreateSpan`) here, and that
+    // byref overload is valid for any `T` — including reference types.
+    let is_pointer_overload = matches!(
+        method.signature().parameters.first().map(|p| &p.1),
+        Some(ParameterType::Value(_))
+    );
+    if is_pointer_overload && element_layout.is_or_contains_refs() {
         return ctx.throw_by_name_with_message(
             "System.ArgumentException",
             "The type cannot contain references.",

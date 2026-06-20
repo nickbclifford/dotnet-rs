@@ -2,7 +2,7 @@ use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     error::{ExecutionError, VmError},
-    generics::GenericLookup,
+    generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
 };
@@ -29,6 +29,15 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("bool System.Reflection.MethodBase::get_ContainsGenericParameters()")]
 #[dotnet_intrinsic("System.Type[] System.Reflection.MethodBase::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeMethodHandle System.Reflection.MethodBase::get_MethodHandle()")]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo System.Reflection.MethodInfo::MakeGenericMethod(System.Type[])"
+)]
+#[dotnet_intrinsic(
+    "System.Delegate System.Reflection.MethodInfo::CreateDelegate(System.Type)"
+)]
+#[dotnet_intrinsic(
+    "System.Delegate System.Reflection.MethodInfo::CreateDelegate(System.Type, object)"
+)]
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::ToString()")]
 #[dotnet_intrinsic("string DotnetRs.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("string DotnetRs.MethodInfo::GetName()")]
@@ -53,6 +62,10 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("System.Type[] DotnetRs.MethodInfo::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.MethodInfo::get_MethodHandle()")]
 #[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.MethodInfo::GetMethodHandle()")]
+#[dotnet_intrinsic("System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type)")]
+#[dotnet_intrinsic(
+    "System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type, object)"
+)]
 #[dotnet_intrinsic("string DotnetRs.MethodInfo::ToString()")]
 #[dotnet_intrinsic(
     "object DotnetRs.MethodInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
@@ -76,6 +89,10 @@ use dotnetdll::prelude::ParameterType;
 )]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.MethodInfo::GetParameters()")]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.ConstructorInfo::GetParameters()")]
+#[dotnet_intrinsic("object[] DotnetRs.MethodInfo::GetCustomAttributes(bool)")]
+#[dotnet_intrinsic("object[] DotnetRs.MethodInfo::GetCustomAttributes(System.Type, bool)")]
+#[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(bool)")]
+#[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(System.Type, bool)")]
 pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -268,10 +285,178 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             return ctx.reflection_dispatch_method(method, lookup);
         }
+        ("MakeGenericMethod", 1) => {
+            let type_args_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+            let (method, mut lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+
+            let expected_arity = method.method().generic_parameters.len();
+            if expected_arity == 0 {
+                return ctx.throw_by_name_with_message(
+                    "System.InvalidOperationException",
+                    "Method is not a generic method definition.",
+                );
+            }
+
+            let type_arg_refs = dotnet_vm_ops::vm_try!(type_args_obj.try_as_vector(
+                |v: &dotnet_value::object::Vector<'gc>| {
+                    v.get()
+                        .chunks_exact(ObjectRef::SIZE)
+                        .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
+                        .collect::<Vec<_>>()
+                }
+            ));
+
+            if type_arg_refs.len() != expected_arity {
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentException",
+                    "Incorrect number of generic type arguments.",
+                );
+            }
+
+            let mut method_generics = Vec::with_capacity(type_arg_refs.len());
+            for type_arg_ref in type_arg_refs {
+                let runtime_type =
+                    dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, type_arg_ref));
+                method_generics.push(runtime_type.to_concrete(ctx.loader().as_ref()));
+            }
+
+            lookup.method_generics = method_generics.into();
+
+            let method_obj = crate::common::get_runtime_method_obj(ctx, method, lookup);
+            ctx.push_obj(method_obj);
+            Some(StepResult::Continue)
+        }
+        ("CreateDelegate", 1) => {
+            let delegate_type_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+            return create_method_info_delegate(ctx, method_obj, delegate_type_obj, ObjectRef(None));
+        }
+        ("CreateDelegate", 2) => {
+            let target_obj = ctx.pop_obj();
+            let delegate_type_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+            return create_method_info_delegate(ctx, method_obj, delegate_type_obj, target_obj);
+        }
+        ("GetCustomAttributes", 1) => {
+            let _inherit = ctx.pop_i32();
+            let method_obj = ctx.pop_obj();
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_method_custom_attributes(
+                ctx, method, None
+            ));
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            return crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type));
+        }
+        ("GetCustomAttributes", 2) => {
+            let _inherit = ctx.pop_i32();
+            let attribute_type_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+
+            let attribute_filter = if attribute_type_obj.0.is_some() {
+                let filter_runtime_type = dotnet_vm_ops::vm_try!(
+                    crate::common::resolve_runtime_type(ctx, attribute_type_obj)
+                );
+                match filter_runtime_type {
+                    RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_method_custom_attributes(
+                ctx,
+                method,
+                attribute_filter
+            ));
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            return crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type));
+        }
         _ => None,
     };
 
     let _ = result.expect("unimplemented method info intrinsic");
+    StepResult::Continue
+}
+
+fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method_obj: ObjectRef<'gc>,
+    delegate_type_obj: ObjectRef<'gc>,
+    target_obj: ObjectRef<'gc>,
+) -> StepResult {
+    let (method, lookup) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+
+    let delegate_runtime_type =
+        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, delegate_type_obj));
+    let delegate_td = match &delegate_runtime_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "delegateType must be a RuntimeType representing a class type.",
+            );
+        }
+    };
+
+    let delegate_base = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+    let delegate_concrete = ConcreteType::from(delegate_td.clone());
+    let delegate_base_concrete = ConcreteType::from(delegate_base.clone());
+    if !dotnet_vm_ops::vm_try!(ctx.is_a(delegate_concrete, delegate_base_concrete)) {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type must derive from System.Delegate.",
+        );
+    }
+
+    let delegate_lookup = crate::types::build_generic_lookup_from_runtime_type(ctx, &delegate_runtime_type);
+    let delegate_instance =
+        dotnet_vm_ops::vm_try!(ctx.new_object_with_lookup(delegate_td.clone(), &delegate_lookup));
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let delegate_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(delegate_instance)));
+    ctx.register_new_object(&delegate_ref);
+
+    let method_index = ctx.reflection_runtime_method_index_get_or_insert(method, lookup);
+
+    delegate_ref.as_object_mut(gc, |instance| {
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(delegate_base.clone(), "_target")
+            .unwrap()
+            .write(target_obj);
+        instance
+            .instance_storage
+            .field::<usize>(delegate_base.clone(), "_method")
+            .unwrap()
+            .write(method_index);
+    });
+
+    let multicast_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
+    if dotnet_vm_ops::vm_try!(ctx.is_a(
+        ConcreteType::from(delegate_td),
+        ConcreteType::from(multicast_type.clone()),
+    )) {
+        let mut targets =
+            dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(delegate_base), 1));
+        delegate_ref.write(&mut targets.get_mut()[..ObjectRef::SIZE]);
+        let targets_ref = ObjectRef::new(gc, HeapStorage::Vec(Box::new(targets)));
+        ctx.register_new_object(&targets_ref);
+
+        delegate_ref.as_object_mut(gc, |instance| {
+            instance
+                .instance_storage
+                .field::<ObjectRef<'gc>>(multicast_type.clone(), "targets")
+                .unwrap()
+                .write(targets_ref);
+        });
+    }
+
+    ctx.push_obj(delegate_ref);
     StepResult::Continue
 }
 

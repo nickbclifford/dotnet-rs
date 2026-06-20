@@ -8,6 +8,7 @@ use dotnet_assemblies::SUPPORT_ASSEMBLY;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
+    error::VmError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::RuntimeType,
@@ -20,7 +21,10 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::prelude::{Accessibility, MemberAccessibility, MethodMemberIndex, TypeDefinition};
+use dotnetdll::prelude::{
+    Accessibility, AlwaysFailsResolver, BaseType, FixedArg, IntegralParam, MemberAccessibility,
+    MemberType, MethodMemberIndex, MethodReferenceParent, TypeDefinition, TypeSource, UserMethod,
+};
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<
@@ -124,25 +128,340 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+fn resolve_attribute_declaring_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    owner: &TypeDescription,
+    attribute: &dotnetdll::prelude::Attribute<'_>,
+) -> Option<TypeDescription> {
+    match attribute.constructor {
+        UserMethod::Definition(method_index) => Some(TypeDescription::new(
+            owner.resolution.clone(),
+            method_index.parent_type(),
+        )),
+        UserMethod::Reference(method_ref_index) => {
+            let method_ref = &owner.resolution.definition()[method_ref_index];
+            match &method_ref.parent {
+                MethodReferenceParent::Type(method_type) => {
+                    let dotnetdll::prelude::MethodType::Base(base_type) = method_type else {
+                        return None;
+                    };
+
+                    let BaseType::Type {
+                        source: TypeSource::User(user_type),
+                        ..
+                    } = base_type.as_ref()
+                    else {
+                        return None;
+                    };
+
+                    ctx.loader()
+                        .locate_type(owner.resolution.clone(), *user_type)
+                        .ok()
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+fn write_constructor_arg_to_field<'gc>(
+    instance: &dotnet_value::object::Object<'gc>,
+    owner: &TypeDescription,
+    field_name: &str,
+    field_type: &MemberType,
+    arg: &FixedArg<'_>,
+) -> bool {
+    match (field_type, arg) {
+        (MemberType::Base(base), FixedArg::Boolean(value)) if matches!(&**base, BaseType::Boolean) => {
+            if let Some(field) = instance.instance_storage.field::<u8>(owner.clone(), field_name) {
+                field.write(u8::from(*value));
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Char(value)) if matches!(&**base, BaseType::Char) => {
+            if let Some(field) = instance.instance_storage.field::<u16>(owner.clone(), field_name) {
+                field.write(*value as u16);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Float32(value))
+            if matches!(&**base, BaseType::Float32) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<f32>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Float64(value))
+            if matches!(&**base, BaseType::Float64) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<f64>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int8(value)))
+            if matches!(&**base, BaseType::Int8) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<i8>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt8(value)))
+            if matches!(&**base, BaseType::UInt8) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<u8>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int16(value)))
+            if matches!(&**base, BaseType::Int16) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<i16>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt16(value)))
+            if matches!(&**base, BaseType::UInt16) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<u16>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int32(value)))
+            if matches!(&**base, BaseType::Int32) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<i32>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt32(value)))
+            if matches!(&**base, BaseType::UInt32) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<u32>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int64(value)))
+            if matches!(&**base, BaseType::Int64) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<i64>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt64(value)))
+            if matches!(&**base, BaseType::UInt64) =>
+        {
+            if let Some(field) = instance.instance_storage.field::<u64>(owner.clone(), field_name) {
+                field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Materialize a single decoded custom attribute into a managed object, applying the optional
+/// `attribute_filter`. Returns `Ok(None)` when the attribute should be skipped (declaring type
+/// unresolvable, filtered out, blob decode failed, or the constructor args do not map onto the
+/// attribute's instance fields). `owner` supplies the resolution context used to resolve the
+/// attribute's declaring type and to decode its instantiation blob; for a method/field attribute
+/// pass the declaring type, since members share their declaring type's resolution.
+fn materialize_custom_attribute<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    owner: &TypeDescription,
+    attribute: &dotnetdll::prelude::Attribute<'_>,
+    attribute_filter: &Option<TypeDescription>,
+) -> Result<Option<ObjectRef<'gc>>, VmError> {
+    let owner_resolution = owner.resolution.definition();
+
+    let Some(attribute_type) = resolve_attribute_declaring_type(ctx, owner, attribute) else {
+        return Ok(None);
+    };
+
+    if let Some(filter_type) = attribute_filter {
+        let is_match = attribute_type == *filter_type
+            || ctx
+                .is_a(attribute_type.clone().into(), filter_type.clone().into())
+                .unwrap_or(false);
+        if !is_match {
+            return Ok(None);
+        }
+    }
+
+    let data = match attribute.instantiation_data(&AlwaysFailsResolver, owner_resolution) {
+        Ok(data) => data,
+        Err(_) => return Ok(None),
+    };
+
+    let instance = ctx.new_object(attribute_type.clone())?;
+
+    let instance_fields = attribute_type
+        .definition()
+        .fields
+        .iter()
+        .filter(|field| !field.static_member)
+        .collect::<Vec<_>>();
+
+    if data.constructor_args.len() > instance_fields.len() {
+        return Ok(None);
+    }
+
+    let can_materialize = data
+        .constructor_args
+        .iter()
+        .zip(instance_fields.iter())
+        .all(|(arg, field)| {
+            write_constructor_arg_to_field(
+                &instance,
+                &attribute_type,
+                field.name.as_ref(),
+                &field.return_type,
+                arg,
+            )
+        });
+
+    if !can_materialize {
+        return Ok(None);
+    }
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let attr_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
+    ctx.register_new_object(&attr_obj);
+    Ok(Some(attr_obj))
+}
+
+fn collect_type_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    target_runtime_type: RuntimeType,
+    attribute_filter: Option<TypeDescription>,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let owner_type = match target_runtime_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td,
+        _ => return Ok(Vec::new()),
+    };
+
+    let mut attributes = Vec::new();
+
+    let type_attributes = owner_type
+        .resolution
+        .definition()
+        .type_attributes(owner_type.index)
+        .unwrap_or_default();
+
+    for attribute in &type_attributes {
+        if let Some(attr_obj) =
+            materialize_custom_attribute(ctx, &owner_type, attribute, &attribute_filter)?
+        {
+            attributes.push(attr_obj);
+        }
+    }
+
+    Ok(attributes)
+}
+
+/// Collects the materialized custom attributes declared directly on `method`, mirroring
+/// [`collect_type_custom_attributes`] for the method-level metadata table. The attributes share
+/// the resolution of the method's declaring type (`method.parent`).
+pub(crate) fn collect_method_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    attribute_filter: Option<TypeDescription>,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let mut attributes = Vec::new();
+
+    let owner_type = method.parent.clone();
+    let method_attributes = method
+        .resolution()
+        .definition()
+        .method_attributes(method.method_index())
+        .unwrap_or_default();
+
+    for attribute in &method_attributes {
+        if let Some(attr_obj) =
+            materialize_custom_attribute(ctx, &owner_type, attribute, &attribute_filter)?
+        {
+            attributes.push(attr_obj);
+        }
+    }
+
+    Ok(attributes)
+}
+
 pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _inherit = ctx.pop();
-    let _obj = ctx.pop_obj();
+    let _inherit = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+
+    let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let custom_attributes =
+        dotnet_vm_ops::vm_try!(collect_type_custom_attributes(ctx, target_runtime_type, None));
+
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
-    populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
+    populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
 }
 
 pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _inherit = ctx.pop();
-    let _attribute_type = ctx.pop_obj();
-    let _obj = ctx.pop_obj();
+    let _inherit = ctx.pop_i32();
+    let attribute_type_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let attribute_filter = if attribute_type_obj.0.is_some() {
+        let filter_runtime_type =
+            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
+        match filter_runtime_type {
+            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
+        ctx,
+        target_runtime_type,
+        attribute_filter,
+    ));
+
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
-    populate_reflection_array(ctx, Vec::new(), ConcreteType::from(object_type))
+    populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
 }
 
 pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(

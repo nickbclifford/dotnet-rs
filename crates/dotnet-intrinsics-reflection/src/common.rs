@@ -140,7 +140,27 @@ pub fn make_runtime_type(
                 let (ut, generics) = decompose_type_source::<MethodType>(source);
                 let td = res_ctx.reflection_locate_type(ut)?;
                 if generics.is_empty() {
-                    RuntimeType::Type(td)
+                    match (td.definition().namespace.as_deref(), td.definition().name.as_ref()) {
+                        (Some("System"), "Void") => RuntimeType::Void,
+                        (Some("System"), "TypedReference") => RuntimeType::TypedReference,
+                        (Some("System"), "Boolean") => RuntimeType::Boolean,
+                        (Some("System"), "Char") => RuntimeType::Char,
+                        (Some("System"), "SByte") => RuntimeType::Int8,
+                        (Some("System"), "Byte") => RuntimeType::UInt8,
+                        (Some("System"), "Int16") => RuntimeType::Int16,
+                        (Some("System"), "UInt16") => RuntimeType::UInt16,
+                        (Some("System"), "Int32") => RuntimeType::Int32,
+                        (Some("System"), "UInt32") => RuntimeType::UInt32,
+                        (Some("System"), "Int64") => RuntimeType::Int64,
+                        (Some("System"), "UInt64") => RuntimeType::UInt64,
+                        (Some("System"), "Single") => RuntimeType::Float32,
+                        (Some("System"), "Double") => RuntimeType::Float64,
+                        (Some("System"), "IntPtr") => RuntimeType::IntPtr,
+                        (Some("System"), "UIntPtr") => RuntimeType::UIntPtr,
+                        (Some("System"), "Object") => RuntimeType::Object,
+                        (Some("System"), "String") => RuntimeType::String,
+                        _ => RuntimeType::Type(td),
+                    }
                 } else {
                     RuntimeType::Generic(
                         td,

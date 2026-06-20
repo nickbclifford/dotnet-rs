@@ -315,6 +315,17 @@ pub fn intrinsic_type_get_is_interface<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("bool System.Type::get_IsPrimitive()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsPrimitive()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsPrimitive()")]
+pub fn intrinsic_type_get_is_primitive<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    handle_is_primitive_impl(ctx, generics)
+}
+
 #[dotnet_intrinsic("bool System.Type::get_IsByRefLike()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsByRefLike()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsByRefLike()")]
@@ -674,6 +685,26 @@ pub fn handle_get_is_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
     ctx.push_i32(if is_generic { 1 } else { 0 });
+    StepResult::Continue
+}
+
+pub fn handle_get_is_constructed_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    // BCL semantics: IsConstructedGenericType == IsGenericType && !IsGenericTypeDefinition.
+    // A generic type definition (e.g. `List<>`) is modelled here as a `Generic` whose
+    // arguments are all open `TypeParameter`s (see `handle_get_generic_type_definition`),
+    // whereas a constructed type (`List<int>`) has at least one concrete argument.
+    let is_constructed = match target_type {
+        RuntimeType::Generic(_, ref args) => !args
+            .iter()
+            .all(|a| matches!(a, RuntimeType::TypeParameter { .. })),
+        _ => false,
+    };
+    ctx.push_i32(if is_constructed { 1 } else { 0 });
     StepResult::Continue
 }
 

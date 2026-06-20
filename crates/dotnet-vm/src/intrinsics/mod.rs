@@ -138,6 +138,7 @@ use dotnet_vm_ops::NULL_REF_MSG;
 
 use std::sync::Arc;
 
+pub mod app_context;
 pub mod constants;
 pub mod cpu_intrinsics;
 pub mod diagnostics;

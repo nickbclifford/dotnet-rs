@@ -183,6 +183,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
             self.shared().caches.clone(),
             Some(Arc::downgrade(self.shared())),
         );
+
+        if let Ok(concrete) = ctx.make_concrete(source)
+            && let Some(rt) = dotnet_types::runtime::runtime_type_from_concrete(
+                self.loader().as_ref(),
+                &concrete,
+            )
+        {
+            return rt;
+        }
+
         dotnet_intrinsics_reflection::common::make_runtime_type(&ctx, source)
             .expect("failed to build runtime type")
     }

@@ -340,6 +340,7 @@ pub struct SharedGlobalState {
     #[cfg(feature = "multithreading")]
     pub reflection_registry: SharedReflectionRegistry,
     pub resolution_shared_cache: OnceLock<Arc<crate::context::ResolutionShared>>,
+    pub app_context_switches: DashMap<String, bool>,
 }
 
 // SAFETY: Under `--no-default-features` the runtime is single-threaded; `SharedGlobalState` is
@@ -443,6 +444,15 @@ impl SharedGlobalState {
             #[cfg(feature = "multithreading")]
             reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),
+            app_context_switches: {
+                let switches = DashMap::new();
+                switches.insert(
+                    "System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported"
+                        .to_string(),
+                    false,
+                );
+                switches
+            },
         };
 
         state

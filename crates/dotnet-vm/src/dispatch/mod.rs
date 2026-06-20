@@ -68,6 +68,25 @@ fn no_body_in_method_step_result(method: &MethodDescription) -> StepResult {
     )
 }
 
+fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+) -> Option<StepResult> {
+    if method.parent.type_name() == "System.Dynamic.Utils.DelegateHelpers"
+        && method.method().name.as_ref()
+            == "<CreateObjectArrayDelegateRefEmit>g__ForceAllowDynamicCode|19_1"
+    {
+        // This method is a compiler-generated UnsafeAccessor extern with no IL body.
+        // dotnet-rs doesn't support DynamicMethod emission, so treat ForceAllowDynamicCode
+        // scope creation as a no-op and return null IDisposable.
+        let _ = ctx.pop();
+        ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+        return Some(StepResult::Continue);
+    }
+
+    None
+}
+
 fn dispatch_safe_point_poll_interval() -> usize {
     static POLL_INTERVAL: OnceLock<usize> = OnceLock::new();
     *POLL_INTERVAL.get_or_init(|| match std::env::var("DOTNET_SAFE_POINT_POLL_INTERVAL") {
@@ -340,6 +359,10 @@ impl<'gc> ExecutionEngine<'gc> {
             }
 
             if method.body().is_none() {
+                if let Some(result) = try_no_body_runtime_stub(&mut ctx, &method) {
+                    return result;
+                }
+
                 if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     &mut ctx,
                     method.clone(),

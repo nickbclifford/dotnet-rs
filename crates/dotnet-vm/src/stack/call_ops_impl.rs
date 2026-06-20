@@ -56,6 +56,25 @@ fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepRe
     )
 }
 
+fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+) -> Option<StepResult> {
+    if method.parent.type_name() == "System.Dynamic.Utils.DelegateHelpers"
+        && method.method().name.as_ref()
+            == "<CreateObjectArrayDelegateRefEmit>g__ForceAllowDynamicCode|19_1"
+    {
+        // This method is a compiler-generated UnsafeAccessor extern with no IL body.
+        // dotnet-rs doesn't support DynamicMethod emission, so treat ForceAllowDynamicCode
+        // scope creation as a no-op and return null IDisposable.
+        let _ = ctx.pop();
+        ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+        return Some(StepResult::Continue);
+    }
+
+    None
+}
+
 impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn return_frame(&mut self) -> StepResult {
@@ -272,6 +291,10 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             dotnet_pinvoke::external_call(self, method, &shared.pinvoke)
         } else {
             if method.body().is_none() {
+                if let Some(result) = try_no_body_runtime_stub(self, &method) {
+                    return result;
+                }
+
                 if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     self,
                     method.clone(),
@@ -479,7 +502,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             _ => GenericLookup::default(),
         };
 
-        if receiver_lookup.type_generics.len() > lookup.type_generics.len() {
+        if !receiver_lookup.type_generics.is_empty() {
+            // For instance/virtual dispatch the receiver's instantiated type arguments are
+            // authoritative for `!0`, `!1`, ... on the target method's declaring type.
+            // Preserve them even when the caller already has same-arity type generics from an
+            // unrelated generic context (e.g. Expression<TDelegate>), otherwise `typeof(!0)` in
+            // the callee can resolve against the caller and leak incorrect runtime types.
             lookup.type_generics = receiver_lookup.type_generics.clone();
         }
     }

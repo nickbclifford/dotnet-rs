@@ -6,7 +6,7 @@ using JetBrains.Annotations;
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.Array")]
-public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable, IEnumerable<Type>
+public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable
 {
     // Sentinel for array constructors used by runtime
     [UsedImplicitly] internal void CtorArraySentinel() { }
@@ -85,7 +85,6 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     void IList.RemoveAt(int index) => throw new NotSupportedException();
 
     public IEnumerator GetEnumerator() => new ArrayEnumerator(this);
-    IEnumerator<Type> IEnumerable<Type>.GetEnumerator() => new TypeArrayEnumerator(this);
 
     public void CopyTo(System.Array array, int index)
     {
@@ -275,12 +274,55 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
         public void Reset() => _index = -1;
     }
 
-    private sealed class TypeArrayEnumerator(Array array) : IEnumerator<Type>
+}
+
+internal sealed class SZArrayHelper<T> : IEnumerable<T>, ICollection<T>, IList<T>, IReadOnlyCollection<T>, IReadOnlyList<T>
+{
+    private static Array AsArray(object self) => (Array)self;
+
+    public int Count => AsArray(this).Length;
+    public bool IsReadOnly => true;
+
+    public T this[int index]
+    {
+        get => (T)AsArray(this).GetValue(index)!;
+        set => throw new NotSupportedException();
+    }
+
+    public void Add(T item) => throw new NotSupportedException();
+    public void Clear() => throw new NotSupportedException();
+    public bool Remove(T item) => throw new NotSupportedException();
+    public void Insert(int index, T item) => throw new NotSupportedException();
+    public void RemoveAt(int index) => throw new NotSupportedException();
+
+    public bool Contains(T item) => Array.IndexOf(AsArray(this), item) >= 0;
+
+    public int IndexOf(T item) => Array.IndexOf(AsArray(this), item);
+
+    public void CopyTo(T[] array, int arrayIndex)
+    {
+        ArgumentNullException.ThrowIfNull(array);
+        ArgumentOutOfRangeException.ThrowIfNegative(arrayIndex);
+
+        var source = AsArray(this);
+        if (arrayIndex + source.Length > array.Length) throw new ArgumentException();
+
+        for (int i = 0; i < source.Length; i++)
+        {
+            array[arrayIndex + i] = (T)source.GetValue(i)!;
+        }
+    }
+
+    public IEnumerator<T> GetEnumerator() => new SZGenericArrayEnumerator<T>(AsArray(this));
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    private sealed class SZGenericArrayEnumerator<TElement>(Array array) : IEnumerator<TElement>
     {
         private int _index = -1;
 
         object? IEnumerator.Current => Current;
-        public Type Current => (Type)array.GetValue(_index)!;
+        public TElement Current => (TElement)array.GetValue(_index)!;
 
         public bool MoveNext()
         {

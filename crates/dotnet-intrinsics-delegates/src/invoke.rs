@@ -96,8 +96,10 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     // Look up the actual method from the registry
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
 
-    // Push arguments back onto stack
-    if target_method.signature().instance {
+    // Push arguments back onto stack.
+    // For closed static delegates created via MethodInfo.CreateDelegate(delegateType, target),
+    // `_target` is a bound first argument even though the target method is static.
+    if target_method.signature().instance || target.0.is_some() {
         ctx.push(StackValue::ObjectRef(target));
     }
 

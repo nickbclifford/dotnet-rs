@@ -589,6 +589,22 @@ pub fn intrinsic_uint64_log2<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static uint System.UInt32::Log2(uint)")]
+pub fn intrinsic_uint32_log2<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_i32() as u32;
+    let log2 = if val == 0 {
+        0
+    } else {
+        u32::BITS - 1 - val.leading_zeros()
+    };
+    ctx.push_i32(log2 as i32);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static int System.Numerics.BitOperations::Log2(uint)")]
 pub fn intrinsic_bitoperations_log2_uint<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,

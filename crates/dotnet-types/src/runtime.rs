@@ -62,10 +62,39 @@ pub fn runtime_type_from_concrete(
         BaseType::Type {
             source: TypeSource::User(user),
             ..
-        } => loader
-            .locate_type(concrete.resolution(), *user)
-            .ok()
-            .map(RuntimeType::Type),
+        } => loader.locate_type(concrete.resolution(), *user).ok().map(|td| {
+            match (td.definition().namespace.as_deref(), td.definition().name.as_ref()) {
+                (Some("System"), "Void") => RuntimeType::Void,
+                (Some("System"), "TypedReference") => RuntimeType::TypedReference,
+                (Some("System"), "Boolean") => RuntimeType::Boolean,
+                (Some("System"), "Char") => RuntimeType::Char,
+                (Some("System"), "SByte") => RuntimeType::Int8,
+                (Some("System"), "Byte") => RuntimeType::UInt8,
+                (Some("System"), "Int16") => RuntimeType::Int16,
+                (Some("System"), "UInt16") => RuntimeType::UInt16,
+                (Some("System"), "Int32") => RuntimeType::Int32,
+                (Some("System"), "UInt32") => RuntimeType::UInt32,
+                (Some("System"), "Int64") => RuntimeType::Int64,
+                (Some("System"), "UInt64") => RuntimeType::UInt64,
+                (Some("System"), "Single") => RuntimeType::Float32,
+                (Some("System"), "Double") => RuntimeType::Float64,
+                (Some("System"), "IntPtr") => RuntimeType::IntPtr,
+                (Some("System"), "UIntPtr") => RuntimeType::UIntPtr,
+                (Some("System"), "Object") => RuntimeType::Object,
+                (Some("System"), "String") => RuntimeType::String,
+                (Some("System"), "Delegate") => loader
+                    .corlib_type("System.Delegate")
+                    .ok()
+                    .map(RuntimeType::Type)
+                    .unwrap_or_else(|| RuntimeType::Type(td.clone())),
+                (Some("System"), "MulticastDelegate") => loader
+                    .corlib_type("System.MulticastDelegate")
+                    .ok()
+                    .map(RuntimeType::Type)
+                    .unwrap_or_else(|| RuntimeType::Type(td.clone())),
+                _ => RuntimeType::Type(td),
+            }
+        }),
         BaseType::Type {
             source:
                 TypeSource::Generic {

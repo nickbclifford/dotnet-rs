@@ -110,17 +110,17 @@ pub struct AssemblyLoader {
     pub(crate) redirects: DashMap<String, Vec<BindingRedirect>>,
     pub(crate) strict_versioning: bool,
     /// `ReadOptions` applied to every assembly parsed via `load_resolution_from_file`.
-    /// Defaults to fully lazy (bodies, signatures, attributes); see `default_read_options`.
+    /// Defaults to lazy bodies/attributes with eager method signatures; see `default_read_options`.
     pub(crate) read_options: ReadOptions,
 }
 
-/// The default (fully lazy) parse options. A VM run typically executes only a fraction of the
-/// methods in a loaded assembly, so deferring decode work to first use avoids parsing bodies,
-/// signatures, and attributes that are never touched.
+/// The default parse options. A VM run typically executes only a fraction of the
+/// methods in a loaded assembly, so deferring body/attribute decode work to first use avoids
+/// parsing metadata that is never touched.
 pub fn default_read_options() -> ReadOptions {
     ReadOptions {
         lazy_method_bodies: true,
-        lazy_method_signatures: true,
+        lazy_method_signatures: false,
         lazy_attributes: true,
         ..Default::default()
     }

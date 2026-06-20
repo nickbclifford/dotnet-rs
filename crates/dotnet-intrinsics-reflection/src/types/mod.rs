@@ -68,6 +68,7 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("System.Reflection.Assembly System.Type::get_Assembly()")]
 #[dotnet_intrinsic("System.Type System.Type::get_BaseType()")]
 #[dotnet_intrinsic("bool System.Type::get_IsGenericType()")]
+#[dotnet_intrinsic("bool System.Type::get_IsConstructedGenericType()")]
 #[dotnet_intrinsic("System.Type System.Type::GetGenericTypeDefinition()")]
 #[dotnet_intrinsic("System.Type[] System.Type::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeTypeHandle System.Type::get_TypeHandle()")]
@@ -82,6 +83,8 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetBaseType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsGenericType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsConstructedGenericType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsConstructedGenericType()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::get_GenericTypeDefinition()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetGenericTypeDefinition()")]
 #[dotnet_intrinsic("System.Type[] System.RuntimeType::GetGenericArguments()")]
@@ -146,6 +149,9 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
+        ("GetIsConstructedGenericType" | "get_IsConstructedGenericType", 0) => {
+            handle_get_is_constructed_generic_type(ctx, generics)
+        }
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
             handle_get_generic_type_definition(ctx, generics)
         }

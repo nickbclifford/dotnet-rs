@@ -155,6 +155,25 @@ where
             return Ok(cached);
         }
 
+        let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
+
+        if is_interface
+            && let Some(array_helper_method) = self.try_resolve_array_generic_interface_method(
+                &base_method,
+                &this_type,
+                generics,
+            )?
+        {
+            self.caches.record_vmt_key_clones(3);
+            self.caches.set_vmt_cached(
+                base_method.clone(),
+                this_type.clone(),
+                generics.clone(),
+                array_helper_method.clone(),
+            );
+            return Ok(array_helper_method);
+        }
+
         // Delegate Invoke/BeginInvoke/EndInvoke methods are runtime-synthesized and have no
         // concrete virtual override entries in metadata tables.
         let method_name = &*base_method.method().name;
@@ -182,8 +201,6 @@ where
         // whole chain is incorrect for inherited generic bases (e.g.
         // GroupByIterator<TSource,TKey> : Iterator<IGrouping<TKey,TSource>>), and can
         // cause fields on the base to be read with the wrong runtime type.
-        let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
-
         let ancestors: Vec<_> = self.loader.ancestors(this_type.clone()).collect();
         let mut ancestor_lookup = generics.clone();
 
@@ -220,6 +237,56 @@ where
             "could not find virtual method implementation of {:?} in {:?} with generics {:?}",
             base_method, this_type, generics
         )))
+    }
+
+    fn try_resolve_array_generic_interface_method(
+        &self,
+        base_method: &MethodDescription,
+        this_type: &TypeDescription,
+        generics: &GenericLookup,
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
+        let this_type_name = this_type.type_name();
+        if self.loader.canonical_type_name(&this_type_name) != "System.Array" {
+            return Ok(None);
+        }
+
+        let parent_name = base_method.parent.type_name();
+        let canonical_parent = self.loader.canonical_type_name(&parent_name);
+        let supported = matches!(
+            canonical_parent,
+            "System.Collections.Generic.IEnumerable`1"
+                | "System.Collections.Generic.ICollection`1"
+                | "System.Collections.Generic.IList`1"
+                | "System.Collections.Generic.IReadOnlyCollection`1"
+                | "System.Collections.Generic.IReadOnlyList`1"
+        );
+        if !supported {
+            return Ok(None);
+        }
+
+        let Some(element_type) = base_method.parent_generics.type_generics.first().cloned() else {
+            return Ok(None);
+        };
+
+        let mut signature_lookup = base_method.parent_generics.clone();
+        signature_lookup.method_generics = generics.method_generics.clone();
+
+        let helper_generics = GenericLookup {
+            type_generics: vec![element_type].into(),
+            method_generics: vec![].into(),
+        };
+
+        let helper_type = self.loader.corlib_type("DotnetRs.SZArrayHelper`1")?;
+
+        Ok(self.loader.find_method_in_type_internal(
+            helper_type,
+            &base_method.method().name,
+            base_method.signature(),
+            base_method.resolution(),
+            Some(&signature_lookup),
+            Some(&helper_generics),
+            true,
+        ))
     }
 
     fn find_and_cache_method(
