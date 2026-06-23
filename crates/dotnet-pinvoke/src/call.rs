@@ -138,56 +138,74 @@ fn checked_narrow_integer(
         IntegerNarrowTarget::I8 => i8::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
         IntegerNarrowTarget::U8 => u8::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
         IntegerNarrowTarget::I16 => i16::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
         IntegerNarrowTarget::U16 => u16::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
         IntegerNarrowTarget::I32 => i32::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
         IntegerNarrowTarget::U32 => u32::try_from(raw_value)
             .map(|v| v.to_ne_bytes().to_vec())
             .map_err(|_| {
-                ExecutionError::InternalError(format!(
-                    "P/Invoke marshalling: value {} out of range for {}",
-                    raw_value,
-                    target.name()
-                ))
+                ExecutionError::InternalError(
+                    format!(
+                        "P/Invoke marshalling: value {} out of range for {}",
+                        raw_value,
+                        target.name()
+                    )
+                    .into(),
+                )
             })?,
     };
 
@@ -494,7 +512,7 @@ fn handle_pinvoke_return<'gc>(
             if type_ptr.is_null() {
                 return StepResult::Error(
                     ExecutionError::InternalError(
-                        "null type handle in returned TypedReference".to_string(),
+                        "null type handle in returned TypedReference".into(),
                     )
                     .into(),
                 );
@@ -818,7 +836,9 @@ fn external_call_impl<'gc>(
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                std::ptr::with_exposed_provenance_mut::<u8>(p.byte_offset().as_usize())
+                                std::ptr::with_exposed_provenance_mut::<u8>(
+                                    p.byte_offset().as_usize(),
+                                )
                             }
                         } else {
                             p.with_data(0, |data| data.as_ptr().cast_mut())

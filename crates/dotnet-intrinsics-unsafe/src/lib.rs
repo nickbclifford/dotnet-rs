@@ -31,8 +31,8 @@ use std::sync::Arc;
 
 pub mod buffer;
 pub mod marshal;
-pub mod unsafe_ptr;
 pub(crate) mod mem_helpers;
+pub mod unsafe_ptr;
 
 pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
     fn unsafe_type_layout(

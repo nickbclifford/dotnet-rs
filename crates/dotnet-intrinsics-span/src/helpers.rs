@@ -16,7 +16,7 @@ pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc
     let ptr = span
         .instance_storage
         .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _reference field".to_string()))?
+        .ok_or(IntrinsicError::Static("Span must have _reference field"))?
         .read();
     Ok(ptr.into_info())
 }
@@ -26,7 +26,7 @@ pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
     Ok(span
         .instance_storage
         .field::<i32>(span.description.clone(), "_length")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _length field".to_string()))?
+        .ok_or(IntrinsicError::Static("Span must have _length field"))?
         .read())
 }
 
@@ -38,7 +38,7 @@ pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
 ) -> Result<ManagedPtr<'gc>, IntrinsicError> {
     let ref_field = layout
         .get_field_by_name("_reference")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _reference field".to_string()))?;
+        .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
 
     // Read the raw bytes of the _reference field and deserialize properly.
     // We MUST NOT use ctx.read_unaligned with span_ptr.origin because that would
@@ -54,7 +54,9 @@ pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
             &mut ptr_bytes,
         )
     }
-    .map_err(|e| IntrinsicError::Message(format!("Failed to read span _reference bytes: {}", e)))?;
+    .map_err(|e| {
+        IntrinsicError::Message(format!("Failed to read span _reference bytes: {}", e).into())
+    })?;
 
     // Deserialize the ManagedPtrInfo from bytes
     // SAFETY: `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
@@ -66,7 +68,7 @@ pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
         )
     }
     .map_err(|e| {
-        IntrinsicError::Message(format!("Failed to deserialize span _reference: {:?}", e))
+        IntrinsicError::Message(format!("Failed to deserialize span _reference: {:?}", e).into())
     })?;
 
     // Reconstruct with proper type - use NULL for now, caller can adjust if needed
@@ -85,7 +87,7 @@ pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
 ) -> Result<i32, IntrinsicError> {
     let length_field = layout
         .get_field_by_name("_length")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _length field".to_string()))?;
+        .ok_or(IntrinsicError::Static("Span must have _length field"))?;
     // SAFETY: `_length` field offset/layout come from validated span layout metadata for `span_ptr`.
     let val = unsafe {
         ctx.read_unaligned(
@@ -94,7 +96,7 @@ pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
             &length_field.layout,
             None,
         )
-        .map_err(|e| IntrinsicError::Message(format!("Failed to read _length: {}", e)))?
+        .map_err(|e| IntrinsicError::Message(format!("Failed to read _length: {}", e).into()))?
     };
     Ok(val.as_i32())
 }
@@ -109,10 +111,10 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
 ) -> Result<(), IntrinsicError> {
     let ref_field = layout
         .get_field_by_name("_reference")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _reference field".to_string()))?;
+        .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     let length_field = layout
         .get_field_by_name("_length")
-        .ok_or_else(|| IntrinsicError::Message("Span must have _length field".to_string()))?;
+        .ok_or(IntrinsicError::Static("Span must have _length field"))?;
 
     // Write _reference
     // SAFETY: `_reference` offset/layout are resolved from the span layout, and the serialized
@@ -125,7 +127,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
             &ref_field.layout,
         )
     }
-    .map_err(|e| IntrinsicError::Message(format!("Failed to write _reference: {}", e)))?;
+    .map_err(|e| IntrinsicError::Message(format!("Failed to write _reference: {}", e).into()))?;
 
     // Write _length
     // SAFETY: `_length` offset/layout are resolved from span metadata and we write a plain i32
@@ -138,7 +140,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
             &length_field.layout,
         )
     }
-    .map_err(|e| IntrinsicError::Message(format!("Failed to write _length: {}", e)))?;
+    .map_err(|e| IntrinsicError::Message(format!("Failed to write _length: {}", e).into()))?;
 
     Ok(())
 }
@@ -166,9 +168,9 @@ pub fn with_span_data<'gc, R, T: RawMemoryOps<'gc>>(
 
     // Bounds checking
     if let Some(owner) = m_ptr.owner() {
-        let handle = owner.0.ok_or_else(|| {
-            IntrinsicError::Message("ManagedPtr::with_data: null owner handle".to_string())
-        })?;
+        let handle = owner.0.ok_or(IntrinsicError::Static(
+            "ManagedPtr::with_data: null owner handle",
+        ))?;
         let inner = handle.borrow();
 
         match &inner.storage {

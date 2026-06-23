@@ -51,7 +51,7 @@ fn invalid_ip_step_result(ip: usize) -> StepResult {
 #[inline(never)]
 fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
-        ExecutionError::NotImplemented(format!("intrinsic not found: {:?}", method)).into(),
+        ExecutionError::NotImplemented(format!("intrinsic not found: {:?}", method).into()).into(),
     )
 }
 
@@ -59,11 +59,14 @@ fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
 #[inline(never)]
 fn no_body_in_method_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
-        ExecutionError::NotImplemented(format!(
-            "no body in executing method: {}.{}",
-            method.parent.type_name(),
-            method.method().name
-        ))
+        ExecutionError::NotImplemented(
+            format!(
+                "no body in executing method: {}.{}",
+                method.parent.type_name(),
+                method.method().name
+            )
+            .into(),
+        )
         .into(),
     )
 }

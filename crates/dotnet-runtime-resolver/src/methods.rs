@@ -158,11 +158,8 @@ where
         let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
 
         if is_interface
-            && let Some(array_helper_method) = self.try_resolve_array_generic_interface_method(
-                &base_method,
-                &this_type,
-                generics,
-            )?
+            && let Some(array_helper_method) =
+                self.try_resolve_array_generic_interface_method(&base_method, &this_type, generics)?
         {
             self.caches.record_vmt_key_clones(3);
             self.caches.set_vmt_cached(
@@ -233,10 +230,13 @@ where
             }
         }
 
-        Err(TypeResolutionError::MethodNotFound(format!(
-            "could not find virtual method implementation of {:?} in {:?} with generics {:?}",
-            base_method, this_type, generics
-        )))
+        Err(TypeResolutionError::MethodNotFound(
+            format!(
+                "could not find virtual method implementation of {:?} in {:?} with generics {:?}",
+                base_method, this_type, generics
+            )
+            .into(),
+        ))
     }
 
     fn try_resolve_array_generic_interface_method(

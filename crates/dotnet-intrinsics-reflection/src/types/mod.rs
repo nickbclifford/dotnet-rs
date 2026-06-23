@@ -213,8 +213,8 @@ pub(crate) fn string_from_heap_obj<'gc>(name_obj: ObjectRef<'gc>) -> Result<Stri
 
     name.map_err(|actual| {
         VmError::Execution(ExecutionError::TypeMismatch {
-            expected: "String".to_string(),
-            actual,
+            expected: "String",
+            actual: actual.into(),
         })
     })
 }

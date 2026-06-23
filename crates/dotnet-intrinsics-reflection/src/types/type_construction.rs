@@ -23,8 +23,8 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
     let arg = ctx.peek_stack();
     let StackValue::ValueType(handle) = arg else {
         return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-            expected: "RuntimeTypeHandle".to_string(),
-            actual: format!("{arg:?}"),
+            expected: "RuntimeTypeHandle",
+            actual: format!("{arg:?}").into(),
         }));
     };
 
@@ -98,16 +98,20 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
                 (sig.instance && sig.parameters.is_empty()).then_some(d)
             })
         {
-
             let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
             dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
             return StepResult::FramePushed;
         }
 
-        StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
-            "could not find a parameterless constructor in {:?}",
-            target_td
-        ))))
+        // Keep this as a recoverable host error: metadata/program input can legitimately request
+        // activation of a type without an accessible parameterless constructor.
+        StepResult::Error(VmError::Execution(ExecutionError::InternalError(
+            format!(
+                "could not find a parameterless constructor in {:?}",
+                target_td
+            )
+            .into(),
+        )))
     }
 }
 
@@ -201,10 +205,11 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
         RuntimeType::Type(td) => (td, vec![]),
         RuntimeType::Generic(td, args) => (td, args.clone()),
         _ => {
-            return StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
-                "cannot create instance of {:?}",
-                target_rt
-            ))));
+            // Keep this recoverable: the reflected runtime type can come from user code and may
+            // denote an uninstantiable shape (pointer/byref/etc.), which is not a VM invariant.
+            return StepResult::Error(VmError::Execution(ExecutionError::InternalError(
+                format!("cannot create instance of {:?}", target_rt).into(),
+            )));
         }
     };
 
@@ -236,14 +241,14 @@ pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>
             (sig.instance && sig.parameters.is_empty()).then_some(d)
         })
     {
-
         let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
         dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
         return StepResult::FramePushed;
     }
 
-    StepResult::Error(VmError::Execution(ExecutionError::InternalError(format!(
-        "could not find a parameterless constructor in {:?}",
-        td
-    ))))
+    // Keep this as a recoverable host error: `Activator.CreateInstance(Type)` may target a type
+    // that does not expose a parameterless constructor.
+    StepResult::Error(VmError::Execution(ExecutionError::InternalError(
+        format!("could not find a parameterless constructor in {:?}", td).into(),
+    )))
 }

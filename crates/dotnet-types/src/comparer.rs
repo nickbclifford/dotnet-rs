@@ -631,8 +631,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             ($method:expr, $member_index:expr) => {
                 let m = $method;
                 if m.name == name {
-                    let m_idx =
-                        MethodDescription::index_for(def_res, desc.index, $member_index);
+                    let m_idx = MethodDescription::index_for(def_res, desc.index, $member_index);
                     let m_sig = def_res
                         .method_signature(m_idx)
                         .expect("failed to decode method signature");

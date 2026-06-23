@@ -50,7 +50,12 @@ impl LayoutFactory {
             }
         }
 
-        for attr in td.resolution.definition().type_attributes(td.index).unwrap_or_default() {
+        for attr in td
+            .resolution
+            .definition()
+            .type_attributes(td.index)
+            .unwrap_or_default()
+        {
             let Ok(ctor) = resolver
                 .loader
                 .locate_attribute(td.resolution.clone(), &attr)
@@ -208,7 +213,7 @@ impl LayoutFactory {
                         None => {
                             return Err(TypeResolutionError::InvalidLayout(
                                 "explicit field layout requires all fields to have defined offsets"
-                                    .to_string(),
+                                    .into(),
                             ));
                         }
                         Some(o) => {
@@ -240,10 +245,13 @@ impl LayoutFactory {
                                             type_name, name, actual_offset, prev_start, prev_end
                                         );
                                     } else {
-                                        return Err(TypeResolutionError::InvalidLayout(format!(
-                                            "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}).",
-                                            type_name, name, actual_offset, prev_start, prev_end
-                                        )));
+                                        return Err(TypeResolutionError::InvalidLayout(
+                                            format!(
+                                                "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}).",
+                                                type_name, name, actual_offset, prev_start, prev_end
+                                            )
+                                            .into(),
+                                        ));
                                     }
                                 }
                             }
@@ -275,10 +283,9 @@ impl LayoutFactory {
         };
 
         if total_size > 0x1000_0000 {
-            return Err(TypeResolutionError::MassiveAllocation(format!(
-                "massive field layout detected: {} bytes",
-                total_size
-            )));
+            return Err(TypeResolutionError::MassiveAllocation(
+                format!("massive field layout detected: {} bytes", total_size).into(),
+            ));
         }
 
         Ok(FieldLayoutManager {
@@ -462,11 +469,14 @@ impl LayoutFactory {
         if length > 0x4000_0000
             || (length > 0 && element_layout.size().as_usize() > usize::MAX / length)
         {
-            return Err(TypeResolutionError::MassiveAllocation(format!(
-                "massive array allocation attempt: length={}, element_size={}",
-                length,
-                element_layout.size()
-            )));
+            return Err(TypeResolutionError::MassiveAllocation(
+                format!(
+                    "massive array allocation attempt: length={}, element_size={}",
+                    length,
+                    element_layout.size()
+                )
+                .into(),
+            ));
         }
 
         Ok(ArrayLayoutManager {

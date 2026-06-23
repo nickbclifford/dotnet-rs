@@ -78,10 +78,13 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
                     element_size: a.layout.element_layout.size().as_usize(),
                 }),
                 _ => Err(StepResult::Error(
-                    ExecutionError::NotImplemented(format!(
-                        "AsSpan called on non-string/non-array object: {:?}",
-                        heap.storage
-                    ))
+                    ExecutionError::NotImplemented(
+                        format!(
+                            "AsSpan called on non-string/non-array object: {:?}",
+                            heap.storage
+                        )
+                        .into(),
+                    )
                     .into(),
                 )),
             }
@@ -224,14 +227,14 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         Some(_) => {
             return StepResult::Error(
                 ExecutionError::InternalError(
-                    "AsSpan called on method with ref/typedref return".to_string(),
+                    "AsSpan called on method with ref/typedref return".into(),
                 )
                 .into(),
             );
         }
         None => {
             return StepResult::Error(
-                ExecutionError::InternalError("AsSpan called on method returning void".to_string())
+                ExecutionError::InternalError("AsSpan called on method returning void".into())
                     .into(),
             );
         }
@@ -303,9 +306,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
     let _value_offset = match &*handle_layout {
         LayoutManager::Field(f) => {
             dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::InternalError(
-                    "RuntimeFieldHandle must have _value field".to_string(),
-                )
+                ExecutionError::InternalError("RuntimeFieldHandle must have _value field".into())
             }))
             .position
             .as_usize()
@@ -313,7 +314,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         _ => {
             return StepResult::Error(
                 ExecutionError::InternalError(
-                    "Expected Field layout for RuntimeFieldHandle".to_string(),
+                    "Expected Field layout for RuntimeFieldHandle".into(),
                 )
                 .into(),
             );
@@ -354,7 +355,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size =
             dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-                ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
+                ExecutionError::InternalError(format!("Failed to parse array size: {}", e).into())
             }));
         let data_slice = &initial_data[..array_size];
 
@@ -368,22 +369,19 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             LayoutManager::Field(f) => {
                 let ref_off =
                     dotnet_vm_ops::vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
-                        ExecutionError::NotImplemented(
-                            "Span must have _reference field".to_string(),
-                        )
+                        ExecutionError::NotImplemented("Span must have _reference field".into())
                     }))
                     .position;
                 let len_off =
                     dotnet_vm_ops::vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
-                        ExecutionError::NotImplemented("Span must have _length field".to_string())
+                        ExecutionError::NotImplemented("Span must have _length field".into())
                     }))
                     .position;
                 (ref_off, len_off)
             }
             _ => {
                 return StepResult::Error(
-                    ExecutionError::NotImplemented("Expected Field layout for Span".to_string())
-                        .into(),
+                    ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
                 );
             }
         };
@@ -414,8 +412,10 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         StepResult::Continue
     } else {
         StepResult::Error(
-            ExecutionError::NotImplemented(format!("initial field data for {:?}", field_desc))
-                .into(),
+            ExecutionError::NotImplemented(
+                format!("initial field data for {:?}", field_desc).into(),
+            )
+            .into(),
         )
     }
 }
@@ -440,9 +440,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     let _field_value_offset = match &*field_layout {
         LayoutManager::Field(f) => {
             dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::NotImplemented(
-                    "RuntimeFieldHandle must have _value field".to_string(),
-                )
+                ExecutionError::NotImplemented("RuntimeFieldHandle must have _value field".into())
             }))
             .position
             .as_usize()
@@ -450,7 +448,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         _ => {
             return StepResult::Error(
                 ExecutionError::NotImplemented(
-                    "Expected Field layout for RuntimeFieldHandle".to_string(),
+                    "Expected Field layout for RuntimeFieldHandle".into(),
                 )
                 .into(),
             );
@@ -474,9 +472,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     let _type_value_offset = match &*runtime_type_layout {
         LayoutManager::Field(f) => {
             dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::NotImplemented(
-                    "RuntimeTypeHandle must have _value field".to_string(),
-                )
+                ExecutionError::NotImplemented("RuntimeTypeHandle must have _value field".into())
             }))
             .position
             .as_usize()
@@ -484,7 +480,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         _ => {
             return StepResult::Error(
                 ExecutionError::NotImplemented(
-                    "Expected Field layout for RuntimeTypeHandle".to_string(),
+                    "Expected Field layout for RuntimeTypeHandle".into(),
                 )
                 .into(),
             );
@@ -515,7 +511,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size =
             dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-                ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
+                ExecutionError::InternalError(format!("Failed to parse array size: {}", e).into())
             }));
 
         let element_count = (array_size / element_size.as_usize()) as i32;
@@ -529,7 +525,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
                     &element_count.to_ne_bytes(),
                 )
             }
-            .map_err(|e| ExecutionError::InternalError(e.to_string()))
+            .map_err(|e| ExecutionError::InternalError(e.to_string().into()))
         );
 
         let element_desc =
@@ -575,7 +571,7 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
             if f.get_field_by_name("_value").is_none() {
                 return StepResult::Error(
                     ExecutionError::InternalError(
-                        "RuntimeFieldHandle must have _value field".to_string(),
+                        "RuntimeFieldHandle must have _value field".into(),
                     )
                     .into(),
                 );
@@ -584,7 +580,7 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
         _ => {
             return StepResult::Error(
                 ExecutionError::InternalError(
-                    "Expected Field layout for RuntimeFieldHandle".to_string(),
+                    "Expected Field layout for RuntimeFieldHandle".into(),
                 )
                 .into(),
             );
@@ -596,7 +592,7 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
             .instance_storage
             .field::<ObjectRef<'gc>>(field_handle.description.clone(), "_value")
             .ok_or_else(|| {
-                ExecutionError::InternalError("RuntimeFieldHandle missing _value slot".to_string())
+                ExecutionError::InternalError("RuntimeFieldHandle missing _value slot".into())
             })
     )
     .read();
@@ -649,8 +645,7 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
         generics.method_generics[0].clone()
     } else {
         return StepResult::Error(
-            ExecutionError::NotImplemented("GetArrayData expected generic argument".to_string())
-                .into(),
+            ExecutionError::NotImplemented("GetArrayData expected generic argument".into()).into(),
         );
     };
 
@@ -678,10 +673,8 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
             ctx.push_managed_ptr(managed);
         } else {
             return StepResult::Error(
-                ExecutionError::NotImplemented(
-                    "GetArrayData called on non-vector object".to_string(),
-                )
-                .into(),
+                ExecutionError::NotImplemented("GetArrayData called on non-vector object".into())
+                    .into(),
             );
         }
     } else {
@@ -710,7 +703,7 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::Error(
-            ExecutionError::NotImplemented("Expected Field layout for Span".to_string()).into(),
+            ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
         );
     };
 

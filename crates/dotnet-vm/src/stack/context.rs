@@ -241,16 +241,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     pub fn return_frame(&mut self) -> StepResult {
-        let frame = match self.frame_stack.pop() {
-            Some(frame) => frame,
-            None => {
-                return StepResult::Error(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::InternalError(
-                        "ret instruction with empty frame stack".into(),
-                    ),
-                ));
-            }
-        };
+        // VM invariant: `return_frame` is only reached while executing a method body, so the
+        // dispatch loop must have an active frame. An empty stack here indicates a bug in frame
+        // lifecycle management, not a recoverable runtime condition.
+        let frame = self
+            .frame_stack
+            .pop()
+            .expect("return_frame called with empty frame stack (ret/dispatch invariant violated)");
 
         self.trace_method_exit_for_frame(&frame);
 

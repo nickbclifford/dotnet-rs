@@ -565,12 +565,14 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                             );
                         }
                         _ => {
-                            // Unexpected state - this should not happen
-                            return StepResult::internal_error(format!(
+                            // VM invariant: once `wait_for_init` returns without yielding, the
+                            // state machine must have converged to INITIALIZED or FAILED.
+                            // Any other state is an internal synchronization bug.
+                            unreachable!(
                                 "Type initialization for '{}' ended in unexpected state {}",
                                 description.type_name(),
                                 state
-                            ));
+                            );
                         }
                     }
                 }

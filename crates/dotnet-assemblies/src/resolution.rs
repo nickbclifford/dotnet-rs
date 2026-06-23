@@ -9,13 +9,13 @@ use dotnet_types::{
 use dotnet_utils::sync::Ordering;
 use dotnetdll::prelude::{FieldSource, *};
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     io::Read,
     path::{Path, PathBuf},
     ptr,
     sync::Arc,
 };
+use thiserror::Error;
 
 impl TypeResolver for AssemblyLoader {
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
@@ -46,16 +46,16 @@ impl AssemblyLoader {
         e: &ExportedType,
     ) -> Result<TypeDescription, TypeResolutionError> {
         match e.implementation {
-            TypeImplementation::Nested(_) => Err(TypeResolutionError::TypeNotFound(format!(
-                "Nested exported type not implemented: {}",
-                e.type_name()
-            ))),
-            TypeImplementation::ModuleFile { .. } => {
-                Err(TypeResolutionError::TypeNotFound(format!(
+            TypeImplementation::Nested(_) => Err(TypeResolutionError::TypeNotFound(
+                format!("Nested exported type not implemented: {}", e.type_name()).into(),
+            )),
+            TypeImplementation::ModuleFile { .. } => Err(TypeResolutionError::TypeNotFound(
+                format!(
                     "ModuleFile exported type not implemented: {}",
                     e.type_name()
-                )))
-            }
+                )
+                .into(),
+            )),
             TypeImplementation::TypeForwarder(a) => {
                 self.find_in_assembly(&resolution[a], &e.type_name())
             }
@@ -128,7 +128,7 @@ impl AssemblyLoader {
 
         let res = self
             .get_assembly_with_version(assembly.name.as_ref(), Some(assembly.version))
-            .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
+            .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string().into()))?;
 
         let (namespace, name, type_def_index) =
             self.parse_and_find_type_definition_index(&res, full_name, false);
@@ -139,7 +139,7 @@ impl AssemblyLoader {
                 .type_definition_index(index)
                 .ok_or_else(|| {
                     TypeResolutionError::TypeNotFound(
-                        "Internal error: invalid type definition index".to_string(),
+                        "Internal error: invalid type definition index".into(),
                     )
                 })?;
             return Ok(TypeDescription::new(res, type_index));
@@ -151,10 +151,13 @@ impl AssemblyLoader {
             }
         }
 
-        Err(TypeResolutionError::TypeNotFound(format!(
-            "could not find type {} in assembly {}",
-            full_name, assembly.name
-        )))
+        Err(TypeResolutionError::TypeNotFound(
+            format!(
+                "could not find type {} in assembly {}",
+                full_name, assembly.name
+            )
+            .into(),
+        ))
     }
 
     pub fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
@@ -176,7 +179,7 @@ impl AssemblyLoader {
         if self.external.read().contains_key("mscorlib") {
             let res = self
                 .get_assembly("mscorlib")
-                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
+                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string().into()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
             }
@@ -186,7 +189,7 @@ impl AssemblyLoader {
         if self.external.read().contains_key("System.Private.CoreLib") {
             let res = self
                 .get_assembly("System.Private.CoreLib")
-                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
+                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string().into()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
             }
@@ -195,7 +198,7 @@ impl AssemblyLoader {
         if self.external.read().contains_key(SUPPORT_ASSEMBLY) {
             let res = self
                 .get_assembly(SUPPORT_ASSEMBLY)
-                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
+                .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string().into()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
             }
@@ -203,10 +206,9 @@ impl AssemblyLoader {
 
         // Fallback to old behavior
         if tried_mscorlib {
-            Err(TypeResolutionError::TypeNotFound(format!(
-                "could not find type {} in corlib",
-                name
-            )))
+            Err(TypeResolutionError::TypeNotFound(
+                format!("could not find type {} in corlib", name).into(),
+            ))
         } else {
             self.find_in_assembly(&ExternalAssemblyReference::new("mscorlib"), name)
         }
@@ -221,7 +223,10 @@ impl AssemblyLoader {
             self.parse_and_find_type_definition_index(&resolution, full_name, false);
 
         if let Some(index) = type_def_index {
-            let type_index = resolution.definition().type_definition_index(index).unwrap();
+            let type_index = resolution
+                .definition()
+                .type_definition_index(index)
+                .unwrap();
             return Some(TypeDescription::new(resolution, type_index));
         }
 
@@ -234,7 +239,10 @@ impl AssemblyLoader {
         let (_, _, nested_type_index) =
             self.parse_and_find_type_definition_index(&resolution, full_name, true);
         if let Some(index) = nested_type_index {
-            let type_index = resolution.definition().type_definition_index(index).unwrap();
+            let type_index = resolution
+                .definition()
+                .type_definition_index(index)
+                .unwrap();
             return Some(TypeDescription::new(resolution, type_index));
         }
 
@@ -273,19 +281,28 @@ impl AssemblyLoader {
 
         use ResolutionScope::*;
         match &type_ref.scope {
-            ExternalModule(_) => Err(TypeResolutionError::TypeNotFound(format!(
-                "ExternalModule scope not implemented for type: {}",
-                type_ref.type_name()
-            ))),
-            CurrentModule => Err(TypeResolutionError::TypeNotFound(format!(
-                "CurrentModule scope not implemented for type: {}",
-                type_ref.type_name()
-            ))),
+            ExternalModule(_) => Err(TypeResolutionError::TypeNotFound(
+                format!(
+                    "ExternalModule scope not implemented for type: {}",
+                    type_ref.type_name()
+                )
+                .into(),
+            )),
+            CurrentModule => Err(TypeResolutionError::TypeNotFound(
+                format!(
+                    "CurrentModule scope not implemented for type: {}",
+                    type_ref.type_name()
+                )
+                .into(),
+            )),
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
-            Exported => Err(TypeResolutionError::TypeNotFound(format!(
-                "Exported (type-forwarder) scope not implemented for type: {}",
-                type_ref.type_name()
-            ))),
+            Exported => Err(TypeResolutionError::TypeNotFound(
+                format!(
+                    "Exported (type-forwarder) scope not implemented for type: {}",
+                    type_ref.type_name()
+                )
+                .into(),
+            )),
             Nested(o) => {
                 let td = self.locate_type_ref(resolution.clone(), *o)?;
                 let res = td.resolution.clone();
@@ -302,23 +319,26 @@ impl AssemblyLoader {
                             .iter()
                             .position(|td| ptr::eq(td, t))
                             .ok_or_else(|| {
-                                TypeResolutionError::TypeNotFound("Internal error".to_string())
+                                TypeResolutionError::TypeNotFound("Internal error".into())
                             })?;
                         let type_index =
                             res.definition()
                                 .type_definition_index(index)
                                 .ok_or_else(|| {
-                                    TypeResolutionError::TypeNotFound("Internal error".to_string())
+                                    TypeResolutionError::TypeNotFound("Internal error".into())
                                 })?;
                         return Ok(TypeDescription::new(res, type_index));
                     }
                 }
 
-                Err(TypeResolutionError::TypeNotFound(format!(
-                    "could not find type {} nested in {}",
-                    type_ref.type_name(),
-                    owner.type_name()
-                )))
+                Err(TypeResolutionError::TypeNotFound(
+                    format!(
+                        "could not find type {} nested in {}",
+                        type_ref.type_name(),
+                        owner.type_name()
+                    )
+                    .into(),
+                ))
             }
         }
     }
@@ -598,7 +618,7 @@ impl AssemblyLoader {
                                 }
                             }
                             return Err(TypeResolutionError::MethodNotFound(
-                                "CtorArraySentinel not found in System.Array".to_string(),
+                                "CtorArraySentinel not found in System.Array".into(),
                             ));
                         }
 
@@ -608,14 +628,16 @@ impl AssemblyLoader {
                         let mut lookup_for_substitution = parent_generics.clone();
                         lookup_for_substitution.method_generics =
                             generic_inst.method_generics.clone();
-                        let ref_sig = resolution
-                            .definition()
-                            .method_ref_signature(r)
-                            .map_err(|e| {
-                                TypeResolutionError::MethodNotFound(format!(
-                                    "failed to decode method ref signature: {e}"
-                                ))
-                            })?;
+                        let ref_sig =
+                            resolution
+                                .definition()
+                                .method_ref_signature(r)
+                                .map_err(|e| {
+                                    TypeResolutionError::MethodNotFound(
+                                        format!("failed to decode method ref signature: {e}")
+                                            .into(),
+                                    )
+                                })?;
                         match self.find_method_in_type_with_substitution(
                             parent_type.clone(),
                             &method_ref.name,
@@ -643,14 +665,17 @@ impl AssemblyLoader {
                                     return Ok(method);
                                 }
 
-                                Err(TypeResolutionError::MethodNotFound(format!(
-                                    "could not find {} in type {}",
-                                    ref_sig.show_with_name(
-                                        resolution.definition(),
-                                        &method_ref.name
-                                    ),
-                                    parent_type.type_name()
-                                )))
+                                Err(TypeResolutionError::MethodNotFound(
+                                    format!(
+                                        "could not find {} in type {}",
+                                        ref_sig.show_with_name(
+                                            resolution.definition(),
+                                            &method_ref.name
+                                        ),
+                                        parent_type.type_name()
+                                    )
+                                    .into(),
+                                ))
                             }
                             Some(mut m) => {
                                 m.parent_generics = parent_generics;
@@ -658,14 +683,20 @@ impl AssemblyLoader {
                             }
                         }
                     }
-                    Module(_) => Err(TypeResolutionError::MethodNotFound(format!(
-                        "Module method references are not implemented: {}",
-                        method_ref.name
-                    ))),
-                    VarargMethod(_) => Err(TypeResolutionError::MethodNotFound(format!(
-                        "Vararg method references are not implemented: {}",
-                        method_ref.name
-                    ))),
+                    Module(_) => Err(TypeResolutionError::MethodNotFound(
+                        format!(
+                            "Module method references are not implemented: {}",
+                            method_ref.name
+                        )
+                        .into(),
+                    )),
+                    VarargMethod(_) => Err(TypeResolutionError::MethodNotFound(
+                        format!(
+                            "Vararg method references are not implemented: {}",
+                            method_ref.name
+                        )
+                        .into(),
+                    )),
                 }
             }
         };
@@ -706,7 +737,9 @@ impl AssemblyLoader {
                     .fields
                     .iter()
                     .position(|f| ptr::eq(f, field))
-                    .ok_or_else(|| TypeResolutionError::FieldNotFound(field.name.to_string()))?;
+                    .ok_or_else(|| {
+                        TypeResolutionError::FieldNotFound(field.name.as_ref().into())
+                    })?;
                 Ok((
                     FieldDescription::new(parent, resolution, index),
                     generic_inst.clone(),
@@ -744,30 +777,31 @@ impl AssemblyLoader {
                             }
                         }
 
-                        Err(TypeResolutionError::FieldNotFound(format!(
-                            "could not find {}::{}",
-                            parent_type.type_name(),
-                            field_ref.name
-                        )))
+                        Err(TypeResolutionError::FieldNotFound(
+                            format!(
+                                "could not find {}::{}",
+                                parent_type.type_name(),
+                                field_ref.name
+                            )
+                            .into(),
+                        ))
                     }
-                    _ => Err(TypeResolutionError::FieldNotFound(format!(
-                        "Field references with non-type parents are not implemented: {}",
-                        field_ref.name
-                    ))),
+                    _ => Err(TypeResolutionError::FieldNotFound(
+                        format!(
+                            "Field references with non-type parents are not implemented: {}",
+                            field_ref.name
+                        )
+                        .into(),
+                    )),
                 }
             }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("could not resolve attribute")]
 pub struct AttrResolveError;
-impl Error for AttrResolveError {}
-impl fmt::Display for AttrResolveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "could not resolve attribute")
-    }
-}
 
 impl<'a> Resolver<'a> for &'a AssemblyLoader {
     type Error = AttrResolveError;
@@ -790,27 +824,16 @@ pub(crate) fn load_resolution_core(
     options: ReadOptions,
 ) -> Result<ResolutionS, AssemblyLoadError> {
     let path_ref = path.as_ref();
-    let mut file = fs::File::open(path_ref).map_err(|e| {
-        AssemblyLoadError::Io(format!(
-            "could not open file {} ({:?})",
-            path_ref.display(),
-            e
-        ))
-    })?;
+    let mut file = fs::File::open(path_ref)?;
 
     // Read directly into an 8-byte-aligned Vec<u64>, skipping the intermediate Vec<u8>
     // that a read_to_end + copy approach would require (saves ~12 MB for corlib).
-    let len = file
-        .metadata()
-        .map_err(|e| AssemblyLoadError::Io(format!("failed to read file metadata: {}", e)))?
-        .len() as usize;
+    let len = file.metadata()?.len() as usize;
     let cap = len.div_ceil(8);
     let mut aligned: Vec<u64> = vec![0u64; cap];
     // SAFETY: aligned has `cap * 8 >= len` bytes; the u8 slice is valid for that range.
-    let byte_buf =
-        unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, len) };
-    file.read_exact(byte_buf)
-        .map_err(|e| AssemblyLoadError::Io(format!("failed to read file: {}", e)))?;
+    let byte_buf = unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, len) };
+    file.read_exact(byte_buf)?;
 
     let aligned_boxed = aligned.into_boxed_slice();
     let aligned_ptr = Box::into_raw(aligned_boxed);
@@ -832,7 +855,7 @@ pub(crate) fn load_resolution_core(
     // via `Resolution::method_body` (see `MethodDescription::body`) avoids decoding bodies that
     // are never run.
     let res = Resolution::parse(byte_slice, options).map_err(|e| {
-        AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e))
+        AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e).into())
     })?;
 
     #[cfg(feature = "metadata-validation")]

@@ -61,7 +61,9 @@ impl Drop for ArenaRegistrationGuard {
     }
 }
 
-pub(crate) fn with_test_gc_context<R>(f: impl for<'gc> FnOnce(dotnet_utils::gc::GCHandle<'gc>) -> R) -> R {
+pub(crate) fn with_test_gc_context<R>(
+    f: impl for<'gc> FnOnce(dotnet_utils::gc::GCHandle<'gc>) -> R,
+) -> R {
     type TestRoot = Rootable![()];
     let arena = Arena::<TestRoot>::new(|_mc| ());
 

@@ -9,6 +9,24 @@ Before running local builds or tests, install:
 - **Rust (stable toolchain)**
 - **.NET SDK** (required for fixture compilation and build-script paths that invoke dotnet/MSBuild)
 
+## Panic-vs-Result policy
+
+When adding or changing runtime behavior, classify failure paths into two categories:
+
+1. **VM invariant violation (bug / impossible state):** use `panic!`, `unreachable!`, `debug_assert!`, or `expect()` with a specific message.
+   - These are conditions that should never be reachable if VM internals are correct.
+   - Do **not** route these through `VmError`.
+2. **Runtime/metadata failure (input/environment driven):** return `VmError` via `Result` / `StepResult::Error`.
+   - This includes metadata resolution failures, invalid CIL, null/memory access errors, P/Invoke load/symbol failures, and other recoverable host-side execution failures.
+
+### Host errors vs. managed exceptions
+
+`VmError` and related enums are **host-side Rust errors**.
+
+Managed `.NET` exceptions (`ManagedException`, `ExceptionState`, SEH search/unwind flow) are a separate mechanism described in [`docs/EXCEPTION_HANDLING.md`](docs/EXCEPTION_HANDLING.md).
+
+Keep this distinction intact: host errors are not managed exceptions. The `.cctor` wrapping path (host error -> managed `System.TypeInitializationException`) is a bridge between layers, not a reason to merge the two models.
+
 ## Run the project checks
 
 For the standard local validation pass used by contributors, run:

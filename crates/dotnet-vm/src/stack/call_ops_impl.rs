@@ -47,11 +47,14 @@ vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current 
 #[inline(never)]
 fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
-        crate::error::ExecutionError::NotImplemented(format!(
-            "no body in executing method: {}.{}",
-            method.parent.type_name(),
-            method.method().name
-        ))
+        crate::error::ExecutionError::NotImplemented(
+            format!(
+                "no body in executing method: {}.{}",
+                method.parent.type_name(),
+                method.method().name
+            )
+            .into(),
+        )
         .into(),
     )
 }
@@ -657,7 +660,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             if frame.stack_height != crate::StackSlotIndex(0) {
                 return StepResult::Error(crate::error::VmError::Execution(
                     crate::error::ExecutionError::Aborted(
-                        "jmp requires empty evaluation stack".to_string(),
+                        "jmp requires empty evaluation stack".into(),
                     ),
                 ));
             }
@@ -669,7 +672,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 if sec.instructions.contains(&ip) {
                     return StepResult::Error(crate::error::VmError::Execution(
                         crate::error::ExecutionError::Aborted(
-                            "jmp out of try/catch/finally block".to_string(),
+                            "jmp out of try/catch/finally block".into(),
                         ),
                     ));
                 }
@@ -677,7 +680,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                     if handler.instructions.contains(&ip) {
                         return StepResult::Error(crate::error::VmError::Execution(
                             crate::error::ExecutionError::Aborted(
-                                "jmp out of exception handler".to_string(),
+                                "jmp out of exception handler".into(),
                             ),
                         ));
                     }
@@ -701,7 +704,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 Some(&lookup), // Target generics
             ) {
                 return StepResult::Error(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::Aborted("jmp signature mismatch".to_string()),
+                    crate::error::ExecutionError::Aborted("jmp signature mismatch".into()),
                 ));
             }
 

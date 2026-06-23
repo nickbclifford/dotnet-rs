@@ -47,7 +47,7 @@ pub fn generate_instruction_table(out_dir: &OsStr, entries: &[InstructionEntry])
         jump_table_entries.push((opcode, wrapper_name, arm.to_string()));
     }
 
-    table_code.push_str("        _ => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr))))\n");
+    table_code.push_str("        _ => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr).into())))\n");
     table_code.push_str("    }\n");
     table_code.push_str("}\n");
 
@@ -61,7 +61,7 @@ pub fn generate_instruction_table(out_dir: &OsStr, entries: &[InstructionEntry])
     table_code.push_str("    _ctx: &mut T,\n");
     table_code.push_str("    instr: &Instruction,\n");
     table_code.push_str(") -> crate::StepResult {\n");
-    table_code.push_str("    crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr))))\n");
+    table_code.push_str("    crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr).into())))\n");
     table_code.push_str("}\n\n");
 
     for (_, wrapper_name, arm) in &jump_table_entries {
@@ -211,7 +211,7 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
     dispatch_code.push_str("    is_address: bool,\n");
     dispatch_code.push_str(") -> crate::StepResult {\n");
     dispatch_code.push_str("    match id {\n");
-    dispatch_code.push_str("        FieldIntrinsicId::Missing => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"Missing field intrinsic: {:?}\", field)))),\n");
+    dispatch_code.push_str("        FieldIntrinsicId::Missing => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"Missing field intrinsic: {:?}\", field).into()))),\n");
     let mut field_variants: Vec<_> = sorted_entries
         .iter()
         .filter(|entry| entry.is_field)

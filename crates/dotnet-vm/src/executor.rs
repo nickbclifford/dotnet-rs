@@ -325,10 +325,8 @@ impl Executor {
                     #[cfg(not(feature = "fuzzing"))]
                     _ => {
                         return Err(VmError::Execution(ExecutionError::TypeMismatch {
-                            expected:
-                                "zero parameters or a single string[] parameter at entrypoint"
-                                    .to_string(),
-                            actual: format!("{} parameters", info.signature.parameters.len()),
+                            expected: "zero parameters or a single string[] parameter at entrypoint",
+                            actual: format!("{} parameters", info.signature.parameters.len()).into(),
                         }));
                     }
                     #[cfg(feature = "fuzzing")]
@@ -354,7 +352,7 @@ impl Executor {
         let result = loop {
             if self.shared.abort_requested.load(Ordering::Relaxed) {
                 break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(
-                    "Requested by user/timeout".to_string(),
+                    "Requested by user/timeout".into(),
                 )));
             }
 
@@ -479,8 +477,8 @@ impl Executor {
                                     Some(StackValue::Int32(i)) => Ok(*i as u8),
                                     Some(v) => {
                                         Err(VmError::Execution(ExecutionError::TypeMismatch {
-                                            expected: "Int32".to_string(),
-                                            actual: format!("{:?}", v),
+                                            expected: "Int32",
+                                            actual: format!("{:?}", v).into(),
                                         }))
                                     }
                                     None => Ok(0),

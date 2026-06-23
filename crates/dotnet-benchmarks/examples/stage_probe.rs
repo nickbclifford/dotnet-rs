@@ -105,7 +105,11 @@ fn run(label: &str, bytes: &[u8], opts: ReadOptions, iters: u32) {
         grand += ns / count.max(&1);
         println!("  {stage:<24} {avg_ms:>8.3} ms/iter");
     }
-    println!("  {:<24} {:>8.3} ms/iter (sum of stages)", "TOTAL", grand as f64 / 1e6);
+    println!(
+        "  {:<24} {:>8.3} ms/iter (sum of stages)",
+        "TOTAL",
+        grand as f64 / 1e6
+    );
 }
 
 fn main() {

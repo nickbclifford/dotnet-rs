@@ -233,8 +233,10 @@ fn resolve_indirect_origin_and_offset<'gc, T: ExceptionOps<'gc>>(
         StackValue::UnmanagedPtr(u) => {
             Ok((PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)))
         }
-        _ => Err(ctx
-            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG)),
+        _ => {
+            Err(ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG))
+        }
     }
 }
 

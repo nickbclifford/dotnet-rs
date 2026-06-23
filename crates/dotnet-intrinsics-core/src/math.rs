@@ -12,16 +12,8 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::prelude::{BaseType, MethodType, TypeSource, UserType};
+use dotnetdll::prelude::BaseType;
 use std::sync::Arc;
-
-fn concrete_to_method_type(concrete: &ConcreteType) -> MethodType {
-    let mapped = concrete
-        .get()
-        .clone()
-        .map(|inner| concrete_to_method_type(&inner));
-    MethodType::Base(Box::new(mapped))
-}
 
 fn instantiate_comparer<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
@@ -29,29 +21,15 @@ fn instantiate_comparer<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>
     comparer_type_name: &str,
 ) -> Result<ObjectRef<'gc>, VmError> {
     let comparer_td = ctx.loader().corlib_type(comparer_type_name)?;
-
-    let comparer_method_type = MethodType::Base(Box::new(BaseType::Type {
-        source: TypeSource::Generic {
-            base: UserType::Definition(comparer_td.index),
-            parameters: vec![concrete_to_method_type(&target_type)],
-        },
-        value_kind: None,
-    }));
-
     let comparer_lookup = GenericLookup::new(vec![target_type]);
-    // Resolve the generic comparer in the comparer type's owning resolution,
-    // not the caller frame's source resolution.
-    let comparer_concrete = comparer_lookup.make_concrete(
-        comparer_td.resolution.clone(),
-        comparer_method_type,
-        ctx.loader().as_ref(),
-    )?;
-    let comparer_closed_td = ctx.loader().find_concrete_type(comparer_concrete)?;
 
+    // Keep the comparer as a generic type-definition + lookup pair.
+    // Rebuilding it via MethodType erases each ConcreteType's source resolution,
+    // which can make generic-constraint validation index the wrong resolution.
     Ok(ObjectRef::new(
         ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Obj(Box::new(
-            ctx.new_object_with_lookup(comparer_closed_td, &comparer_lookup)?,
+            ctx.new_object_with_lookup(comparer_td, &comparer_lookup)?,
         )),
     ))
 }
@@ -139,10 +117,8 @@ pub fn intrinsic_numeric_create_truncating<'gc, T: TypedStackOps<'gc>>(
                 "IntPtr" | "System.IntPtr" => ctx.push_isize($val as isize),
                 _ => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected:
-                            "Byte/SByte/UInt16/Int16/UInt32/Int32/UInt64/Int64/UIntPtr/IntPtr"
-                                .to_string(),
-                        actual: target_type.clone(),
+                        expected: "Byte/SByte/UInt16/Int16/UInt32/Int32/UInt64/Int64/UIntPtr/IntPtr",
+                        actual: target_type.clone().into(),
                     }));
                 }
             }
@@ -155,8 +131,8 @@ pub fn intrinsic_numeric_create_truncating<'gc, T: TypedStackOps<'gc>>(
         StackValue::NativeInt(v) => convert!(v),
         actual => {
             return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "Int32 or Int64 or NativeInt".to_string(),
-                actual: format!("{actual:?}"),
+                expected: "Int32 or Int64 or NativeInt",
+                actual: format!("{actual:?}").into(),
             }));
         }
     }

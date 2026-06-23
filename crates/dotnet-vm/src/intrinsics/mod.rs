@@ -163,7 +163,7 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 #[inline(never)]
 fn unsupported_intrinsic_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
-        ExecutionError::NotImplemented(format!("unsupported intrinsic {:?}", method)).into(),
+        ExecutionError::NotImplemented(format!("unsupported intrinsic {:?}", method).into()).into(),
     )
 }
 
@@ -171,10 +171,9 @@ fn unsupported_intrinsic_step_result(method: &MethodDescription) -> StepResult {
 #[inline(never)]
 fn unsupported_intrinsic_field_step_result(field: &FieldDescription) -> StepResult {
     StepResult::Error(
-        ExecutionError::NotImplemented(format!(
-            "unsupported load from intrinsic field: {:?}",
-            field
-        ))
+        ExecutionError::NotImplemented(
+            format!("unsupported load from intrinsic field: {:?}", field).into(),
+        )
         .into(),
     )
 }
@@ -198,10 +197,9 @@ pub fn missing_intrinsic_handler<'gc, T: VesOps<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     StepResult::Error(
-        ExecutionError::NotImplemented(format!(
-            "Missing intrinsic implementation for method: {:?}",
-            method
-        ))
+        ExecutionError::NotImplemented(
+            format!("Missing intrinsic implementation for method: {:?}", method).into(),
+        )
         .into(),
     )
 }

@@ -27,11 +27,15 @@ fn extract_first_index_from_indices_array<'gc, T: ExceptionOps<'gc>>(
 
     // For now only support 1D access via the first index in the array.
     if indices.get().len() < 4 {
-        return Err(ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG));
+        return Err(
+            ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG)
+        );
     }
 
     let Ok(bytes): Result<[u8; 4], _> = indices.get()[0..4].try_into() else {
-        return Err(ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG));
+        return Err(
+            ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG)
+        );
     };
 
     Ok(i32::from_ne_bytes(bytes) as usize)

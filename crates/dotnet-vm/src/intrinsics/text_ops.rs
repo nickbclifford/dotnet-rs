@@ -53,8 +53,9 @@ pub fn intrinsic_unicode_utility_is_in_range_inclusive<
         }
         (actual_value, actual_low, actual_high) => {
             return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "all Int32, all Int64, or all NativeInt".to_string(),
-                actual: format!("value={actual_value:?}, low={actual_low:?}, high={actual_high:?}"),
+                expected: "all Int32, all Int64, or all NativeInt",
+                actual: format!("value={actual_value:?}, low={actual_low:?}, high={actual_high:?}")
+                    .into(),
             }));
         }
     };

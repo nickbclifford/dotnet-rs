@@ -49,7 +49,10 @@ fn run_case(c: &mut Criterion, case: BenchmarkCase) {
         let opts = eager_opts();
         b.iter(|| {
             let code = cold_run(&assemblies, &dll, opts);
-            assert_eq!(code, case.expected_exit_code, "unexpected exit code (eager)");
+            assert_eq!(
+                code, case.expected_exit_code,
+                "unexpected exit code (eager)"
+            );
         });
     });
 

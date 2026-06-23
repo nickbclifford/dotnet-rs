@@ -32,9 +32,7 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic(
     "System.Reflection.MethodInfo System.Reflection.MethodInfo::MakeGenericMethod(System.Type[])"
 )]
-#[dotnet_intrinsic(
-    "System.Delegate System.Reflection.MethodInfo::CreateDelegate(System.Type)"
-)]
+#[dotnet_intrinsic("System.Delegate System.Reflection.MethodInfo::CreateDelegate(System.Type)")]
 #[dotnet_intrinsic(
     "System.Delegate System.Reflection.MethodInfo::CreateDelegate(System.Type, object)"
 )]
@@ -63,9 +61,7 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.MethodInfo::get_MethodHandle()")]
 #[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.MethodInfo::GetMethodHandle()")]
 #[dotnet_intrinsic("System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type)")]
-#[dotnet_intrinsic(
-    "System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type, object)"
-)]
+#[dotnet_intrinsic("System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type, object)")]
 #[dotnet_intrinsic("string DotnetRs.MethodInfo::ToString()")]
 #[dotnet_intrinsic(
     "object DotnetRs.MethodInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
@@ -331,7 +327,12 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("CreateDelegate", 1) => {
             let delegate_type_obj = ctx.pop_obj();
             let method_obj = ctx.pop_obj();
-            return create_method_info_delegate(ctx, method_obj, delegate_type_obj, ObjectRef(None));
+            return create_method_info_delegate(
+                ctx,
+                method_obj,
+                delegate_type_obj,
+                ObjectRef(None),
+            );
         }
         ("CreateDelegate", 2) => {
             let target_obj = ctx.pop_obj();
@@ -348,7 +349,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 ctx, method, None
             ));
             let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
-            return crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type));
+            return crate::types::populate_reflection_array(
+                ctx,
+                attrs,
+                ConcreteType::from(object_type),
+            );
         }
         ("GetCustomAttributes", 2) => {
             let _inherit = ctx.pop_i32();
@@ -375,7 +380,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 attribute_filter
             ));
             let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
-            return crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type));
+            return crate::types::populate_reflection_array(
+                ctx,
+                attrs,
+                ConcreteType::from(object_type),
+            );
         }
         _ => None,
     };
@@ -390,7 +399,8 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
     delegate_type_obj: ObjectRef<'gc>,
     target_obj: ObjectRef<'gc>,
 ) -> StepResult {
-    let (method, lookup) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+    let (method, lookup) =
+        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
 
     let delegate_runtime_type =
         dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, delegate_type_obj));
@@ -414,7 +424,8 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
         );
     }
 
-    let delegate_lookup = crate::types::build_generic_lookup_from_runtime_type(ctx, &delegate_runtime_type);
+    let delegate_lookup =
+        crate::types::build_generic_lookup_from_runtime_type(ctx, &delegate_runtime_type);
     let delegate_instance =
         dotnet_vm_ops::vm_try!(ctx.new_object_with_lookup(delegate_td.clone(), &delegate_lookup));
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
@@ -436,7 +447,8 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
             .write(method_index);
     });
 
-    let multicast_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
+    let multicast_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
     if dotnet_vm_ops::vm_try!(ctx.is_a(
         ConcreteType::from(delegate_td),
         ConcreteType::from(multicast_type.clone()),
@@ -501,15 +513,15 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     arg: ObjectRef<'gc>,
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
-    param_index: usize,
+    _param_index: usize,
 ) -> Result<StackValue<'gc>, StepResult> {
     match param_type {
         ParameterType::TypedReference => {
             if arg.0.is_none() {
                 return Err(StepResult::Error(VmError::Execution(
                     ExecutionError::TypeMismatch {
-                        expected: "boxed System.TypedReference".to_string(),
-                        actual: "null".to_string(),
+                        expected: "boxed System.TypedReference",
+                        actual: "null".into(),
                     },
                 )));
             }
@@ -530,11 +542,8 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 Err(actual) => {
                     return Err(StepResult::Error(VmError::Execution(
                         ExecutionError::TypeMismatch {
-                            expected: format!(
-                                "boxed System.TypedReference for parameter {}",
-                                param_index
-                            ),
-                            actual,
+                            expected: "boxed System.TypedReference",
+                            actual: actual.into(),
                         },
                     )));
                 }
@@ -576,8 +585,8 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                         Err(actual) => {
                             return Err(StepResult::Error(VmError::Execution(
                                 ExecutionError::TypeMismatch {
-                                    expected: format!("boxed value for parameter {}", param_index),
-                                    actual,
+                                    expected: "boxed value",
+                                    actual: actual.into(),
                                 },
                             )));
                         }
@@ -613,8 +622,8 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
             Err(actual) => {
                 return Err(StepResult::Error(VmError::Execution(
                     ExecutionError::TypeMismatch {
-                        expected: "object[]".to_string(),
-                        actual,
+                        expected: "object[]",
+                        actual: actual.into(),
                     },
                 )));
             }

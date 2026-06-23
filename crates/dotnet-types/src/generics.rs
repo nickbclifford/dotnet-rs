@@ -230,9 +230,7 @@ impl ResolvedDebug for ConcreteType {
     }
 }
 
-pub fn member_to_method_type(
-    src: &TypeSource<dotnetdll::prelude::MemberType>,
-) -> MethodType {
+pub fn member_to_method_type(src: &TypeSource<dotnetdll::prelude::MemberType>) -> MethodType {
     match src {
         TypeSource::User(h) => MethodType::Base(Box::new(BaseType::Type {
             source: TypeSource::User(*h),
@@ -512,29 +510,38 @@ impl GenericLookup {
         for (arg, param) in args.iter().zip(generic_parameters.iter()) {
             // Special constraints
             if param.special_constraint.reference_type && !arg.is_class(loader) {
-                return Err(TypeResolutionError::GenericConstraintViolation(format!(
-                    "Type {} must be a reference type to satisfy constraint on {}",
-                    arg.show(arg.resolution().definition()),
-                    param.name
-                )));
+                return Err(TypeResolutionError::GenericConstraintViolation(
+                    format!(
+                        "Type {} must be a reference type to satisfy constraint on {}",
+                        arg.show(arg.resolution().definition()),
+                        param.name
+                    )
+                    .into(),
+                ));
             }
             if param.special_constraint.value_type
                 && (!arg.is_value_type(loader) || arg.is_nullable(loader))
             {
-                return Err(TypeResolutionError::GenericConstraintViolation(format!(
-                    "Type {} must be a non-nullable value type to satisfy constraint on {}",
-                    arg.show(arg.resolution().definition()),
-                    param.name
-                )));
+                return Err(TypeResolutionError::GenericConstraintViolation(
+                    format!(
+                        "Type {} must be a non-nullable value type to satisfy constraint on {}",
+                        arg.show(arg.resolution().definition()),
+                        param.name
+                    )
+                    .into(),
+                ));
             }
             if param.special_constraint.has_default_constructor
                 && !arg.has_default_constructor(loader)
             {
-                return Err(TypeResolutionError::GenericConstraintViolation(format!(
-                    "Type {} must have a public default constructor to satisfy constraint on {}",
-                    arg.show(arg.resolution().definition()),
-                    param.name
-                )));
+                return Err(TypeResolutionError::GenericConstraintViolation(
+                    format!(
+                        "Type {} must have a public default constructor to satisfy constraint on {}",
+                        arg.show(arg.resolution().definition()),
+                        param.name
+                    )
+                    .into(),
+                ));
             }
 
             // Type constraints
@@ -542,12 +549,15 @@ impl GenericLookup {
                 let constraint_type =
                     self.make_concrete(res.clone(), constraint.constraint_type.clone(), loader)?;
                 if !comparer.is_assignable_to(arg, &constraint_type) {
-                    return Err(TypeResolutionError::GenericConstraintViolation(format!(
-                        "Type {} must be assignable to {} to satisfy constraint on {}",
-                        arg.show(arg.resolution().definition()),
-                        constraint_type.show(constraint_type.resolution().definition()),
-                        param.name
-                    )));
+                    return Err(TypeResolutionError::GenericConstraintViolation(
+                        format!(
+                            "Type {} must be assignable to {} to satisfy constraint on {}",
+                            arg.show(arg.resolution().definition()),
+                            constraint_type.show(constraint_type.resolution().definition()),
+                            param.name
+                        )
+                        .into(),
+                    ));
                 }
             }
         }
@@ -691,7 +701,7 @@ mod constraint_cycle_tests {
     impl TypeResolver for CountingMockResolver {
         fn corlib_type(&self, _name: &str) -> Result<TypeDescription, TypeResolutionError> {
             Err(TypeResolutionError::TypeNotFound(
-                "corlib_type not supported in CountingMockResolver".to_string(),
+                "corlib_type not supported in CountingMockResolver".into(),
             ))
         }
 
@@ -703,11 +713,14 @@ mod constraint_cycle_tests {
             let mut count = self.call_count.lock().unwrap();
             *count += 1;
             if *count > self.max_calls {
-                return Err(TypeResolutionError::TypeNotFound(format!(
-                    "locate_type call limit {} exceeded — \
+                return Err(TypeResolutionError::TypeNotFound(
+                    format!(
+                        "locate_type call limit {} exceeded — \
                      unbounded recursion detected in constraint validation",
-                    self.max_calls
-                )));
+                        self.max_calls
+                    )
+                    .into(),
+                ));
             }
             drop(count);
             Ok(TypeDescription::new(res, self.type_index))
@@ -718,7 +731,7 @@ mod constraint_cycle_tests {
             _ty: ConcreteType,
         ) -> Result<TypeDescription, TypeResolutionError> {
             Err(TypeResolutionError::TypeNotFound(
-                "find_concrete_type not supported in CountingMockResolver".to_string(),
+                "find_concrete_type not supported in CountingMockResolver".into(),
             ))
         }
     }

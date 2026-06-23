@@ -38,7 +38,12 @@ pub fn intrinsic_app_context_try_get_switch<
 
     let layout = LayoutManager::Scalar(Scalar::UInt8);
     dotnet_vm_ops::vm_try!(unsafe {
-        ctx.write_unaligned(origin, offset, StackValue::Int32(i32::from(is_enabled)), &layout)
+        ctx.write_unaligned(
+            origin,
+            offset,
+            StackValue::Int32(i32::from(is_enabled)),
+            &layout,
+        )
     });
 
     ctx.push_i32(i32::from(switch_value.is_some()));

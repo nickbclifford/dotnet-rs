@@ -35,7 +35,8 @@ struct AlignedAssembly {
 
 impl AlignedAssembly {
     fn read(name: &str, path: &PathBuf) -> Self {
-        let buf = fs::read(path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let buf =
+            fs::read(path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
         let len = buf.len();
         let cap = len.div_ceil(8);
         let mut backing = vec![0u64; cap];

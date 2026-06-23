@@ -19,10 +19,13 @@ pub fn check_read_safety(
 
         if let Some(sl) = src_layout {
             if !has_ref_at(sl, target_src) {
-                err = Err(MemoryAccessError::TypeMismatch(format!(
-                    "Heap Corruption: Reading ObjectRef from non-ref memory at offset {}",
-                    target_src
-                )));
+                err = Err(MemoryAccessError::TypeMismatch(
+                    format!(
+                        "Heap Corruption: Reading ObjectRef from non-ref memory at offset {}",
+                        target_src
+                    )
+                    .into(),
+                ));
             } else if !target_src.is_multiple_of(8) {
                 err = Err(MemoryAccessError::UnalignedAccess(target_src));
             }
@@ -102,25 +105,34 @@ pub(crate) fn validate_ref_integrity(
 
                 if ref_start < range_end && ref_end > range_start {
                     if ref_start < range_start {
-                        return Err(MemoryAccessError::TypeMismatch(format!(
-                            "Heap Corruption: Write starts in the middle of an ObjectRef at {}",
-                            ref_start
-                        )));
+                        return Err(MemoryAccessError::TypeMismatch(
+                            format!(
+                                "Heap Corruption: Write starts in the middle of an ObjectRef at {}",
+                                ref_start
+                            )
+                            .into(),
+                        ));
                     }
 
                     if ref_end > range_end {
-                        return Err(MemoryAccessError::TypeMismatch(format!(
-                            "Heap Corruption: Write ends in the middle of an ObjectRef at {}",
-                            ref_start
-                        )));
+                        return Err(MemoryAccessError::TypeMismatch(
+                            format!(
+                                "Heap Corruption: Write ends in the middle of an ObjectRef at {}",
+                                ref_start
+                            )
+                            .into(),
+                        ));
                     }
 
                     let src_offset = ref_start - range_start;
                     if !has_ref_at(src_layout, src_offset) {
-                        return Err(MemoryAccessError::TypeMismatch(format!(
-                            "Heap Corruption: Writing non-ref data over ObjectRef at offset {}",
-                            ref_start
-                        )));
+                        return Err(MemoryAccessError::TypeMismatch(
+                            format!(
+                                "Heap Corruption: Writing non-ref data over ObjectRef at offset {}",
+                                ref_start
+                            )
+                            .into(),
+                        ));
                     }
 
                     if !ref_start.is_multiple_of(8) {
@@ -171,39 +183,35 @@ pub(crate) fn validate_ref_integrity(
 pub(crate) fn extract_int(val: StackValue) -> Result<i32, MemoryAccessError> {
     match val {
         StackValue::Int32(v) => Ok(v),
-        _ => Err(MemoryAccessError::TypeMismatch(format!(
-            "Expected Int32, got {:?}",
-            val
-        ))),
+        _ => Err(MemoryAccessError::TypeMismatch(
+            format!("Expected Int32, got {:?}", val).into(),
+        )),
     }
 }
 
 pub(crate) fn extract_long(val: StackValue) -> Result<i64, MemoryAccessError> {
     match val {
         StackValue::Int64(v) => Ok(v),
-        _ => Err(MemoryAccessError::TypeMismatch(format!(
-            "Expected Int64, got {:?}",
-            val
-        ))),
+        _ => Err(MemoryAccessError::TypeMismatch(
+            format!("Expected Int64, got {:?}", val).into(),
+        )),
     }
 }
 
 pub(crate) fn extract_native_int(val: StackValue) -> Result<isize, MemoryAccessError> {
     match val {
         StackValue::NativeInt(v) => Ok(v),
-        _ => Err(MemoryAccessError::TypeMismatch(format!(
-            "Expected NativeInt, got {:?}",
-            val
-        ))),
+        _ => Err(MemoryAccessError::TypeMismatch(
+            format!("Expected NativeInt, got {:?}", val).into(),
+        )),
     }
 }
 
 pub(crate) fn extract_float(val: StackValue) -> Result<f64, MemoryAccessError> {
     match val {
         StackValue::NativeFloat(v) => Ok(v),
-        _ => Err(MemoryAccessError::TypeMismatch(format!(
-            "Expected NativeFloat, got {:?}",
-            val
-        ))),
+        _ => Err(MemoryAccessError::TypeMismatch(
+            format!("Expected NativeFloat, got {:?}", val).into(),
+        )),
     }
 }

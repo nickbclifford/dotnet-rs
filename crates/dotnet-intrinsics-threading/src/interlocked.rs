@@ -384,8 +384,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::NativeInt(i) => i as usize,
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "ObjectRef or NativeInt".to_string(),
-                        actual: format!("{actual:?}"),
+                        expected: "ObjectRef or NativeInt",
+                        actual: format!("{actual:?}").into(),
                     }));
                 }
             };
@@ -488,8 +488,8 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
         InterlockedAtomicTypeDispatch::PointerSized | InterlockedAtomicTypeDispatch::ObjectRef => {
             return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "Int32 or Int64".to_string(),
-                actual: format!("{:?}", target_type.get()),
+                expected: "Int32 or Int64",
+                actual: format!("{:?}", target_type.get()).into(),
             }));
         }
     }

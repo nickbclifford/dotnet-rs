@@ -107,26 +107,30 @@ pub enum StepResult {
     Exception,
     /// Cooperative GC/thread yield point.
     Yield,
-    /// Internal VM error surfaced to the dispatch loop.
+    /// Host-side VM error surfaced to the dispatch loop.
+    ///
+    /// This is for Rust-side runtime, metadata, or environment failures. It is
+    /// distinct from managed .NET exceptions represented by `MethodThrew` or
+    /// `Exception`.
     Error(VmError),
 }
 
 impl StepResult {
-    pub fn internal_error(msg: impl Into<String>) -> Self {
+    pub fn internal_error(msg: impl Into<Box<str>>) -> Self {
         Self::Error(VmError::Execution(ExecutionError::InternalError(
             msg.into(),
         )))
     }
 
-    pub fn not_implemented(msg: impl Into<String>) -> Self {
+    pub fn not_implemented(msg: impl Into<Box<str>>) -> Self {
         Self::Error(VmError::Execution(ExecutionError::NotImplemented(
             msg.into(),
         )))
     }
 
-    pub fn type_error(expected: impl Into<String>, actual: impl Into<String>) -> Self {
+    pub fn type_error(expected: &'static str, actual: impl Into<Box<str>>) -> Self {
         Self::Error(VmError::Execution(ExecutionError::TypeMismatch {
-            expected: expected.into(),
+            expected,
             actual: actual.into(),
         }))
     }

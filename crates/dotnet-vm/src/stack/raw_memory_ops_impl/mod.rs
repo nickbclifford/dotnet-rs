@@ -63,9 +63,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             )
         {
             if !matches!(value, StackValue::ObjectRef(_)) {
-                return Err(MemoryAccessError::TypeMismatch(
-                    "Expected ObjectRef".to_string(),
-                ));
+                return Err(MemoryAccessError::TypeMismatch("Expected ObjectRef".into()));
             }
             self.evaluation_stack.set_slot(idx, value);
             return Ok(());
@@ -243,7 +241,12 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let ptr = self.resolve_address(origin, offset);
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.write_bytes(self.gc, None, ByteOffset(ptr.as_ptr().expose_provenance()), data)
+                    memory.write_bytes(
+                        self.gc,
+                        None,
+                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        data,
+                    )
                 }
             }
             PointerOrigin::Static(metadata) => {
@@ -314,7 +317,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_provenance()), dest) }
+                unsafe {
+                    memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_provenance()), dest)
+                }
             }
             PointerOrigin::Static(metadata) => {
                 let storage = self
@@ -696,14 +701,24 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(None, ByteOffset(abs_ptr.expose_provenance()), size, ordering)
+                    memory.load_atomic(
+                        None,
+                        ByteOffset(abs_ptr.expose_provenance()),
+                        size,
+                        ordering,
+                    )
                 }
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(None, ByteOffset(ptr.as_ptr().expose_provenance()), size, ordering)
+                    memory.load_atomic(
+                        None,
+                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        size,
+                        ordering,
+                    )
                 }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
@@ -711,7 +726,12 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(None, ByteOffset(abs_ptr.expose_provenance()), size, ordering)
+                    memory.load_atomic(
+                        None,
+                        ByteOffset(abs_ptr.expose_provenance()),
+                        size,
+                        ordering,
+                    )
                 }
             }),
             PointerOrigin::Unmanaged => {
@@ -880,10 +900,10 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let ptr = unsafe { inner.storage.raw_data_ptr() };
                 unsafe { NonNull::new_unchecked(ptr.add(offset.as_usize())) }
             }
-            PointerOrigin::Unmanaged => {
-                NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize()))
-                    .expect("resolve_address: null unmanaged pointer (offset=0)")
-            }
+            PointerOrigin::Unmanaged => NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(
+                offset.as_usize(),
+            ))
+            .expect("resolve_address: null unmanaged pointer (offset=0)"),
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
                 let lock = unsafe { &*ptr.as_ptr() };

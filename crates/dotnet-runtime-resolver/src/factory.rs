@@ -116,12 +116,15 @@ where
                     scalar => {
                         let scalar_size = scalar.size_bytes();
                         if scalar_size != dest_len {
-                            return Err(TypeResolutionError::InvalidLayout(format!(
-                                "box_value size mismatch for {}: source={}, destination={}",
-                                obj_instance.description.type_name(),
-                                scalar_size,
-                                dest_len
-                            )));
+                            return Err(TypeResolutionError::InvalidLayout(
+                                format!(
+                                    "box_value size mismatch for {}: source={}, destination={}",
+                                    obj_instance.description.type_name(),
+                                    scalar_size,
+                                    dest_len
+                                )
+                                .into(),
+                            ));
                         }
                         obj_instance.instance_storage.with_data_mut(|dest| {
                             CTSValue::Value(scalar).write(dest);
@@ -250,10 +253,13 @@ where
     ) -> Result<ValueType<'gc>, TypeResolutionError> {
         match self.new_cts_value_with_lookup(t, data, resolution, generics)? {
             CTSValue::Value(v) => Ok(v),
-            CTSValue::Ref(r) => Err(TypeResolutionError::InvalidLayout(format!(
-                "tried to instantiate value type, received object reference ({:?})",
-                r
-            ))),
+            CTSValue::Ref(r) => Err(TypeResolutionError::InvalidLayout(
+                format!(
+                    "tried to instantiate value type, received object reference ({:?})",
+                    r
+                )
+                .into(),
+            )),
         }
     }
 
@@ -279,17 +285,15 @@ where
             BaseType::UInt64 => Ok(CTSValue::Value(UInt64(reinterpret_i64_as_u64(data)?))),
             BaseType::Float32 => match data {
                 StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float32(f as f32))),
-                other => Err(TypeResolutionError::InvalidLayout(format!(
-                    "invalid stack value {:?} for conversion into f32",
-                    other
-                ))),
+                other => Err(TypeResolutionError::InvalidLayout(
+                    format!("invalid stack value {:?} for conversion into f32", other).into(),
+                )),
             },
             BaseType::Float64 => match data {
                 StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float64(f))),
-                other => Err(TypeResolutionError::InvalidLayout(format!(
-                    "invalid stack value {:?} for conversion into f64",
-                    other
-                ))),
+                other => Err(TypeResolutionError::InvalidLayout(
+                    format!("invalid stack value {:?} for conversion into f64", other).into(),
+                )),
             },
             BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(convert_num(data)?))),
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
@@ -316,10 +320,9 @@ where
                 if let StackValue::ObjectRef(o) = data {
                     Ok(CTSValue::Ref(o))
                 } else {
-                    Err(TypeResolutionError::InvalidLayout(format!(
-                        "expected ObjectRef, got {:?}",
-                        data
-                    )))
+                    Err(TypeResolutionError::InvalidLayout(
+                        format!("expected ObjectRef, got {:?}", data).into(),
+                    ))
                 }
             }
             BaseType::Type {
@@ -329,10 +332,9 @@ where
                 if let StackValue::ObjectRef(o) = data {
                     Ok(CTSValue::Ref(o))
                 } else {
-                    Err(TypeResolutionError::InvalidLayout(format!(
-                        "expected ObjectRef, got {:?}",
-                        data
-                    )))
+                    Err(TypeResolutionError::InvalidLayout(
+                        format!("expected ObjectRef, got {:?}", data).into(),
+                    ))
                 }
             }
             BaseType::Type {
@@ -347,10 +349,9 @@ where
                     return Ok(CTSValue::Ref(if let StackValue::ObjectRef(r) = data {
                         r
                     } else {
-                        return Err(TypeResolutionError::InvalidLayout(format!(
-                            "expected ObjectRef, got {:?}",
-                            data
-                        )));
+                        return Err(TypeResolutionError::InvalidLayout(
+                            format!("expected ObjectRef, got {:?}", data).into(),
+                        ));
                     }));
                 }
 
@@ -366,10 +367,9 @@ where
 
                 if td.type_name() == "System.TypedReference" {
                     let StackValue::TypedRef(p, t) = data else {
-                        return Err(TypeResolutionError::InvalidLayout(format!(
-                            "expected TypedRef, got {:?}",
-                            data
-                        )));
+                        return Err(TypeResolutionError::InvalidLayout(
+                            format!("expected TypedRef, got {:?}", data).into(),
+                        ));
                     };
                     return Ok(CTSValue::Value(TypedRef(p.into_inner(), t)));
                 }
@@ -429,7 +429,7 @@ where
                             }
                             _ => {
                                 return Err(TypeResolutionError::InvalidLayout(
-                                    "cannot unbox from non-object storage".to_string(),
+                                    "cannot unbox from non-object storage".into(),
                                 ));
                             }
                         }
@@ -651,10 +651,13 @@ where
             self.create_array_layout_with_lookup(element.clone(), size, resolution, generics)?;
         let total_size = layout.element_layout.size() * size;
         if total_size.as_usize() > 0x7FFF_FFFF {
-            return Err(TypeResolutionError::MassiveAllocation(format!(
-                "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
-                total_size, element, size
-            )));
+            return Err(TypeResolutionError::MassiveAllocation(
+                format!(
+                    "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
+                    total_size, element, size
+                )
+                .into(),
+            ));
         }
 
         Ok(Vector::new(
@@ -671,37 +674,48 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
 ) -> Result<T, TypeResolutionError> {
     match data {
         StackValue::Int32(i) => i.try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(format!(
-                "failed to convert from i32 into {}",
-                any::type_name::<T>()
-            ))
+            TypeResolutionError::InvalidLayout(
+                format!("failed to convert from i32 into {}", any::type_name::<T>()).into(),
+            )
         }),
         StackValue::NativeInt(i) => i.try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(format!(
-                "failed to convert from isize into {}",
-                any::type_name::<T>()
-            ))
+            TypeResolutionError::InvalidLayout(
+                format!(
+                    "failed to convert from isize into {}",
+                    any::type_name::<T>()
+                )
+                .into(),
+            )
         }),
         StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_provenance().try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(format!(
-                "failed to convert unmanaged pointer into {}",
-                any::type_name::<T>()
-            ))
+            TypeResolutionError::InvalidLayout(
+                format!(
+                    "failed to convert unmanaged pointer into {}",
+                    any::type_name::<T>()
+                )
+                .into(),
+            )
         }),
         StackValue::ManagedPtr(p) => {
             let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
             ptr.expose_provenance().try_into().map_err(|_| {
-                TypeResolutionError::InvalidLayout(format!(
-                    "failed to convert managed pointer into {}",
-                    any::type_name::<T>()
-                ))
+                TypeResolutionError::InvalidLayout(
+                    format!(
+                        "failed to convert managed pointer into {}",
+                        any::type_name::<T>()
+                    )
+                    .into(),
+                )
             })
         }
-        other => Err(TypeResolutionError::InvalidLayout(format!(
-            "invalid stack value {:?} for conversion into {}",
-            other,
-            any::type_name::<T>()
-        ))),
+        other => Err(TypeResolutionError::InvalidLayout(
+            format!(
+                "invalid stack value {:?} for conversion into {}",
+                other,
+                any::type_name::<T>()
+            )
+            .into(),
+        )),
     }
 }
 
@@ -711,26 +725,27 @@ where
 {
     match data {
         StackValue::Int64(i) => i.try_into().map_err(|e| {
-            TypeResolutionError::InvalidLayout(format!(
-                "failed to convert from i64 to {} ({})",
-                any::type_name::<T>(),
-                e
-            ))
+            TypeResolutionError::InvalidLayout(
+                format!(
+                    "failed to convert from i64 to {} ({})",
+                    any::type_name::<T>(),
+                    e
+                )
+                .into(),
+            )
         }),
-        other => Err(TypeResolutionError::InvalidLayout(format!(
-            "invalid stack value {:?} for integer conversion",
-            other
-        ))),
+        other => Err(TypeResolutionError::InvalidLayout(
+            format!("invalid stack value {:?} for integer conversion", other).into(),
+        )),
     }
 }
 
 fn reinterpret_i64_as_u64(data: StackValue<'_>) -> Result<u64, TypeResolutionError> {
     match data {
         StackValue::Int64(i) => Ok(i as u64),
-        other => Err(TypeResolutionError::InvalidLayout(format!(
-            "invalid stack value {:?} for u64 reinterpretation",
-            other
-        ))),
+        other => Err(TypeResolutionError::InvalidLayout(
+            format!("invalid stack value {:?} for u64 reinterpretation", other).into(),
+        )),
     }
 }
 

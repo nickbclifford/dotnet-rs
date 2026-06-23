@@ -185,10 +185,8 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
         );
 
         if let Ok(concrete) = ctx.make_concrete(source)
-            && let Some(rt) = dotnet_types::runtime::runtime_type_from_concrete(
-                self.loader().as_ref(),
-                &concrete,
-            )
+            && let Some(rt) =
+                dotnet_types::runtime::runtime_type_from_concrete(self.loader().as_ref(), &concrete)
         {
             return rt;
         }
@@ -514,10 +512,9 @@ impl<'a, 'gc> VmReflectionOps<'gc> for VesContext<'a, 'gc> {
             ctx.resolution.clone(),
             source.clone(),
             self.loader().as_ref(),
-        ) && let Some(rt) = dotnet_types::runtime::runtime_type_from_concrete(
-            self.loader().as_ref(),
-            &concrete,
-        ) {
+        ) && let Some(rt) =
+            dotnet_types::runtime::runtime_type_from_concrete(self.loader().as_ref(), &concrete)
+        {
             return rt;
         }
         dotnet_intrinsics_reflection::common::make_runtime_type(ctx, source)

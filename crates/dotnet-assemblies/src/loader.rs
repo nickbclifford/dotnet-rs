@@ -100,8 +100,11 @@ pub struct AssemblyLoader {
     pub(crate) reverse_stubs: HashMap<String, String>,
     pub(crate) corlib_cache: DashMap<String, TypeDescription>,
     pub(crate) type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
-    pub(crate) method_cache:
-        DashMap<(ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>), MethodDescription, DefaultHashBuilder>,
+    pub(crate) method_cache: DashMap<
+        (ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>),
+        MethodDescription,
+        DefaultHashBuilder,
+    >,
     pub type_cache_hits: AtomicU64,
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
@@ -142,13 +145,7 @@ impl AssemblyLoader {
     }
 
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
-        let resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
-            .map_err(|e| {
-                AssemblyLoadError::Io(format!(
-                    "could not read assembly root {}: {}",
-                    assembly_root, e
-                ))
-            })?
+        let resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)?
             .filter_map(|e| {
                 let path = e.ok()?.path();
                 if path.extension()? == "dll" {
@@ -246,9 +243,7 @@ impl AssemblyLoader {
                 return Ok(());
             }
 
-            let content = fs::read_to_string(file).map_err(|e| {
-                AssemblyLoadError::Io(format!("could not read redirects.txt: {}", e))
-            })?;
+            let content = fs::read_to_string(file)?;
 
             for line in content.lines() {
                 let line = line.trim();
@@ -297,17 +292,20 @@ impl AssemblyLoader {
         file.push(format!("{name}.dll"));
 
         if check_exists && !file.exists() {
-            return Err(AssemblyLoadError::FileNotFound(format!(
-                "could not find assembly {name} in root {}",
-                self.assembly_root
-            )));
+            return Err(AssemblyLoadError::FileNotFound(
+                format!(
+                    "could not find assembly {name} in root {}",
+                    self.assembly_root
+                )
+                .into(),
+            ));
         }
 
         let resolution = self.load_resolution_from_file(file)?;
         match &resolution.assembly {
             None => {
                 return Err(AssemblyLoadError::InvalidFormat(
-                    "no assembly present in external module".to_string(),
+                    "no assembly present in external module".into(),
                 ));
             }
             Some(a) => {
@@ -389,7 +387,7 @@ impl AssemblyLoader {
 
             if let Some(msg) = error {
                 if self.strict_versioning {
-                    return Err(AssemblyLoadError::InvalidFormat(msg));
+                    return Err(AssemblyLoadError::InvalidFormat(msg.into()));
                 } else {
                     tracing::warn!("Binding mismatch: {}", msg);
                 }

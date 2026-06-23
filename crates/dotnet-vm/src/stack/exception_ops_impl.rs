@@ -104,7 +104,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     fn rethrow(&mut self) -> StepResult {
         let Some(exception) = self.current_frame().exception_stack.last().cloned() else {
             return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
-                "rethrow without active exception".to_string(),
+                "rethrow without active exception".into(),
             )));
         };
         *self.exception_mode = ExceptionState::Throwing(exception, true);
@@ -142,10 +142,13 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 *self.exception_mode = ExceptionState::Unwinding(*state);
                 self.handle_exception()
             }
-            _ => StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(format!(
-                "endfinally called outside of handler, state: {:?}",
-                self.exception_mode
-            )))),
+            _ => StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
+                format!(
+                    "endfinally called outside of handler, state: {:?}",
+                    self.exception_mode
+                )
+                .into(),
+            ))),
         }
     }
 
@@ -160,7 +163,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             ),
             _ => {
                 return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
-                    "EndFilter called but not in Filtering mode".to_string(),
+                    "EndFilter called but not in Filtering mode".into(),
                 )));
             }
         };

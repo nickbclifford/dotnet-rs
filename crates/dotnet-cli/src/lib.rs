@@ -46,7 +46,9 @@ fn init_rayon_pool() {
                 .unwrap_or(1)
         });
     // build_global() errors if already initialized; first-call-wins is fine.
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build_global();
 }
 
 pub fn run_cli() -> ExitCode {

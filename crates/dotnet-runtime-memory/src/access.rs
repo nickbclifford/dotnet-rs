@@ -95,7 +95,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: writing to unmanaged null pointer".into(),
+                    "NullReferenceException: writing to unmanaged null pointer",
                 ));
             }
             validate_atomic_access(ptr as *const u8, false);
@@ -148,7 +148,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: reading from unmanaged null pointer".into(),
+                    "NullReferenceException: reading from unmanaged null pointer",
                 ));
             }
             validate_atomic_access(ptr, false);
@@ -235,7 +235,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: writing bytes to unmanaged null pointer".into(),
+                    "NullReferenceException: writing bytes to unmanaged null pointer",
                 ));
             }
             validate_atomic_access(ptr as *const u8, false);
@@ -280,7 +280,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: reading bytes from unmanaged null pointer".into(),
+                    "NullReferenceException: reading bytes from unmanaged null pointer",
                 ));
             }
             validate_atomic_access(ptr, false);
@@ -380,7 +380,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: exchange_atomic to unmanaged null pointer".into(),
+                    "NullReferenceException: exchange_atomic to unmanaged null pointer",
                 ));
             }
             // SAFETY: `ptr` is a non-null unmanaged address whose validity is
@@ -426,7 +426,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: exchange_add_atomic to unmanaged null pointer".into(),
+                    "NullReferenceException: exchange_add_atomic to unmanaged null pointer",
                 ));
             }
             // SAFETY: `ptr` is a non-null unmanaged address whose validity is
@@ -464,7 +464,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: load_atomic from unmanaged null pointer".into(),
+                    "NullReferenceException: load_atomic from unmanaged null pointer",
                 ));
             }
             // SAFETY: `ptr` is a non-null unmanaged address whose validity is
@@ -506,7 +506,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "NullReferenceException: store_atomic to unmanaged null pointer".into(),
+                    "NullReferenceException: store_atomic to unmanaged null pointer",
                 ));
             }
             // SAFETY: `ptr` is a non-null unmanaged address whose validity is
@@ -716,7 +716,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ) -> Result<(), MemoryAccessError> {
         if ptr.is_null() {
             return Err(MemoryAccessError::NullPointer(
-                "NullReferenceException: writing to unmanaged null pointer".into(),
+                "NullReferenceException: writing to unmanaged null pointer",
             ));
         }
         validate_atomic_access(ptr as *const u8, false);
@@ -842,7 +842,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "RawMemoryAccess::write_value_internal called with null pointer!".to_string(),
+                    "RawMemoryAccess::write_value_internal called with null pointer!",
                 ));
             }
 
@@ -1191,7 +1191,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
-                    "RawMemoryAccess::read_value_internal called with null pointer!".to_string(),
+                    "RawMemoryAccess::read_value_internal called with null pointer!",
                 ));
             }
 
@@ -1225,10 +1225,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             &gc,
                         )
                         .map_err(|e| {
-                            MemoryAccessError::TypeMismatch(format!(
-                                "ManagedPtr read failed: {:?}",
-                                e
-                            ))
+                            MemoryAccessError::TypeMismatch(
+                                format!("ManagedPtr read failed: {:?}", e).into(),
+                            )
                         })?;
 
                         let actual_desc = type_desc
@@ -1256,7 +1255,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 _ => {
                     return Err(MemoryAccessError::TypeMismatch(
-                        "Array read not supported".to_string(),
+                        "Array read not supported".into(),
                     ));
                 }
             })

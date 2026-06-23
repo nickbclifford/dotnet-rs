@@ -31,10 +31,9 @@ pub fn validate_metadata(res: &Resolution) -> Result<(), AssemblyLoadError> {
 
     for (i, td) in res.type_definitions.iter().enumerate() {
         if td.name.is_empty() {
-            return Err(AssemblyLoadError::InvalidFormat(format!(
-                "TypeDef[{}] name is empty",
-                i
-            )));
+            return Err(AssemblyLoadError::InvalidFormat(
+                format!("TypeDef[{}] name is empty", i).into(),
+            ));
         }
 
         // §II.22.37: Direct self-inheritance check.
@@ -48,30 +47,39 @@ pub fn validate_metadata(res: &Resolution) -> Result<(), AssemblyLoadError> {
                 && let Some(current_idx) = res.type_definition_index(i)
                 && *base_idx == current_idx
             {
-                return Err(AssemblyLoadError::InvalidFormat(format!(
-                    "TypeDef '{}' (index {:?}) extends itself",
-                    td.name, current_idx
-                )));
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "TypeDef '{}' (index {:?}) extends itself",
+                        td.name, current_idx
+                    )
+                    .into(),
+                ));
             }
         }
 
         // Validate fields for empty names
         for (f_idx, field) in td.fields.iter().enumerate() {
             if field.name.is_empty() {
-                return Err(AssemblyLoadError::InvalidFormat(format!(
-                    "TypeDef '{}' has field at index {} with empty name",
-                    td.name, f_idx
-                )));
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "TypeDef '{}' has field at index {} with empty name",
+                        td.name, f_idx
+                    )
+                    .into(),
+                ));
             }
         }
 
         // Validate methods for empty names
         for (m_idx, method) in td.methods.iter().enumerate() {
             if method.name.is_empty() {
-                return Err(AssemblyLoadError::InvalidFormat(format!(
-                    "TypeDef '{}' has method at index {} with empty name",
-                    td.name, m_idx
-                )));
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "TypeDef '{}' has method at index {} with empty name",
+                        td.name, m_idx
+                    )
+                    .into(),
+                ));
             }
         }
     }

@@ -2,6 +2,12 @@
 
 `dotnet-rs` is a Rust-based implementation of the .NET Common Language Infrastructure (CLI), specifically the Virtual Execution System (VES), as defined in ECMA-335.
 
+## Panic-vs-Result contribution policy
+
+For contributor rules on when to use `panic!`/`unreachable!`/`debug_assert!`/`expect()` versus returning `VmError` (`Result` / `StepResult::Error`), see [`CONTRIBUTING.md` — Panic-vs-Result policy](../CONTRIBUTING.md#panic-vs-result-policy).
+
+That section also documents the host-error (`VmError`) vs managed-exception (`ManagedException` / `ExceptionState`) boundary.
+
 ## Crate Responsibilities
 
 The project is divided into several crates, each with a focused responsibility:

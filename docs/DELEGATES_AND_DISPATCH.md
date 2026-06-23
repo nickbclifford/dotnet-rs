@@ -43,7 +43,7 @@ The `StepResult` enum (defined in `crates/dotnet-vm-data`; canonical path: `dotn
 - `MethodThrew(ManagedException)`: Used internally when an exception propagates unhandled out of a frame.
 - `Exception`: An exception was thrown (either by a CIL instruction or explicitly). The dispatch loop must call `handle_exception`.
 - `Yield`: A GC stop was requested or thread suspension is needed. The execution engine pauses and returns to the caller.
-- `Error(VmError)`: A fatal internal VM error occurred (e.g., type mismatch, invalid memory access).
+- `Error(VmError)`: A host-side VM error occurred (for example, metadata/type resolution failure, invalid CIL, invalid memory access, or P/Invoke load failure). This is distinct from managed .NET exceptions, which flow through `Exception`/`MethodThrew`.
 
 ## Delegate System (`dotnet-intrinsics-delegates`)
 

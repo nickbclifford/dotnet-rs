@@ -11,11 +11,7 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnet_utils::sync::Ordering;
-use dotnet_value::{
-    StackValue,
-    object::ObjectRef,
-    pointer::ManagedPtr,
-};
+use dotnet_value::{StackValue, object::ObjectRef, pointer::ManagedPtr};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
 use dotnetdll::prelude::BaseType;
@@ -178,8 +174,8 @@ fn store_int_volatile<'gc, T: ThreadingIntrinsicHost<'gc>>(
         StackValue::Int32(i) => *i as u64,
         actual => {
             return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "Int32".to_string(),
-                actual: format!("{actual:?}"),
+                expected: "Int32",
+                actual: format!("{actual:?}").into(),
             }));
         }
     };
@@ -237,12 +233,10 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ));
 
     match volatile_atomic_dispatch(target_type.get()) {
-        VolatileAtomicTypeDispatch::Byte => {
-            match store_int_volatile(ctx, &target_ptr, &value, 1) {
-                StepResult::Continue => {}
-                other => return other,
-            }
-        }
+        VolatileAtomicTypeDispatch::Byte => match store_int_volatile(ctx, &target_ptr, &value, 1) {
+            StepResult::Continue => {}
+            other => return other,
+        },
         VolatileAtomicTypeDispatch::Int16 => {
             match store_int_volatile(ctx, &target_ptr, &value, 2) {
                 StepResult::Continue => {}
@@ -255,8 +249,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::NativeFloat(f) => (f as f32).to_bits() as u64,
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "Int32 or NativeFloat".to_string(),
-                        actual: format!("{actual:?}"),
+                        expected: "Int32 or NativeFloat",
+                        actual: format!("{actual:?}").into(),
                     }));
                 }
             };
@@ -280,8 +274,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::NativeFloat(f) => f.to_bits(),
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "Int64 or NativeFloat".to_string(),
-                        actual: format!("{actual:?}"),
+                        expected: "Int64 or NativeFloat",
+                        actual: format!("{actual:?}").into(),
                     }));
                 }
             };
@@ -304,8 +298,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::NativeInt(i) => i as u64,
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "NativeInt".to_string(),
-                        actual: format!("{actual:?}"),
+                        expected: "NativeInt",
+                        actual: format!("{actual:?}").into(),
                     }));
                 }
             };
@@ -335,8 +329,8 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 StackValue::NativeInt(i) => i as u64,
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                        expected: "ObjectRef or NativeInt".to_string(),
-                        actual: format!("{actual:?}"),
+                        expected: "ObjectRef or NativeInt",
+                        actual: format!("{actual:?}").into(),
                     }));
                 }
             };

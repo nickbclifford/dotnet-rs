@@ -52,7 +52,9 @@ impl AssemblyLoader {
             },
         )
         .map_err(|e| {
-            AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
+            AssemblyLoadError::InvalidFormat(
+                format!("failed to parse support library: {}", e).into(),
+            )
         })?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
@@ -70,13 +72,11 @@ impl AssemblyLoader {
 
         for (index, t) in support_res.type_definitions.iter().enumerate() {
             let type_index = support_res.type_definition_index(index).ok_or_else(|| {
-                AssemblyLoadError::InvalidFormat(
-                    "failed to find type definition index".to_string(),
-                )
+                AssemblyLoadError::InvalidFormat("failed to find type definition index".into())
             })?;
             let attrs = support_res
                 .type_attributes(type_index)
-                .map_err(|e| AssemblyLoadError::InvalidFormat(format!("{e}")))?;
+                .map_err(|e| AssemblyLoadError::InvalidFormat(format!("{e}").into()))?;
             for a in attrs {
                 // the target stub attribute is internal to the support library,
                 // so the constructor reference will always be a Definition variant
@@ -90,10 +90,9 @@ impl AssemblyLoader {
                     let data = a
                         .instantiation_data(&(self as &AssemblyLoader), &*support_res)
                         .map_err(|e| {
-                            AssemblyLoadError::InvalidFormat(format!(
-                                "failed to parse stub attribute data: {}",
-                                e
-                            ))
+                            AssemblyLoadError::InvalidFormat(
+                                format!("failed to parse stub attribute data: {}", e).into(),
+                            )
                         })?;
                     for n in data.named_args {
                         match n {

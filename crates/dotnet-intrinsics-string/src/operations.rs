@@ -49,7 +49,10 @@ fn extend_from_string_chunk<'gc, T: RawMemoryOps<'gc>>(
     chunk_len: usize,
     dest: &mut Vec<u16>,
 ) -> bool {
-    let _gc_scope = GcScopeGuard::enter(ctx.as_borrow_scope(), ctx.as_borrow_scope().gc_ready_token());
+    let _gc_scope = GcScopeGuard::enter(
+        ctx.as_borrow_scope(),
+        ctx.as_borrow_scope().gc_ready_token(),
+    );
     let inner = handle.borrow();
     match &inner.storage {
         HeapStorage::Str(s) => {

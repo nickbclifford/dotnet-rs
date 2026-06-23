@@ -254,7 +254,8 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
         if let Some(h) = obj.0 {
             // Boxed T exists.
-            let inner_t: &ConcreteType = lookup.type_generics
+            let inner_t: &ConcreteType = lookup
+                .type_generics
                 .first()
                 .expect("Nullable must have generic parameter");
             let concrete_inner_t = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(inner_t.clone()));

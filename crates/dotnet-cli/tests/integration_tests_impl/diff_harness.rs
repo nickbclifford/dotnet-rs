@@ -5,7 +5,9 @@ fn expressions_expression_compile_42_matches_dotnet() {
     use std::{path::Path, process::Command};
 
     let harness = TestHarness::get();
-    let dll_path = harness.ensure_dll(Path::new("tests/fixtures/expressions/expression_compile_42.cs"));
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/expressions/expression_compile_42.cs",
+    ));
 
     let dotnet_output = Command::new("dotnet")
         .arg(&dll_path)
@@ -24,5 +26,8 @@ fn expressions_expression_compile_42_matches_dotnet() {
         dotnet_rs_exit_code, dotnet_exit_code,
         "dotnet-rs exit code diverged from dotnet"
     );
-    assert_eq!(dotnet_rs_stdout, dotnet_stdout, "dotnet-rs stdout diverged from dotnet");
+    assert_eq!(
+        dotnet_rs_stdout, dotnet_stdout,
+        "dotnet-rs stdout diverged from dotnet"
+    );
 }

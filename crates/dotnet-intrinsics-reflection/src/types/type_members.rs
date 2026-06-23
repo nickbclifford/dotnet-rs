@@ -36,12 +36,8 @@ pub fn intrinsic_assembly_get_custom_attributes<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let num_args = method.signature().parameters.len()
-        + if method.signature().instance {
-            1
-        } else {
-            0
-        };
+    let num_args =
+        method.signature().parameters.len() + if method.signature().instance { 1 } else { 0 };
     for _ in 0..num_args {
         let _ = ctx.pop();
     }
@@ -67,12 +63,8 @@ pub fn intrinsic_attribute_get_custom_attributes<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let num_args = method.signature().parameters.len()
-        + if method.signature().instance {
-            1
-        } else {
-            0
-        };
+    let num_args =
+        method.signature().parameters.len() + if method.signature().instance { 1 } else { 0 };
     for _ in 0..num_args {
         let _ = ctx.pop();
     }
@@ -172,8 +164,13 @@ fn write_constructor_arg_to_field<'gc>(
     arg: &FixedArg<'_>,
 ) -> bool {
     match (field_type, arg) {
-        (MemberType::Base(base), FixedArg::Boolean(value)) if matches!(&**base, BaseType::Boolean) => {
-            if let Some(field) = instance.instance_storage.field::<u8>(owner.clone(), field_name) {
+        (MemberType::Base(base), FixedArg::Boolean(value))
+            if matches!(&**base, BaseType::Boolean) =>
+        {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u8>(owner.clone(), field_name)
+            {
                 field.write(u8::from(*value));
                 true
             } else {
@@ -181,7 +178,10 @@ fn write_constructor_arg_to_field<'gc>(
             }
         }
         (MemberType::Base(base), FixedArg::Char(value)) if matches!(&**base, BaseType::Char) => {
-            if let Some(field) = instance.instance_storage.field::<u16>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u16>(owner.clone(), field_name)
+            {
                 field.write(*value as u16);
                 true
             } else {
@@ -191,7 +191,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Float32(value))
             if matches!(&**base, BaseType::Float32) =>
         {
-            if let Some(field) = instance.instance_storage.field::<f32>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<f32>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -201,7 +204,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Float64(value))
             if matches!(&**base, BaseType::Float64) =>
         {
-            if let Some(field) = instance.instance_storage.field::<f64>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<f64>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -211,7 +217,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int8(value)))
             if matches!(&**base, BaseType::Int8) =>
         {
-            if let Some(field) = instance.instance_storage.field::<i8>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<i8>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -221,7 +230,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt8(value)))
             if matches!(&**base, BaseType::UInt8) =>
         {
-            if let Some(field) = instance.instance_storage.field::<u8>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u8>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -231,7 +243,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int16(value)))
             if matches!(&**base, BaseType::Int16) =>
         {
-            if let Some(field) = instance.instance_storage.field::<i16>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<i16>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -241,7 +256,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt16(value)))
             if matches!(&**base, BaseType::UInt16) =>
         {
-            if let Some(field) = instance.instance_storage.field::<u16>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u16>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -251,7 +269,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int32(value)))
             if matches!(&**base, BaseType::Int32) =>
         {
-            if let Some(field) = instance.instance_storage.field::<i32>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<i32>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -261,7 +282,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt32(value)))
             if matches!(&**base, BaseType::UInt32) =>
         {
-            if let Some(field) = instance.instance_storage.field::<u32>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u32>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -271,7 +295,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::Int64(value)))
             if matches!(&**base, BaseType::Int64) =>
         {
-            if let Some(field) = instance.instance_storage.field::<i64>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<i64>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -281,7 +308,10 @@ fn write_constructor_arg_to_field<'gc>(
         (MemberType::Base(base), FixedArg::Integral(IntegralParam::UInt64(value)))
             if matches!(&**base, BaseType::UInt64) =>
         {
-            if let Some(field) = instance.instance_storage.field::<u64>(owner.clone(), field_name) {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<u64>(owner.clone(), field_name)
+            {
                 field.write(*value);
                 true
             } else {
@@ -427,8 +457,11 @@ pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let obj = ctx.pop_obj();
 
     let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
-    let custom_attributes =
-        dotnet_vm_ops::vm_try!(collect_type_custom_attributes(ctx, target_runtime_type, None));
+    let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
+        ctx,
+        target_runtime_type,
+        None
+    ));
 
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))

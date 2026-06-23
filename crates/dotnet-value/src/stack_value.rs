@@ -191,8 +191,8 @@ fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
         StackValue::Int32(i) => Ok(i as u32),
         StackValue::NativeInt(i) => Ok(i as u32),
         v => Err(ExecutionError::TypeMismatch {
-            expected: "shift amount (Int32 or NativeInt)".to_string(),
-            actual: stack_value_kind(&v).to_string(),
+            expected: "shift amount (Int32 or NativeInt)",
+            actual: stack_value_kind(&v).into(),
         }),
     }
 }
@@ -203,7 +203,9 @@ fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
         unsafe {
             owner
                 .0
-                .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m.offset.as_usize()))
+                .map(|h: ObjectHandle<'gc>| {
+                    h.borrow().storage.raw_data_ptr().add(m.offset.as_usize())
+                })
                 .unwrap_or(std::ptr::null_mut())
         }
     } else {
@@ -258,8 +260,8 @@ macro_rules! checked_arithmetic_op {
                 .map(|v| StackValue::NativeInt(v as isize))
                 .ok_or_else(|| ManagedExceptionError::overflow().into()),
             (l, r, _) => Err(ExecutionError::TypeMismatch {
-                expected: "checked arithmetic operands (Int32, Int64, NativeInt)".to_string(),
-                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+                expected: "checked arithmetic operands (Int32, Int64, NativeInt)",
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)).into(),
             }
             .into()),
         }
@@ -308,8 +310,8 @@ macro_rules! arithmetic_op {
                 ))
             }
             (l, r, _) => Err(ExecutionError::TypeMismatch {
-                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat)".to_string(),
-                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat)",
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)).into(),
             }),
         }
     };
@@ -333,8 +335,8 @@ macro_rules! shift_op {
                 Ok(StackValue::NativeInt(((i as usize) $op $amount) as isize))
             }
             (v, _) => Err(ExecutionError::TypeMismatch {
-                expected: "shift target (Int32, Int64, NativeInt)".to_string(),
-                actual: stack_value_kind(&v).to_string(),
+                expected: "shift target (Int32, Int64, NativeInt)",
+                actual: stack_value_kind(&v).into(),
             }),
         }
     };
@@ -357,8 +359,8 @@ macro_rules! bitwise_op {
             (StackValue::NativeInt(l), StackValue::Int64(r)) => Ok(StackValue::Int64((l as i64) $op r)),
             (StackValue::NativeInt(l), StackValue::NativeInt(r)) => Ok(StackValue::NativeInt(l $op r)),
             (l, r) => Err(ExecutionError::TypeMismatch {
-                expected: "bitwise operands (Int32, Int64, NativeInt)".to_string(),
-                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+                expected: "bitwise operands (Int32, Int64, NativeInt)",
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)).into(),
             }),
         }
     };
@@ -401,9 +403,8 @@ macro_rules! wrapping_arithmetic_op {
                 Ok(StackValue::NativeInt(ptr_l.$op(ptr_r)))
             }
             (l, r) => Err(ExecutionError::TypeMismatch {
-                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat, ObjectRef+nint)"
-                    .to_string(),
-                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)),
+                expected: "arithmetic operands (Int32, Int64, NativeInt, NativeFloat, ObjectRef+nint)",
+                actual: format!("{}, {}", stack_value_kind(&l), stack_value_kind(&r)).into(),
             }),
         }
     };
@@ -512,8 +513,8 @@ impl<'gc> StackValue<'gc> {
             Self::Int32(i) => Ok(*i),
             Self::NativeInt(i) => Ok(*i as i32),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "Int32".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "Int32",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -530,8 +531,8 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::Int64(i) => Ok(*i),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "Int64".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "Int64",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -547,8 +548,8 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeFloat(f) => Ok(*f),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "NativeFloat".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "NativeFloat",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -565,8 +566,8 @@ impl<'gc> StackValue<'gc> {
             Self::NativeInt(i) => Ok(*i),
             Self::Int32(i) => Ok(*i as isize),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "NativeInt".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "NativeInt",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -583,8 +584,8 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::ObjectRef(o) => Ok(*o),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "ObjectRef".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "ObjectRef",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -600,8 +601,8 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::ManagedPtr(m) => Ok(m.deref().clone()),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "ManagedPtr".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "ManagedPtr",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -621,8 +622,8 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::ValueType(v) => Ok(v.clone()),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "ValueType".to_string(),
-                actual: stack_value_kind(v).to_string(),
+                expected: "ValueType",
+                actual: stack_value_kind(v).into(),
             }),
         }
     }
@@ -729,9 +730,9 @@ impl<'gc> StackValue<'gc> {
             LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
             LoadType::IntPtr => Self::NativeInt(val as isize),
             LoadType::Object => {
-                let ptr = std::ptr::with_exposed_provenance::<ThreadSafeLock<object::ObjectInner<'gc>>>(
-                    val as usize,
-                );
+                let ptr = std::ptr::with_exposed_provenance::<
+                    ThreadSafeLock<object::ObjectInner<'gc>>,
+                >(val as usize);
                 let obj = if ptr.is_null() {
                     None
                 } else {
@@ -973,8 +974,8 @@ impl<'gc> Shl for StackValue<'gc> {
             StackValue::Int64(i) => Ok(StackValue::Int64(i << amount)),
             StackValue::NativeInt(i) => Ok(StackValue::NativeInt(i << amount)),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "shift target (Int32, Int64, NativeInt)".to_string(),
-                actual: stack_value_kind(&v).to_string(),
+                expected: "shift target (Int32, Int64, NativeInt)",
+                actual: stack_value_kind(&v).into(),
             }),
         }
     }
@@ -989,8 +990,8 @@ impl<'gc> Not for StackValue<'gc> {
             Int64(i) => Ok(Int64(!i)),
             NativeInt(i) => Ok(NativeInt(!i)),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "not operand (Int32, Int64, NativeInt)".to_string(),
-                actual: stack_value_kind(&v).to_string(),
+                expected: "not operand (Int32, Int64, NativeInt)",
+                actual: stack_value_kind(&v).into(),
             }),
         }
     }
@@ -1006,8 +1007,8 @@ impl<'gc> Neg for StackValue<'gc> {
             NativeInt(i) => Ok(NativeInt(-i)),
             NativeFloat(f) => Ok(NativeFloat(-f)),
             v => Err(ExecutionError::TypeMismatch {
-                expected: "neg operand (Int32, Int64, NativeInt, NativeFloat)".to_string(),
-                actual: stack_value_kind(&v).to_string(),
+                expected: "neg operand (Int32, Int64, NativeInt, NativeFloat)",
+                actual: stack_value_kind(&v).into(),
             }),
         }
     }

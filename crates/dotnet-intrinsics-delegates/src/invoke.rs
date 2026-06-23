@@ -33,8 +33,8 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
         StackValue::ObjectRef(r) => r,
         actual => {
             return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "delegate object reference".to_string(),
-                actual: format!("{actual:?}"),
+                expected: "delegate object reference",
+                actual: format!("{actual:?}").into(),
             }));
         }
     };

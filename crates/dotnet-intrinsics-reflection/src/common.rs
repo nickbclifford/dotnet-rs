@@ -140,7 +140,10 @@ pub fn make_runtime_type(
                 let (ut, generics) = decompose_type_source::<MethodType>(source);
                 let td = res_ctx.reflection_locate_type(ut)?;
                 if generics.is_empty() {
-                    match (td.definition().namespace.as_deref(), td.definition().name.as_ref()) {
+                    match (
+                        td.definition().namespace.as_deref(),
+                        td.definition().name.as_ref(),
+                    ) {
                         (Some("System"), "Void") => RuntimeType::Void,
                         (Some("System"), "TypedReference") => RuntimeType::TypedReference,
                         (Some("System"), "Boolean") => RuntimeType::Boolean,

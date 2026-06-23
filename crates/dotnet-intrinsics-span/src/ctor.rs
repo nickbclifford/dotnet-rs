@@ -10,8 +10,8 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, UnmanagedPtr},
 };
-use dotnetdll::prelude::ParameterType;
 use dotnet_vm_data::StepResult;
+use dotnetdll::prelude::ParameterType;
 use std::ptr::NonNull;
 
 #[dotnet_intrinsic("void System.Span<T>::.ctor(void*, int)")]

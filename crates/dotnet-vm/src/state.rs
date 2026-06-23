@@ -536,7 +536,9 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_types_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_types),
+            shared_runtime_types_bytes: estimated_dashmap_bytes(
+                &self.reflection_registry.runtime_types,
+            ),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_types_bytes: 0,
             #[cfg(feature = "multithreading")]
@@ -544,7 +546,9 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_methods_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_methods),
+            shared_runtime_methods_bytes: estimated_dashmap_bytes(
+                &self.reflection_registry.runtime_methods,
+            ),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_methods_bytes: 0,
             #[cfg(feature = "multithreading")]
@@ -552,7 +556,9 @@ impl SharedGlobalState {
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_size: 0,
             #[cfg(feature = "multithreading")]
-            shared_runtime_fields_bytes: estimated_dashmap_bytes(&self.reflection_registry.runtime_fields),
+            shared_runtime_fields_bytes: estimated_dashmap_bytes(
+                &self.reflection_registry.runtime_fields,
+            ),
             #[cfg(not(feature = "multithreading"))]
             shared_runtime_fields_bytes: 0,
         }

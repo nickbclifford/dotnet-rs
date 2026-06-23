@@ -1,7 +1,7 @@
 use crate::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
 use dotnetdll::prelude::{
-    body, Field, ManagedMethod, Method, MethodIndex, MethodMemberIndex, MethodType, Resolution,
-    ResolvedDebug, TypeIndex,
+    Field, ManagedMethod, Method, MethodIndex, MethodMemberIndex, MethodType, Resolution,
+    ResolvedDebug, TypeIndex, body,
 };
 use gc_arena::static_collect;
 use std::{
@@ -79,36 +79,54 @@ impl MethodDescription {
         member: MethodMemberIndex,
     ) -> MethodIndex {
         match member {
-            MethodMemberIndex::Method(i) => {
-                res.method_index(parent, i).expect("method index out of range")
-            }
+            MethodMemberIndex::Method(i) => res
+                .method_index(parent, i)
+                .expect("method index out of range"),
             MethodMemberIndex::PropertyGetter(i) => {
-                let p = res.property_index(parent, i).expect("property index out of range");
-                res.property_getter_index(p).expect("property has no getter")
+                let p = res
+                    .property_index(parent, i)
+                    .expect("property index out of range");
+                res.property_getter_index(p)
+                    .expect("property has no getter")
             }
             MethodMemberIndex::PropertySetter(i) => {
-                let p = res.property_index(parent, i).expect("property index out of range");
-                res.property_setter_index(p).expect("property has no setter")
+                let p = res
+                    .property_index(parent, i)
+                    .expect("property index out of range");
+                res.property_setter_index(p)
+                    .expect("property has no setter")
             }
             MethodMemberIndex::PropertyOther { property, other } => {
-                let p = res.property_index(parent, property).expect("property index out of range");
-                res.property_other_index(p, other).expect("property other index out of range")
+                let p = res
+                    .property_index(parent, property)
+                    .expect("property index out of range");
+                res.property_other_index(p, other)
+                    .expect("property other index out of range")
             }
             MethodMemberIndex::EventAdd(i) => {
-                let e = res.event_index(parent, i).expect("event index out of range");
+                let e = res
+                    .event_index(parent, i)
+                    .expect("event index out of range");
                 res.event_add_index(e)
             }
             MethodMemberIndex::EventRemove(i) => {
-                let e = res.event_index(parent, i).expect("event index out of range");
+                let e = res
+                    .event_index(parent, i)
+                    .expect("event index out of range");
                 res.event_remove_index(e)
             }
             MethodMemberIndex::EventRaise(i) => {
-                let e = res.event_index(parent, i).expect("event index out of range");
+                let e = res
+                    .event_index(parent, i)
+                    .expect("event index out of range");
                 res.event_raise_index(e).expect("event has no raise method")
             }
             MethodMemberIndex::EventOther { event, other } => {
-                let e = res.event_index(parent, event).expect("event index out of range");
-                res.event_other_index(e, other).expect("event other index out of range")
+                let e = res
+                    .event_index(parent, event)
+                    .expect("event index out of range");
+                res.event_other_index(e, other)
+                    .expect("event other index out of range")
             }
         }
     }

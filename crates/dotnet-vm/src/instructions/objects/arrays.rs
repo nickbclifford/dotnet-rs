@@ -30,8 +30,10 @@ macro_rules! pop_array_index {
             StackValue::Int32(i) => i as usize,
             StackValue::NativeInt(i) => i as usize,
             _ => {
-                return $ctx
-                    .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+                return $ctx.throw_by_name_with_message(
+                    "System.InvalidProgramException",
+                    INVALID_PROGRAM_MSG,
+                );
             }
         }
     }};

@@ -12,7 +12,9 @@ fn init_rayon_pool() {
                 .map(|n| n.get().min(4))
                 .unwrap_or(1)
         });
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build_global();
 }
 
 #[derive(Parser, Debug)]

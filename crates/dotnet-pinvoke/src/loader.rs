@@ -72,7 +72,7 @@ impl NativeLibraries {
         tracer: Option<&Tracer>,
     ) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
         if !self.sandbox.allow_library(name) {
-            return Err(PInvokeError::LibraryNotFound(name.to_string()));
+            return Err(PInvokeError::LibraryNotFound(name.into()));
         }
 
         if let Some(lib) = self.libraries.get(name) {
@@ -132,10 +132,10 @@ impl NativeLibraries {
 
         let lib = lib.ok_or_else(|| {
             PInvokeError::LoadError(
-                name.to_string(),
+                name.into(),
                 last_error
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "Unknown error".to_string()),
+                    .map(|e| e.to_string().into_boxed_str())
+                    .unwrap_or_else(|| "Unknown error".into()),
             )
         })?;
 
@@ -153,17 +153,14 @@ impl NativeLibraries {
         tracer: Option<&Tracer>,
     ) -> Result<CodePtr, PInvokeError> {
         if !self.sandbox.allow_function(library, name) {
-            return Err(PInvokeError::SymbolNotFound(
-                library.to_string(),
-                name.to_string(),
-            ));
+            return Err(PInvokeError::SymbolNotFound(library.into(), name.into()));
         }
         let l = self.get_library(library, tracer)?;
         // SAFETY: We request the raw symbol as an untyped C function pointer and immediately pass
         // it to libffi. Arity/signature validation is handled by metadata-driven marshalling before
         // invocation; lookup failure is converted to `PInvokeError::SymbolNotFound`.
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
-            .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
+            .map_err(|_| PInvokeError::SymbolNotFound(library.into(), name.into()))?;
         Ok(CodePtr::from_fun(*sym))
     }
 }

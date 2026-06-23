@@ -40,8 +40,8 @@ impl TempBuffer {
         match self {
             TempBuffer::I32(val) => Ok(val),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer i32".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer i32",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -50,8 +50,8 @@ impl TempBuffer {
         match self {
             TempBuffer::I64(val) => Ok(val),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer i64".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer i64",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -60,8 +60,8 @@ impl TempBuffer {
         match self {
             TempBuffer::Isize(val) => Ok(val),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer isize".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer isize",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -70,8 +70,8 @@ impl TempBuffer {
         match self {
             TempBuffer::F64(val) => Ok(val),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer f64".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer f64",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -80,8 +80,8 @@ impl TempBuffer {
         match self {
             TempBuffer::Ptr(val) => Ok(val),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer ptr".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer ptr",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -90,8 +90,8 @@ impl TempBuffer {
         match self {
             TempBuffer::Bytes(buf) => Ok(buf),
             _ => Err(ExecutionError::TypeMismatch {
-                expected: "P/Invoke temp buffer bytes".to_string(),
-                actual: self.kind_name().to_string(),
+                expected: "P/Invoke temp buffer bytes",
+                actual: self.kind_name().into(),
             }),
         }
     }
@@ -106,26 +106,31 @@ pub(crate) struct AlignedReturnBuffer {
 impl AlignedReturnBuffer {
     pub(crate) fn new_zeroed(len: usize, align: usize) -> Result<Self, ExecutionError> {
         if align == 0 || !align.is_power_of_two() {
-            return Err(ExecutionError::InternalError(format!(
-                "P/Invoke return buffer alignment is invalid: {}",
-                align
-            )));
+            return Err(ExecutionError::InternalError(
+                format!("P/Invoke return buffer alignment is invalid: {}", align).into(),
+            ));
         }
 
         let layout = Layout::from_size_align(len.max(1), align).map_err(|e| {
-            ExecutionError::InternalError(format!(
-                "P/Invoke return buffer layout is invalid (size={}, align={}): {}",
-                len, align, e
-            ))
+            ExecutionError::InternalError(
+                format!(
+                    "P/Invoke return buffer layout is invalid (size={}, align={}): {}",
+                    len, align, e
+                )
+                .into(),
+            )
         })?;
 
         // SAFETY: `layout` is validated above. A null return is handled as OOM.
         let ptr = unsafe { alloc_zeroed(layout) };
         let ptr = NonNull::new(ptr).ok_or_else(|| {
-            ExecutionError::InternalError(format!(
-                "P/Invoke return buffer allocation failed (size={}, align={})",
-                len, align
-            ))
+            ExecutionError::InternalError(
+                format!(
+                    "P/Invoke return buffer allocation failed (size={}, align={})",
+                    len, align
+                )
+                .into(),
+            )
         })?;
 
         Ok(Self { ptr, len, layout })
@@ -163,10 +168,9 @@ pub(crate) fn ffi_return_layout_from_raw(
     };
 
     if align == 0 || !align.is_power_of_two() {
-        return Err(ExecutionError::InternalError(format!(
-            "P/Invoke return ffi_type alignment is invalid: {}",
-            align
-        )));
+        return Err(ExecutionError::InternalError(
+            format!("P/Invoke return ffi_type alignment is invalid: {}", align).into(),
+        ));
     }
 
     Ok((size, align))
@@ -177,7 +181,7 @@ pub(crate) fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), Executi
     let rtype = unsafe { (*cif.as_raw_ptr()).rtype };
     if rtype.is_null() {
         return Err(ExecutionError::InternalError(
-            "P/Invoke ffi_cif has null return type".to_string(),
+            "P/Invoke ffi_cif has null return type".into(),
         ));
     }
 
@@ -193,10 +197,13 @@ pub(crate) fn validate_typed_return_abi<T>(cif: &Cif) -> Result<(), ExecutionErr
     let rust_size = size_of::<T>();
     let rust_align = align_of::<T>();
     if ffi_size != rust_size || ffi_align != rust_align {
-        return Err(ExecutionError::InternalError(format!(
-            "P/Invoke return ABI mismatch: ffi(size={}, align={}), rust(size={}, align={})",
-            ffi_size, ffi_align, rust_size, rust_align
-        )));
+        return Err(ExecutionError::InternalError(
+            format!(
+                "P/Invoke return ABI mismatch: ffi(size={}, align={}), rust(size={}, align={})",
+                ffi_size, ffi_align, rust_size, rust_align
+            )
+            .into(),
+        ));
     }
     Ok(())
 }
@@ -233,7 +240,8 @@ where
                     format!(
                         "P/Invoke temp buffer bytes expected, got {}",
                         temp.kind_name()
-                    ),
+                    )
+                    .into(),
                 ));
             }
         };
