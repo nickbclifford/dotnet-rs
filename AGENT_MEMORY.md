@@ -252,3 +252,15 @@ repo root.
 **Follow-ups for future steps:** Step 5.2 can now use `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` to exercise host mode directly; the current expected failure there is the known 5.6 enum-reflection blocker, not tooling mode mismatch. If any existing workflow still depends on old default `-a`, invoke `scripts/diff_run.sh --assemblies ...` (or set `DOTNET_RS_DIFF_MODE=assemblies`).
 
 **Open questions:** None.
+
+## 2026-06-24 — Step 5.6 enum-field reflection blocker investigation — gpt-5-codex — completed
+
+**Goal:** Determine whether the Newtonsoft `FieldInfo.GetRawConstantValue()` failure is caused by wrong reflection runtime field-object type vs. a virtual-dispatch miss, and produce a root-cause writeup + fix plan without implementing the fix.
+
+**What changed:** Added investigation writeup `docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md` (repro evidence, root cause, and fix plan); marked checklist item `5.6` complete in `CHECKLIST.md`; added follow-up checklist items `5.7` (implement `GetRawConstantValue` support) and `5.8` (adjacent `GetFieldAttributes` no-body gap).
+
+**What I learned:** Before editing, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` was still present unchanged in the same app-context switch initialization block. Reproducing rung 2 (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`) still throws `NotSupported_AbstractNonCLS` at `System.Reflection.FieldInfo.GetRawConstantValue()` on `Type.GetEnumData`. A minimal enum probe confirms stock runtime returns `System.Reflection.MdFieldInfo` and succeeds, while dotnet-rs returns `DotnetRs.FieldInfo` and throws from `GetRawConstantValue`. Code inspection shows field reflection objects are explicitly created as `DotnetRs.FieldInfo` (`dotnet-intrinsics-reflection/src/common.rs`), `DotnetRs.FieldInfo` does not override `GetRawConstantValue` (`support/FieldInfo.cs`), and no field intrinsic exists for that method (`dotnet-intrinsics-reflection/src/fields.rs`). Therefore this is a reflection runtime-type implementation gap (missing override/intrinsic), not a callvirt override lookup failure. While probing adjacent behavior, `DotnetRs.FieldInfo.GetFieldAttributes()` was also found to have no implementation path (`Not implemented: no body`), which is separate from the Newtonsoft blocker but a real reflection completeness gap.
+
+**Follow-ups for future steps:** Implement checklist item `5.7` exactly as the writeup plan (support override + intrinsic constant materialization + rung-2 diff parity rerun). Then triage/implement `5.8` for `GetFieldAttributes` (and potentially broader `DotnetRs.FieldInfo` internal-call completeness) so callers using `FieldInfo.Attributes` do not crash with no-body errors.
+
+**Open questions:** For `GetRawConstantValue` implementation shape, should the first pass support only enum-needed literal primitives (enough for rung 2) or full metadata-constant coverage (`bool/char/integers/floats/string/null`) to avoid near-term follow-on failures?
