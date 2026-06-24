@@ -228,12 +228,55 @@ pub fn select_framework_version(
     selected.map(|candidate| candidate.path.clone())
 }
 
+fn framework_base_candidates(framework_name: &str) -> Vec<PathBuf> {
+    let mut base_paths = Vec::new();
+
+    if let Some(dotnet_root) = std::env::var_os("DOTNET_ROOT") {
+        base_paths.push(
+            PathBuf::from(dotnet_root)
+                .join("shared")
+                .join(framework_name),
+        );
+    }
+
+    if cfg!(target_os = "windows") {
+        base_paths.push(PathBuf::from("C:\\Program Files\\dotnet\\shared").join(framework_name));
+    } else if cfg!(target_os = "macos") {
+        base_paths.push(PathBuf::from("/usr/local/share/dotnet/shared").join(framework_name));
+    } else {
+        base_paths.push(PathBuf::from("/usr/share/dotnet/shared").join(framework_name));
+        base_paths.push(PathBuf::from("/usr/lib/dotnet/shared").join(framework_name));
+    }
+
+    base_paths
+}
+
+pub fn resolve_framework_from_runtimeconfig(
+    config: &RuntimeConfig,
+    override_base: Option<&Path>,
+) -> Option<PathBuf> {
+    let framework = config.runtime_options.framework.as_ref()?;
+    let policy = config.runtime_options.roll_forward.unwrap_or_default();
+
+    if let Some(base_dir) = override_base {
+        return select_framework_version(base_dir, framework, policy);
+    }
+
+    framework_base_candidates(&framework.name)
+        .into_iter()
+        .find_map(|base_dir| select_framework_version(&base_dir, framework, policy))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FrameworkRef, RollForwardPolicy, parse_runtimeconfig, select_framework_version};
+    use super::{
+        FrameworkRef, RollForwardPolicy, parse_runtimeconfig, resolve_framework_from_runtimeconfig,
+        select_framework_version,
+    };
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -290,6 +333,79 @@ mod tests {
             name: "Microsoft.NETCore.App".to_string(),
             version: version.to_string(),
         }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn resolves_framework_from_fixture_runtimeconfig_with_override_base() {
+        let path = Path::new("/tmp/fixture-probe/SingleFile.runtimeconfig.json");
+        assert!(
+            path.exists(),
+            "missing fixture runtimeconfig at {}; build fixtures first",
+            path.display()
+        );
+
+        let config = parse_runtimeconfig(path).expect("runtimeconfig should parse");
+        let base_dir = create_runtime_base(&["8.0.28", "10.0.9"]);
+
+        assert_eq!(
+            resolve_framework_from_runtimeconfig(&config, Some(&base_dir)),
+            Some(base_dir.join("10.0.9"))
+        );
+
+        fs::remove_dir_all(&base_dir).expect("test runtime base should be removed");
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn resolves_framework_from_fixture_runtimeconfig_using_dotnet_root_override() {
+        let _guard = env_lock()
+            .lock()
+            .expect("environment lock should not be poisoned");
+
+        let path = Path::new("/tmp/fixture-probe/SingleFile.runtimeconfig.json");
+        assert!(
+            path.exists(),
+            "missing fixture runtimeconfig at {}; build fixtures first",
+            path.display()
+        );
+
+        let config = parse_runtimeconfig(path).expect("runtimeconfig should parse");
+        let dotnet_root = create_runtime_base(&[]);
+        let framework_base = dotnet_root.join("shared").join("Microsoft.NETCore.App");
+        fs::create_dir_all(framework_base.join("8.0.28"))
+            .expect("framework version subdirectory should be created");
+        fs::create_dir_all(framework_base.join("10.0.9"))
+            .expect("framework version subdirectory should be created");
+
+        let previous_dotnet_root = std::env::var_os("DOTNET_ROOT");
+        // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
+        unsafe {
+            std::env::set_var("DOTNET_ROOT", &dotnet_root);
+        }
+
+        let resolved = resolve_framework_from_runtimeconfig(&config, None);
+
+        if let Some(previous) = previous_dotnet_root {
+            // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
+            unsafe {
+                std::env::set_var("DOTNET_ROOT", previous);
+            }
+        } else {
+            // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
+            unsafe {
+                std::env::remove_var("DOTNET_ROOT");
+            }
+        }
+
+        assert_eq!(resolved, Some(framework_base.join("10.0.9")));
+
+        fs::remove_dir_all(&dotnet_root).expect("test runtime base should be removed");
     }
 
     #[test]

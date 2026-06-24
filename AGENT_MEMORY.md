@@ -128,3 +128,15 @@ repo root.
 **Follow-ups for future steps:** Step 2.3 can now consume `select_framework_version` when wiring `resolve_framework_from_runtimeconfig` and `DOTNET_ROOT` override behavior.
 
 **Open questions:** The current parser accepts only strict numeric `major.minor.patch` directory names. If preview/suffix runtime folder naming must be supported later, decide whether to extend parsing rules then (out of scope for this step).
+
+## 2026-06-24 — Step 2.3 runtimeconfig framework resolver wiring — gpt-5-codex — completed
+
+**Goal:** Add host-side framework resolution from parsed runtimeconfig by combining framework policy selection with base-path discovery, including `DOTNET_ROOT` support.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/host.rs` to add `resolve_framework_from_runtimeconfig(config, override_base) -> Option<PathBuf>` and a small `framework_base_candidates(framework_name)` helper that checks `DOTNET_ROOT` first, then OS-default shared framework roots, before calling `select_framework_version`. Added two end-to-end unit tests using the fixture runtimeconfig at `/tmp/fixture-probe/SingleFile.runtimeconfig.json`: one validates resolution via `override_base`, and one validates `DOTNET_ROOT`-driven resolution with an isolated temp `shared/Microsoft.NETCore.App` layout. Updated `CHECKLIST.md` to mark step `2.3` complete.
+
+**What I learned:** Before edits, the REVIEW-cited runtime discovery code in `crates/dotnet-assemblies/src/resolution.rs` (`find_latest_runtime_in_base`) and the hardcoded `IsDynamicCodeSupported = false` block in `crates/dotnet-vm/src/state.rs` still matched plan assumptions; no discrepancy to report. In this Rust toolchain/edition, env var mutation APIs in tests require `unsafe`, so the `DOTNET_ROOT` test serializes mutation via a local mutex and restores prior state.
+
+**Follow-ups for future steps:** Step 3.x can consume `resolve_framework_from_runtimeconfig` directly when wiring `AssemblyLoader::new_from_host`; keep `--assemblies` path unchanged. If more tests begin mutating process env vars, consider consolidating env mutation helpers to avoid cross-test interference.
+
+**Open questions:** `framework_base_candidates` currently mirrors existing `find_dotnet_app_path` conventions and only consults `DOTNET_ROOT` (not arch-specific variants such as `DOTNET_ROOT_x64`); decide later whether expanded host-env compatibility is required for this project.
