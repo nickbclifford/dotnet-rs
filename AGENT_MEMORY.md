@@ -200,3 +200,15 @@ repo root.
 **Follow-ups for future steps:** Step 5.1 can now exercise host-path fixture execution (`dotnet-rs <SingleFile.dll>` without `-a`) directly on top of this wiring while keeping existing integration harness behavior intact.
 
 **Open questions:** None.
+
+## 2026-06-24 — Step 5.1 Rung 1 fixture host-path validation — gpt-5-codex — completed
+
+**Goal:** Verify host-path execution for the `expression_compile_42` fixture (no `-a`) and confirm full `dotnet-cli` fixture-suite stability.
+
+**What changed:** Marked checklist item `5.1` complete in `CHECKLIST.md`; appended this step log entry to `AGENT_MEMORY.md`.
+
+**What I learned:** Before running checks, the REVIEW-cited `IsDynamicCodeSupported = false` block in `crates/dotnet-vm/src/state.rs` (lines 447–455 in REVIEW context; currently in the same `app_context_switches` initialization region) remained unchanged. Rebuilt fixtures with `cargo run -p xtask -- fixtures build`, then ran `cargo run --bin dotnet-rs --no-default-features -- target/debug/dotnet-fixtures/expressions/expression_compile_42/SingleFile.dll` (no `-a`) and observed exit code `42`. Full fixture validation with `DOTNET_USE_PREBUILT_FIXTURES=1 cargo nextest run --no-default-features -p dotnet-cli` passed with no regressions (`158 passed, 3 skipped`).
+
+**Follow-ups for future steps:** Step 5.2 can proceed with the Newtonsoft.Json host-path probe/diff on top of the now-validated no-`-a` fixture baseline.
+
+**Open questions:** None.

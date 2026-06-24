@@ -25,7 +25,7 @@
 
 ## Phase 5: Test Ladder
 
-- [ ] 5.1 Rung 1: build `expression_compile_42` fixture (or reuse prebuilt), run `dotnet-rs /path/to/SingleFile.dll` (no `-a` flag), confirm exit code 42; run full fixture suite via `DOTNET_USE_PREBUILT_FIXTURES=1 cargo nextest run --no-default-features -p dotnet-cli` and confirm no regressions [effort: default] — refs REVIEW.md#F-TEST-001
+- [x] 5.1 Rung 1: build `expression_compile_42` fixture (or reuse prebuilt), run `dotnet-rs /path/to/SingleFile.dll` (no `-a` flag), confirm exit code 42; run full fixture suite via `DOTNET_USE_PREBUILT_FIXTURES=1 cargo nextest run --no-default-features -p dotnet-cli` and confirm no regressions [effort: default] — refs REVIEW.md#F-TEST-001
 - [ ] 5.2 Rung 2: build the Newtonsoft.Json probe (`/tmp/nuget-probe/App.csproj` or rebuild), run `dotnet-rs /tmp/nuget-probe-out/App.dll` (no `-a`), verify via `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` — exit code and stdout must match stock `dotnet` [effort: default] — refs REVIEW.md#F-TEST-001
 - [ ] 5.3 Rung 3: build or reuse the EF InMemory probe (`/tmp/ef-probe/EfApp.csproj` or `/tmp/ef-probe-out/`), run `dotnet-rs /tmp/ef-probe-out/EfApp.dll` (no `-a`), compare against stock `dotnet` exit code; record pass/fail and any new gaps not in `docs/EF_GAP_BACKLOG.md` [effort: default] — refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001
 
