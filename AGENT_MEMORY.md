@@ -240,3 +240,15 @@ repo root.
 **Follow-ups for future steps:** Step 5.5 (host-mode diff tooling) remains needed for one-command host parity checks; current rung confirmation used direct stock/dotnet-rs command comparison. Generic-resolution investigation/fix remains outside this step and is still the EF execution blocker.
 
 **Open questions:** None new for this step.
+
+## 2026-06-24 — Step 5.5 host/assemblies differential tooling modes — gpt-5-codex — completed
+
+**Goal:** Extend `scripts/diff_run.sh` so rung 2/3 can run host-mode parity checks (no `-a`) while preserving explicit `-a` differential workflows.
+
+**What changed:** Updated `scripts/diff_run.sh` to support mode selection via `--host` and `--assemblies` flags (plus `DOTNET_RS_DIFF_MODE=host|assemblies`), changed default mode to host (no `-a`), and kept the previous `-a <shared_framework_dir>` behavior behind `--assemblies`. Updated usage text and PASS/FAIL output to include mode, and marked checklist item `5.5` complete in `CHECKLIST.md`.
+
+**What I learned:** Before editing, the REVIEW-cited hardcoded app-context switch (`IsDynamicCodeSupported = false`) remained unchanged in `crates/dotnet-vm/src/state.rs`, and `scripts/diff_run.sh` still hardcoded `-a <shared_framework_dir>` (matching the plan’s stated pre-step discrepancy). The updated script now runs the unchanged rung commands in host mode by default (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`) while still allowing legacy assemblies-root differentials with `--assemblies`.
+
+**Follow-ups for future steps:** Step 5.2 can now use `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` to exercise host mode directly; the current expected failure there is the known 5.6 enum-reflection blocker, not tooling mode mismatch. If any existing workflow still depends on old default `-a`, invoke `scripts/diff_run.sh --assemblies ...` (or set `DOTNET_RS_DIFF_MODE=assemblies`).
+
+**Open questions:** None.

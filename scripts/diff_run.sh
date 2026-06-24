@@ -9,13 +9,19 @@ TMP_DIFF_RUN_DIR=""
 usage() {
     cat >&2 <<'EOF'
 Usage:
-  bash scripts/diff_run.sh <path-to-fixture.cs>
-  bash scripts/diff_run.sh <path-to-project.csproj>
-  bash scripts/diff_run.sh <path-to-prebuilt.dll>
+  bash scripts/diff_run.sh [--host|--assemblies] <path-to-fixture.cs>
+  bash scripts/diff_run.sh [--host|--assemblies] <path-to-project.csproj>
+  bash scripts/diff_run.sh [--host|--assemblies] <path-to-prebuilt.dll>
+
+Options:
+  --host        Run dotnet-rs in host mode (no -a). This is the default.
+  --assemblies  Run dotnet-rs in explicit `-a <shared_framework_dir>` mode.
 
 Builds a C# fixture with crates/dotnet-cli/tests/SingleFile.csproj (for .cs input),
 or builds the supplied project (for .csproj input), then runs the resulting DLL
 under both `dotnet` and `dotnet-rs` and diffs exit code + stdout.
+
+The default mode can also be set via DOTNET_RS_DIFF_MODE=host|assemblies.
 EOF
 }
 
@@ -145,6 +151,42 @@ write_report() {
 }
 
 main() {
+    local mode="${DOTNET_RS_DIFF_MODE:-host}"
+    case "$mode" in
+        host|assemblies)
+            ;;
+        *)
+            fail "DOTNET_RS_DIFF_MODE must be 'host' or 'assemblies' (got: $mode)"
+            ;;
+    esac
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --host)
+                mode="host"
+                shift
+                ;;
+            --assemblies)
+                mode="assemblies"
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                fail "unknown option: $1"
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
     [[ $# -eq 1 ]] || {
         usage
         exit 2
@@ -216,9 +258,11 @@ main() {
             ;;
     esac
 
-    local shared_framework_dir
-    shared_framework_dir="$(find_shared_framework_dir || true)"
-    [[ -n "$shared_framework_dir" ]] || fail "could not locate Microsoft.NETCore.App shared framework directory"
+    local shared_framework_dir=""
+    if [[ "$mode" == "assemblies" ]]; then
+        shared_framework_dir="$(find_shared_framework_dir || true)"
+        [[ -n "$shared_framework_dir" ]] || fail "could not locate Microsoft.NETCore.App shared framework directory"
+    fi
 
     local dotnet_rs_bin
     local use_cargo_run=0
@@ -236,9 +280,17 @@ main() {
     run_capture_stdout_and_exit "$dotnet_stdout" "$dotnet_exit" dotnet "$dll_path"
 
     if [[ "$use_cargo_run" -eq 1 ]]; then
-        (cd "$ROOT_DIR" && run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" cargo run --quiet --bin dotnet-rs --no-default-features -- -a "$shared_framework_dir" "$dll_path")
+        if [[ "$mode" == "assemblies" ]]; then
+            (cd "$ROOT_DIR" && run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" cargo run --quiet --bin dotnet-rs --no-default-features -- -a "$shared_framework_dir" "$dll_path")
+        else
+            (cd "$ROOT_DIR" && run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" cargo run --quiet --bin dotnet-rs --no-default-features -- "$dll_path")
+        fi
     else
-        run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" "$dotnet_rs_bin" -a "$shared_framework_dir" "$dll_path"
+        if [[ "$mode" == "assemblies" ]]; then
+            run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" "$dotnet_rs_bin" -a "$shared_framework_dir" "$dll_path"
+        else
+            run_capture_stdout_and_exit "$rs_stdout" "$rs_exit" "$dotnet_rs_bin" "$dll_path"
+        fi
     fi
 
     local dotnet_report="$TMP_DIFF_RUN_DIR/dotnet.report"
@@ -247,11 +299,11 @@ main() {
     write_report "$rs_report" "$rs_exit" "$rs_stdout"
 
     if diff -u "$dotnet_report" "$rs_report" >/dev/null; then
-        echo "PASS: exit code and stdout match"
+        echo "PASS: exit code and stdout match (mode=$mode)"
         return 0
     fi
 
-    echo "FAIL: outputs diverged (dotnet vs dotnet-rs)" >&2
+    echo "FAIL: outputs diverged (dotnet vs dotnet-rs, mode=$mode)" >&2
     diff -u "$dotnet_report" "$rs_report" >&2 || true
     return 1
 }
