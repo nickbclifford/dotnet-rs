@@ -116,3 +116,15 @@ repo root.
 **Follow-ups for future steps:** Step 2.2 can now focus on roll-forward selection logic (`select_framework_version`) using `RollForwardPolicy`; step 2.3 can wire `DOTNET_ROOT` + runtimeconfig parsing into end-to-end framework resolution.
 
 **Open questions:** The new unit test currently expects `/tmp/fixture-probe/SingleFile.runtimeconfig.json` to exist; if future environments do not precreate that probe artifact, decide whether to standardize fixture generation before `dotnet-assemblies` tests or relocate this test input under repository-controlled paths.
+
+## 2026-06-24 — Step 2.2 roll-forward selector implementation — gpt-5-codex — completed
+
+**Goal:** Implement host-side framework version selection with all six roll-forward policies and add focused unit coverage.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/host.rs` to add `select_framework_version(base_dir, requested, policy) -> Option<PathBuf>` plus internal helpers for parsing `major.minor.patch` directory names, scanning installed framework directories, and policy-specific candidate selection (`Disable`, `LatestPatch`, `Minor`, `LatestMinor`, `Major`, `LatestMajor`). Added unit tests that model the verified installed runtime set (`8.0.28`, `10.0.9`) for a `10.0.0` request and assert expected policy outcomes, including the `Disable` no-exact-match boundary and exact-match behavior.
+
+**What I learned:** Before editing, the REVIEW-cited code in `crates/dotnet-assemblies/src/resolution.rs` (`find_latest_runtime_in_base`) and the hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` still matched the described state; no discrepancy to report. The new selector is isolated in `host.rs` and does not alter existing `-a/--assemblies` behavior.
+
+**Follow-ups for future steps:** Step 2.3 can now consume `select_framework_version` when wiring `resolve_framework_from_runtimeconfig` and `DOTNET_ROOT` override behavior.
+
+**Open questions:** The current parser accepts only strict numeric `major.minor.patch` directory names. If preview/suffix runtime folder naming must be supported later, decide whether to extend parsing rules then (out of scope for this step).

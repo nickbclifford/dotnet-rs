@@ -9,7 +9,7 @@
 ## Phase 2: `runtimeconfig.json` Parser + Roll-forward (Option A Milestone 1)
 
 - [x] 2.1 Add `crates/dotnet-assemblies/src/host.rs` with `RuntimeConfig` / `RuntimeOptions` / `FrameworkRef` / `RollForwardPolicy` serde types and `parse_runtimeconfig(path) -> Result<RuntimeConfig, HostError>`; add `serde` + `serde_json` to workspace `Cargo.toml` and `crates/dotnet-assemblies/Cargo.toml`; unit test parsing a real fixture runtimeconfig [effort: default] — refs REVIEW.md#F-HOST-001
-- [ ] 2.2 Implement `select_framework_version(base_dir, requested, policy) -> Option<PathBuf>` in `host.rs` covering all six roll-forward policies (`Disable`, `LatestPatch`, `Minor`, `LatestMinor`, `Major`, `LatestMajor`); unit tests against installed runtimes 8.0.28 and 10.0.9 for a 10.0.0 request [effort: high] — refs REVIEW.md#F-HOST-002
+- [x] 2.2 Implement `select_framework_version(base_dir, requested, policy) -> Option<PathBuf>` in `host.rs` covering all six roll-forward policies (`Disable`, `LatestPatch`, `Minor`, `LatestMinor`, `Major`, `LatestMajor`); unit tests against installed runtimes 8.0.28 and 10.0.9 for a 10.0.0 request [effort: high] — refs REVIEW.md#F-HOST-002
 - [ ] 2.3 Add `resolve_framework_from_runtimeconfig(config: &RuntimeConfig, override_base: Option<&Path>) -> Option<PathBuf>` wiring together parse + selection; respect `DOTNET_ROOT` env var; unit test end-to-end from a fixture runtimeconfig path to a resolved directory [effort: default] — refs REVIEW.md#F-HOST-001, REVIEW.md#F-HOST-002
 
 ## Phase 3: `deps.json` Parser + Multi-root Probing (Option A Milestone 2)
