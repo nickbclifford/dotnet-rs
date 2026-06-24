@@ -21,7 +21,7 @@
 
 ## Phase 4: CLI Host Mode
 
-- [ ] 4.1 Change `Args.assemblies` from `String` to `Option<String>` in `crates/dotnet-cli/src/lib.rs`; in `run_cli()`: if `Some(dir)` → existing `AssemblyLoader::new(dir)` path (unchanged); if `None` → `AssemblyLoader::new_from_host(entrypoint_path, None)` with a clear error if no runtimeconfig found; update `--assemblies` / `-a` clap annotation to `required = false` [effort: default] — refs REVIEW.md#F-CLI-001
+- [x] 4.1 Change `Args.assemblies` from `String` to `Option<String>` in `crates/dotnet-cli/src/lib.rs`; in `run_cli()`: if `Some(dir)` → existing `AssemblyLoader::new(dir)` path (unchanged); if `None` → `AssemblyLoader::new_from_host(entrypoint_path, None)` with a clear error if no runtimeconfig found; update `--assemblies` / `-a` clap annotation to `required = false` [effort: default] — refs REVIEW.md#F-CLI-001
 
 ## Phase 5: Test Ladder
 

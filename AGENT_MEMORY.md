@@ -188,3 +188,15 @@ repo root.
 **Follow-ups for future steps:** Step 4.1 can adopt host mode in CLI (`AssemblyLoader::new_from_host`) and automatically benefit from native-search wiring without changing the existing `-a` path. If host policy later needs explicit ordering beyond current precedence (primary root, then registration order of extra dirs), that contract should be documented before changing resolution order.
 
 **Open questions:** Native-asset derivation still depends on the current `derive_native_search_dirs` logic from step 3.1; if broader RID fallback selection is required for packages that publish multiple RID target groups, that should be addressed as a dedicated follow-up rather than folded into this wiring step.
+
+## 2026-06-24 — Step 4.1 make `--assemblies` optional and wire CLI host mode — gpt-5-codex — completed
+
+**Goal:** Make CLI `--assemblies/-a` optional and route no-flag invocations through host-based loader initialization with an explicit missing-runtimeconfig error.
+
+**What changed:** Updated `crates/dotnet-cli/src/lib.rs` so `Args.assemblies` is now `Option<String>` with clap annotation `required = false`; changed `run_cli()` to branch loader creation by mode: `Some(dir)` keeps existing `AssemblyLoader::new(dir)` behavior, while `None` computes `<entrypoint>.runtimeconfig.json`, emits `error: no --assemblies flag and no <name>.runtimeconfig.json found next to <dll>` and exits 1 when missing, otherwise calls `AssemblyLoader::new_from_host(&entrypoint_path, None)`. Also switched entrypoint loading to use `PathBuf` (`load_resolution_from_file(&entrypoint_path)`). Marked checklist item `4.1` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, REVIEW-cited CLI assumptions still matched current code (`Args.assemblies: String`, required `-a`, and unconditional `AssemblyLoader::new(args.assemblies)` path), so no discrepancy from plan. The `-a` harness path remains unchanged, and no-`-a` host mode successfully runs a prebuilt fixture DLL (exit 42); missing runtimeconfig now fails with the explicit targeted message and exit code 1.
+
+**Follow-ups for future steps:** Step 5.1 can now exercise host-path fixture execution (`dotnet-rs <SingleFile.dll>` without `-a`) directly on top of this wiring while keeping existing integration harness behavior intact.
+
+**Open questions:** None.
