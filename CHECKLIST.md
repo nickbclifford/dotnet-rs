@@ -4,7 +4,7 @@
 
 ## Phase 1: EF InMemory Spike (empirical, read-only)
 
-- [ ] 1.1 Assemble EF flat directory (framework DLLs + EF closure DLLs), run `dotnet-rs -a <flat-dir> /tmp/ef-probe-out/EfApp.dll`, capture every failure, write prioritized gap backlog to `docs/EF_GAP_BACKLOG.md` — does NOT fix any gaps [effort: high] — refs REVIEW.md#F-SPIKE-001
+- [x] 1.1 Assemble EF flat directory (framework DLLs + EF closure DLLs), run `dotnet-rs -a <flat-dir> /tmp/ef-probe-out/EfApp.dll`, capture every failure, write prioritized gap backlog to `docs/EF_GAP_BACKLOG.md` — does NOT fix any gaps [effort: high] — refs REVIEW.md#F-SPIKE-001
 
 ## Phase 2: `runtimeconfig.json` Parser + Roll-forward (Option A Milestone 1)
 
@@ -17,6 +17,7 @@
 - [ ] 3.1 Add `DepsJson` / `TargetLibrary` / `LibraryInfo` serde types and `parse_deps_json(path) -> Result<DepsJson, HostError>` in `host.rs`; add `derive_managed_probing_paths(deps, nuget_global) -> Vec<(String, PathBuf)>` and `derive_native_search_dirs(deps, nuget_global) -> Vec<PathBuf>`; add `nuget_global_packages_dir() -> PathBuf`; unit test with both the fixture deps.json (no NuGet) and the Newtonsoft.Json deps.json (one NuGet package) [effort: default] — refs REVIEW.md#F-HOST-003
 - [ ] 3.2 Add `probing_paths: DashMap<String, PathBuf>` field to `AssemblyLoader`; update `load_and_register` to check `probing_paths` before constructing the `assembly_root`-based path; add `add_scan_root(root: &Path) -> Result<(), AssemblyLoadError>` (scans flat dir, inserts into both `external` and `probing_paths` for names not already loaded); add `register_probing_path(name: &str, path: PathBuf)` helper; confirm all existing fixture tests pass with no behavior change [effort: high] — refs REVIEW.md#F-LOAD-001, REVIEW.md#F-LOAD-002
 - [ ] 3.3 Add `AssemblyLoader::new_from_host(entrypoint: &Path, nuget_global: Option<&Path>) -> Result<Self, HostError>`: parse runtimeconfig → roll-forward → `new(framework_dir)` → `add_scan_root(app_dir)` → parse deps.json → `register_probing_path` for each NuGet asset; expose `host.rs` types from `crates/dotnet-assemblies/src/lib.rs` [effort: default] — refs REVIEW.md#F-LOAD-003
+- [ ] 3.4 Wire host-derived native search directories/runtime native assets into `dotnet-pinvoke::NativeLibraries` / VM state so framework native libraries such as `libSystem.Native` resolve without manually copying `.so` files into the assembly root [effort: high] — refs REVIEW.md#F-HOST-003
 
 ## Phase 4: CLI Host Mode
 

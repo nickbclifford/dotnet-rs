@@ -81,3 +81,26 @@ repo root.
 - Will EF's DI container construction succeed at all under the current interpreter? The core bottleneck is whether `Microsoft.Extensions.DependencyInjection` (which uses heavy reflection + `Expression.Compile` for activator delegates) can execute. With `IsDynamicCodeSupported=false` routing `Compile` through the interpreter, this should be the reachable path — but reflection depth of the DI container is unknown.
 - Does `dotnet build` always copy NuGet DLLs flat to the output directory for framework-dependent builds? Verified yes for our probe projects (net10.0, EF 9.0.17). Self-contained deploys work differently and are not in scope.
 - The `dotnet-runtime-resolver` crate has a `resolution.rs` — does it have any host-parsing code that might conflict? Brief inspection showed it handles type/method resolution at VM runtime, not file-level host config. No conflict expected.
+
+## 2026-06-24 — Step 1.1 EF InMemory flat-dir spike — gpt-5-codex — completed
+
+**Goal:** Assemble the EF flat directory, run the EF probe under existing `dotnet-rs -a`, and record a prioritized no-fix gap backlog.
+
+**What changed:** Added `docs/EF_GAP_BACKLOG.md`; checked off `CHECKLIST.md` item 1.1; added follow-up checklist item 3.4 for wiring host-derived native search directories into P/Invoke.
+
+**What I learned:**
+- Confirmed the cited `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` still exists in the `app_context_switches` initialization and was not touched.
+- The existing `--assemblies` path still scans a single managed assembly root and `load_and_register` still constructs `{assembly_root}/{name}.dll`; no host/probing refactor has happened yet.
+- `/tmp/ef-probe-out/EfApp.dll` still exists and stock `dotnet /tmp/ef-probe-out/EfApp.dll` prints `Hello` and exits `42`.
+- The required DLL-only flat dir (`/tmp/ef-flat-dir`, 184 managed DLLs from `/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.9/*.dll` plus `/tmp/ef-probe-out/*.dll`) fails quickly, not by timeout: `System.DllNotFoundException: Unable to load DLL 'libSystem.Native': dlopen failed` from `Interop.GetCryptographicallySecureRandomBytes -> System.Guid.NewGuid -> Microsoft.EntityFrameworkCore.DbContext..ctor`.
+- Setting `LD_LIBRARY_PATH` to the framework runtime directory did not change the `libSystem.Native` failure. Copying the framework `.so` files into `/tmp/ef-flat-dir` allowed a deeper exploratory run; that then failed with `Internal VM error: Type resolution failed: Generic index 0 out of bounds (length 0)` during early `DbContextOptions` construction, around `ImmutableSortedDictionary.Create<System.Type, ValueTuple<IDbContextOptionsExtension,int>>`.
+- `DOTNET_RS_TRACE` is the useful tracer knob, not `RUST_LOG` alone. However, with native `.so` files copied in, enabling `DOTNET_RS_TRACE` can itself panic while formatting generic debug output: `dotnetdll ... resolved/types.rs:691:45: index out of bounds: the len is 215 but the index is 754`. Untraced native-assisted execution reports the generic-index VM error instead of panicking.
+
+**Follow-ups for future steps:**
+- New checklist item 3.4 is needed if host mode is expected to run EF without manually copying framework native libraries: `derive_native_search_dirs` alone will not help until `dotnet-pinvoke::NativeLibraries` / VM state can use those directories.
+- After native probing is fixed or worked around, the next EF blocker is generic method/type substitution in early EF options construction, before the app reaches provider configuration, DI/service-provider construction, `SaveChanges`, or query execution.
+- Deep EF tracing may require fixing or avoiding debug formatting of cross-resolution generic type handles; otherwise `DOTNET_RS_TRACE` can mask the real execution error with a tracing-only panic.
+
+**Open questions:**
+- Is the `Generic index 0 out of bounds (length 0)` caused by cross-assembly generic substitution, by `System.Collections.Immutable` net10/net8 version skew, or by a more general constructed-generic method resolution bug? This spike did not fix or minimize it.
+- Should future EF probe flat dirs include framework native libraries by convention, or should the plan wait for native-search-dir wiring in the host path? The required Step 1.1 DLL-only run proves the current command cannot progress without native library discovery.
