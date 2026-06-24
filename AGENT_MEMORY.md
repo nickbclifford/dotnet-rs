@@ -228,3 +228,15 @@ repo root.
 **Follow-ups for future steps:** Step 5.6 — fixing the stall exposes the next blocker: `System.Reflection.FieldInfo.GetRawConstantValue()` dispatching to the throwing abstract base (`NotSupportedException: NotSupported_AbstractNonCLS`) instead of the runtime override, on `Type.GetEnumData` → `Enum.GetNames`, reached from `Newtonsoft…EnumUtils.InitializeValuesAndNames`. This blocks rung-2 parity (probe now exits 1 fast instead of hanging). 5.5 (host-mode diff tooling) still needed before parity can be checked end-to-end.
 
 **Open questions:** Is the 5.6 `GetRawConstantValue` failure a reflection-object-type problem (enum literal fields surfaced as plain `FieldInfo` rather than the runtime field-info subtype) or a virtual-dispatch miss on the override? Same *class* as the 5.4 bug (base reached instead of override) but a different mechanism (reflection objects, not the dispatch instruction) — needs its own investigation.
+
+## 2026-06-24 — Step 5.3 Rung 3 EF host-path probe check — gpt-5-codex — completed
+
+**Goal:** Reuse or rebuild the EF InMemory probe, run host-mode `dotnet-rs` without `-a`, compare exit code to stock `dotnet`, and record pass/fail plus any newly discovered EF gaps.
+
+**What changed:** Marked checklist item `5.3` complete in `CHECKLIST.md`; updated `docs/EF_GAP_BACKLOG.md` with a new host-path rung check section capturing commands/results and explicit pass/fail status.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` was still present and unchanged in the same app-context switch initialization block (no discrepancy from plan). Reused existing probe artifacts at `/tmp/ef-probe/EfApp.csproj` and `/tmp/ef-probe-out/EfApp.dll` (rebuild not required). Stock `dotnet /tmp/ef-probe-out/EfApp.dll` still prints `Hello` and exits `42`. Host-mode `dotnet-rs /tmp/ef-probe-out/EfApp.dll` (no `-a`) exits `1` with `Internal VM error: Type resolution failed: Generic index 0 out of bounds (length 0)`. This is the same P1 generic-resolution blocker already documented in `docs/EF_GAP_BACKLOG.md`; no new distinct EF gap surfaced in this rung.
+
+**Follow-ups for future steps:** Step 5.5 (host-mode diff tooling) remains needed for one-command host parity checks; current rung confirmation used direct stock/dotnet-rs command comparison. Generic-resolution investigation/fix remains outside this step and is still the EF execution blocker.
+
+**Open questions:** None new for this step.

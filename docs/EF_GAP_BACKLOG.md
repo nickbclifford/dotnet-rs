@@ -147,3 +147,24 @@ These are in `/tmp` and may be ephemeral:
 - `/tmp/ef-dotnet-rs-run3-withso.log` — native-assisted run; generic index VM error.
 - `/tmp/ef-dotnet-rs-run5-trace-bt.log` — traced native-assisted run with backtrace; tracing-only debug-format panic.
 - `/tmp/ef-dotnet-rs-trace.log`, `/tmp/ef-dotnet-rs-trace-bt.log` — trace files from native-assisted runs.
+
+## Host-path rung check update (Step 5.3, 2026-06-24)
+
+Rung 3 was rerun in host mode (no `-a`) using the existing probe output.
+
+Commands:
+
+```bash
+dotnet /tmp/ef-probe-out/EfApp.dll
+./target/debug/dotnet-rs /tmp/ef-probe-out/EfApp.dll
+```
+
+Observed results:
+
+- Stock `dotnet`: prints `Hello`, exits `42`.
+- Host-mode `dotnet-rs` (no `-a`): exits `1` with
+  `Internal VM error: Type resolution failed: Generic index 0 out of bounds (length 0)`.
+
+Pass/fail status for rung 3: **FAIL** (exit code mismatch).
+
+New-gap check vs this backlog: **no new distinct blocker identified**. The observed host-mode failure matches the existing P1 generic-resolution blocker already documented above; native probing is no longer the first failure in host mode because step 3.4 wired native search directories.
