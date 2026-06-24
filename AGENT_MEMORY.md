@@ -164,3 +164,15 @@ repo root.
 **Follow-ups for future steps:** Step 3.3 can call `add_scan_root(entrypoint.parent())` and then `register_probing_path` for deps-derived assets without changing `-a` semantics; because registration is now non-overwriting, primary/framework and first-seen scan-root entries continue to win on name conflicts.
 
 **Open questions:** `register_probing_path` currently ignores any name already present in `external` (including lazy `None` entries), which preserves current root precedence and avoids behavior changes; if later host policy needs explicit override ordering across multiple probing sources, that precedence contract should be specified before changing this behavior.
+
+## 2026-06-24 — Step 3.3 new_from_host constructor + host exports — gpt-5-codex — completed
+
+**Goal:** Add a host-aware `AssemblyLoader::new_from_host` constructor that resolves framework + probing roots from app host metadata, and re-export host-layer types from crate root.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/loader.rs` to add `AssemblyLoader::new_from_host(entrypoint: &Path, nuget_global: Option<&Path>) -> Result<Self, HostError>` with flow: derive `*.runtimeconfig.json` → parse runtimeconfig → resolve framework dir → `AssemblyLoader::new(framework_dir)` → `add_scan_root(entrypoint.parent())` → optional `*.deps.json` parse + `derive_managed_probing_paths` + `register_probing_path`. Added a focused loader unit test `new_from_host_uses_fixture_runtimeconfig_and_app_scan_root` against `/tmp/fixture-probe/SingleFile.dll`. Updated `crates/dotnet-assemblies/src/host.rs` `HostError` with constructor-wiring variants (`ResolveFramework`, `CreateAssemblyLoader`, `AddScanRoot`) so loader init/add-scan failures are surfaced as host errors. Updated `crates/dotnet-assemblies/src/lib.rs` to re-export host types/helpers at crate root. Marked checklist item `3.3` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, the REVIEW-cited code still matched assumptions: `find_latest_runtime_in_base` remained in `crates/dotnet-assemblies/src/resolution.rs`, and the hardcoded `IsDynamicCodeSupported = false` app-context switch remained at `crates/dotnet-vm/src/state.rs` unchanged. `new_from_host` can stay additive without affecting existing `-a` mode because it is a separate constructor.
+
+**Follow-ups for future steps:** Step 4.1 can call `AssemblyLoader::new_from_host` directly for CLI no-`-a` mode and preserve existing `AssemblyLoader::new` path for `-a`. Step 3.4 remains required for native library probing (`libSystem.Native` etc.); this step only wires managed probing from deps.
+
+**Open questions:** `new_from_host` currently skips deps probing if `<entrypoint>.deps.json` is absent (optional behavior per plan) but still fails hard on malformed deps when present; if host policy later requires strict deps presence, this behavior should be revisited explicitly.

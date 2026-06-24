@@ -1,5 +1,11 @@
 #![allow(unexpected_cfgs)]
-use crate::error::AssemblyLoadError;
+use crate::{
+    error::AssemblyLoadError,
+    host::{
+        HostError, derive_managed_probing_paths, nuget_global_packages_dir, parse_deps_json,
+        parse_runtimeconfig, resolve_framework_from_runtimeconfig,
+    },
+};
 use dashmap::DashMap;
 use dotnet_types::{
     TypeDescription,
@@ -164,6 +170,52 @@ impl AssemblyLoader {
     /// This is useful for testing or when all assemblies are registered manually.
     pub fn new_bare(assembly_root: String) -> Result<Self, AssemblyLoadError> {
         Self::new_internal(assembly_root, HashMap::new())
+    }
+
+    pub fn new_from_host(
+        entrypoint: &Path,
+        nuget_global: Option<&Path>,
+    ) -> Result<Self, HostError> {
+        let runtimeconfig_path = entrypoint.with_extension("runtimeconfig.json");
+        let config = parse_runtimeconfig(&runtimeconfig_path)?;
+
+        let framework_dir =
+            resolve_framework_from_runtimeconfig(&config, None).ok_or_else(|| {
+                HostError::ResolveFramework {
+                    runtimeconfig_path: runtimeconfig_path.clone(),
+                }
+            })?;
+
+        let loader = Self::new(framework_dir.to_string_lossy().into_owned()).map_err(|source| {
+            HostError::CreateAssemblyLoader {
+                framework_dir: framework_dir.clone(),
+                source,
+            }
+        })?;
+
+        let app_dir = entrypoint.parent().unwrap_or_else(|| Path::new("."));
+        loader
+            .add_scan_root(app_dir)
+            .map_err(|source| HostError::AddScanRoot {
+                app_dir: app_dir.to_path_buf(),
+                source,
+            })?;
+
+        let deps_json_path = entrypoint.with_extension("deps.json");
+        if deps_json_path.exists() {
+            let deps = parse_deps_json(&deps_json_path)?;
+            let nuget_global_dir = nuget_global
+                .map(Path::to_path_buf)
+                .unwrap_or_else(nuget_global_packages_dir);
+
+            for (assembly_name, assembly_path) in
+                derive_managed_probing_paths(&deps, &nuget_global_dir)
+            {
+                loader.register_probing_path(&assembly_name, assembly_path);
+            }
+        }
+
+        Ok(loader)
     }
 
     fn new_internal(
@@ -489,7 +541,7 @@ mod tests {
     #[cfg(not(miri))]
     use std::{
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -576,5 +628,28 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn new_from_host_uses_fixture_runtimeconfig_and_app_scan_root() {
+        let entrypoint = Path::new("/tmp/fixture-probe/SingleFile.dll");
+        assert!(
+            entrypoint.exists(),
+            "missing fixture entrypoint at {}; build fixtures first",
+            entrypoint.display()
+        );
+
+        let loader = AssemblyLoader::new_from_host(entrypoint, None)
+            .expect("new_from_host should initialize loader");
+
+        assert!(loader.external.read().contains_key("SingleFile"));
+        assert_eq!(
+            loader
+                .probing_paths
+                .get("SingleFile")
+                .map(|entry| entry.value().clone()),
+            Some(Path::new("/tmp/fixture-probe/SingleFile.dll").to_path_buf()),
+        );
     }
 }

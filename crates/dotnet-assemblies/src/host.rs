@@ -1,3 +1,4 @@
+use crate::error::AssemblyLoadError;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -96,6 +97,20 @@ pub enum HostError {
         path: PathBuf,
         #[source]
         source: serde_json::Error,
+    },
+    #[error("failed to resolve framework from runtimeconfig '{runtimeconfig_path}'")]
+    ResolveFramework { runtimeconfig_path: PathBuf },
+    #[error("failed to create assembly loader from framework root '{framework_dir}': {source}")]
+    CreateAssemblyLoader {
+        framework_dir: PathBuf,
+        #[source]
+        source: AssemblyLoadError,
+    },
+    #[error("failed to scan app directory '{app_dir}' for managed assemblies: {source}")]
+    AddScanRoot {
+        app_dir: PathBuf,
+        #[source]
+        source: AssemblyLoadError,
     },
     #[error("failed to read deps.json '{path}': {source}")]
     ReadDepsJson {
