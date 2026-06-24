@@ -51,11 +51,7 @@ impl AssemblyLoader {
                 ..Default::default()
             },
         )
-        .map_err(|e| {
-            AssemblyLoadError::InvalidFormat(
-                format!("failed to parse support library: {}", e).into(),
-            )
-        })?;
+        .map_err(AssemblyLoadError::from)?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
         // SAFETY: We manually track this leaked box in MetadataArena to reclaim it on drop.

@@ -28,9 +28,6 @@ heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
 deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
 # Bench-only switch for vm jump-table dispatch variant.
 instruction-dispatch-jump-table = ["dotnet-vm/instruction-dispatch-jump-table"]
-# Emits per-stage parse timing via tracing::debug. Use with a tracing subscriber and
-# RUST_LOG=debug to capture assembly load breakdowns.
-stage-timing = ["dotnet-assemblies/stage-timing"]
 
 [dependencies]
 dotnet-assemblies = { workspace = true }

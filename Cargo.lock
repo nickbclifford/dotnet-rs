@@ -732,8 +732,8 @@ dependencies = [
 
 [[package]]
 name = "dotnetdll"
-version = "0.2.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#cfc2769eaf27ddd750ee9d305c2c90570344ead9"
+version = "0.3.0"
+source = "git+https://github.com/nickbclifford/dotnetdll#2771b9b7da88febaa6ad9fd4e1537d6ffd3a5ed2"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -752,8 +752,8 @@ dependencies = [
 
 [[package]]
 name = "dotnetdll-macros"
-version = "0.1.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#cfc2769eaf27ddd750ee9d305c2c90570344ead9"
+version = "0.2.0"
+source = "git+https://github.com/nickbclifford/dotnetdll#2771b9b7da88febaa6ad9fd4e1537d6ffd3a5ed2"
 dependencies = [
  "heck",
  "proc-macro2",

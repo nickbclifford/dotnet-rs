@@ -15,9 +15,6 @@ tracing = { workspace = true }
 
 [features]
 metadata-validation = []
-# Emits tracing::debug events with elapsed_ns per dotnetdll parse stage (assembly, fields,
-# methods, …). Enable when profiling assembly load time.
-stage-timing = ["dotnetdll/stage-timing"]
 
 [build-dependencies]
 dotnet-build-tools = { workspace = true }

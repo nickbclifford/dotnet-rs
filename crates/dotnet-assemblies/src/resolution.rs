@@ -854,9 +854,7 @@ pub(crate) fn load_resolution_core(
     // assembly (especially System.Private.CoreLib), so deferring IL decoding to first execution
     // via `Resolution::method_body` (see `MethodDescription::body`) avoids decoding bodies that
     // are never run.
-    let res = Resolution::parse(byte_slice, options).map_err(|e| {
-        AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e).into())
-    })?;
+    let res = Resolution::parse(byte_slice, options).map_err(AssemblyLoadError::from)?;
 
     #[cfg(feature = "metadata-validation")]
     crate::validation::validate_metadata(&res)?;

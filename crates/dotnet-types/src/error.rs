@@ -1,3 +1,4 @@
+use dotnetdll::dll::{DLLError, ParseError, ResolveError, ValidityError};
 use thiserror::Error;
 
 #[cfg(feature = "fuzzing")]
@@ -70,6 +71,12 @@ pub enum AssemblyLoadError {
     InvalidFormat(Box<str>),
     #[error("IO error: {0}")]
     Io(#[source] CloneableIoError),
+    #[error("DLL parse error: {0}")]
+    DllParse(#[source] ParseError),
+    #[error("DLL validity error: {0}")]
+    DllValidity(#[source] ValidityError),
+    #[error("DLL resolve error: {0}")]
+    DllResolve(#[source] ResolveError),
 }
 
 impl From<io::Error> for AssemblyLoadError {
@@ -78,10 +85,21 @@ impl From<io::Error> for AssemblyLoadError {
     }
 }
 
+impl From<DLLError> for AssemblyLoadError {
+    fn from(e: DLLError) -> Self {
+        match e {
+            DLLError::Parse(p) => Self::DllParse(p),
+            DLLError::Validity(v) => Self::DllValidity(v),
+            DLLError::Resolve(r) => Self::DllResolve(r),
+            e => Self::InvalidFormat(e.to_string().into()),
+        }
+    }
+}
+
 #[cfg(feature = "fuzzing")]
 impl Arbitrary<'_> for AssemblyLoadError {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.arbitrary::<u8>()? % 3;
+        let tag = u.arbitrary::<u8>()? % 6;
         match tag {
             0 => Ok(Self::FileNotFound(
                 u.arbitrary::<String>()?.into_boxed_str(),
@@ -89,10 +107,18 @@ impl Arbitrary<'_> for AssemblyLoadError {
             1 => Ok(Self::InvalidFormat(
                 u.arbitrary::<String>()?.into_boxed_str(),
             )),
-            _ => Ok(Self::Io(CloneableIoError::new(io::Error::new(
+            2 => Ok(Self::Io(CloneableIoError::new(io::Error::new(
                 io::ErrorKind::NotFound,
                 "arbitrary io error",
             )))),
+            3 => Ok(Self::DllParse(ParseError::BadStructure("arbitrary"))),
+            4 => Ok(Self::DllValidity(ValidityError::BadFlags {
+                context: "arbitrary",
+                flags: 0,
+            })),
+            _ => Ok(Self::DllResolve(ResolveError::LazyLookupFailed(
+                "arbitrary",
+            ))),
         }
     }
 }
