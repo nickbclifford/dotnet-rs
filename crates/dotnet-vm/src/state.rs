@@ -424,7 +424,8 @@ impl SharedGlobalState {
 
         let state = Self {
             pinvoke: {
-                let p = NativeLibraries::new(loader.get_root());
+                let p = NativeLibraries::new(loader.get_root())
+                    .with_search_dirs(loader.native_search_dirs());
                 #[cfg(feature = "fuzzing")]
                 let p = p.with_sandbox(Arc::new(dotnet_pinvoke::DenySandbox));
                 p

@@ -9,6 +9,7 @@ use std::{path::PathBuf, sync::Arc};
 
 pub struct NativeLibraries {
     root: PathBuf,
+    search_dirs: Vec<PathBuf>,
     libraries: DashMap<String, Library>,
     sandbox: Arc<dyn PInvokeSandbox>,
 }
@@ -17,9 +18,21 @@ impl NativeLibraries {
     pub fn new(root: impl AsRef<str>) -> Self {
         Self {
             root: PathBuf::from(root.as_ref()),
+            search_dirs: Vec::new(),
             libraries: DashMap::new(),
             sandbox: Arc::new(DefaultSandbox),
         }
+    }
+
+    pub fn with_search_dirs(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        for dir in dirs {
+            if dir == self.root || self.search_dirs.contains(&dir) {
+                continue;
+            }
+            self.search_dirs.push(dir);
+        }
+
+        self
     }
 
     pub fn with_sandbox(mut self, sandbox: Arc<dyn PInvokeSandbox>) -> Self {
@@ -27,12 +40,11 @@ impl NativeLibraries {
         self
     }
 
-    fn find_library_path(&self, name: &str) -> Option<PathBuf> {
-        let exact = self.root.join(name);
-        if exact.exists() {
-            return Some(exact);
-        }
+    fn search_roots(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.root).chain(self.search_dirs.iter())
+    }
 
+    fn find_library_path(&self, name: &str) -> Option<PathBuf> {
         // Try with platform extension
         #[cfg(target_os = "linux")]
         let extensions = &[".so", ".dylib", ".dll"];
@@ -43,22 +55,29 @@ impl NativeLibraries {
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         let extensions = &[".so", ".dll", ".dylib"];
 
-        for ext in extensions {
-            let path = self.root.join(format!("{}{}", name, ext));
-            if path.exists() {
-                return Some(path);
+        for root in self.search_roots() {
+            let exact = root.join(name);
+            if exact.exists() {
+                return Some(exact);
             }
-        }
 
-        // Versioned search
-        if let Ok(entries) = self.root.read_dir() {
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
-                let file_name = entry.file_name();
-                let s = file_name.to_string_lossy();
-
-                if s.starts_with(name) && (s.contains(".so.") || s.contains(".dylib.")) {
+            for ext in extensions {
+                let path = root.join(format!("{}{}", name, ext));
+                if path.exists() {
                     return Some(path);
+                }
+            }
+
+            // Versioned search
+            if let Ok(entries) = root.read_dir() {
+                for entry in entries.filter_map(Result::ok) {
+                    let path = entry.path();
+                    let file_name = entry.file_name();
+                    let s = file_name.to_string_lossy();
+
+                    if s.starts_with(name) && (s.contains(".so.") || s.contains(".dylib.")) {
+                        return Some(path);
+                    }
                 }
             }
         }
@@ -88,7 +107,10 @@ impl NativeLibraries {
                 &if let Some(p) = &path {
                     format!("Library '{}' found at '{}', now loading", name, p.display())
                 } else {
-                    format!("Library '{}' not found in root, trying system paths", name)
+                    format!(
+                        "Library '{}' not found in configured search roots, trying system paths",
+                        name
+                    )
                 },
             );
         }
@@ -162,5 +184,69 @@ impl NativeLibraries {
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
             .map_err(|_| PInvokeError::SymbolNotFound(library.into(), name.into()))?;
         Ok(CodePtr::from_fun(*sym))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NativeLibraries;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        std::env::temp_dir().join(format!("dotnet_rs_pinvoke_{label}_{nanos}"))
+    }
+
+    #[test]
+    fn find_library_path_uses_additional_search_dirs() {
+        let root = unique_temp_dir("root");
+        let extra = unique_temp_dir("extra");
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&extra).expect("create extra");
+
+        let target = extra.join("libSystem.Native.so");
+        fs::write(&target, b"not an actual shared library").expect("write target");
+
+        let libraries =
+            NativeLibraries::new(root.to_string_lossy().as_ref()).with_search_dirs([extra.clone()]);
+
+        assert_eq!(
+            libraries.find_library_path("libSystem.Native"),
+            Some(target.clone())
+        );
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+        fs::remove_dir_all(&extra).expect("cleanup extra");
+    }
+
+    #[test]
+    fn find_library_path_prefers_primary_root_over_additional_dirs() {
+        let root = unique_temp_dir("primary");
+        let extra = unique_temp_dir("secondary");
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&extra).expect("create extra");
+
+        let primary = root.join("libSystem.Native.so");
+        let secondary = extra.join("libSystem.Native.so");
+        fs::write(&primary, b"primary").expect("write primary");
+        fs::write(&secondary, b"secondary").expect("write secondary");
+
+        let libraries =
+            NativeLibraries::new(root.to_string_lossy().as_ref()).with_search_dirs([extra.clone()]);
+
+        assert_eq!(
+            libraries.find_library_path("libSystem.Native"),
+            Some(primary.clone())
+        );
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+        fs::remove_dir_all(&extra).expect("cleanup extra");
     }
 }

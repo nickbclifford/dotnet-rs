@@ -2,8 +2,9 @@
 use crate::{
     error::AssemblyLoadError,
     host::{
-        HostError, derive_managed_probing_paths, nuget_global_packages_dir, parse_deps_json,
-        parse_runtimeconfig, resolve_framework_from_runtimeconfig,
+        HostError, derive_managed_probing_paths, derive_native_search_dirs,
+        nuget_global_packages_dir, parse_deps_json, parse_runtimeconfig,
+        resolve_framework_from_runtimeconfig,
     },
 };
 use dashmap::DashMap;
@@ -98,6 +99,7 @@ pub struct AssemblyLoader {
     pub(crate) assembly_root: String,
     pub(crate) external: RwLock<HashMap<String, Option<ResolutionS>>>,
     pub(crate) probing_paths: DashMap<String, PathBuf>,
+    pub(crate) native_search_dirs: RwLock<Vec<PathBuf>>,
     /// Mapping of canonical BCL names (e.g., "System.Delegate") to their implementation
     /// in the support library (e.g., "DotnetRs.Delegate").
     pub(crate) stubs: HashMap<String, TypeDescription>,
@@ -200,6 +202,7 @@ impl AssemblyLoader {
                 app_dir: app_dir.to_path_buf(),
                 source,
             })?;
+        loader.register_native_search_dir(app_dir.to_path_buf());
 
         let deps_json_path = entrypoint.with_extension("deps.json");
         if deps_json_path.exists() {
@@ -212,6 +215,10 @@ impl AssemblyLoader {
                 derive_managed_probing_paths(&deps, &nuget_global_dir)
             {
                 loader.register_probing_path(&assembly_name, assembly_path);
+            }
+
+            for native_dir in derive_native_search_dirs(&deps, &nuget_global_dir) {
+                loader.register_native_search_dir(native_dir);
             }
         }
 
@@ -226,6 +233,7 @@ impl AssemblyLoader {
             assembly_root,
             external: RwLock::new(resolutions),
             probing_paths: DashMap::new(),
+            native_search_dirs: RwLock::new(Vec::new()),
             stubs: HashMap::new(),
             reverse_stubs: HashMap::new(),
             corlib_cache: DashMap::new(),
@@ -248,6 +256,19 @@ impl AssemblyLoader {
 
     pub fn get_root(&self) -> &str {
         &self.assembly_root
+    }
+
+    pub fn register_native_search_dir(&self, dir: PathBuf) {
+        let mut native_search_dirs = self.native_search_dirs.write();
+        if native_search_dirs.contains(&dir) {
+            return;
+        }
+
+        native_search_dirs.push(dir);
+    }
+
+    pub fn native_search_dirs(&self) -> Vec<PathBuf> {
+        self.native_search_dirs.read().clone()
     }
 
     /// Returns the canonical (System.*) name for a stubbed type,
@@ -651,5 +672,76 @@ mod tests {
                 .map(|entry| entry.value().clone()),
             Some(Path::new("/tmp/fixture-probe/SingleFile.dll").to_path_buf()),
         );
+        assert!(
+            loader
+                .native_search_dirs()
+                .contains(&Path::new("/tmp/fixture-probe").to_path_buf())
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn new_from_host_registers_native_dirs_from_deps_assets() {
+        let app_dir = unique_temp_dir("new_from_host_native_dirs");
+        fs::create_dir_all(&app_dir).expect("create app dir");
+
+        let entrypoint = app_dir.join("App.dll");
+        fs::write(&entrypoint, b"not a managed assembly").expect("write entrypoint placeholder");
+
+        fs::write(
+            app_dir.join("App.runtimeconfig.json"),
+            r#"{
+  "runtimeOptions": {
+    "tfm": "net10.0",
+    "framework": {
+      "name": "Microsoft.NETCore.App",
+      "version": "10.0.0"
+    }
+  }
+}"#,
+        )
+        .expect("write runtimeconfig");
+
+        fs::write(
+            app_dir.join("App.deps.json"),
+            r#"{
+  "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "SQLitePCLRaw.lib.e_sqlite3/2.1.6": {
+        "native": {
+          "runtimes/linux-x64/native/libe_sqlite3.so": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "SQLitePCLRaw.lib.e_sqlite3/2.1.6": {
+      "type": "package",
+      "path": "sqlitepclraw.lib.e_sqlite3/2.1.6"
+    }
+  }
+}"#,
+        )
+        .expect("write deps");
+
+        let nuget_root = unique_temp_dir("new_from_host_native_dirs_nuget");
+        fs::create_dir_all(&nuget_root).expect("create nuget root");
+
+        let loader = AssemblyLoader::new_from_host(&entrypoint, Some(&nuget_root))
+            .expect("new_from_host should initialize loader");
+
+        let native_dirs = loader.native_search_dirs();
+        assert!(native_dirs.contains(&app_dir));
+        assert!(
+            native_dirs.contains(
+                &nuget_root
+                    .join("sqlitepclraw.lib.e_sqlite3/2.1.6")
+                    .join("runtimes/linux-x64/native")
+            )
+        );
+
+        fs::remove_dir_all(&app_dir).expect("cleanup app dir");
+        fs::remove_dir_all(&nuget_root).expect("cleanup nuget root");
     }
 }

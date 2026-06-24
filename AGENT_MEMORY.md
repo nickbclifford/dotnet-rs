@@ -176,3 +176,15 @@ repo root.
 **Follow-ups for future steps:** Step 4.1 can call `AssemblyLoader::new_from_host` directly for CLI no-`-a` mode and preserve existing `AssemblyLoader::new` path for `-a`. Step 3.4 remains required for native library probing (`libSystem.Native` etc.); this step only wires managed probing from deps.
 
 **Open questions:** `new_from_host` currently skips deps probing if `<entrypoint>.deps.json` is absent (optional behavior per plan) but still fails hard on malformed deps when present; if host policy later requires strict deps presence, this behavior should be revisited explicitly.
+
+## 2026-06-24 — Step 3.4 native search-dir wiring into P/Invoke/VM state — gpt-5-codex — completed
+
+**Goal:** Wire host-derived native probing directories into runtime native library resolution so host-mode apps can resolve framework/package native assets without copying `.so` files into the managed assembly root.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/loader.rs` to track native probing directories (`native_search_dirs`), expose `register_native_search_dir` + `native_search_dirs()` accessors, and extend `AssemblyLoader::new_from_host` to register app directory + deps-derived native dirs (`derive_native_search_dirs`) alongside managed probing paths. Updated `crates/dotnet-pinvoke/src/loader.rs` `NativeLibraries` to support additional search directories (`with_search_dirs`) and search across primary root first, then host-provided dirs, before falling back to system loader paths. Updated `crates/dotnet-vm/src/state.rs` so `SharedGlobalState::new` builds `NativeLibraries` with loader-provided native search dirs. Added/updated focused tests in `dotnet-assemblies` (`new_from_host_registers_native_dirs_from_deps_assets`, plus fixture host test assertion) and in `dotnet-pinvoke` (additional-dir lookup and primary-root precedence). Marked checklist item `3.4` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, REVIEW-cited assumptions still matched current code: `find_latest_runtime_in_base` remained in `crates/dotnet-assemblies/src/resolution.rs`, and the hardcoded `IsDynamicCodeSupported = false` switch remained in `crates/dotnet-vm/src/state.rs` unchanged. Wiring native dirs through loader → VM state is additive and does not change `-a` semantics: legacy `AssemblyLoader::new` still uses only its assembly root unless host-mode constructor registers extra dirs.
+
+**Follow-ups for future steps:** Step 4.1 can adopt host mode in CLI (`AssemblyLoader::new_from_host`) and automatically benefit from native-search wiring without changing the existing `-a` path. If host policy later needs explicit ordering beyond current precedence (primary root, then registration order of extra dirs), that contract should be documented before changing resolution order.
+
+**Open questions:** Native-asset derivation still depends on the current `derive_native_search_dirs` logic from step 3.1; if broader RID fallback selection is required for packages that publish multiple RID target groups, that should be addressed as a dedicated follow-up rather than folded into this wiring step.
