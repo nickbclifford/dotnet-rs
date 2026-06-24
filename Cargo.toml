@@ -68,6 +68,8 @@ thiserror = "2.0"
 smallvec = "1.13"
 slab = "0.4"
 lru = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Benchmark profile guidance:
 # - Use `bench-thin` for fast benchmark iteration.

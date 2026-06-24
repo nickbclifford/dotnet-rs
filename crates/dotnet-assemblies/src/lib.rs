@@ -6,6 +6,7 @@ pub mod ancestors;
 #[cfg(test)]
 mod drop_tests;
 pub mod error;
+pub mod host;
 pub mod loader;
 pub mod resolution;
 pub mod support;

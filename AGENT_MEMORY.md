@@ -104,3 +104,15 @@ repo root.
 **Open questions:**
 - Is the `Generic index 0 out of bounds (length 0)` caused by cross-assembly generic substitution, by `System.Collections.Immutable` net10/net8 version skew, or by a more general constructed-generic method resolution bug? This spike did not fix or minimize it.
 - Should future EF probe flat dirs include framework native libraries by convention, or should the plan wait for native-search-dir wiring in the host path? The required Step 1.1 DLL-only run proves the current command cannot progress without native library discovery.
+
+## 2026-06-24 — Step 2.1 runtimeconfig parser scaffold — gpt-5-codex — completed
+
+**Goal:** Add host-side `runtimeconfig.json` serde types + parser in `dotnet-assemblies`, including a unit test against a real fixture runtimeconfig.
+
+**What changed:** Added `crates/dotnet-assemblies/src/host.rs` with `RuntimeConfig`, `RuntimeOptions`, `FrameworkRef`, `RollForwardPolicy`, `HostError`, and `parse_runtimeconfig(&Path)`; added a unit test `host::tests::parses_fixture_runtimeconfig` that parses `/tmp/fixture-probe/SingleFile.runtimeconfig.json` and asserts `tfm`, framework name/version, absent `rollForward`, and expected `configProperties` value; updated `Cargo.toml` workspace deps with `serde` + `serde_json`; updated `crates/dotnet-assemblies/Cargo.toml` to consume those deps; registered the new module in `crates/dotnet-assemblies/src/lib.rs`; checked off checklist item `2.1` in `CHECKLIST.md`.
+
+**What I learned:** The REVIEW.md-cited runtime discovery code in `crates/dotnet-assemblies/src/resolution.rs` (`find_latest_runtime_in_base`, `find_dotnet_app_path`) still matches the described pre-host state; the `IsDynamicCodeSupported = false` app-context switch in `crates/dotnet-vm/src/state.rs` is still present and untouched. The `/tmp/fixture-probe/SingleFile.runtimeconfig.json` fixture file exists in this environment and matches the expected shape.
+
+**Follow-ups for future steps:** Step 2.2 can now focus on roll-forward selection logic (`select_framework_version`) using `RollForwardPolicy`; step 2.3 can wire `DOTNET_ROOT` + runtimeconfig parsing into end-to-end framework resolution.
+
+**Open questions:** The new unit test currently expects `/tmp/fixture-probe/SingleFile.runtimeconfig.json` to exist; if future environments do not precreate that probe artifact, decide whether to standardize fixture generation before `dotnet-assemblies` tests or relocate this test input under repository-controlled paths.
