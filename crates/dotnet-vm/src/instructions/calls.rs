@@ -156,8 +156,24 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             .find_concrete_type(constraint_type_source.clone())
     );
 
-    // Determine dispatch strategy based on constraint type
-    let method = if dotnet_vm_ops::vm_try!(
+    // When the constrained method is resolved against the constraint type itself
+    // (a direct override on a value type, or an implementation found on a reference
+    // type), the callee must execute under the constraint type's own generic
+    // instantiation — NOT the caller frame's `lookup`. Reusing the caller's lookup
+    // leaks the caller's type arguments into the callee; for a self-referential
+    // instantiation such as `StructMultiKey<StructMultiKey<..>, ..>` this makes the
+    // inner `GetHashCode` re-resolve `!T1` to the outer type and recurse forever.
+    // `make_lookup()` derives the type arguments from the concrete constraint type;
+    // method generics (e.g. a generic interface method) are preserved from the call.
+    let constraint_lookup = {
+        let mut l = constraint_type_source.make_lookup();
+        l.method_generics = lookup.method_generics.clone();
+        l
+    };
+
+    // Determine dispatch strategy based on constraint type. Each branch yields the
+    // resolved method plus the generic lookup the callee frame must run under.
+    let (method, dispatch_lookup) = if dotnet_vm_ops::vm_try!(
         constraint_type
             .clone()
             .is_value_type(&ctx.current_context())
@@ -168,11 +184,12 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             &base_method.method().name,
             base_method.signature(),
             base_method.resolution(),
-            &lookup,
+            &constraint_lookup,
             false,
         ) {
-            // Value type has its own implementation
-            Ok(overriding_method)
+            // Value type has its own implementation: run it under the constraint
+            // type's instantiation.
+            (Ok(overriding_method), constraint_lookup.clone())
         } else {
             // No override: box the value and use base implementation
             let m = dotnet_vm_ops::vm_try!(args[0].try_as_managed_ptr());
@@ -207,12 +224,13 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&constraint_type_source, value));
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(boxed));
-            ctx.resolver().resolve_virtual_method(
+            let resolved = ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
                 &lookup,
                 &ctx.current_context(),
-            )
+            );
+            (resolved, lookup.clone())
         }
     } else {
         // Reference type: the 'this' may already be an ObjectRef (common case),
@@ -264,23 +282,26 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
         // For reference types with constrained callvirt, try to find the method
         // implementation directly in the constraint type first
         if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
-            constraint_type,
+            constraint_type.clone(),
             &base_method.method().name,
             base_method.signature(),
             base_method.resolution(),
-            &lookup,
+            &constraint_lookup,
             false,
         ) {
-            Ok(impl_method)
+            // Implementation found on the constraint type: run it under that type's
+            // instantiation rather than the caller frame's lookup.
+            (Ok(impl_method), constraint_lookup.clone())
         } else {
             // Fall back to normal virtual dispatch
             let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj_ref));
-            ctx.resolver().resolve_virtual_method(
+            let resolved = ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
                 &lookup,
                 &ctx.current_context(),
-            )
+            );
+            (resolved, lookup.clone())
         }
     };
 
@@ -295,5 +316,5 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     // instead of unified_dispatch because it performs custom method resolution
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
-    ctx.dispatch_method(method, lookup)
+    ctx.dispatch_method(method, dispatch_lookup)
 }
