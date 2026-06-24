@@ -152,3 +152,15 @@ repo root.
 **Follow-ups for future steps:** Step 3.2 can consume managed probing pairs to populate loader probing maps without changing existing `-a` behavior. Step 3.4 still needs to wire derived native directories into `dotnet-pinvoke`/VM native resolution; this step only derives the list.
 
 **Open questions:** As with runtimeconfig tests, deps parser tests currently rely on `/tmp` probe artifacts existing in the environment; if this becomes flaky in CI/dev setups, future work should standardize generating these inputs before `dotnet-assemblies` tests.
+
+## 2026-06-24 — Step 3.2 loader probing-path refactor — gpt-5-codex — completed
+
+**Goal:** Extend `AssemblyLoader` with explicit probing-path registration and secondary-root scanning while preserving existing `--assemblies` behavior.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/loader.rs` to add `probing_paths: DashMap<String, PathBuf>` on `AssemblyLoader`, initialize it in `new_internal`, and update `load_and_register` to prefer a registered probing path before the legacy `{assembly_root}/{name}.dll` fallback. Added `register_probing_path(name: &str, path: PathBuf)` and `add_scan_root(root: &Path) -> Result<(), AssemblyLoadError>`; both register lazy externals (`None`) plus explicit probe paths only when the assembly name is not already present in `external` (preserving primary-root precedence). Added focused unit tests for probing-path registration and scan-root behavior. Marked checklist item `3.2` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, REVIEW-cited code still matched assumptions: `crates/dotnet-assemblies/src/resolution.rs` still contains `find_latest_runtime_in_base`, `crates/dotnet-vm/src/state.rs` still has the hardcoded `IsDynamicCodeSupported = false` switch in the same block, and `AssemblyLoader::new`/`load_and_register` were still single-root as described. No discrepancies were found.
+
+**Follow-ups for future steps:** Step 3.3 can call `add_scan_root(entrypoint.parent())` and then `register_probing_path` for deps-derived assets without changing `-a` semantics; because registration is now non-overwriting, primary/framework and first-seen scan-root entries continue to win on name conflicts.
+
+**Open questions:** `register_probing_path` currently ignores any name already present in `external` (including lazy `None` entries), which preserves current root precedence and avoids behavior changes; if later host policy needs explicit override ordering across multiple probing sources, that precedence contract should be specified before changing this behavior.
