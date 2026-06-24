@@ -72,3 +72,13 @@ Why this is not a dispatch bug:
 - `Internal VM error: Method execution failed: Not implemented: no body in executing method: DotnetRs.FieldInfo.GetFieldAttributes`
 
 This is separate from the `GetRawConstantValue` blocker but should be tracked as follow-up reflection completeness work.
+
+## Post-5.7 follow-on blocker (not fixed in this step)
+
+After implementing `DotnetRs.FieldInfo.GetRawConstantValue()` support and intrinsic constant materialization, rung-2 no longer fails with `NotSupported_AbstractNonCLS`; execution progresses further and now fails with:
+
+- `System.InvalidProgramException: Common Language Runtime detected an invalid program.`
+- top frame: `System.Globalization.CompareInfo/SortHandleCache.GetCachedSortHandle(string sortName)`
+- call path still rooted under enum metadata initialization (`System.Type.GetEnumData` -> `System.Enum.GetNames` -> `Newtonsoft.Json.Utilities.EnumUtils.InitializeValuesAndNames`)
+
+This is a newly exposed downstream runtime bug and is outside the scope of the 5.6/5.7 field-constant reflection fix.

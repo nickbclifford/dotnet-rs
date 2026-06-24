@@ -264,3 +264,15 @@ repo root.
 **Follow-ups for future steps:** Implement checklist item `5.7` exactly as the writeup plan (support override + intrinsic constant materialization + rung-2 diff parity rerun). Then triage/implement `5.8` for `GetFieldAttributes` (and potentially broader `DotnetRs.FieldInfo` internal-call completeness) so callers using `FieldInfo.Attributes` do not crash with no-body errors.
 
 **Open questions:** For `GetRawConstantValue` implementation shape, should the first pass support only enum-needed literal primitives (enough for rung 2) or full metadata-constant coverage (`bool/char/integers/floats/string/null`) to avoid near-term follow-on failures?
+
+## 2026-06-24 — Step 5.7 GetRawConstantValue override + intrinsic constant materialization — gpt-5-codex — completed
+
+**Goal:** Implement the 5.6 fix plan by adding `DotnetRs.FieldInfo.GetRawConstantValue()` support (override + intrinsic constant materialization) and rerun rung-2 Newtonsoft parity.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/support/FieldInfo.cs` to override `GetRawConstantValue()` as an internal call surface; updated `crates/dotnet-intrinsics-reflection/src/fields.rs` to add `DotnetRs.FieldInfo::GetRawConstantValue()` intrinsic that resolves metadata constants and materializes managed objects (`bool/char/integer/float/string/null`) with boxed primitives and proper non-literal `InvalidOperationException`; updated `CHECKLIST.md` to mark `5.7` complete and added follow-up item `5.9`; updated `docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md` with a new post-5.7 downstream blocker section.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch was still present unchanged in `crates/dotnet-vm/src/state.rs` in the same `app_context_switches` initialization block (line numbers have shifted since REVIEW, but the exact switch/value are unchanged). The `GetRawConstantValue` fix is effective: a minimal enum probe now reports `DotnetRs.FieldInfo` and successfully returns raw constant values (e.g., `System.Byte` value `1`, exit `42`). Re-running rung-2 parity no longer hits `NotSupported_AbstractNonCLS`; instead it now fails later with `System.InvalidProgramException` in `System.Globalization.CompareInfo/SortHandleCache.GetCachedSortHandle`, reached via `Type.GetEnumData -> Enum.GetNames -> Newtonsoft EnumUtils`.
+
+**Follow-ups for future steps:** New checklist item `5.9` tracks the newly exposed rung-2 blocker (`CompareInfo` invalid-program failure) and should be handled after or alongside `5.8` reflection completeness work.
+
+**Open questions:** Is the post-5.7 `CompareInfo/SortHandleCache` `InvalidProgramException` rooted in an interpreter IL validity bug (e.g., instruction semantics/verification mismatch) or in a missing intrinsic/runtime-coupled path in globalization code that now becomes reachable?
