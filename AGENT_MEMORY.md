@@ -140,3 +140,15 @@ repo root.
 **Follow-ups for future steps:** Step 3.x can consume `resolve_framework_from_runtimeconfig` directly when wiring `AssemblyLoader::new_from_host`; keep `--assemblies` path unchanged. If more tests begin mutating process env vars, consider consolidating env mutation helpers to avoid cross-test interference.
 
 **Open questions:** `framework_base_candidates` currently mirrors existing `find_dotnet_app_path` conventions and only consults `DOTNET_ROOT` (not arch-specific variants such as `DOTNET_ROOT_x64`); decide later whether expanded host-env compatibility is required for this project.
+
+## 2026-06-24 — Step 3.1 deps.json parser + probing derivation — gpt-5-codex — completed
+
+**Goal:** Add host-side `deps.json` serde parsing plus managed/native probing derivation helpers and focused unit coverage for fixture/no-NuGet and Newtonsoft/NuGet cases.
+
+**What changed:** Updated `crates/dotnet-assemblies/src/host.rs` with new serde types (`DepsJson`, `DepsRuntimeTarget`, `TargetLibrary`, `AssemblyAssetInfo`, `LibraryInfo`), new `HostError` variants for deps read/parse failures, `parse_deps_json(&Path) -> Result<DepsJson, HostError>`, `derive_managed_probing_paths(&DepsJson, &Path) -> Vec<(String, PathBuf)>`, `derive_native_search_dirs(&DepsJson, &Path) -> Vec<PathBuf>`, and `nuget_global_packages_dir() -> PathBuf`. Added unit tests that parse `/tmp/fixture-probe/SingleFile.deps.json` and `/tmp/nuget-probe-out/App.deps.json` and assert expected managed/native derivation behavior. Marked checklist item `3.1` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, REVIEW-cited locations still matched assumptions: `find_latest_runtime_in_base` in `crates/dotnet-assemblies/src/resolution.rs` is still present and unchanged, and the hardcoded `IsDynamicCodeSupported = false` switch remains in `crates/dotnet-vm/src/state.rs` untouched. The current probe artifacts at `/tmp/fixture-probe` and `/tmp/nuget-probe-out` contain deps.json shapes matching REVIEW examples.
+
+**Follow-ups for future steps:** Step 3.2 can consume managed probing pairs to populate loader probing maps without changing existing `-a` behavior. Step 3.4 still needs to wire derived native directories into `dotnet-pinvoke`/VM native resolution; this step only derives the list.
+
+**Open questions:** As with runtimeconfig tests, deps parser tests currently rely on `/tmp` probe artifacts existing in the environment; if this becomes flaky in CI/dev setups, future work should standardize generating these inputs before `dotnet-assemblies` tests.

@@ -39,6 +39,50 @@ pub enum RollForwardPolicy {
     LatestMajor,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DepsJson {
+    #[serde(rename = "runtimeTarget")]
+    pub runtime_target: DepsRuntimeTarget,
+    #[serde(default)]
+    pub targets: BTreeMap<String, BTreeMap<String, TargetLibrary>>,
+    #[serde(default)]
+    pub libraries: BTreeMap<String, LibraryInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DepsRuntimeTarget {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+pub struct TargetLibrary {
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, String>,
+    #[serde(default)]
+    pub runtime: BTreeMap<String, AssemblyAssetInfo>,
+    #[serde(default)]
+    pub native: BTreeMap<String, AssemblyAssetInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+pub struct AssemblyAssetInfo {
+    #[serde(rename = "assemblyVersion")]
+    pub assembly_version: Option<String>,
+    #[serde(rename = "fileVersion")]
+    pub file_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct LibraryInfo {
+    #[serde(rename = "type")]
+    pub library_type: String,
+    pub serviceable: Option<bool>,
+    pub sha512: Option<String>,
+    pub path: Option<String>,
+    #[serde(rename = "hashPath")]
+    pub hash_path: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum HostError {
     #[error("failed to read runtimeconfig '{path}': {source}")]
@@ -49,6 +93,18 @@ pub enum HostError {
     },
     #[error("failed to parse runtimeconfig '{path}': {source}")]
     ParseRuntimeConfig {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to read deps.json '{path}': {source}")]
+    ReadDepsJson {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse deps.json '{path}': {source}")]
+    ParseDepsJson {
         path: PathBuf,
         #[source]
         source: serde_json::Error,
@@ -67,6 +123,119 @@ pub fn parse_runtimeconfig(path: &Path) -> Result<RuntimeConfig, HostError> {
             source,
         }
     })
+}
+
+pub fn parse_deps_json(path: &Path) -> Result<DepsJson, HostError> {
+    let bytes = fs::read(path).map_err(|source| HostError::ReadDepsJson {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    serde_json::from_slice::<DepsJson>(&bytes).map_err(|source| HostError::ParseDepsJson {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+pub fn derive_managed_probing_paths(
+    deps: &DepsJson,
+    nuget_global: &Path,
+) -> Vec<(String, PathBuf)> {
+    let Some(targets) = deps.targets.get(&deps.runtime_target.name) else {
+        return Vec::new();
+    };
+
+    let mut managed_paths = Vec::new();
+
+    for (library_key, target_library) in targets {
+        let Some(library_info) = deps.libraries.get(library_key) else {
+            continue;
+        };
+
+        if library_info.library_type != "package" {
+            continue;
+        }
+
+        let Some(package_path) = library_info.path.as_deref() else {
+            continue;
+        };
+
+        let package_dir = nuget_global.join(package_path);
+
+        for asset_rel_path in target_library.runtime.keys() {
+            let asset_rel = Path::new(asset_rel_path);
+            let Some(assembly_stem) = asset_rel.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+
+            managed_paths.push((assembly_stem.to_string(), package_dir.join(asset_rel)));
+        }
+    }
+
+    managed_paths
+}
+
+pub fn derive_native_search_dirs(deps: &DepsJson, nuget_global: &Path) -> Vec<PathBuf> {
+    let Some(targets) = deps.targets.get(&deps.runtime_target.name) else {
+        return Vec::new();
+    };
+
+    let mut native_dirs = Vec::new();
+
+    for (library_key, target_library) in targets {
+        if target_library.native.is_empty() {
+            continue;
+        }
+
+        let Some(library_info) = deps.libraries.get(library_key) else {
+            continue;
+        };
+
+        if library_info.library_type != "package" {
+            continue;
+        }
+
+        let Some(package_path) = library_info.path.as_deref() else {
+            continue;
+        };
+
+        let package_dir = nuget_global.join(package_path);
+
+        for native_rel_path in target_library.native.keys() {
+            let native_rel = Path::new(native_rel_path);
+            let native_dir = native_rel
+                .parent()
+                .map_or_else(|| package_dir.clone(), |parent| package_dir.join(parent));
+
+            if !native_dirs.contains(&native_dir) {
+                native_dirs.push(native_dir);
+            }
+        }
+    }
+
+    native_dirs
+}
+
+pub fn nuget_global_packages_dir() -> PathBuf {
+    if let Some(nuget_packages) = std::env::var_os("NUGET_PACKAGES")
+        && !nuget_packages.is_empty()
+    {
+        return PathBuf::from(nuget_packages);
+    }
+
+    if cfg!(target_os = "windows") {
+        if let Some(user_profile) = std::env::var_os("USERPROFILE")
+            && !user_profile.is_empty()
+        {
+            return PathBuf::from(user_profile).join(".nuget").join("packages");
+        }
+    } else if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join(".nuget").join("packages");
+    }
+
+    PathBuf::from(".nuget").join("packages")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -270,7 +439,8 @@ pub fn resolve_framework_from_runtimeconfig(
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameworkRef, RollForwardPolicy, parse_runtimeconfig, resolve_framework_from_runtimeconfig,
+        FrameworkRef, RollForwardPolicy, derive_managed_probing_paths, derive_native_search_dirs,
+        parse_deps_json, parse_runtimeconfig, resolve_framework_from_runtimeconfig,
         select_framework_version,
     };
     use serde_json::Value;
@@ -305,6 +475,51 @@ mod tests {
                 .get("System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization"),
             Some(&Value::Bool(false))
         );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn parses_fixture_deps_and_derives_no_nuget_probing_paths() {
+        let deps_path = Path::new("/tmp/fixture-probe/SingleFile.deps.json");
+        assert!(
+            deps_path.exists(),
+            "missing fixture deps.json at {}; build fixtures first",
+            deps_path.display()
+        );
+
+        let deps = parse_deps_json(deps_path).expect("deps.json should parse");
+        let nuget_global = Path::new("/tmp/fixture-probe-nuget-root");
+
+        assert_eq!(deps.runtime_target.name, ".NETCoreApp,Version=v10.0");
+        assert!(derive_managed_probing_paths(&deps, nuget_global).is_empty());
+        assert!(derive_native_search_dirs(&deps, nuget_global).is_empty());
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn parses_newtonsoft_deps_and_derives_package_probing_paths() {
+        let deps_path = Path::new("/tmp/nuget-probe-out/App.deps.json");
+        assert!(
+            deps_path.exists(),
+            "missing Newtonsoft probe deps.json at {}; rebuild probe first",
+            deps_path.display()
+        );
+
+        let deps = parse_deps_json(deps_path).expect("deps.json should parse");
+        let nuget_global = Path::new("/tmp/nuget-global");
+
+        let managed = derive_managed_probing_paths(&deps, nuget_global);
+        assert_eq!(managed.len(), 1);
+        assert_eq!(
+            managed[0],
+            (
+                "Newtonsoft.Json".to_string(),
+                nuget_global
+                    .join("newtonsoft.json/13.0.3")
+                    .join("lib/net6.0/Newtonsoft.Json.dll")
+            )
+        );
+        assert!(derive_native_search_dirs(&deps, nuget_global).is_empty());
     }
 
     fn create_runtime_base(version_dirs: &[&str]) -> PathBuf {
