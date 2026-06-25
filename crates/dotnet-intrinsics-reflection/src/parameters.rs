@@ -13,6 +13,7 @@ use dotnetdll::resolved::signature::ParameterType;
 
 #[dotnet_intrinsic("string DotnetRs.ParameterInfo::GetName()")]
 #[dotnet_intrinsic("System.Type DotnetRs.ParameterInfo::GetParameterType()")]
+#[dotnet_intrinsic("System.Reflection.MemberInfo DotnetRs.ParameterInfo::GetMember()")]
 pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,

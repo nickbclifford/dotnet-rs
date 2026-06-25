@@ -89,6 +89,8 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("object[] DotnetRs.MethodInfo::GetCustomAttributes(System.Type, bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(System.Type, bool)")]
+#[dotnet_intrinsic("bool DotnetRs.MethodInfo::IsDefined(System.Type, bool)")]
+#[dotnet_intrinsic("bool DotnetRs.ConstructorInfo::IsDefined(System.Type, bool)")]
 pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -99,6 +101,37 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let param_count = method.signature().parameters.len();
 
     let result = match (method_name, param_count) {
+        ("get_ContainsGenericParameters", 0) => {
+            // Every dispatched method is fully resolved, so report no unresolved type params.
+            let _obj = ctx.pop_obj();
+            ctx.push_i32(0);
+            Some(StepResult::Continue)
+        }
+        ("IsDefined", 2) => {
+            let _inherit = ctx.pop_i32();
+            let attribute_type_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+            let attribute_filter = if attribute_type_obj.0.is_some() {
+                let filter_rt = dotnet_vm_ops::vm_try!(
+                    crate::common::resolve_runtime_type(ctx, attribute_type_obj)
+                );
+                match filter_rt {
+                    RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_method_custom_attributes(
+                ctx,
+                method,
+                attribute_filter
+            ));
+            ctx.push_i32(if attrs.is_empty() { 0 } else { 1 });
+            Some(StepResult::Continue)
+        }
         ("GetName" | "get_Name", 0) => {
             let obj = ctx.pop_obj();
             let (method, _) =
@@ -389,7 +422,14 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         _ => None,
     };
 
-    let _ = result.expect("unimplemented method info intrinsic");
+    let _ = result.unwrap_or_else(|| {
+        panic!(
+            "unimplemented method info intrinsic: {}.{}({})",
+            method.parent.type_name(),
+            method_name,
+            param_count
+        )
+    });
     StepResult::Continue
 }
 

@@ -445,6 +445,22 @@ fn handle_pinvoke_return<'gc>(
                         .find_concrete_type(concrete)
                         .expect("Failed to resolve type in pinvoke interop");
 
+                    // An enum returned from native code is a value type at the
+                    // metadata level, but on the evaluation stack it must be
+                    // represented as its underlying primitive (ECMA-335 §III.1.1.1:
+                    // the CLI treats enums exactly as their underlying type).
+                    // Resolve the underlying type before `td` is consumed below.
+                    let enum_underlying = match td.is_enum() {
+                        Some(member) => {
+                            let mt: MethodType = member.clone().into();
+                            match ctx.make_concrete(&mt) {
+                                Ok(ct) => Some(ct),
+                                Err(e) => return StepResult::Error(e.into()),
+                            }
+                        }
+                        None => None,
+                    };
+
                     let instance = match ctx.new_object(td) {
                         Ok(inst) => inst,
                         Err(e) => return StepResult::Error(e.into()),
@@ -472,7 +488,19 @@ fn handle_pinvoke_return<'gc>(
                         copy_value_type_return_data(guard, temp_buffer.as_bytes());
                     });
 
-                    StackValue::ValueType(instance)
+                    match enum_underlying {
+                        Some(enum_ct) => {
+                            let cts = match instance
+                                .instance_storage
+                                .with_data(|d| ctx.read_cts_value(&enum_ct, d))
+                            {
+                                Ok(v) => v,
+                                Err(e) => return StepResult::Error(e.into()),
+                            };
+                            cts.into_stack()
+                        }
+                        None => StackValue::ValueType(instance),
+                    }
                 }
                 BaseType::Type { .. }
                 | BaseType::Array { .. }

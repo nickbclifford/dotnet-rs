@@ -123,6 +123,11 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("object[] System.RuntimeType::GetCustomAttributes(System.Type, bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.RuntimeType::GetCustomAttributes(bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.RuntimeType::GetCustomAttributes(System.Type, bool)")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::IsDefined(System.Type, bool)")]
+#[dotnet_intrinsic("bool System.RuntimeType::IsDefined(System.Type, bool)")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericTypeDefinition()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsGenericTypeDefinition()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsGenericTypeDefinition()")]
 #[dotnet_intrinsic("System.Type[] System.RuntimeType::GetInterfaces()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetInterface(string, bool)")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetElementType()")]
@@ -149,6 +154,9 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
+        ("GetIsGenericTypeDefinition" | "get_IsGenericTypeDefinition", 0) => {
+            handle_get_is_generic_type_definition(ctx, generics)
+        }
         ("GetIsConstructedGenericType" | "get_IsConstructedGenericType", 0) => {
             handle_get_is_constructed_generic_type(ctx, generics)
         }
@@ -172,6 +180,7 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("HasElementTypeImpl", 0) => handle_has_element_type_impl(ctx, generics),
         ("GetCustomAttributes", 1) => handle_get_custom_attributes_bool(ctx, generics),
         ("GetCustomAttributes", 2) => handle_get_custom_attributes_typed(ctx, generics),
+        ("IsDefined", 2) => handle_is_defined(ctx, generics),
         ("GetInterfaces", 0) => handle_get_interfaces(ctx, generics),
         ("GetInterface", 2) => handle_get_interface(ctx, generics),
         ("GetElementType", 0) => handle_get_element_type(ctx, generics),

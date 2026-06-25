@@ -140,6 +140,20 @@ pub fn make_runtime_type(
                 let (ut, generics) = decompose_type_source::<MethodType>(source);
                 let td = res_ctx.reflection_locate_type(ut)?;
                 if generics.is_empty() {
+                    // If the type itself declares generic parameters, this is a generic type
+                    // definition (e.g. `typeof(IDictionary<,>)`). Represent it as
+                    // `RuntimeType::Generic` with open `TypeParameter` args so that
+                    // `IsGenericTypeDefinition` can recognise it correctly.
+                    let n_params = td.definition().generic_parameters.len();
+                    if n_params > 0 {
+                        let params = (0..n_params as u16)
+                            .map(|index| RuntimeType::TypeParameter {
+                                owner: td.clone(),
+                                index,
+                            })
+                            .collect();
+                        return Ok(RuntimeType::Generic(td, params));
+                    }
                     match (
                         td.definition().namespace.as_deref(),
                         td.definition().name.as_ref(),

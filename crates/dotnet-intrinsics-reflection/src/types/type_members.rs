@@ -449,6 +449,31 @@ pub(crate) fn collect_method_custom_attributes<'gc, T: ReflectionIntrinsicHost<'
     Ok(attributes)
 }
 
+/// Collects the materialized custom attributes declared directly on `field`,
+/// mirroring [`collect_method_custom_attributes`] for the field-level metadata
+/// table.
+pub(crate) fn collect_field_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    field: dotnet_types::members::FieldDescription,
+    attribute_filter: Option<TypeDescription>,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let owner_type = field.parent.clone();
+    // `field()` dereferences directly into the type definition's field list;
+    // for lazy assemblies the attributes may not be loaded yet so we fall back
+    // to an empty list (same behaviour as collect_method_custom_attributes when
+    // the method has no attributes).
+    let field_attrs = field.field().attributes.clone();
+    let mut attributes = Vec::new();
+    for attribute in &field_attrs {
+        if let Some(attr_obj) =
+            materialize_custom_attribute(ctx, &owner_type, attribute, &attribute_filter)?
+        {
+            attributes.push(attr_obj);
+        }
+    }
+    Ok(attributes)
+}
+
 pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -495,6 +520,36 @@ pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
+}
+
+pub fn handle_is_defined<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _inherit = ctx.pop_i32();
+    let attribute_type_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let attribute_filter = if attribute_type_obj.0.is_some() {
+        let filter_runtime_type =
+            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
+        match filter_runtime_type {
+            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
+        ctx,
+        target_runtime_type,
+        attribute_filter,
+    ));
+
+    ctx.push_i32(if custom_attributes.is_empty() { 0 } else { 1 });
+    StepResult::Continue
 }
 
 pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(

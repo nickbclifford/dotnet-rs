@@ -17,8 +17,8 @@ macro_rules! binary_op {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
-            let v2 = vm_pop!(ctx);
-            let v1 = vm_pop!(ctx);
+            let v2 = vm_pop!(ctx).coerce_enum_to_underlying();
+            let v1 = vm_pop!(ctx).coerce_enum_to_underlying();
             let result = dotnet_vm_ops::vm_try!(v1 $op v2);
             ctx.push(result);
             StepResult::Continue
@@ -35,8 +35,8 @@ macro_rules! binary_op_result {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::{EvalStackOps, ExceptionOps};
-            let v2 = vm_pop!(ctx);
-            let v1 = vm_pop!(ctx);
+            let v2 = vm_pop!(ctx).coerce_enum_to_underlying();
+            let v1 = vm_pop!(ctx).coerce_enum_to_underlying();
             match v1.$method(v2, sgn) {
                 Ok(result) => {
                     ctx.push(result);
@@ -60,8 +60,8 @@ macro_rules! binary_op_sgn {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
-            let v2 = vm_pop!(ctx);
-            let v1 = vm_pop!(ctx);
+            let v2 = vm_pop!(ctx).coerce_enum_to_underlying();
+            let v1 = vm_pop!(ctx).coerce_enum_to_underlying();
             let result = dotnet_vm_ops::vm_try!(v1.$method(v2, sgn));
             ctx.push(result);
             StepResult::Continue
@@ -77,7 +77,7 @@ macro_rules! unary_op {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
-            let v = vm_pop!(ctx);
+            let v = vm_pop!(ctx).coerce_enum_to_underlying();
             let result = dotnet_vm_ops::vm_try!($op v);
             ctx.push(result);
             StepResult::Continue
@@ -94,8 +94,8 @@ macro_rules! comparison_op {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::{EvalStackOps, TypedStackOps};
-            let v2 = vm_pop!(ctx);
-            let v1 = vm_pop!(ctx);
+            let v2 = vm_pop!(ctx).coerce_enum_to_underlying();
+            let v1 = vm_pop!(ctx).coerce_enum_to_underlying();
             let val = matches!(v1.compare(&v2, sgn), Some($pat)) as i32;
             ctx.push_i32(val);
             StepResult::Continue

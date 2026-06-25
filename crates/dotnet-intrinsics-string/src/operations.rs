@@ -155,6 +155,61 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     StepResult::Continue
 }
 
+/// `String.Equals(string, string, StringComparison)` — compares two strings using the given
+/// comparison mode. dotnet-rs maps all comparison modes to ordinal (byte-level) comparison
+/// because locale-sensitive collation is not yet implemented; this is correct for
+/// `Ordinal` and `OrdinalIgnoreCase`, and a conservative approximation for culture-specific
+/// modes.
+#[dotnet_intrinsic("static bool System.String::Equals(string, string, valuetype System.StringComparison)")]
+pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let comparison = ctx.pop();
+    let b_val = ctx.pop();
+    let a_val = ctx.pop();
+
+    // Extract the StringComparison enum value; use Ordinal as fallback.
+    let ignore_case = match comparison.coerce_enum_to_underlying() {
+        StackValue::Int32(1 | 3 | 5) => true,  // *IgnoreCase variants
+        _ => false,
+    };
+
+    let res = match (a_val, b_val) {
+        (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
+        (StackValue::ObjectRef(ObjectRef(None)), _)
+        | (_, StackValue::ObjectRef(ObjectRef(None))) => false,
+        (
+            StackValue::ObjectRef(ObjectRef(Some(a_handle))),
+            StackValue::ObjectRef(ObjectRef(Some(b_handle))),
+        ) => {
+            let a_heap = a_handle.borrow();
+            let b_heap = b_handle.borrow();
+            match (&a_heap.storage, &b_heap.storage) {
+                (HeapStorage::Str(a), HeapStorage::Str(b)) => {
+                    if a.len() != b.len() {
+                        false
+                    } else if ignore_case {
+                        a.iter().zip(b.iter()).all(|(ac, bc)| {
+                            char::from_u32(u32::from(*ac))
+                                .map(|c| c.to_ascii_uppercase())
+                                == char::from_u32(u32::from(*bc)).map(|c| c.to_ascii_uppercase())
+                        })
+                    } else {
+                        a[..] == b[..]
+                    }
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
+
+    ctx.push_i32(if res { 1 } else { 0 });
+    StepResult::Continue
+}
+
 /// `System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)`
 #[dotnet_intrinsic(
     "static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)"
