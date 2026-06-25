@@ -288,3 +288,15 @@ repo root.
 **Follow-ups for future steps:** Execute new checklist item `5.11` to root-cause and fix the `Invalid magic in ObjectInner` panic (likely in `ldfld`/heap object ref read path or a preceding write that corrupts object-slot contents), then rerun rung-2 diff parity.
 
 **Open questions:** Is this failure a regression introduced by the 5.9 opcode/object-path changes (enum coercion adjunct fixes including `ldfld` string intercept/unbox.any/PInvoke enum return handling), or a pre-existing latent heap/object validation issue only reached now that rung-2 proceeds further?
+
+## 2026-06-25 — Step 5.12 rung-2 prerequisite drift fix (`ParameterInfo::GetMember`) — gpt-5-codex — completed
+
+**Goal:** Resolve/triage the fresh no-default rung-2 drift where execution panicked early with `unhandled ParameterInfo intrinsic: GetMember`, so 5.11 memory-corruption debugging can proceed from the intended baseline.
+
+**What changed:** Updated `crates/dotnet-intrinsics-reflection/src/parameters.rs` to implement the missing `DotnetRs.ParameterInfo::GetMember()` intrinsic arm by resolving the owning runtime method from `method_index` and returning its cached reflection `MemberInfo` object (`DotnetRs.MethodInfo` / `DotnetRs.ConstructorInfo` via `get_runtime_method_obj`). Marked checklist item `5.12` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` app-context switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same initialization block, and `parameters.rs` still had a `GetMember` intrinsic signature but no `match` arm (falling into `unreachable!`). Running a fresh no-default host-mode probe (`cargo run --bin dotnet-rs --no-default-features -- /tmp/nuget-probe-out/App.dll`) after the fix no longer fails on `ParameterInfo::GetMember`; execution now reaches the later known rung-2 failure (`Invalid magic in ObjectInner` panic), restoring the post-5.10 baseline needed for 5.11.
+
+**Follow-ups for future steps:** Resume checklist item `5.11` memory/object corruption root-cause work from this restored baseline (`Invalid magic in ObjectInner` in `ldfld/read_unaligned`) and rerun rung-2 differential parity once fixed.
+
+**Open questions:** None.

@@ -48,6 +48,13 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
             ctx.push_obj(rt_obj);
             StepResult::Continue
         }
+        "GetMember" => {
+            let obj = ctx.pop_obj();
+            let (m_desc, lookup, _) = dotnet_vm_ops::vm_try!(resolve_runtime_parameter(ctx, obj));
+            let member_obj = crate::common::get_runtime_method_obj(ctx, m_desc, lookup);
+            ctx.push_obj(member_obj);
+            StepResult::Continue
+        }
         _ => unreachable!("unhandled ParameterInfo intrinsic: {}", method_name),
     }
 }
