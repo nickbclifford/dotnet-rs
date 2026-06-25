@@ -311,7 +311,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
 
         if let Some(owner) = owner {
-            owner.with_data_mut(gc, |data| {
+            let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
                 // SAFETY: `base` is the start of the object's backing storage.
@@ -333,7 +333,15 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     )
                 }
                 .map_err(CompareExchangeError::Mismatch)
-            })
+            });
+
+            // Successful CAS mutates heap storage in-place. Treat it like any
+            // other heap write so incremental GC revisits the parent object.
+            if result.is_ok() {
+                Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
+            }
+
+            result
         } else {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             // SAFETY: Caller guarantees `offset` encodes a valid unmanaged address
@@ -363,7 +371,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
 
         if let Some(owner) = owner {
-            owner.with_data_mut(gc, |data| {
+            let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
                 // SAFETY: `base` is the start of the object's backing storage.
@@ -375,7 +383,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // SAFETY: `ptr` is within the object's backing storage (just
                 // bounds-checked).  `size` bytes at `ptr` support atomic exchange.
                 Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
-            })
+            });
+
+            if result.is_ok() {
+                Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
+            }
+
+            result
         } else {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
@@ -488,7 +502,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ) -> Result<(), MemoryAccessError> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
         if let Some(owner) = owner {
-            owner.with_data_mut(gc, |data| {
+            let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
                 // SAFETY: `base` is the start of the object's backing storage.
@@ -501,7 +515,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
                 }
                 Ok(())
-            })
+            });
+
+            if result.is_ok() {
+                Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
+            }
+
+            result
         } else {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
@@ -955,6 +975,20 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             Ok(())
         }
+    }
+
+    fn backward_barrier_for_heap_atomic_write(
+        gc: GCHandle<'gc>,
+        owner: Option<MemoryOwner<'gc>>,
+    ) {
+        let Some(MemoryOwner::Local(parent)) = owner else {
+            return;
+        };
+        let Some(parent_gc) = parent.0 else {
+            return;
+        };
+
+        let _ = gc_arena::Gc::write(gc.mutation(), parent_gc);
     }
 
     fn backward_barrier_for_heap_ref_write(

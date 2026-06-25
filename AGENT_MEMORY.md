@@ -300,3 +300,15 @@ repo root.
 **Follow-ups for future steps:** Resume checklist item `5.11` memory/object corruption root-cause work from this restored baseline (`Invalid magic in ObjectInner` in `ldfld/read_unaligned`) and rerun rung-2 differential parity once fixed.
 
 **Open questions:** None.
+
+## 2026-06-25 — Step 5.11 rung-2 debug fix 5 (post-5.9 memory/object read corruption) — gpt-5-codex — completed
+
+**Goal:** Root-cause and fix the host-mode Newtonsoft `Invalid magic in ObjectInner` crash path reached from rung-2 runs.
+
+**What changed:** Updated `crates/dotnet-runtime-memory/src/access.rs` so heap-backed atomic mutation paths (`compare_exchange_atomic`, `exchange_atomic`, and `store_atomic`) now trigger a backward GC write barrier on successful mutation via a new helper (`backward_barrier_for_heap_atomic_write`). Marked checklist item `5.11` complete and added follow-up checklist item `5.13` in `CHECKLIST.md`.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` was still present/unchanged in the same app-context-switch initialization block. The `Invalid magic in ObjectInner` panic root cause was missing backward-barrier signaling for atomic heap writes of managed references (notably in `System.Threading.Volatile` / `Interlocked` object-ref paths used by `ConcurrentDictionary`), which allowed GC to reclaim still-referenced objects and left stale pointers in traced object-reference arrays. After the fix, repeated host-mode probe runs no longer panic with `Invalid magic` (previously intermittent). Rung-2 parity is still not restored: `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` now deterministically diverges with `0`, `0`, `{}` output due a separate reflection completeness gap (`handle_get_properties` currently returns an empty array unconditionally).
+
+**Follow-ups for future steps:** Execute checklist item `5.13` to implement real `RuntimeType.GetProperties` / `GetPropertyImpl` behavior so rung-2 stdout parity can recover now that the memory-corruption panic is removed.
+
+**Open questions:** `cargo fmt --all -- --check` currently reports formatting drift in several pre-existing files unrelated to this step; decide whether to run a repository-wide formatting normalization step or pin/align rustfmt tooling before relying on fmt-gate pass/fail as a per-step signal.
