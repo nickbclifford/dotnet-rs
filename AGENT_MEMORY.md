@@ -276,3 +276,15 @@ repo root.
 **Follow-ups for future steps:** New checklist item `5.9` tracks the newly exposed rung-2 blocker (`CompareInfo` invalid-program failure) and should be handled after or alongside `5.8` reflection completeness work.
 
 **Open questions:** Is the post-5.7 `CompareInfo/SortHandleCache` `InvalidProgramException` rooted in an interpreter IL validity bug (e.g., instruction semantics/verification mismatch) or in a missing intrinsic/runtime-coupled path in globalization code that now becomes reachable?
+
+## 2026-06-25 — Step 5.10 rung-2 parity verification rerun — gpt-5-codex — completed
+
+**Goal:** Re-run rung-2 differential parity after steps 5.4–5.9 and record whether host-mode Newtonsoft now matches stock `dotnet`.
+
+**What changed:** Marked checklist item `5.10` complete in `CHECKLIST.md`; added follow-up checklist item `5.11` for the newly surfaced post-5.9 failure; appended this step entry to `AGENT_MEMORY.md`.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch is still present unchanged in `crates/dotnet-vm/src/state.rs` (`app_context_switches` initialization, currently around line 451). Rerunning `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` in host mode still fails parity: stock `dotnet` exits `42` and prints full expected output, while `dotnet-rs` prints only the first line (`2`) and exits `101` due to a panic. Repro is deterministic on both the diff script and direct host run (`target/debug/dotnet-rs /tmp/nuget-probe-step510/App.dll`). With `RUST_BACKTRACE=1`, the panic is `Invalid magic in ObjectInner` from `dotnet-value/src/validation.rs`, reached via `ObjectRef::read_branded -> RawMemoryAccess::read_unaligned -> dotnet-vm instructions::objects::fields::ldfld` (`fields.rs` around line 149), indicating a newly exposed object-field read/corruption issue in runtime memory/object handling during Newtonsoft execution.
+
+**Follow-ups for future steps:** Execute new checklist item `5.11` to root-cause and fix the `Invalid magic in ObjectInner` panic (likely in `ldfld`/heap object ref read path or a preceding write that corrupts object-slot contents), then rerun rung-2 diff parity.
+
+**Open questions:** Is this failure a regression introduced by the 5.9 opcode/object-path changes (enum coercion adjunct fixes including `ldfld` string intercept/unbox.any/PInvoke enum return handling), or a pre-existing latent heap/object validation issue only reached now that rung-2 proceeds further?
