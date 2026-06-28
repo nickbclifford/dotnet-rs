@@ -312,3 +312,15 @@ repo root.
 **Follow-ups for future steps:** Execute checklist item `5.13` to implement real `RuntimeType.GetProperties` / `GetPropertyImpl` behavior so rung-2 stdout parity can recover now that the memory-corruption panic is removed.
 
 **Open questions:** `cargo fmt --all -- --check` currently reports formatting drift in several pre-existing files unrelated to this step; decide whether to run a repository-wide formatting normalization step or pin/align rustfmt tooling before relying on fmt-gate pass/fail as a per-step signal.
+
+## 2026-06-27 — Step 5.14 rung-2 follow-up blocker (`ICollection<T>.CopyTo` virtual lookup) — gpt-5-codex — completed
+
+**Goal:** Fix the generic interface virtual-dispatch lookup failure (`Method not found` on `ICollection<T>.CopyTo` for `List<PropertyInfo>`) exposed after non-empty property enumeration.
+
+**What changed:** Updated `crates/dotnet-runtime-resolver/src/methods.rs` in `find_and_cache_method` to rebind interface signature-side generic lookup to receiver generics when declaration generics and receiver generics have matching arity but differ, then use that rebound form for override-map exact lookup fallback, facade/CoreLib signature bridging, and direct `find_method_in_type_internal` matching. Marked checklist item `5.14` complete in `CHECKLIST.md` and added follow-up checklist item `5.15` for the newly surfaced post-5.14 JSON-output divergence.
+
+**What I learned:** Before editing, the REVIEW-cited `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` was still present unchanged in the same app-context-switch block (no discrepancy). Repro on `/tmp/nuget-probe-out/App.dll` showed the prior blocker was a mismatch between declaration-side `method.parent_generics` (`MemberInfo`) and runtime receiver generics (`PropertyInfo`) during interface-method matching, which made `List<PropertyInfo>` fail lookup for `ICollection<T>.CopyTo`. After the resolver change, the `Method not found` abort is gone; host-mode probe now runs through and prints `2`, `2`, `{}` instead of terminating with a resolution error.
+
+**Follow-ups for future steps:** Execute checklist item `5.15` to diagnose/fix the remaining Newtonsoft stdout mismatch (`{}` vs expected JSON) now that the interface dispatch abort is removed.
+
+**Open questions:** The `MemberInfo`→`PropertyInfo` generic-instantiation drift that triggered the dispatch miss may indicate a broader variance/assignability quirk upstream; determine in 5.15 whether the remaining `{}` divergence stems from that same root cause or from independent reflection-contract serialization gaps.

@@ -112,7 +112,13 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     "System.Reflection.PropertyInfo[] System.RuntimeType::GetProperties(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
+    "System.Reflection.PropertyInfo[] DotnetRs.RuntimeType::GetProperties(System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
     "System.Reflection.PropertyInfo System.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.PropertyInfo DotnetRs.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
 )]
 #[dotnet_intrinsic("bool System.RuntimeType::IsPrimitiveImpl()")]
 #[dotnet_intrinsic("bool System.RuntimeType::IsArrayImpl()")]
