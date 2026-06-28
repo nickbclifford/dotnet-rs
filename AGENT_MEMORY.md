@@ -372,3 +372,15 @@ repo root.
 **Follow-ups for future steps:** Execute new checklist item `5.19` to triage/fix the remaining 5-arg invoke divergence on enum property-setter paths (`ManagedPtr` where `ObjectRef` is expected). Keep 5.15 open until rung-2 host-mode JSON parity is restored.
 
 **Open questions:** The newly exposed `ManagedPtr` panic may be specific to property-setter/enum paths (and not generic void invoke); confirm whether it is in return marshalling, argument back-propagation, or reflective setter internals before broadening invoke changes.
+
+## 2026-06-28 — Step 5.19 invoke enum-setter panic follow-up — gpt-5-codex — completed
+
+**Goal:** Triage/fix the remaining 5-arg `MethodInfo.Invoke` enum-setter path that panicked with `expected ObjectRef, received ManagedPtr(...)` after invoke-return marshalling.
+
+**What changed:** Updated `crates/dotnet-vm/src/intrinsics/mod.rs` `System.Object::GetType()` intrinsic to accept value-type receiver forms that can legally appear in interpreter execution (`ObjectRef`, `ManagedPtr`, `ValueType`) instead of unconditionally `pop_obj()`-panicking on non-`ObjectRef`. For `ManagedPtr` receivers, the intrinsic now resolves runtime type from the owning boxed object when available (preserving concrete enum runtime type) and otherwise falls back to pointer inner-type mapping. Marked checklist item `5.19` complete in `CHECKLIST.md` and added follow-up checklist item `5.20` for a newly exposed, separate enum-formatting failure.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same `app_context_switches` initialization block (line offsets shifted vs REVIEW, semantics unchanged). The original crash signature is gone: `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll` no longer panics in `stack_value.rs:626` (`expected ObjectRef, received ManagedPtr(...)`). The invoke-specific focused repro (`/tmp/step519-min-out/Step519Min.dll`, 5-arg setter invoke + `void` return null check + enum value write verification) now exits `42` under `dotnet-rs`. While triaging the broader probe, execution now fails later with managed `System.InvalidCastException` in `System.Enum.ToString()` (`Console.WriteLine(enum)` path), which appears distinct from invoke-return bookkeeping and was recorded as new checklist item `5.20`.
+
+**Follow-ups for future steps:** Execute checklist item `5.20` to diagnose/fix `System.Enum.ToString()` invalid-cast behavior reached after the panic removal; this is now the remaining blocker on `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll` after 5.19.
+
+**Open questions:** Does the new `System.Enum.ToString()` invalid cast stem from enum/runtime-type projection semantics (`GetType`/`RuntimeType` expectations) or from `System.Enum` instance-method receiver canonicalization for managed-pointer `this` values?

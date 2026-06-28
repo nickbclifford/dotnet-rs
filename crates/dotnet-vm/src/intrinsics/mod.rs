@@ -506,44 +506,76 @@ fn object_get_type<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj();
-    if this.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    fn runtime_type_from_desc(td: dotnet_types::TypeDescription) -> RuntimeType {
+        match td.type_name().as_str() {
+            "System.Boolean" => RuntimeType::Boolean,
+            "System.Char" => RuntimeType::Char,
+            "System.SByte" => RuntimeType::Int8,
+            "System.Byte" => RuntimeType::UInt8,
+            "System.Int16" => RuntimeType::Int16,
+            "System.UInt16" => RuntimeType::UInt16,
+            "System.Int32" => RuntimeType::Int32,
+            "System.UInt32" => RuntimeType::UInt32,
+            "System.Int64" => RuntimeType::Int64,
+            "System.UInt64" => RuntimeType::UInt64,
+            "System.Single" => RuntimeType::Float32,
+            "System.Double" => RuntimeType::Float64,
+            "System.IntPtr" => RuntimeType::IntPtr,
+            "System.UIntPtr" => RuntimeType::UIntPtr,
+            _ => RuntimeType::Type(td),
+        }
     }
 
-    let rt: RuntimeType = this.as_heap_storage(|storage| match storage {
-        HeapStorage::Obj(o) => RuntimeType::Type(o.description.clone()),
-        HeapStorage::Str(_) => RuntimeType::String,
-        HeapStorage::Vec(v) => {
-            let element_rt = runtime_type_from_concrete(ctx.loader().as_ref(), &v.element)
-                .unwrap_or(RuntimeType::Object);
-            if v.dims.len() <= 1 {
-                RuntimeType::Vector(Box::new(element_rt))
+    fn runtime_type_from_heap(
+        loader: &AssemblyLoader,
+        object_ref: ObjectRef<'_>,
+    ) -> RuntimeType {
+        object_ref.as_heap_storage(|storage| match storage {
+            HeapStorage::Obj(o) => RuntimeType::Type(o.description.clone()),
+            HeapStorage::Str(_) => RuntimeType::String,
+            HeapStorage::Vec(v) => {
+                let element_rt =
+                    runtime_type_from_concrete(loader, &v.element).unwrap_or(RuntimeType::Object);
+                if v.dims.len() <= 1 {
+                    RuntimeType::Vector(Box::new(element_rt))
+                } else {
+                    RuntimeType::Array(Box::new(element_rt), v.dims.len() as u32)
+                }
+            }
+            HeapStorage::Boxed(o) => runtime_type_from_desc(o.description.clone()),
+        })
+    }
+
+    let this = ctx.pop();
+    let rt = match this {
+        StackValue::ObjectRef(this_ref) => {
+            if this_ref.0.is_none() {
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+            }
+            runtime_type_from_heap(ctx.loader().as_ref(), this_ref)
+        }
+        StackValue::ManagedPtr(this_ptr) => {
+            if this_ptr.is_null() {
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+            }
+
+            if let Some(owner) = this_ptr.owner() {
+                runtime_type_from_heap(ctx.loader().as_ref(), owner)
             } else {
-                RuntimeType::Array(Box::new(element_rt), v.dims.len() as u32)
+                runtime_type_from_desc(this_ptr.inner_type())
             }
         }
-        HeapStorage::Boxed(o) => {
-            let name = o.description.type_name();
-            match name.as_str() {
-                "System.Boolean" => RuntimeType::Boolean,
-                "System.Char" => RuntimeType::Char,
-                "System.SByte" => RuntimeType::Int8,
-                "System.Byte" => RuntimeType::UInt8,
-                "System.Int16" => RuntimeType::Int16,
-                "System.UInt16" => RuntimeType::UInt16,
-                "System.Int32" => RuntimeType::Int32,
-                "System.UInt32" => RuntimeType::UInt32,
-                "System.Int64" => RuntimeType::Int64,
-                "System.UInt64" => RuntimeType::UInt64,
-                "System.Single" => RuntimeType::Float32,
-                "System.Double" => RuntimeType::Float64,
-                "System.IntPtr" => RuntimeType::IntPtr,
-                "System.UIntPtr" => RuntimeType::UIntPtr,
-                _ => RuntimeType::Type(o.description.clone()),
-            }
+        StackValue::ValueType(value) => runtime_type_from_desc(value.description.clone()),
+        other => {
+            return StepResult::Error(
+                ExecutionError::TypeMismatch {
+                    expected: "ObjectRef/ManagedPtr/ValueType",
+                    actual: format!("{other:?}").into(),
+                }
+                .into(),
+            );
         }
-    });
+    };
 
     let typ_obj = ctx.get_runtime_type(rt);
     ctx.push_obj(typ_obj);
