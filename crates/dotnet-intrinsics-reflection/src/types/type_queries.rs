@@ -715,28 +715,41 @@ pub fn handle_get_base_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
-    match target_type {
-        RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) => {
-            if let Some(base) = &td.definition().extends {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let method_type = member_to_method_type(base);
-                let Some(base_rt) = runtime_type_from_method_type(
-                    ctx.loader().as_ref(),
-                    td.resolution.clone(),
-                    &method_type,
-                    &lookup,
-                ) else {
+
+    let (td, lookup) = match &target_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+            (td.clone(), build_generic_lookup_from_runtime_type(ctx, &target_type))
+        }
+        _ => {
+            let concrete = target_type.to_concrete(ctx.loader().as_ref());
+            let td = match ctx.loader().find_concrete_type(concrete.clone()) {
+                Ok(td) => td,
+                Err(_) => {
                     ctx.push(StackValue::null());
                     return StepResult::Continue;
-                };
-                let rt_obj = crate::common::get_runtime_type(ctx, base_rt);
-                ctx.push_obj(rt_obj);
-            } else {
-                ctx.push(StackValue::null());
-            }
+                }
+            };
+            (td, concrete.make_lookup())
         }
-        _ => ctx.push(StackValue::null()),
+    };
+
+    if let Some(base) = &td.definition().extends {
+        let method_type = member_to_method_type(base);
+        let Some(base_rt) = runtime_type_from_method_type(
+            ctx.loader().as_ref(),
+            td.resolution.clone(),
+            &method_type,
+            &lookup,
+        ) else {
+            ctx.push(StackValue::null());
+            return StepResult::Continue;
+        };
+        let rt_obj = crate::common::get_runtime_type(ctx, base_rt);
+        ctx.push_obj(rt_obj);
+    } else {
+        ctx.push(StackValue::null());
     }
+
     StepResult::Continue
 }
 

@@ -173,6 +173,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
+        ("GetAttributes" | "get_Attributes" | "GetMethodFlags", 0) => {
+            let obj = ctx.pop_obj();
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
+            ctx.push_i32(method_attributes_flags(&method));
+            Some(StepResult::Continue)
+        }
         ("GetParameters", 0) => {
             let obj = ctx.pop_obj();
             let (method, lookup) =
@@ -534,6 +541,53 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
     StepResult::Continue
 }
 
+fn method_attributes_flags(method: &MethodDescription) -> i32 {
+    let method_def = method.method();
+    let mut flags = method_def.accessibility.to_mask() as i32;
+
+    if !method.signature().instance {
+        flags |= 0x0010; // MethodAttributes.Static
+    }
+    if method_def.sealed {
+        flags |= 0x0020; // MethodAttributes.Final
+    }
+    if method_def.virtual_member {
+        flags |= 0x0040; // MethodAttributes.Virtual
+    }
+    if method_def.hide_by_sig {
+        flags |= 0x0080; // MethodAttributes.HideBySig
+    }
+    if matches!(
+        method_def.vtable_layout,
+        dotnetdll::resolved::members::VtableLayout::NewSlot
+    ) {
+        flags |= 0x0100; // MethodAttributes.NewSlot
+    }
+    if method_def.strict {
+        flags |= 0x0200; // MethodAttributes.CheckAccessOnOverride
+    }
+    if method_def.abstract_member {
+        flags |= 0x0400; // MethodAttributes.Abstract
+    }
+    if method_def.special_name {
+        flags |= 0x0800; // MethodAttributes.SpecialName
+    }
+    if method_def.runtime_special_name {
+        flags |= 0x1000; // MethodAttributes.RTSpecialName
+    }
+    if method_def.pinvoke.is_some() {
+        flags |= 0x2000; // MethodAttributes.PinvokeImpl
+    }
+    if method_def.security.is_some() {
+        flags |= 0x4000; // MethodAttributes.HasSecurity
+    }
+    if method_def.require_sec_object {
+        flags |= 0x8000; // MethodAttributes.RequireSecObject
+    }
+
+    flags
+}
+
 fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     method: &MethodDescription,
@@ -551,6 +605,7 @@ fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     arg: ObjectRef<'gc>,
+    method: &MethodDescription,
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
     _param_index: usize,
@@ -595,7 +650,11 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
         }
         ParameterType::Value(t) | ParameterType::Ref(t) => {
-            let concrete_param_type = match ctx.make_concrete(t) {
+            let concrete_param_type = match lookup.make_concrete(
+                method.resolution(),
+                t.clone(),
+                ctx.loader().as_ref(),
+            ) {
                 Ok(v) => v,
                 Err(e) => return Err(StepResult::Error(e.into())),
             };
@@ -675,7 +734,7 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
             let param_type = &method.signature().parameters[i].1;
-            let arg = unbox_param_to_stack_value(ctx, arg_obj, param_type, lookup, i)?;
+            let arg = unbox_param_to_stack_value(ctx, arg_obj, method, param_type, lookup, i)?;
             args.push(arg);
         }
     }
