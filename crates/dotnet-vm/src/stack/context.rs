@@ -282,9 +282,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.push(return_value);
         }
 
-        if let Some(return_type) = frame.awaiting_invoke_return.clone() {
-            let is_void = matches!(return_type, RuntimeType::Void);
-            if is_void {
+        let invoke_return_type = self
+            .frame_stack
+            .current_frame_opt_mut()
+            .and_then(|caller| caller.awaiting_invoke_return.take());
+
+        if let Some(return_type) = invoke_return_type {
+            if matches!(return_type, RuntimeType::Void) {
                 self.push(StackValue::null());
             } else {
                 let val = self.pop();

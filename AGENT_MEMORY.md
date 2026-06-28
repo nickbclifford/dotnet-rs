@@ -360,3 +360,15 @@ repo root.
 **Follow-ups for future steps:** Execute new checklist item `5.18` to fix invoke-return marshalling/bookkeeping for affected overload paths (`void` should return `null`, and `awaiting_invoke_return` should be cleared exactly once). Keep 5.15 open until rung-2 host diff parity is restored.
 
 **Open questions:** The 5.18 repros indicate overload-path differences in how invoke-return state is consumed/cleared; verify whether the bug is confined to the 5-arg `MethodBase.Invoke` path or shared with constructor invoke paths before changing bookkeeping globally.
+
+## 2026-06-28 — Step 5.18 invoke-return bookkeeping fix — gpt-5-codex — completed
+
+**Goal:** Fix `MethodInfo.Invoke`/`MethodBase.Invoke` return-value bookkeeping so 5-arg invoke paths marshal `void` as `null` and do not leak `awaiting_invoke_return` into caller-frame return handling.
+
+**What changed:** Updated `crates/dotnet-vm/src/stack/context.rs` `return_frame()` to consume invoke bookkeeping from the **caller frame** (`current_frame_opt_mut().and_then(|f| f.awaiting_invoke_return.take())`) immediately after the dispatched target returns, instead of reading `awaiting_invoke_return` from the popped callee frame. Return marshalling logic remains the same (box value-type returns, pass-through reference returns), but `void` now reliably pushes `null` at invoke-return time and the flag is cleared exactly once via `take()`. Marked checklist item `5.18` complete and added follow-up checklist item `5.19` for a newly exposed invoke edge case.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same `app_context_switches` block (line offsets shifted vs REVIEW, semantics unchanged). The two step-5.18 repros now behave as expected: `/tmp/step517-min-out/App.dll` (5-arg value return) no longer fails with `expected Int32, got boxed Int32` and exits `42`, and a focused new void-5-arg probe (`/tmp/step518-void-probe-out/App.dll`) exits `42` with `Invoke(...)` returning `null` for `void` target methods. While validating, an additional out-of-scope issue surfaced: `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll` now advances past the old stack-underflow but panics later with `expected ObjectRef, received ManagedPtr(...)` (likely another invoke marshalling edge case), so that was recorded as a new follow-up item.
+
+**Follow-ups for future steps:** Execute new checklist item `5.19` to triage/fix the remaining 5-arg invoke divergence on enum property-setter paths (`ManagedPtr` where `ObjectRef` is expected). Keep 5.15 open until rung-2 host-mode JSON parity is restored.
+
+**Open questions:** The newly exposed `ManagedPtr` panic may be specific to property-setter/enum paths (and not generic void invoke); confirm whether it is in return marshalling, argument back-propagation, or reflective setter internals before broadening invoke changes.
