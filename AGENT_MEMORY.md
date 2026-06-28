@@ -384,3 +384,15 @@ repo root.
 **Follow-ups for future steps:** Execute checklist item `5.20` to diagnose/fix `System.Enum.ToString()` invalid-cast behavior reached after the panic removal; this is now the remaining blocker on `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll` after 5.19.
 
 **Open questions:** Does the new `System.Enum.ToString()` invalid cast stem from enum/runtime-type projection semantics (`GetType`/`RuntimeType` expectations) or from `System.Enum` instance-method receiver canonicalization for managed-pointer `this` values?
+
+## 2026-06-28 — Step 5.20 enum formatting follow-up fix — gpt-5-codex — completed
+
+**Goal:** Fix the separate `System.Enum.ToString()` formatting failure (`InvalidCastException` on `Console.WriteLine(enum)`) exposed after the 5.19 panic removal.
+
+**What changed:** Updated `crates/dotnet-vm/src/intrinsics/mod.rs` to add a dedicated `System.Enum::ToString()` intrinsic that formats enum instances directly from their metadata/value (`value__` + literal field constants), including managed-pointer receivers with boxed owners (the failing path from `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll`). Marked checklist item `5.20` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same `app_context_switches` initialization block (line offsets shifted vs REVIEW, semantics unchanged). The observed `InvalidCastException` was one layer of a broader `System.Enum` runtime-type path (cast/MethodTable/cache internals) that is avoided by handling enum formatting at the intrinsic boundary. With the new intrinsic, `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll` now prints `B` and exits `42`, and the focused 5.19 invoke regression probe (`/tmp/step519-min-out/Step519Min.dll`) still exits `42`.
+
+**Follow-ups for future steps:** Keep monitoring for format-specifier coverage gaps if tests start exercising `Enum.ToString(string)` variants beyond default/general behavior; this step only targeted the failing default formatting path reached by `Console.WriteLine(enum)`. `cargo fmt --all -- --check` still reports repository-wide pre-existing formatting drift in unrelated files (same baseline issue noted in prior steps).
+
+**Open questions:** None.
