@@ -181,6 +181,7 @@ pub(crate) fn validate_ref_integrity(
 }
 
 pub(crate) fn extract_int(val: StackValue) -> Result<i32, MemoryAccessError> {
+    let val = val.coerce_enum_to_underlying();
     match val {
         StackValue::Int32(v) => Ok(v),
         _ => Err(MemoryAccessError::TypeMismatch(
@@ -190,6 +191,7 @@ pub(crate) fn extract_int(val: StackValue) -> Result<i32, MemoryAccessError> {
 }
 
 pub(crate) fn extract_long(val: StackValue) -> Result<i64, MemoryAccessError> {
+    let val = val.coerce_enum_to_underlying();
     match val {
         StackValue::Int64(v) => Ok(v),
         _ => Err(MemoryAccessError::TypeMismatch(
@@ -199,6 +201,7 @@ pub(crate) fn extract_long(val: StackValue) -> Result<i64, MemoryAccessError> {
 }
 
 pub(crate) fn extract_native_int(val: StackValue) -> Result<isize, MemoryAccessError> {
+    let val = val.coerce_enum_to_underlying();
     match val {
         StackValue::NativeInt(v) => Ok(v),
         _ => Err(MemoryAccessError::TypeMismatch(

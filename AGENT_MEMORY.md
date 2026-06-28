@@ -324,3 +324,27 @@ repo root.
 **Follow-ups for future steps:** Execute checklist item `5.15` to diagnose/fix the remaining Newtonsoft stdout mismatch (`{}` vs expected JSON) now that the interface dispatch abort is removed.
 
 **Open questions:** The `MemberInfo`→`PropertyInfo` generic-instantiation drift that triggered the dispatch miss may indicate a broader variance/assignability quirk upstream; determine in 5.15 whether the remaining `{}` divergence stems from that same root cause or from independent reflection-contract serialization gaps.
+
+## 2026-06-27 — Step 5.15 rung-2 contract/property serialization parity — gpt-5-codex — blocked
+
+**Goal:** Diagnose and fix the remaining Newtonsoft host-mode stdout mismatch (`{}` vs expected JSON) after the 5.14 `ICollection<T>.CopyTo` dispatch fix.
+
+**What changed:** Added checklist follow-up item `5.16` in `CHECKLIST.md` for a newly surfaced blocker (`JsonPrimitiveContract` constructor path `System.AccessViolationException`) that appears once property-member matching is corrected. No product-code changes were kept in-tree: multiple candidate fixes were prototyped/reproduced locally and then reverted because rung-2 parity was not restored.
+
+**What I learned:** Before investigation, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same `app_context_switches` block (no discrepancy). Repro/diagnostics showed the original `{}` output is tied to reflection contract-member filtering semantics (`GetSerializableMembers` drops properties when repeated `GetProperties` results are not equality-comparable). Once that path is corrected in experiments, execution advances but exposes deeper serializer blockers: missing `DotnetRs.MethodInfo.get_Attributes`, `RuntimeType.get_BaseType` returning `null` for intrinsic runtime types like `System.String` (breaking `Type.IsAssignableFrom` and `Expression.Convert` reference conversions), `MethodInfo.Invoke` argument unmarshalling using ambient `make_concrete` context instead of invoked-method lookup, and then a remaining hard failure in Newtonsoft contract construction (`JsonPrimitiveContract::.ctor` / `set_TypeCode` path) manifesting as `System.AccessViolationException` before JSON emission. The final unresolved blocker is this constructor/enum-contract write path.
+
+**Follow-ups for future steps:** Execute new checklist item `5.16` to root-cause/fix `JsonPrimitiveContract` constructor failure first; without that, even with property-member matching fixes, rung-2 cannot reach final JSON output parity. Keep 5.15 unchecked until the end-to-end rung-2 diff (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`) passes.
+
+**Open questions:** The crash site reports `set_TypeCode`, while IL inspection of `JsonPrimitiveContract::.ctor` shows mixed direct field writes plus a `call set_TypeCode`; determine whether the remaining fault is in enum-parameter call dispatch, enum-backed field storage, or a preceding constructor-state corruption in `JsonContract` initialization.
+
+## 2026-06-27 — Step 5.16 JsonPrimitiveContract enum-field write fix — gpt-5-codex — completed
+
+**Goal:** Fix the `JsonPrimitiveContract::.ctor`/`set_TypeCode` failure path by making enum value-type writes compatible with scalar underlying-field layouts.
+
+**What changed:** Updated `crates/dotnet-runtime-memory/src/validation.rs` so `extract_int`, `extract_long`, and `extract_native_int` first normalize enum `StackValue::ValueType` operands via `coerce_enum_to_underlying()` before scalar writes. Marked checklist item `5.16` complete and added follow-up checklist item `5.17` for the still-open `MethodBase.Invoke` value-type argument unmarshalling bug.
+
+**What I learned:** Before edits, the REVIEW-cited hardcoded `IsDynamicCodeSupported = false` switch in `crates/dotnet-vm/src/state.rs` remained present and unchanged in the same `app_context_switches` block (no discrepancy). A focused repro (`/tmp/jsonprimitive-probe/App.csproj`) confirmed the crash mechanism: `JsonPrimitiveContract::<TypeCode>k__BackingField` has scalar `Int32` layout, but setter argument arrived as enum `ValueType`, producing a scalar-write type mismatch that surfaced as `System.AccessViolationException`. After coercion, the focused repro now matches stock `dotnet` (exit `42`, stdout `True`) and no longer throws. The broader Newtonsoft rung still diverges as `{}` (existing 5.15 gap), but the constructor/enum-contract write path no longer crashes when exercised directly.
+
+**Follow-ups for future steps:** Execute new checklist item `5.17` to fix `MethodBase.Invoke`/`MethodInfo.Invoke` argument unmarshalling so value-type parameters are concretized in the invoked method’s context (current ambient-context unboxing still breaks reflective enum setter invocation).
+
+**Open questions:** With 5.16 fixed, rerun the “property-member matching corrected” branch state from 5.15 experiments to confirm the previous `JsonPrimitiveContract` AccessViolation is fully gone in that end-to-end path and to isolate the next true rung-2 blocker.
