@@ -412,4 +412,18 @@ repo root.
 
 **Open questions:** Which option does the maintainer want? Until chosen, 5.15 stays `blocked` (parked, needs decision) and 6.1/7.1 are the next runnable steps.
 
+## 2026-06-29 — Rung-2 `{}` root-cause diagnosis (prelim, decision = Option B) — claude-opus-4-8 — completed
+
+**Goal:** Maintainer chose to keep grinding rung-2. Do preliminary diagnosis and leave concrete starting points (don't fully implement).
+
+**What changed:** Added `docs/NEWTONSOFT_SERIALIZATION_GAP.md` (confirmed root cause + reproducible differential probe + templated fix plan + secondary finding). Updated `CHECKLIST.md`: Decision Point marked DECIDED=Option B; added **5.21** (property-object caching, the confirmed next action) and **5.22** (tangential enum-interpolation crash). Inserted 5.21/5.22 as `pending` steps in the orchestrator DB (5.21 intent=high). No product code changed.
+
+**What I learned (empirically confirmed, not from prior notes):** Built a raw-reflection differential probe (`/tmp/refl_probe.cs`, `bash scripts/diff_run.sh`). The 5.15 hypothesis is exactly right and now precisely localized: the **only** broken primitive is reflection-object equality/identity. Stock: `refEq/valEq/hashEq/contains=True, distinctUnion=2`. dotnet-rs: `False/False/False/False, 4` — while `GetProperties().Length=2` and all accessors (`CanRead/CanWrite/Get/SetMethod/MemberType/DeclaringType`) match stock. Newtonsoft `GetSerializableMembers` uses `List<MemberInfo>.Contains`/set ops, so uncached fresh `PropertyInfo` objects compare unequal across calls → every member dropped → `{}`. Methods/fields don't hit this because `get_runtime_method_obj`/`get_runtime_field_obj` (`common.rs`) cache their objects (`runtime_method_objs`/`runtime_field_objs` in `state.rs`); **properties have no cache** — `create_runtime_property_obj` (`type_members.rs:1108`) allocates fresh every call. Fix = mirror the field cache, keyed by `(accessor MethodDescription = getter ?? setter, GenericLookup)`. **Critical:** the new cache map must be added to the GC-trace loop in `state.rs` (~656–661) beside `runtime_field_objs`, or cached objects get collected (the 5.11 `Invalid magic` failure class).
+
+**Secondary finding:** the probe also tripped `System.InvalidCastException` in `Enum.TryFormatUnconstrained` via `DefaultInterpolatedStringHandler` for `$"{enum}"` — a *different* path than 5.20's `Enum.ToString()` intrinsic. NOT on the `Item` rung-2 critical path (recorded as 5.22, fix opportunistically).
+
+**Follow-ups for future steps:** Execute **5.21** per `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. **Verify against the real probe** (`/tmp/nuget-probe/App.csproj` → `{"name":"test","value":42}`), not a synthetic repro — re-running the actual probe after every change is the explicit guard against the 5.16–5.20 drift. If `{}` persists after the cache fix lands and `/tmp/refl_probe.cs` matches stock, member discovery is fixed and the next blocker is downstream (likely getter `MethodInfo.Invoke` value reads — cf. 5.17–5.19).
+
+**Open questions:** After the cache fix, does property-*value* read (getter invoke) for simple auto-properties already work, or is there a second member-level blocker before JSON parity? Only the real probe will tell — run it.
+
 **Open questions:** None.

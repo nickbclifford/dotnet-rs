@@ -95,10 +95,24 @@ valuable VM improvements, just not sufficient for rung-2 parity):
 **The actual open blocker (the umbrella these fixes were chasing):**
 
 - [ ] 5.15 ❗ **Newtonsoft host-mode stdout parity still UNMET** — real probe prints `{}` not
-  `{"name":"test","value":42}`. Per the 5.15 investigation notes, the lead root cause is
-  `Newtonsoft…GetSerializableMembers` dropping every property because repeated `GetProperties()`
-  results are not equality-comparable (reflection objects must compare equal across calls). This is
-  the next thing to fix **iff** continuing rung-2. — refs REVIEW.md#F-TEST-001
+  `{"name":"test","value":42}`. Umbrella acceptance for rung-2; stays open until
+  `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` prints the correct JSON. Root cause is now
+  **diagnosed and confirmed empirically** — see `docs/NEWTONSOFT_SERIALIZATION_GAP.md` and step 5.21. — refs REVIEW.md#F-TEST-001
+
+**Concrete next steps (decision = Option B "keep grinding", taken 2026-06-29):**
+
+- [ ] 5.21 ▶ **NEXT — cache reflection property objects** so repeated `GetProperties()` return
+  identity/equality-stable `PropertyInfo` (mirrors the existing method/field caches). This is *the*
+  confirmed `{}` root cause: Newtonsoft's `GetSerializableMembers` uses `List<MemberInfo>.Contains` /
+  set ops, and uncached fresh `PropertyInfo` objects compare unequal across calls so every member is
+  dropped. Full templated plan (4 edit sites + **mandatory GC-trace loop**) and the differential probe
+  are in `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. **Verify against the real probe**
+  (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` → `{"name":"test","value":42}`), not a
+  synthetic repro — that drift is what produced 5.16–5.20. [effort: high] — refs REVIEW.md#F-TEST-001
+- [ ] 5.22 (tangential, lower priority) enum formatting via **interpolated string** (`$"{enum}"`) throws
+  `InvalidCastException` in `System.Enum.TryFormatUnconstrained` / `DefaultInterpolatedStringHandler` —
+  a separate path from the 5.20 `Enum.ToString()` intrinsic. Surfaced by the diagnostic probe; **not**
+  on the `Item` serialization critical path. Fix opportunistically, not bundled with 5.21. [effort: default] — refs REVIEW.md#F-TEST-001
 
 > **Rung 3 (EF InMemory) — parity UNMET, by design.** Step 5.3 (completed) *recorded* the result:
 > host-mode EF fails with `Generic index 0 out of bounds (length 0)`, the known P1 generic-resolution
@@ -107,11 +121,15 @@ valuable VM improvements, just not sufficient for rung-2 parity):
 
 ---
 
-## 🔀 Decision point — where to continue
+## 🔀 Decision point — DECIDED 2026-06-29: Option B (keep grinding rung-2)
+
+> **Chosen: Option B.** Continue rung-2 from the diagnosed root cause — **step 5.21** (property-object
+> caching) is the immediate next action; see `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. Part C (6.1, 7.1)
+> is still worth doing and is independent of the rung-2 grind. Original options kept below for context.
 
 The host-runner deliverable (Part A) is complete. Rung-2/3 parity (Part B) is gated on
 reflection/runtime-execution completeness that is **out of the original "NuGet host runner" scope** and
-is open-ended (every fix has surfaced the next). Two ways forward — pick one before doing more work:
+is open-ended (every fix has surfaced the next). Two ways forward:
 
 - **Option A — draw the line and ship (recommended).** Declare the host runner done. Demote the
   remaining rung-2/3 parity work to a tracked gap document (mirroring `docs/EF_GAP_BACKLOG.md`) titled
