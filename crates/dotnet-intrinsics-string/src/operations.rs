@@ -160,7 +160,9 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
 /// because locale-sensitive collation is not yet implemented; this is correct for
 /// `Ordinal` and `OrdinalIgnoreCase`, and a conservative approximation for culture-specific
 /// modes.
-#[dotnet_intrinsic("static bool System.String::Equals(string, string, valuetype System.StringComparison)")]
+#[dotnet_intrinsic(
+    "static bool System.String::Equals(string, string, valuetype System.StringComparison)"
+)]
 pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -172,7 +174,7 @@ pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemory
 
     // Extract the StringComparison enum value; use Ordinal as fallback.
     let ignore_case = match comparison.coerce_enum_to_underlying() {
-        StackValue::Int32(1 | 3 | 5) => true,  // *IgnoreCase variants
+        StackValue::Int32(1 | 3 | 5) => true, // *IgnoreCase variants
         _ => false,
     };
 
@@ -192,8 +194,7 @@ pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemory
                         false
                     } else if ignore_case {
                         a.iter().zip(b.iter()).all(|(ac, bc)| {
-                            char::from_u32(u32::from(*ac))
-                                .map(|c| c.to_ascii_uppercase())
+                            char::from_u32(u32::from(*ac)).map(|c| c.to_ascii_uppercase())
                                 == char::from_u32(u32::from(*bc)).map(|c| c.to_ascii_uppercase())
                         })
                     } else {

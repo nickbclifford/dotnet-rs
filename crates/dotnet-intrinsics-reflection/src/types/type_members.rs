@@ -925,14 +925,18 @@ fn property_accessor_descriptions(
 
     let fallback_accessor = |prefix: &str| {
         let accessor_name = format!("{prefix}{}", property.name);
-        td.definition().methods.iter().enumerate().find_map(|(i, m)| {
-            (m.name == accessor_name).then_some(MethodDescription::new(
-                td.clone(),
-                lookup.clone(),
-                td.resolution.clone(),
-                MethodMemberIndex::Method(i),
-            ))
-        })
+        td.definition()
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                (m.name == accessor_name).then_some(MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(i),
+                ))
+            })
     };
 
     let getter = if property.getter.is_some() {
@@ -1243,7 +1247,9 @@ pub fn handle_get_property_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     };
 
     let expected_index_types = if types_obj.0.is_some() {
-        Some(dotnet_vm_ops::vm_try!(parse_runtime_type_array(ctx, types_obj)))
+        Some(dotnet_vm_ops::vm_try!(parse_runtime_type_array(
+            ctx, types_obj
+        )))
     } else {
         None
     };

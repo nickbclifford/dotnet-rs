@@ -977,10 +977,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    fn backward_barrier_for_heap_atomic_write(
-        gc: GCHandle<'gc>,
-        owner: Option<MemoryOwner<'gc>>,
-    ) {
+    fn backward_barrier_for_heap_atomic_write(gc: GCHandle<'gc>, owner: Option<MemoryOwner<'gc>>) {
         let Some(MemoryOwner::Local(parent)) = owner else {
             return;
         };

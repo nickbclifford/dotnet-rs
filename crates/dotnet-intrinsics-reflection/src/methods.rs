@@ -112,9 +112,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let attribute_type_obj = ctx.pop_obj();
             let method_obj = ctx.pop_obj();
             let attribute_filter = if attribute_type_obj.0.is_some() {
-                let filter_rt = dotnet_vm_ops::vm_try!(
-                    crate::common::resolve_runtime_type(ctx, attribute_type_obj)
-                );
+                let filter_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(
+                    ctx,
+                    attribute_type_obj
+                ));
                 match filter_rt {
                     RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
                     _ => None,
@@ -650,14 +651,11 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
         }
         ParameterType::Value(t) | ParameterType::Ref(t) => {
-            let concrete_param_type = match lookup.make_concrete(
-                method.resolution(),
-                t.clone(),
-                ctx.loader().as_ref(),
-            ) {
-                Ok(v) => v,
-                Err(e) => return Err(StepResult::Error(e.into())),
-            };
+            let concrete_param_type =
+                match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => return Err(StepResult::Error(e.into())),
+                };
             let td = ctx
                 .loader()
                 .find_concrete_type(concrete_param_type.clone())

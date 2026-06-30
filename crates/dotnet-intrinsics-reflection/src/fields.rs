@@ -50,8 +50,9 @@ pub fn intrinsic_field_info_get_custom_attributes_bool<'gc, T: ReflectionIntrins
     let _inherit = ctx.pop_i32();
     let this = ctx.pop_obj();
     let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
-    let attrs =
-        dotnet_vm_ops::vm_try!(crate::types::collect_field_custom_attributes(ctx, field, None));
+    let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_field_custom_attributes(
+        ctx, field, None
+    ));
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type))
 }
@@ -261,8 +262,7 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let value = numeric_constant_to_stack(constant)
                 .expect("non-string/null constant must produce a stack value");
             // Box as the field's declared type (the enum type for enum members).
-            let field_type: dotnetdll::prelude::MethodType =
-                field_def.return_type.clone().into();
+            let field_type: dotnetdll::prelude::MethodType = field_def.return_type.clone().into();
             let field_ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(&field_type));
             let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&field_ct, value));
             ctx.push_obj(boxed);
@@ -292,7 +292,9 @@ pub fn intrinsic_field_info_get_field_handle<
 
 /// `DotnetRs.FieldInfo.GetFieldAttributes()` — returns the `System.Reflection.FieldAttributes`
 /// flags value for the field. These flags are defined in ECMA-335 §II.23.1.5.
-#[dotnet_intrinsic("valuetype System.Reflection.FieldAttributes DotnetRs.FieldInfo::GetFieldAttributes()")]
+#[dotnet_intrinsic(
+    "valuetype System.Reflection.FieldAttributes DotnetRs.FieldInfo::GetFieldAttributes()"
+)]
 pub fn intrinsic_field_info_get_field_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,

@@ -335,8 +335,10 @@ pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'
         }
     };
     let Some(member) = td.is_enum() else {
-        return ctx
-            .throw_by_name_with_message("System.ArgumentException", "Type provided must be an Enum.");
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type provided must be an Enum.",
+        );
     };
     // The enum's underlying type (e.g. `Int32`) is a non-generic primitive, so an
     // empty generic lookup is sufficient to resolve it.
@@ -717,9 +719,10 @@ pub fn handle_get_base_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
     let (td, lookup) = match &target_type {
-        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
-            (td.clone(), build_generic_lookup_from_runtime_type(ctx, &target_type))
-        }
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => (
+            td.clone(),
+            build_generic_lookup_from_runtime_type(ctx, &target_type),
+        ),
         _ => {
             let concrete = target_type.to_concrete(ctx.loader().as_ref());
             let td = match ctx.loader().find_concrete_type(concrete.clone()) {
