@@ -168,3 +168,36 @@ Observed results:
 Pass/fail status for rung 3: **FAIL** (exit code mismatch).
 
 New-gap check vs this backlog: **no new distinct blocker identified**. The observed host-mode failure matches the existing P1 generic-resolution blocker already documented above; native probing is no longer the first failure in host mode because step 3.4 wired native search directories.
+
+## Rung-3 re-confirmation + localization (2026-06-30)
+
+Re-verified after the rung-2 work landed (property-object cache 5.21, enum-format 5.22/5.23). The VM has
+changed substantially since the spike, but **rung 3 fails identically**:
+
+```bash
+dotnet /tmp/ef-probe-out/EfApp.dll                   # Hello, exit 42
+./target/debug/dotnet-rs /tmp/ef-probe-out/EfApp.dll # Internal VM error: ... Generic index 0 out of bounds (length 0), exit 1
+```
+
+**Localization (for whoever picks up the EF epic).** The error is raised in
+`crates/dotnet-types/src/generics.rs` (`MethodType::TypeGeneric` ~440 / `MethodType::MethodGeneric` ~473)
+from `GenericLookup::make_concrete`. `index 0, length 0` means a generic-parameter slot (`!0`/`!!0`) is
+resolved against a `GenericLookup` whose **both** `type_generics` and `method_generics` are empty.
+
+Per the trace above, the failing instantiation is the **generic static method**
+`System.Collections.Immutable.ImmutableSortedDictionary.Create<TKey,TValue>(IComparer<TKey>)` with
+`TKey=System.Type`, `TValue=System.ValueTuple<IDbContextOptionsExtension,int>`, reached from
+`DbContextOptions..ctor`. The method-generic arguments are not reaching the resolution context where
+`!!0`/`!!1` are looked up (the lookup carries zero args), so the `!!0` lookup underflows.
+
+This is the **same class** as the 5.4 constrained-callvirt bug (method generics not propagated to the
+dispatched context). Start at `crates/dotnet-runtime-resolver/src/methods.rs::find_generic_method`
+(~52–76, where `new_lookup.method_generics = params.into()`) and trace whether the dispatched frame's
+lookup carries `method_generics` into the type-resolution calls executed inside the method body /
+`.cctor` reached from it. **Note:** `generics.rs` already accretes heuristic index-probing fallbacks
+(`lookup_method_generic_with_fallback_indices`, the type/method index-shift probes at ~436/453/461) —
+the real fix is upstream propagation, **not** another fallback heuristic.
+
+**Scope reality:** unlike rung-2 (a contained reflection-completeness gap that one cache fix unblocked),
+this is a core generic type/method substitution bug, and EF is a large framework — clearing this blocker
+will surface further ones. Treat rung-3/EF as a **separate epic**, not a quick follow-on to rung-2.

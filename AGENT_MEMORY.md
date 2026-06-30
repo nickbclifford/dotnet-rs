@@ -463,3 +463,18 @@ repo root.
 **Follow-ups for future steps:** `scripts/diff_run.sh` has a separate robustness issue when `target/debug/dotnet-rs` is absent and no global binary exists (`line 134: : command not found` instead of cargo fallback); tracked as checklist item `5.24`, not fixed in this scoped step.
 
 **Open questions:** None.
+
+## 2026-06-30 — Research + update round (rung-2 verified done; rung-3 characterized) — claude-opus-4-8 — completed
+
+**Goal:** Review the 5.21/5.22/5.23 commits, independently verify rung-2, and assess where to go next.
+
+**What changed:** Closed `5.15` (rung-2 umbrella) in `CHECKLIST.md` and the orchestrator DB (→ completed, commit f9a18ef4). Updated the Status-at-a-glance table (rung-2 ✅). Reframed the Decision Point (rung-2 done; new fork = wrap-up vs EF epic). Appended a "Rung-3 re-confirmation + localization (2026-06-30)" section to `docs/EF_GAP_BACKLOG.md`. Added checklist item + DB step **5.25** (EF epic entry). No product code changed.
+
+**What I learned (verified independently, not from the step agents' claims):**
+- **Rung-2 is genuinely DONE.** `./target/debug/dotnet-rs /tmp/nuget-probe-out/App.dll` prints `{"name":"test","value":42}` exit 42 (matches stock), and `bash scripts/diff_run.sh /tmp/refl_probe.cs` passes (refEq/valEq/hashEq/contains True, distinct 2). The 5.21 property-object cache fixed it exactly as diagnosed — and this time the verification used the **real** probe, so no synthetic-repro drift.
+- **No regression** from the large 5.22/5.23 intrinsic changes: fixture suite `158 passed, 3 skipped`.
+- **Rung-3 (EF) re-confirmed failing**, identically: `Generic index 0 out of bounds (length 0)`. Localized: raised in `crates/dotnet-types/src/generics.rs` (`MethodType::TypeGeneric` ~440 / `MethodGeneric` ~473) from `GenericLookup::make_concrete` with an **empty** lookup (`length 0`). The instantiation is the generic static method `ImmutableSortedDictionary.Create<Type, ValueTuple<…>>` from `DbContextOptions..ctor`; method-generic args aren't threaded into the body's type-resolution context. **Same class as 5.4.** Start at `crates/dotnet-runtime-resolver/src/methods.rs::find_generic_method` (~52–76); fix upstream propagation, NOT another `generics.rs` fallback heuristic (those are accreting at ~436/453/461).
+
+**Follow-ups for future steps:** Recommended path = finish in-scope **5.24** (diff_run.sh fallback), **6.1** (fail-loud compat), **7.1** (roadmap doc), then finalize/merge. Rung-3 (EF, step **5.25**) is a *separate epic* — a core engine bug with many EF blockers behind it; pursue only on a dedicated push, and keep the branch mergeable first.
+
+**Open questions:** Does the maintainer want to wrap up (Option A) or commit to the EF epic (Option B)? Either way 5.24/6.1/7.1 should land first.

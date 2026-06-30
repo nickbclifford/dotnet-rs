@@ -28,14 +28,15 @@ ladder** (fixtures → Newtonsoft → EF) that *demonstrates* the host runner en
 | Hard constraint: `--assemblies` unchanged | ✅ Holds — fixture suite **158/158** green via the harness's `-a` path (2026-06-29) |
 | EF spike → `docs/EF_GAP_BACKLOG.md` | ✅ DONE |
 | Rung 1 — fixtures via host path (no `-a`) | ✅ PASS (re-verified 2026-06-29) |
-| Rung 2 — Newtonsoft serialization parity | ❌ **NOT met** — still prints `{}` not `{"name":"test","value":42}` (exit 42 matches) |
-| Rung 3 — EF InMemory parity | ❌ NOT met — known P1 `Generic index 0 out of bounds`, **out of scope** per the spike |
-| Phase 6 — fail-loud NativeAOT / single-file | ⬜ not started |
-| Phase 7 — roadmap doc update | ⬜ not started |
+| Rung 2 — Newtonsoft serialization parity | ✅ **PASS (verified 2026-06-30)** — host-mode prints `{"name":"test","value":42}` exit 42, matches stock; reflection-equality differential also matches |
+| Rung 3 — EF InMemory parity | ❌ NOT met — P1 generic-substitution engine bug `Generic index 0 out of bounds` (re-confirmed 2026-06-30); **out of scope** per the spike, separate epic |
+| Phase 6 — fail-loud NativeAOT / single-file | ⬜ not started (5.24 tooling, 6.1) |
+| Phase 7 — roadmap doc update | ⬜ not started (7.1) |
 
-**The branch's actual deliverable — the NuGet host runner — is complete and working.** What is *not*
-done is full execution correctness for reflection-heavy library code (Newtonsoft, EF). That is a
-VM/reflection-completeness problem, **not** a host-loading problem; see the Decision Point below.
+**The branch's actual deliverable — the NuGet host runner — is complete and working, and the rung-2
+stretch goal (Newtonsoft) is now met.** The only unmet rung is rung-3 (EF), gated on a core
+generic-substitution engine bug that is a separate epic (see the rung-3 note in Part B). Remaining
+in-scope, finishable work before merge: 5.24, 6.1, 7.1.
 
 ---
 
@@ -92,12 +93,13 @@ valuable VM improvements, just not sufficient for rung-2 parity):
 - [x] 5.19 `System.Object::GetType()` accepts `ManagedPtr`/`ValueType` receivers (fixed enum-setter invoke panic) — refs REVIEW.md#F-TEST-001
 - [x] 5.20 `System.Enum::ToString()` intrinsic (fixed `InvalidCastException` on `Console.WriteLine(enum)`) — refs REVIEW.md#F-TEST-001
 
-**The actual open blocker (the umbrella these fixes were chasing):**
+**The umbrella acceptance — NOW SATISFIED:**
 
-- [ ] 5.15 ❗ **Newtonsoft host-mode stdout parity still UNMET** — real probe prints `{}` not
-  `{"name":"test","value":42}`. Umbrella acceptance for rung-2; stays open until
-  `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` prints the correct JSON. Root cause is now
-  **diagnosed and confirmed empirically** — see `docs/NEWTONSOFT_SERIALIZATION_GAP.md` and step 5.21. — refs REVIEW.md#F-TEST-001
+- [x] 5.15 ✅ **Newtonsoft host-mode parity MET (verified 2026-06-30).** Real probe
+  `./target/debug/dotnet-rs /tmp/nuget-probe-out/App.dll` prints `{"name":"test","value":42}` exit 42,
+  matching stock; `bash scripts/diff_run.sh /tmp/refl_probe.cs` (reflection-equality differential) also
+  passes. Unblocked by the 5.21 property-object cache exactly as diagnosed in
+  `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. Verified against the *real* probe, not a synthetic repro. — refs REVIEW.md#F-TEST-001
 
 **Concrete next steps (decision = Option B "keep grinding", taken 2026-06-29):**
 
@@ -121,37 +123,43 @@ valuable VM improvements, just not sufficient for rung-2 parity):
   found`) instead of falling back to `cargo run`; harden runner resolution/branching. [effort: default]
   — refs REVIEW.md#F-TEST-001
 
-> **Rung 3 (EF InMemory) — parity UNMET, by design.** Step 5.3 (completed) *recorded* the result:
-> host-mode EF fails with `Generic index 0 out of bounds (length 0)`, the known P1 generic-resolution
-> blocker in `docs/EF_GAP_BACKLOG.md`. The spike explicitly does **not** fix this — it is a tracked
-> gap, not branch work. (refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001)
+> **Rung 3 (EF InMemory) — parity UNMET; re-confirmed 2026-06-30.** Host-mode EF still fails with
+> `Generic index 0 out of bounds (length 0)`. Now localized (see `docs/EF_GAP_BACKLOG.md` →
+> "Rung-3 re-confirmation + localization"): a **generic static method** call
+> (`ImmutableSortedDictionary.Create<Type, ValueTuple<…>>` from `DbContextOptions..ctor`) resolves
+> `!!0`/`!!1` against an empty `GenericLookup` — the method-generic args aren't threaded into the
+> resolution context. Same *class* as the 5.4 constrained-callvirt bug. Unlike rung-2 (a contained
+> reflection gap), this is a **core engine bug** and EF is large — treat as a **separate epic**, not a
+> quick follow-on. (refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001)
+
+- [ ] 5.25 (EF epic entry — only if pursuing rung-3) Thread generic *method* arguments into the
+  type-resolution context for generic static-method calls so `ImmutableSortedDictionary.Create<TKey,TValue>`
+  resolves `!!0`/`!!1` correctly. Start at `crates/dotnet-runtime-resolver/src/methods.rs::find_generic_method`
+  (~52–76) and verify the dispatched frame's lookup carries `method_generics` into body/`.cctor`
+  type-resolution; **fix upstream propagation, do not add another `generics.rs` fallback heuristic**.
+  Repro: `./target/debug/dotnet-rs /tmp/ef-probe-out/EfApp.dll` (rebuild probe per REVIEW F-SPIKE-001).
+  Expect further EF blockers after this one. [effort: high] — refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001
 
 ---
 
-## 🔀 Decision point — DECIDED 2026-06-29: Option B (keep grinding rung-2)
+## 🔀 Decision point — rung-2 DONE; next fork (open, 2026-06-30)
 
-> **Chosen: Option B.** Continue rung-2 from the diagnosed root cause — **step 5.21** (property-object
-> caching) is the immediate next action; see `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. Part C (6.1, 7.1)
-> is still worth doing and is independent of the rung-2 grind. Original options kept below for context.
+Rung-2 (Newtonsoft) is now met — Option B paid off via the single 5.21 property-cache fix. Rung-1 ✅,
+rung-2 ✅, host runner ✅. The branch has met its deliverable **and** its stretch goal. Two ways forward:
 
-The host-runner deliverable (Part A) is complete. Rung-2/3 parity (Part B) is gated on
-reflection/runtime-execution completeness that is **out of the original "NuGet host runner" scope** and
-is open-ended (every fix has surfaced the next). Two ways forward:
+- **Option A — wrap up and merge (recommended).** Do the small in-scope remainder — **5.24** (diff_run.sh
+  fallback bug), **6.1** (fail-loud NativeAOT/single-file), **7.1** (roadmap doc) — then finalize and
+  merge. Rung-3 (EF) stays a tracked gap (its localization is now recorded in `docs/EF_GAP_BACKLOG.md`),
+  picked up on a dedicated branch.
 
-- **Option A — draw the line and ship (recommended).** Declare the host runner done. Demote the
-  remaining rung-2/3 parity work to a tracked gap document (mirroring `docs/EF_GAP_BACKLOG.md`) titled
-  e.g. `docs/NEWTONSOFT_SERIALIZATION_GAP.md`, capturing the `{}` root cause (member-equality in
-  `GetSerializableMembers`) and the fixes already landed. Then finish Part C (6.1, 7.1), finalize, and
-  merge. Rung 1 is the parity proof the host runner needs; rung 2/3 become follow-up branches.
+- **Option B — keep grinding into rung-3 (EF).** Take **5.25** (thread generic method args into type
+  resolution). Be clear-eyed: this is a **core engine bug**, not a contained reflection gap, and EF will
+  surface further blockers behind it — i.e. a new multi-step epic, larger than the rung-2 chain was.
+  Recommend still landing 5.24/6.1/7.1 first so the branch stays mergeable independent of the EF outcome.
 
-- **Option B — keep grinding rung-2.** Continue the chain at **5.15**: make reflection member objects
-  (`PropertyInfo`/`MemberInfo`) compare equal across repeated `GetProperties()` calls so
-  `GetSerializableMembers` stops dropping them. Expect further blockers after that; rung-3 (EF) is
-  deeper still. Only choose this if full library-execution fidelity is a goal of *this* branch.
-
-> Re-verify after **every** rung-2 change with the real probe, not a minimal repro:
-> `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`. A green synthetic repro is necessary but not
-> sufficient — 5.16–5.20 are the cautionary example.
+> Lesson that held: verify every rung change against the **real** probe, not a minimal repro —
+> `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`. 5.16–5.20 were the cautionary example; 5.21
+> got it right and that's why rung-2 actually closed.
 
 ---
 
@@ -164,5 +172,5 @@ is open-ended (every fix has surfaced the next). Two ways forward:
 
 ## Finalize (after the decision + Part C)
 
-- [ ] Whole-branch finalizer audit (high-effort): confirm `--assemblies` parity, `cargo fmt --all -- --check`, fixture suite green, host-mode rung-1 green; reconcile orchestrator DB step states (5.13/5.15 tags) with reality.
+- [ ] Whole-branch finalizer audit (high-effort): confirm `--assemblies` parity, `cargo fmt --all -- --check`, fixture suite green, host-mode rung-1 + rung-2 green. (DB step states reconciled 2026-06-29/30: 5.13 + 5.15 closed.)
 - [ ] Remove refactor scratch artifacts (`REVIEW.md`, `CHECKLIST.md`, `AGENT_MEMORY.md`, `AGENT_PROMPT.md`) before merge to `main`.
