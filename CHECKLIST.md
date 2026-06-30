@@ -113,9 +113,13 @@ valuable VM improvements, just not sufficient for rung-2 parity):
   `InvalidCastException` in `System.Enum.TryFormatUnconstrained` / `DefaultInterpolatedStringHandler` —
   a separate path from the 5.20 `Enum.ToString()` intrinsic. Surfaced by the diagnostic probe; **not**
   on the `Item` serialization critical path. Fix opportunistically, not bundled with 5.21. [effort: default] — refs REVIEW.md#F-TEST-001
-- [ ] 5.23 Interpolated formatting parity follow-up: non-string interpolations currently produce blank
+- [x] 5.23 Interpolated formatting parity follow-up: non-string interpolations currently produce blank
   stdout (e.g., `$"{1}"`, `$"{enum}"`), despite no exception after 5.22. Track as a separate VM
   formatting/runtime-contract gap (outside host-runner critical path). [effort: high] — refs REVIEW.md#F-TEST-001
+- [ ] 5.24 `scripts/diff_run.sh` cargo fallback bug: when `target/debug/dotnet-rs` is absent and no
+  global `dotnet-rs` exists, the script can hit an empty command invocation (`line 134: : command not
+  found`) instead of falling back to `cargo run`; harden runner resolution/branching. [effort: default]
+  — refs REVIEW.md#F-TEST-001
 
 > **Rung 3 (EF InMemory) — parity UNMET, by design.** Step 5.3 (completed) *recorded* the result:
 > host-mode EF fails with `Generic index 0 out of bounds (length 0)`, the known P1 generic-resolution

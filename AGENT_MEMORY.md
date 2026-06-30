@@ -451,3 +451,15 @@ repo root.
 **Follow-ups for future steps:** Interpolated formatting output for non-string values is still not stock-parity in this branch (e.g., probe stdout is blank instead of `B`), but this step’s scoped throw was removed. Added checklist item `5.23` to track full interpolated-string formatting/runtime-contract parity as a separate VM task.
 
 **Open questions:** None.
+
+## 2026-06-30 — Step 5.23 interpolated formatting parity follow-up — gpt-5-codex — completed
+
+**Goal:** Restore host-mode interpolated-string output parity for non-string values (notably `$"{1}"` and `$"{enum}"`) after 5.22 removed the enum throw but left blank output.
+
+**What changed:** Updated `crates/dotnet-intrinsics-string/src/constructors.rs` so `System.String::.ctor(char[])` also handles span value-type inputs by copying UTF-16 data via `string_with_span_data`; this unblocked `new string(ReadOnlySpan<char>)` call paths used by `DefaultInterpolatedStringHandler.ToStringAndClear()`. Updated `crates/dotnet-vm/src/intrinsics/mod.rs` enum formatting flow by adding non-throwing enum-format helpers (`format_enum_value_from_type`, `scalar_enum_value_from_stack`, `enum_type_from_stack_value`, `generic_enum_type`) and by changing `System.Enum::TryFormatUnconstrained<M0>` to write UTF-16 output + `charsWritten` through the destination span contract instead of reporting success with zero chars. Marked checklist item `5.23` complete and added checklist follow-up item `5.24` for a separate differential-tooling fallback bug discovered during verification.
+
+**What I learned:** Before edits, the hardcoded `System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported = false` switch remained present and unchanged in `crates/dotnet-vm/src/state.rs` app-context-switch initialization (line offsets shifted vs REVIEW, invariant unchanged). Root cause for blank interpolation was a combination of constructor-path behavior (`new string(ReadOnlySpan<char>)` effectively yielding empty under current intrinsic dispatch) plus the 5.22 enum `TryFormatUnconstrained` shortcut always returning `charsWritten = 0`. A critical gotcha: calling throwing helper paths from an intrinsic and then ignoring the `Err` in Rust still mutates VM exception state (it later surfaced as misleading `InvalidCastException` from `ToStringAndClear`), so the final enum path uses non-throwing formatting derivation for scalar generic enum values.
+
+**Follow-ups for future steps:** `scripts/diff_run.sh` has a separate robustness issue when `target/debug/dotnet-rs` is absent and no global binary exists (`line 134: : command not found` instead of cargo fallback); tracked as checklist item `5.24`, not fixed in this scoped step.
+
+**Open questions:** None.
