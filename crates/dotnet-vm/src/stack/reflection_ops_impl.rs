@@ -461,6 +461,28 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
             .field_objs_write()
             .insert((field, lookup), object);
     }
+
+    fn reflection_cached_runtime_property_obj(
+        &self,
+        accessor: &MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Option<ObjectRef<'gc>> {
+        self.reflection()
+            .property_objs_read()
+            .get(&(accessor.clone(), lookup.clone()))
+            .copied()
+    }
+
+    fn reflection_cache_runtime_property_obj(
+        &self,
+        accessor: MethodDescription,
+        lookup: GenericLookup,
+        object: ObjectRef<'gc>,
+    ) {
+        self.reflection()
+            .property_objs_write()
+            .insert((accessor, lookup), object);
+    }
 }
 
 impl<'a, 'gc> ReflectionLookupOps<'gc> for VesContext<'a, 'gc> {

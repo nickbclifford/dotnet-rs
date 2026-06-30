@@ -101,7 +101,7 @@ valuable VM improvements, just not sufficient for rung-2 parity):
 
 **Concrete next steps (decision = Option B "keep grinding", taken 2026-06-29):**
 
-- [ ] 5.21 ▶ **NEXT — cache reflection property objects** so repeated `GetProperties()` return
+- [x] 5.21 ▶ **NEXT — cache reflection property objects** so repeated `GetProperties()` return
   identity/equality-stable `PropertyInfo` (mirrors the existing method/field caches). This is *the*
   confirmed `{}` root cause: Newtonsoft's `GetSerializableMembers` uses `List<MemberInfo>.Contains` /
   set ops, and uncached fresh `PropertyInfo` objects compare unequal across calls so every member is

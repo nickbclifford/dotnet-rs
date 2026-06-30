@@ -170,6 +170,19 @@ pub trait ReflectionRegistryHost<'gc> {
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
     );
+
+    fn reflection_cached_runtime_property_obj(
+        &self,
+        accessor: &MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Option<ObjectRef<'gc>>;
+
+    fn reflection_cache_runtime_property_obj(
+        &self,
+        accessor: MethodDescription,
+        lookup: GenericLookup,
+        object: ObjectRef<'gc>,
+    );
 }
 
 dotnet_vm_ops::trait_alias! {

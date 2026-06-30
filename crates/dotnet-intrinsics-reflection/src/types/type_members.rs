@@ -1111,6 +1111,13 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
     property: &PropertyCandidate,
     lookup: &GenericLookup,
 ) -> Result<ObjectRef<'gc>, VmError> {
+    let accessor = property.getter.clone().or_else(|| property.setter.clone());
+    if let Some(accessor) = accessor.as_ref()
+        && let Some(obj) = ctx.reflection_cached_runtime_property_obj(accessor, lookup)
+    {
+        return Ok(obj);
+    }
+
     let property_type_runtime = property_signature_runtime_types(
         ctx,
         property.getter.as_ref(),
@@ -1171,6 +1178,10 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
             .unwrap()
             .write(property_type_obj);
     });
+
+    if let Some(accessor) = accessor {
+        ctx.reflection_cache_runtime_property_obj(accessor, lookup.clone(), property_info_obj);
+    }
 
     Ok(property_info_obj)
 }

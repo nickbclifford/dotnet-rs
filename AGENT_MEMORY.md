@@ -427,3 +427,15 @@ repo root.
 **Open questions:** After the cache fix, does property-*value* read (getter invoke) for simple auto-properties already work, or is there a second member-level blocker before JSON parity? Only the real probe will tell — run it.
 
 **Open questions:** None.
+
+## 2026-06-30 — Step 5.21 property-object cache for reflection stability — gpt-5-codex — completed
+
+**Goal:** Cache `DotnetRs.PropertyInfo` runtime reflection objects so repeated `Type.GetProperties()` calls return identity/equality-stable instances and unblock Newtonsoft member discovery.
+
+**What changed:** Updated `crates/dotnet-vm/src/state.rs` to add `runtime_property_objs` to `ReflectionLocalState`, initialize it, expose `property_objs_read/write` on `ReflectionRegistry`, and trace cached property objects in `Collect::trace` (mandatory GC root). Extended `ReflectionRegistryHost` in `crates/dotnet-intrinsics-reflection/src/lib.rs` with property-object cache get/set hooks, implemented those hooks in `crates/dotnet-vm/src/stack/reflection_ops_impl.rs`, and wired `crates/dotnet-intrinsics-reflection/src/types/type_members.rs::create_runtime_property_obj` to (a) return cache hits keyed by accessor method + lookup and (b) cache new `PropertyInfo` objects before returning. Marked `CHECKLIST.md` item `5.21` complete.
+
+**What I learned:** Before editing, the cited invariants still matched plan assumptions: `IsDynamicCodeSupported = false` remains hardcoded and unchanged in `crates/dotnet-vm/src/state.rs` in the app-context-switch block, and `create_runtime_property_obj` was still allocating uncached fresh property objects. After this step and rebuilding `dotnet-rs`, both target probes now match stock: `bash scripts/diff_run.sh /tmp/refl_probe.cs` passes (identity/equality/hash/contains restored), and `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` passes with correct JSON output (`{"name":"test","value":42}`) and exit code 42.
+
+**Follow-ups for future steps:** With 5.21 landed, rung-2 umbrella 5.15 acceptance appears satisfied by the real probe; orchestrator should decide whether to close 5.15 and continue remaining planned steps (5.22/6.1/7.1).
+
+**Open questions:** `cargo fmt --all -- --check` still fails on pre-existing repository-wide formatting drift in unrelated files (same baseline issue noted in prior entries); this scoped step did not make broad formatting edits.
