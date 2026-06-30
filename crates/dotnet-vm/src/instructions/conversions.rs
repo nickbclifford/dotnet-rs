@@ -14,7 +14,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     t: ConversionType,
 ) -> StepResult {
-    let value = vm_pop!(ctx);
+    let value = vm_pop!(ctx).coerce_enum_to_underlying();
 
     macro_rules! simple_cast {
         ($t:ty) => {

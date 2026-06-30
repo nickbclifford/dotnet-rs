@@ -18,4 +18,8 @@ public class ParameterInfo : System.Reflection.ParameterInfo
     public override Type ParameterType => GetParameterType();
 
     public override int Position => position;
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private extern MemberInfo GetMember();
+    public override MemberInfo Member => GetMember();
 }

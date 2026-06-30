@@ -13,6 +13,7 @@ use dotnetdll::resolved::signature::ParameterType;
 
 #[dotnet_intrinsic("string DotnetRs.ParameterInfo::GetName()")]
 #[dotnet_intrinsic("System.Type DotnetRs.ParameterInfo::GetParameterType()")]
+#[dotnet_intrinsic("System.Reflection.MemberInfo DotnetRs.ParameterInfo::GetMember()")]
 pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -45,6 +46,13 @@ pub fn runtime_parameter_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc
             };
             let rt_obj = crate::common::get_runtime_type(ctx, rt);
             ctx.push_obj(rt_obj);
+            StepResult::Continue
+        }
+        "GetMember" => {
+            let obj = ctx.pop_obj();
+            let (m_desc, lookup, _) = dotnet_vm_ops::vm_try!(resolve_runtime_parameter(ctx, obj));
+            let member_obj = crate::common::get_runtime_method_obj(ctx, m_desc, lookup);
+            ctx.push_obj(member_obj);
             StepResult::Continue
         }
         _ => unreachable!("unhandled ParameterInfo intrinsic: {}", method_name),

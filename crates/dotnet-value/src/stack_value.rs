@@ -185,6 +185,36 @@ pub fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
     }
 }
 
+/// If `obj` is a boxed/struct enum value, read its `value__` storage (always at
+/// offset 0) and produce the underlying primitive as a [`StackValue`], widening
+/// sub-`int` underlying types to `Int32` per ECMA-335 stack-normalization rules.
+/// Returns `None` for non-enum value types.
+fn enum_value_type_to_underlying<'gc>(obj: &Object<'gc>) -> Option<StackValue<'gc>> {
+    let member = obj.description.is_enum()?;
+    let MemberType::Base(base) = member else {
+        return None;
+    };
+    let read = |n: usize| -> u64 {
+        obj.with_data(|d| {
+            let mut buf = [0u8; 8];
+            buf[..n].copy_from_slice(&d[..n]);
+            u64::from_le_bytes(buf)
+        })
+    };
+    Some(match &**base {
+        BaseType::Boolean | BaseType::UInt8 => StackValue::Int32(read(1) as u8 as i32),
+        BaseType::Int8 => StackValue::Int32(read(1) as i8 as i32),
+        BaseType::Char | BaseType::UInt16 => StackValue::Int32(read(2) as u16 as i32),
+        BaseType::Int16 => StackValue::Int32(read(2) as i16 as i32),
+        BaseType::Int32 | BaseType::UInt32 => StackValue::Int32(read(4) as u32 as i32),
+        BaseType::Int64 | BaseType::UInt64 => StackValue::Int64(read(8) as i64),
+        BaseType::IntPtr | BaseType::UIntPtr => {
+            StackValue::NativeInt(read(size_of::<isize>()) as isize)
+        }
+        _ => return None,
+    })
+}
+
 #[inline]
 fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
     match v {
@@ -637,6 +667,23 @@ impl<'gc> StackValue<'gc> {
 
     pub fn is_zero(&self) -> bool {
         matches!(self, Self::Int32(0) | Self::Int64(0) | Self::NativeInt(0))
+    }
+
+    /// CLI numeric opcodes (arithmetic, comparison, conversion, conditional
+    /// branches) treat an enum exactly as its underlying integer type
+    /// (ECMA-335 §III.1.1.1). An enum can land on the evaluation stack as a
+    /// [`StackValue::ValueType`] — e.g. when read from a generic value-type slot
+    /// such as `Dictionary<TKey, TEnum>` — so normalize such an operand to its
+    /// underlying primitive before those operations. Non-enum values and other
+    /// variants are returned unchanged.
+    #[must_use]
+    pub fn coerce_enum_to_underlying(self) -> Self {
+        if let StackValue::ValueType(ref obj) = self
+            && let Some(coerced) = enum_value_type_to_underlying(obj)
+        {
+            return coerced;
+        }
+        self
     }
 
     pub fn is_null(&self) -> bool {

@@ -370,6 +370,8 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

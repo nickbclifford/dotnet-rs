@@ -12,7 +12,7 @@ use clap::Parser;
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult};
 use dotnetdll::prelude::*;
-use std::process::ExitCode;
+use std::{path::PathBuf, process::ExitCode};
 use vm::{state, sync::Arc};
 
 #[derive(Parser, Debug)]
@@ -22,8 +22,8 @@ use vm::{state, sync::Arc};
     about = "An experimental interpreter for the .NET runtime"
 )]
 pub struct Args {
-    #[arg(short, long, value_name = "FOLDER")]
-    pub assemblies: String,
+    #[arg(short, long, value_name = "FOLDER", required = false)]
+    pub assemblies: Option<String>,
     #[arg(value_name = "DLL")]
     pub entrypoint: String,
 }
@@ -54,16 +54,66 @@ fn init_rayon_pool() {
 pub fn run_cli() -> ExitCode {
     init_rayon_pool();
     let args = Args::parse();
+    let entrypoint_path = PathBuf::from(&args.entrypoint);
 
-    let loader = match dotnet_assemblies::AssemblyLoader::new(args.assemblies) {
-        Ok(l) => Arc::new(l),
-        Err(e) => {
-            eprintln!("Error initializing assembly loader: {}", e);
+    // Fail loudly on inputs that carry no usable IL, rather than surfacing a
+    // confusing downstream parse error. ReadyToRun images keep a CLI header and
+    // are classified as Managed.
+    match dotnet_assemblies::probe_entry_kind(&entrypoint_path) {
+        dotnet_assemblies::EntryKind::Managed => {}
+        dotnet_assemblies::EntryKind::NativeAot => {
+            eprintln!(
+                "error: '{}' appears to be a NativeAOT native image, which is not supported \
+                 (it contains no IL). Use a framework-dependent or ReadyToRun build instead.",
+                entrypoint_path.display(),
+            );
             return ExitCode::from(1);
+        }
+        dotnet_assemblies::EntryKind::SingleFileBundle => {
+            eprintln!(
+                "error: '{}' is a single-file bundle, which is not supported. \
+                 Publish without -p:PublishSingleFile=true instead.",
+                entrypoint_path.display(),
+            );
+            return ExitCode::from(1);
+        }
+    }
+
+    let loader = match args.assemblies {
+        Some(assemblies_dir) => match dotnet_assemblies::AssemblyLoader::new(assemblies_dir) {
+            Ok(l) => Arc::new(l),
+            Err(e) => {
+                eprintln!("Error initializing assembly loader: {}", e);
+                return ExitCode::from(1);
+            }
+        },
+        None => {
+            let runtimeconfig_path = entrypoint_path.with_extension("runtimeconfig.json");
+            if !runtimeconfig_path.exists() {
+                let runtimeconfig_name = runtimeconfig_path.file_name().map_or_else(
+                    || runtimeconfig_path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+
+                eprintln!(
+                    "error: no --assemblies flag and no {} found next to {}",
+                    runtimeconfig_name,
+                    entrypoint_path.display(),
+                );
+                return ExitCode::from(1);
+            }
+
+            match dotnet_assemblies::AssemblyLoader::new_from_host(&entrypoint_path, None) {
+                Ok(l) => Arc::new(l),
+                Err(e) => {
+                    eprintln!("Error initializing assembly loader: {}", e);
+                    return ExitCode::from(1);
+                }
+            }
         }
     };
 
-    let resolution = match loader.load_resolution_from_file(args.entrypoint) {
+    let resolution = match loader.load_resolution_from_file(&entrypoint_path) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error loading entry point: {}", e);

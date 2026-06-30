@@ -33,6 +33,9 @@ public class FieldInfo : System.Reflection.FieldInfo
     public override extern void SetValue(object? obj, object? value, BindingFlags invokeAttr, Binder? binder, System.Globalization.CultureInfo? culture);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern object? GetRawConstantValue();
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
     private extern FieldAttributes GetFieldAttributes();
     public override FieldAttributes Attributes => GetFieldAttributes();
 

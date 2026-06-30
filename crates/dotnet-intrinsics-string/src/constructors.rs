@@ -1,5 +1,6 @@
+use crate::{IntrinsicStringHost, extend_from_utf16_ne_bytes};
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
@@ -92,7 +93,7 @@ pub fn intrinsic_string_fast_allocate_string<
 
 /// System.String::.ctor(char[])
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
-pub fn intrinsic_string_ctor_char_array<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
+pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -139,7 +140,99 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: TypedStackOps<'gc> + RawMemoryOp
             }
             result
         }
+        StackValue::ValueType(span) => {
+            let len =
+                match ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                    slice.len() / 2
+                }) {
+                    Ok(len) => len,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
+
+            let mut result = Vec::with_capacity(len);
+            let mut offset = 0usize;
+            const CHUNK_SIZE: usize = 1024;
+
+            while offset < len {
+                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                let copy_res =
+                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                        let start = offset * 2;
+                        let end = start + (chunk_len * 2);
+                        if let Some(chunk_bytes) = slice.get(start..end) {
+                            extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
+                        }
+                    });
+
+                if let Err(e) = copy_res {
+                    return StepResult::Error(e.into());
+                }
+
+                offset += chunk_len;
+                if offset < len && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
+            }
+
+            result
+        }
         _ => Vec::new(), // null or invalid
+    };
+
+    let value = CLRString::new(chars);
+    ctx.push_string(value);
+    StepResult::Continue
+}
+
+/// System.String::.ctor(System.ReadOnlySpan<char>)
+#[dotnet_intrinsic("void System.String::.ctor(System.ReadOnlySpan<char>)")]
+pub fn intrinsic_string_ctor_readonly_span_char<'gc, T: IntrinsicStringHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let arg = ctx.pop();
+    let chars: Vec<u16> = match arg {
+        StackValue::ValueType(span) => {
+            let len =
+                match ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                    slice.len() / 2
+                }) {
+                    Ok(len) => len,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
+
+            let mut result = Vec::with_capacity(len);
+            let mut offset = 0usize;
+            const CHUNK_SIZE: usize = 1024;
+
+            while offset < len {
+                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                let copy_res =
+                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+                        let start = offset * 2;
+                        let end = start + (chunk_len * 2);
+                        if let Some(chunk_bytes) = slice.get(start..end) {
+                            extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
+                        }
+                    });
+
+                if let Err(e) = copy_res {
+                    return StepResult::Error(e.into());
+                }
+
+                offset += chunk_len;
+                if offset < len && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
+            }
+
+            result
+        }
+        StackValue::ObjectRef(ObjectRef(None)) => Vec::new(),
+        other => {
+            return StepResult::type_error("System.ReadOnlySpan<char>", format!("{:?}", other));
+        }
     };
 
     let value = CLRString::new(chars);

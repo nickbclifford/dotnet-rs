@@ -424,7 +424,8 @@ impl SharedGlobalState {
 
         let state = Self {
             pinvoke: {
-                let p = NativeLibraries::new(loader.get_root());
+                let p = NativeLibraries::new(loader.get_root())
+                    .with_search_dirs(loader.native_search_dirs());
                 #[cfg(feature = "fuzzing")]
                 let p = p.with_sandbox(Arc::new(dotnet_pinvoke::DenySandbox));
                 p
@@ -618,6 +619,7 @@ pub struct ReflectionLocalState<'gc> {
     pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
     pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
+    pub runtime_property_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
 }
 
 impl<'gc> ReflectionLocalState<'gc> {
@@ -630,6 +632,7 @@ impl<'gc> ReflectionLocalState<'gc> {
             runtime_method_objs: RefCell::new(HashMap::new()),
             runtime_fields: RefCell::new(vec![]),
             runtime_field_objs: RefCell::new(HashMap::new()),
+            runtime_property_objs: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -655,6 +658,9 @@ unsafe impl<'gc> Collect<'gc> for ReflectionLocalState<'gc> {
             o.trace(cc);
         }
         for o in self.runtime_field_objs.borrow().values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_property_objs.borrow().values() {
             o.trace(cc);
         }
     }
@@ -760,5 +766,17 @@ impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
         &self,
     ) -> RefMut<'a, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
         self.local.runtime_field_objs.borrow_mut()
+    }
+
+    pub fn property_objs_read(
+        &self,
+    ) -> Ref<'a, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_property_objs.borrow()
+    }
+
+    pub fn property_objs_write(
+        &self,
+    ) -> RefMut<'a, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_property_objs.borrow_mut()
     }
 }

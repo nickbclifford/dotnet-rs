@@ -58,9 +58,14 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
     if is_vt {
         let is_nullable = target_ct.is_nullable(ctx.loader().as_ref());
         // If it's a value type, unbox it.
+        // Fast path: if the value is already unboxed (e.g. from Array.GetValue returning a
+        // primitive), push it directly. ECMA-335 §III.4.33 says unbox.any on a value type
+        // requires an object reference, but callers like Array.GetValue return primitives
+        // directly rather than boxing them. Accept already-unboxed primitives here to support
+        // that pattern.
         let StackValue::ObjectRef(obj) = val else {
-            return ctx
-                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+            ctx.push(val);
+            return StepResult::Continue;
         };
         if obj.0.is_none() {
             if is_nullable {

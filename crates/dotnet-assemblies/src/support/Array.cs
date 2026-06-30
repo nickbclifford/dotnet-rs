@@ -321,8 +321,8 @@ internal sealed class SZArrayHelper<T> : IEnumerable<T>, ICollection<T>, IList<T
     {
         private int _index = -1;
 
-        object? IEnumerator.Current => Current;
-        public TElement Current => (TElement)array.GetValue(_index)!;
+        object? IEnumerator.Current { get { return Current; } }
+        public TElement Current { get { return (TElement)array.GetValue(_index)!; } }
 
         public bool MoveNext()
         {

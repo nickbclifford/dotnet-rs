@@ -23,7 +23,8 @@ use dotnet_vm_ops::{
 };
 use dotnetdll::prelude::{
     Accessibility, AlwaysFailsResolver, BaseType, FixedArg, IntegralParam, MemberAccessibility,
-    MemberType, MethodMemberIndex, MethodReferenceParent, TypeDefinition, TypeSource, UserMethod,
+    MemberType, MethodMemberIndex, MethodReferenceParent, ParameterType, TypeDefinition,
+    TypeSource, UserMethod,
 };
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
@@ -449,6 +450,31 @@ pub(crate) fn collect_method_custom_attributes<'gc, T: ReflectionIntrinsicHost<'
     Ok(attributes)
 }
 
+/// Collects the materialized custom attributes declared directly on `field`,
+/// mirroring [`collect_method_custom_attributes`] for the field-level metadata
+/// table.
+pub(crate) fn collect_field_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    field: dotnet_types::members::FieldDescription,
+    attribute_filter: Option<TypeDescription>,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let owner_type = field.parent.clone();
+    // `field()` dereferences directly into the type definition's field list;
+    // for lazy assemblies the attributes may not be loaded yet so we fall back
+    // to an empty list (same behaviour as collect_method_custom_attributes when
+    // the method has no attributes).
+    let field_attrs = field.field().attributes.clone();
+    let mut attributes = Vec::new();
+    for attribute in &field_attrs {
+        if let Some(attr_obj) =
+            materialize_custom_attribute(ctx, &owner_type, attribute, &attribute_filter)?
+        {
+            attributes.push(attr_obj);
+        }
+    }
+    Ok(attributes)
+}
+
 pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -495,6 +521,36 @@ pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
     populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
+}
+
+pub fn handle_is_defined<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _inherit = ctx.pop_i32();
+    let attribute_type_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let attribute_filter = if attribute_type_obj.0.is_some() {
+        let filter_runtime_type =
+            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
+        match filter_runtime_type {
+            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
+        ctx,
+        target_runtime_type,
+        attribute_filter,
+    ));
+
+    ctx.push_i32(if custom_attributes.is_empty() { 0 } else { 1 });
+    StepResult::Continue
 }
 
 pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -833,32 +889,427 @@ pub fn handle_get_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-pub fn handle_get_properties<
-    'gc,
-    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc> + ExceptionOps<'gc>,
->(
+const BINDING_FLAGS_IGNORE_CASE: i32 = 1;
+const BINDING_FLAGS_INSTANCE: i32 = 4;
+const BINDING_FLAGS_STATIC: i32 = 8;
+const BINDING_FLAGS_PUBLIC: i32 = 16;
+const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+#[derive(Clone)]
+struct PropertyCandidate {
+    name: String,
+    getter: Option<MethodDescription>,
+    setter: Option<MethodDescription>,
+}
+
+fn runtime_type_from_parameter<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+    parameter: &ParameterType<dotnetdll::prelude::MethodType>,
+) -> RuntimeType {
+    match parameter {
+        ParameterType::Value(t) | ParameterType::Ref(t) => {
+            ctx.reflection_make_runtime_type_for_method(method.clone(), lookup, t)
+        }
+        ParameterType::TypedReference => RuntimeType::TypedReference,
+    }
+}
+
+fn property_accessor_descriptions(
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+    index: usize,
+) -> (Option<MethodDescription>, Option<MethodDescription>) {
+    let property = &td.definition().properties[index];
+
+    let fallback_accessor = |prefix: &str| {
+        let accessor_name = format!("{prefix}{}", property.name);
+        td.definition()
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                (m.name == accessor_name).then_some(MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(i),
+                ))
+            })
+    };
+
+    let getter = if property.getter.is_some() {
+        Some(MethodDescription::new(
+            td.clone(),
+            lookup.clone(),
+            td.resolution.clone(),
+            MethodMemberIndex::PropertyGetter(index),
+        ))
+    } else {
+        fallback_accessor("get_")
+    };
+
+    let setter = if property.setter.is_some() {
+        Some(MethodDescription::new(
+            td.clone(),
+            lookup.clone(),
+            td.resolution.clone(),
+            MethodMemberIndex::PropertySetter(index),
+        ))
+    } else {
+        fallback_accessor("set_")
+    };
+
+    (getter, setter)
+}
+
+fn collect_property_candidates(
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+) -> Vec<PropertyCandidate> {
+    if !td.definition().properties.is_empty() {
+        return td
+            .definition()
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(index, property)| {
+                let (getter, setter) = property_accessor_descriptions(td, lookup, index);
+                PropertyCandidate {
+                    name: property.name.to_string(),
+                    getter,
+                    setter,
+                }
+            })
+            .collect();
+    }
+
+    let mut synthetic = std::collections::BTreeMap::<String, (Option<usize>, Option<usize>)>::new();
+    for (index, method) in td.definition().methods.iter().enumerate() {
+        if let Some(property_name) = method.name.strip_prefix("get_") {
+            synthetic.entry(property_name.to_string()).or_default().0 = Some(index);
+        } else if let Some(property_name) = method.name.strip_prefix("set_") {
+            synthetic.entry(property_name.to_string()).or_default().1 = Some(index);
+        }
+    }
+
+    synthetic
+        .into_iter()
+        .map(|(name, (getter_index, setter_index))| PropertyCandidate {
+            name,
+            getter: getter_index.map(|method_index| {
+                MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(method_index),
+                )
+            }),
+            setter: setter_index.map(|method_index| {
+                MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(method_index),
+                )
+            }),
+        })
+        .collect()
+}
+
+fn property_signature_runtime_types<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    getter: Option<&MethodDescription>,
+    setter: Option<&MethodDescription>,
+    lookup: &GenericLookup,
+) -> Option<(RuntimeType, Vec<RuntimeType>)> {
+    if let Some(getter) = getter {
+        let getter_sig = getter.signature();
+        let return_type = getter_sig
+            .return_type
+            .1
+            .as_ref()
+            .map(|parameter| runtime_type_from_parameter(ctx, getter, lookup, parameter))
+            .unwrap_or(RuntimeType::Void);
+        let index_params = getter_sig
+            .parameters
+            .iter()
+            .map(|parameter| runtime_type_from_parameter(ctx, getter, lookup, &parameter.1))
+            .collect();
+        return Some((return_type, index_params));
+    }
+
+    if let Some(setter) = setter {
+        let setter_sig = setter.signature();
+        let (value_parameter, index_parameters) = setter_sig.parameters.split_last()?;
+        let return_type = runtime_type_from_parameter(ctx, setter, lookup, &value_parameter.1);
+        let index_params = index_parameters
+            .iter()
+            .map(|parameter| runtime_type_from_parameter(ctx, setter, lookup, &parameter.1))
+            .collect();
+        return Some((return_type, index_params));
+    }
+
+    None
+}
+
+fn property_matches_binding_flags(property: &PropertyCandidate, flags: i32) -> bool {
+    let mut has_public_accessor = false;
+    let mut has_non_public_accessor = false;
+    let mut has_static_accessor = false;
+    let mut has_instance_accessor = false;
+
+    for accessor in [property.getter.as_ref(), property.setter.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        let method = accessor.method();
+        let is_public = method.accessibility == MemberAccessibility::Access(Accessibility::Public);
+        if is_public {
+            has_public_accessor = true;
+        } else {
+            has_non_public_accessor = true;
+        }
+
+        if accessor.signature().instance {
+            has_instance_accessor = true;
+        } else {
+            has_static_accessor = true;
+        }
+    }
+
+    let match_public = (has_public_accessor && (flags & BINDING_FLAGS_PUBLIC) != 0)
+        || (has_non_public_accessor && (flags & BINDING_FLAGS_NON_PUBLIC) != 0);
+    let match_static = (has_static_accessor && (flags & BINDING_FLAGS_STATIC) != 0)
+        || (has_instance_accessor && (flags & BINDING_FLAGS_INSTANCE) != 0);
+
+    match_public && match_static
+}
+
+fn parse_runtime_type_array<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    types_obj: ObjectRef<'gc>,
+) -> Result<Vec<RuntimeType>, VmError> {
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let type_objs = types_obj
+        .try_as_vector(|v: &dotnet_value::object::Vector<'gc>| {
+            v.get()
+                .chunks_exact(ObjectRef::SIZE)
+                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
+                .collect::<Vec<_>>()
+        })
+        .map_err(VmError::from)?;
+
+    let mut runtime_types = Vec::with_capacity(type_objs.len());
+    for type_obj in type_objs {
+        runtime_types.push(crate::common::resolve_runtime_type(ctx, type_obj)?);
+    }
+
+    Ok(runtime_types)
+}
+
+fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    declaring_runtime_type: &RuntimeType,
+    property: &PropertyCandidate,
+    lookup: &GenericLookup,
+) -> Result<ObjectRef<'gc>, VmError> {
+    let accessor = property.getter.clone().or_else(|| property.setter.clone());
+    if let Some(accessor) = accessor.as_ref()
+        && let Some(obj) = ctx.reflection_cached_runtime_property_obj(accessor, lookup)
+    {
+        return Ok(obj);
+    }
+
+    let property_type_runtime = property_signature_runtime_types(
+        ctx,
+        property.getter.as_ref(),
+        property.setter.as_ref(),
+        lookup,
+    )
+    .map(|(property_type, _)| property_type)
+    .unwrap_or(RuntimeType::Object);
+
+    let getter_obj = property
+        .getter
+        .clone()
+        .map(|desc| crate::common::get_runtime_method_obj(ctx, desc, lookup.clone()))
+        .unwrap_or_else(|| ObjectRef(None));
+    let setter_obj = property
+        .setter
+        .clone()
+        .map(|desc| crate::common::get_runtime_method_obj(ctx, desc, lookup.clone()))
+        .unwrap_or_else(|| ObjectRef(None));
+
+    let declaring_type_obj = crate::common::get_runtime_type(ctx, declaring_runtime_type.clone());
+    let property_type_obj = crate::common::get_runtime_type(ctx, property_type_runtime);
+
+    let property_info_type = ctx.loader().corlib_type("DotnetRs.PropertyInfo")?;
+    let property_info_instance = ctx.new_object(property_info_type.clone())?;
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let property_info_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(property_info_instance)));
+    ctx.register_new_object(&property_info_obj);
+
+    let name_obj = ObjectRef::new(gc, HeapStorage::Str(property.name.clone().into()));
+    ctx.register_new_object(&name_obj);
+
+    property_info_obj.as_object_mut(gc, |instance| {
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(property_info_type.clone(), "name")
+            .unwrap()
+            .write(name_obj);
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(property_info_type.clone(), "getter")
+            .unwrap()
+            .write(getter_obj);
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(property_info_type.clone(), "setter")
+            .unwrap()
+            .write(setter_obj);
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(property_info_type.clone(), "declaringType")
+            .unwrap()
+            .write(declaring_type_obj);
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(property_info_type.clone(), "propertyType")
+            .unwrap()
+            .write(property_type_obj);
+    });
+
+    if let Some(accessor) = accessor {
+        ctx.reflection_cache_runtime_property_obj(accessor, lookup.clone(), property_info_obj);
+    }
+
+    Ok(property_info_obj)
+}
+
+pub fn handle_get_properties<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _flags = ctx.pop_i32();
-    let _obj = ctx.pop_obj();
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+
+    let mut property_objs = Vec::new();
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+        let properties = collect_property_candidates(td, &lookup);
+
+        for property in &properties {
+            if !property_matches_binding_flags(property, flags) {
+                continue;
+            }
+
+            property_objs.push(dotnet_vm_ops::vm_try!(create_runtime_property_obj(
+                ctx,
+                &target_type,
+                property,
+                &lookup,
+            )));
+        }
+    }
+
     let property_info_type =
         dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.PropertyInfo"));
-    populate_reflection_array(ctx, vec![], ConcreteType::from(property_info_type))
+    populate_reflection_array(ctx, property_objs, ConcreteType::from(property_info_type))
 }
 
-pub fn handle_get_property_impl<'gc, T: TypedStackOps<'gc>>(
+pub fn handle_get_property_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _modifiers = ctx.pop();
-    let _types = ctx.pop();
-    let _return_type = ctx.pop();
+    let types_obj = ctx.pop_obj();
+    let return_type_obj = ctx.pop_obj();
     let _binder = ctx.pop();
-    let _flags = ctx.pop();
-    let _name = ctx.pop();
-    let _obj = ctx.pop_obj();
-    ctx.push(StackValue::null());
+    let flags = ctx.pop_i32();
+    let name_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let name = dotnet_vm_ops::vm_try!(string_from_heap_obj(name_obj));
+    let ignore_case = (flags & BINDING_FLAGS_IGNORE_CASE) != 0;
+
+    let expected_return_type = if return_type_obj.0.is_some() {
+        Some(dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(
+            ctx,
+            return_type_obj,
+        )))
+    } else {
+        None
+    };
+
+    let expected_index_types = if types_obj.0.is_some() {
+        Some(dotnet_vm_ops::vm_try!(parse_runtime_type_array(
+            ctx, types_obj
+        )))
+    } else {
+        None
+    };
+
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+
+    let mut found_property = None;
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+        let properties = collect_property_candidates(td, &lookup);
+
+        for property in &properties {
+            let name_matches = if ignore_case {
+                property.name.eq_ignore_ascii_case(&name)
+            } else {
+                property.name == name
+            };
+
+            if !name_matches || !property_matches_binding_flags(property, flags) {
+                continue;
+            }
+
+            let Some((property_type, index_types)) = property_signature_runtime_types(
+                ctx,
+                property.getter.as_ref(),
+                property.setter.as_ref(),
+                &lookup,
+            ) else {
+                continue;
+            };
+
+            if expected_return_type
+                .as_ref()
+                .is_some_and(|expected| *expected != property_type)
+            {
+                continue;
+            }
+
+            if expected_index_types
+                .as_ref()
+                .is_some_and(|expected| expected != &index_types)
+            {
+                continue;
+            }
+
+            found_property = Some(dotnet_vm_ops::vm_try!(create_runtime_property_obj(
+                ctx,
+                &target_type,
+                property,
+                &lookup,
+            )));
+            break;
+        }
+    }
+
+    if let Some(property_obj) = found_property {
+        ctx.push_obj(property_obj);
+    } else {
+        ctx.push(StackValue::null());
+    }
     StepResult::Continue
 }
 

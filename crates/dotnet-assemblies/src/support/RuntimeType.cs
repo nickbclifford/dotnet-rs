@@ -95,6 +95,8 @@ internal class RuntimeType : Type
 
     public override extern bool IsGenericType { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
+    public override extern bool IsGenericTypeDefinition { [MethodImpl(MethodImplOptions.InternalCall)] get; }
+
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type GetGenericTypeDefinition();
 

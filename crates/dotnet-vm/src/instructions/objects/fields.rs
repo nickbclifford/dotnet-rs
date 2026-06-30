@@ -56,6 +56,37 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     if parent.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
+
+    // Strings are stored as `HeapStorage::Str(CLRString)`, not as field-laid-out
+    // objects, so the generic field read below cannot resolve `_stringLength` /
+    // `_firstChar`. CoreLib reads these fields directly (e.g. in
+    // `String.GetHashCode`), so intercept them here, mirroring the `ldflda`
+    // handling of `System.String._firstChar`.
+    if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent
+        && field.parent.type_name() == "System.String"
+    {
+        let data = h.borrow();
+        if let HeapStorage::Str(ref s) = data.storage {
+            let name = &field.field().name;
+            let intercepted = if name == "_stringLength" {
+                Some(StackValue::Int32(s.len() as i32))
+            } else if name == "_firstChar" {
+                // `_firstChar` is a `char`; the eval stack holds it as Int32.
+                // An empty string's first char is the NUL terminator.
+                Some(StackValue::Int32(s.first().copied().unwrap_or(0) as i32))
+            } else {
+                None
+            };
+            if let Some(val) = intercepted {
+                return {
+                    drop(data);
+                    ctx.push(val);
+                    StepResult::Continue
+                };
+            }
+        }
+    }
+
     let (origin, base_offset) = match get_ptr_info(ctx, &parent) {
         Ok(v) => v,
         Err(e) => return e,

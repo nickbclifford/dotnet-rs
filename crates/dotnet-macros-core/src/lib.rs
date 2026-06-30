@@ -486,6 +486,9 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
         if ident == "ref" || ident == "out" || ident == "in" {
             input.call(Ident::parse_any)?;
             is_ref = true;
+        } else if ident == "valuetype" || ident == "class" {
+            // IL-style type-kind qualifier — consume and ignore, the actual type follows
+            input.call(Ident::parse_any)?;
         }
     }
 

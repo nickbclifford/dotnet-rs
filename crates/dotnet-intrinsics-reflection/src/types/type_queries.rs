@@ -277,6 +277,27 @@ pub fn intrinsic_type_get_is_value_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("bool System.Type::get_IsGenericTypeDefinition()")]
+pub fn intrinsic_type_get_is_generic_type_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let o = ctx.pop_obj();
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
+    let is_def = match target_type {
+        RuntimeType::Generic(_, ref args) => {
+            !args.is_empty()
+                && args
+                    .iter()
+                    .all(|a| matches!(a, RuntimeType::TypeParameter { .. }))
+        }
+        _ => false,
+    };
+    ctx.push_i32(if is_def { 1 } else { 0 });
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsEnum()")]
@@ -292,6 +313,50 @@ pub fn intrinsic_type_get_is_enum<'gc, T: ReflectionIntrinsicHost<'gc>>(
         _ => false,
     };
     ctx.push_i32(value as i32);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Type System.Type::GetEnumUnderlyingType()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::GetEnumUnderlyingType()")]
+pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let o = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
+    let td = match &target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Type provided must be an Enum.",
+            );
+        }
+    };
+    let Some(member) = td.is_enum() else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type provided must be an Enum.",
+        );
+    };
+    // The enum's underlying type (e.g. `Int32`) is a non-generic primitive, so an
+    // empty generic lookup is sufficient to resolve it.
+    let method_type: dotnetdll::prelude::MethodType = member.clone().into();
+    let lookup = ctx.reflection_empty_generics();
+    let Some(underlying_rt) = runtime_type_from_method_type(
+        ctx.loader().as_ref(),
+        td.resolution.clone(),
+        &method_type,
+        &lookup,
+    ) else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type provided must be an Enum.",
+        );
+    };
+    let rt_obj = crate::common::get_runtime_type(ctx, underlying_rt);
+    ctx.push_obj(rt_obj);
     StepResult::Continue
 }
 
@@ -652,28 +717,42 @@ pub fn handle_get_base_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
-    match target_type {
-        RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) => {
-            if let Some(base) = &td.definition().extends {
-                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let method_type = member_to_method_type(base);
-                let Some(base_rt) = runtime_type_from_method_type(
-                    ctx.loader().as_ref(),
-                    td.resolution.clone(),
-                    &method_type,
-                    &lookup,
-                ) else {
+
+    let (td, lookup) = match &target_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => (
+            td.clone(),
+            build_generic_lookup_from_runtime_type(ctx, &target_type),
+        ),
+        _ => {
+            let concrete = target_type.to_concrete(ctx.loader().as_ref());
+            let td = match ctx.loader().find_concrete_type(concrete.clone()) {
+                Ok(td) => td,
+                Err(_) => {
                     ctx.push(StackValue::null());
                     return StepResult::Continue;
-                };
-                let rt_obj = crate::common::get_runtime_type(ctx, base_rt);
-                ctx.push_obj(rt_obj);
-            } else {
-                ctx.push(StackValue::null());
-            }
+                }
+            };
+            (td, concrete.make_lookup())
         }
-        _ => ctx.push(StackValue::null()),
+    };
+
+    if let Some(base) = &td.definition().extends {
+        let method_type = member_to_method_type(base);
+        let Some(base_rt) = runtime_type_from_method_type(
+            ctx.loader().as_ref(),
+            td.resolution.clone(),
+            &method_type,
+            &lookup,
+        ) else {
+            ctx.push(StackValue::null());
+            return StepResult::Continue;
+        };
+        let rt_obj = crate::common::get_runtime_type(ctx, base_rt);
+        ctx.push_obj(rt_obj);
+    } else {
+        ctx.push(StackValue::null());
     }
+
     StepResult::Continue
 }
 
@@ -685,6 +764,27 @@ pub fn handle_get_is_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
     ctx.push_i32(if is_generic { 1 } else { 0 });
+    StepResult::Continue
+}
+
+pub fn handle_get_is_generic_type_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj();
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    // A generic type definition is a Generic with all open (TypeParameter) type args.
+    // Non-generic types are never generic type definitions.
+    let is_def = match target_type {
+        RuntimeType::Generic(_, ref args) => {
+            !args.is_empty()
+                && args
+                    .iter()
+                    .all(|a| matches!(a, RuntimeType::TypeParameter { .. }))
+        }
+        _ => false,
+    };
+    ctx.push_i32(if is_def { 1 } else { 0 });
     StepResult::Continue
 }
 

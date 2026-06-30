@@ -98,7 +98,22 @@ pub fn runtime_type_from_concrete(
                         .ok()
                         .map(RuntimeType::Type)
                         .unwrap_or_else(|| RuntimeType::Type(td.clone())),
-                    _ => RuntimeType::Type(td),
+                    _ => {
+                        // If the type has generic parameters but no args were supplied, this is
+                        // a generic type definition (e.g. `typeof(IDictionary<,>)`).
+                        let n_params = td.definition().generic_parameters.len();
+                        if n_params > 0 {
+                            let params = (0..n_params as u16)
+                                .map(|index| RuntimeType::TypeParameter {
+                                    owner: td.clone(),
+                                    index,
+                                })
+                                .collect();
+                            RuntimeType::Generic(td, params)
+                        } else {
+                            RuntimeType::Type(td)
+                        }
+                    }
                 }
             }),
         BaseType::Type {

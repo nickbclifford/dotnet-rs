@@ -89,6 +89,8 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("object[] DotnetRs.MethodInfo::GetCustomAttributes(System.Type, bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(bool)")]
 #[dotnet_intrinsic("object[] DotnetRs.ConstructorInfo::GetCustomAttributes(System.Type, bool)")]
+#[dotnet_intrinsic("bool DotnetRs.MethodInfo::IsDefined(System.Type, bool)")]
+#[dotnet_intrinsic("bool DotnetRs.ConstructorInfo::IsDefined(System.Type, bool)")]
 pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -99,6 +101,38 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let param_count = method.signature().parameters.len();
 
     let result = match (method_name, param_count) {
+        ("get_ContainsGenericParameters", 0) => {
+            // Every dispatched method is fully resolved, so report no unresolved type params.
+            let _obj = ctx.pop_obj();
+            ctx.push_i32(0);
+            Some(StepResult::Continue)
+        }
+        ("IsDefined", 2) => {
+            let _inherit = ctx.pop_i32();
+            let attribute_type_obj = ctx.pop_obj();
+            let method_obj = ctx.pop_obj();
+            let attribute_filter = if attribute_type_obj.0.is_some() {
+                let filter_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(
+                    ctx,
+                    attribute_type_obj
+                ));
+                match filter_rt {
+                    RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_method_custom_attributes(
+                ctx,
+                method,
+                attribute_filter
+            ));
+            ctx.push_i32(if attrs.is_empty() { 0 } else { 1 });
+            Some(StepResult::Continue)
+        }
         ("GetName" | "get_Name", 0) => {
             let obj = ctx.pop_obj();
             let (method, _) =
@@ -138,6 +172,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let rt = resolve_return_type(ctx, &method, &lookup);
             let rt_obj = crate::common::get_runtime_type(ctx, rt);
             ctx.push_obj(rt_obj);
+            Some(StepResult::Continue)
+        }
+        ("GetAttributes" | "get_Attributes" | "GetMethodFlags", 0) => {
+            let obj = ctx.pop_obj();
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
+            ctx.push_i32(method_attributes_flags(&method));
             Some(StepResult::Continue)
         }
         ("GetParameters", 0) => {
@@ -389,7 +430,14 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         _ => None,
     };
 
-    let _ = result.expect("unimplemented method info intrinsic");
+    let _ = result.unwrap_or_else(|| {
+        panic!(
+            "unimplemented method info intrinsic: {}.{}({})",
+            method.parent.type_name(),
+            method_name,
+            param_count
+        )
+    });
     StepResult::Continue
 }
 
@@ -494,6 +542,53 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
     StepResult::Continue
 }
 
+fn method_attributes_flags(method: &MethodDescription) -> i32 {
+    let method_def = method.method();
+    let mut flags = method_def.accessibility.to_mask() as i32;
+
+    if !method.signature().instance {
+        flags |= 0x0010; // MethodAttributes.Static
+    }
+    if method_def.sealed {
+        flags |= 0x0020; // MethodAttributes.Final
+    }
+    if method_def.virtual_member {
+        flags |= 0x0040; // MethodAttributes.Virtual
+    }
+    if method_def.hide_by_sig {
+        flags |= 0x0080; // MethodAttributes.HideBySig
+    }
+    if matches!(
+        method_def.vtable_layout,
+        dotnetdll::resolved::members::VtableLayout::NewSlot
+    ) {
+        flags |= 0x0100; // MethodAttributes.NewSlot
+    }
+    if method_def.strict {
+        flags |= 0x0200; // MethodAttributes.CheckAccessOnOverride
+    }
+    if method_def.abstract_member {
+        flags |= 0x0400; // MethodAttributes.Abstract
+    }
+    if method_def.special_name {
+        flags |= 0x0800; // MethodAttributes.SpecialName
+    }
+    if method_def.runtime_special_name {
+        flags |= 0x1000; // MethodAttributes.RTSpecialName
+    }
+    if method_def.pinvoke.is_some() {
+        flags |= 0x2000; // MethodAttributes.PinvokeImpl
+    }
+    if method_def.security.is_some() {
+        flags |= 0x4000; // MethodAttributes.HasSecurity
+    }
+    if method_def.require_sec_object {
+        flags |= 0x8000; // MethodAttributes.RequireSecObject
+    }
+
+    flags
+}
+
 fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     method: &MethodDescription,
@@ -511,6 +606,7 @@ fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     arg: ObjectRef<'gc>,
+    method: &MethodDescription,
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
     _param_index: usize,
@@ -555,10 +651,11 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
         }
         ParameterType::Value(t) | ParameterType::Ref(t) => {
-            let concrete_param_type = match ctx.make_concrete(t) {
-                Ok(v) => v,
-                Err(e) => return Err(StepResult::Error(e.into())),
-            };
+            let concrete_param_type =
+                match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => return Err(StepResult::Error(e.into())),
+                };
             let td = ctx
                 .loader()
                 .find_concrete_type(concrete_param_type.clone())
@@ -635,7 +732,7 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
             let param_type = &method.signature().parameters[i].1;
-            let arg = unbox_param_to_stack_value(ctx, arg_obj, param_type, lookup, i)?;
+            let arg = unbox_param_to_stack_value(ctx, arg_obj, method, param_type, lookup, i)?;
             args.push(arg);
         }
     }

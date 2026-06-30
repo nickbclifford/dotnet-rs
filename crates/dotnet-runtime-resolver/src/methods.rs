@@ -297,6 +297,21 @@ where
         allow_variance: bool,
     ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         let def = this_type.definition();
+
+        // Interface dispatch can arrive with a declaration-side generic instantiation that
+        // differs from the concrete receiver's instantiation (e.g. metadata-side
+        // ICollection<MemberInfo>::CopyTo against a runtime List<PropertyInfo> receiver).
+        // Keep using declaration generics by default, but when arity matches and receiver
+        // generics are more concrete, rebind signature-side lookup to the receiver to avoid
+        // false MethodNotFound on valid implementations.
+        let mut method_for_lookup = method.clone();
+        if allow_variance
+            && method_for_lookup.parent_generics.type_generics.len() == generics.type_generics.len()
+            && method_for_lookup.parent_generics.type_generics != generics.type_generics
+        {
+            method_for_lookup.parent_generics.type_generics = generics.type_generics.clone();
+        }
+        method_for_lookup.parent_generics.method_generics = generics.method_generics.clone();
         if !def.overrides.is_empty() {
             let cache_key = (this_type.clone(), generics.clone());
             let overrides = if let Some(map) = self.caches.get_overrides_cached(&cache_key) {
@@ -323,7 +338,10 @@ where
                 arc_map
             };
 
-            if let Some(impl_m) = overrides.get(&method) {
+            if let Some(impl_m) = overrides
+                .get(&method)
+                .or_else(|| overrides.get(&method_for_lookup))
+            {
                 self.caches.record_vmt_key_clones(3);
                 self.caches.set_vmt_cached(
                     method.clone(),
@@ -350,18 +368,18 @@ where
                 let comparer = self.loader.comparer();
                 if allow_variance {
                     comparer.signatures_compatible_with_variance(
-                        &method.method_resolution,
-                        method.signature(),
-                        Some(&method.parent_generics),
+                        &method_for_lookup.method_resolution,
+                        method_for_lookup.signature(),
+                        Some(&method_for_lookup.parent_generics),
                         &decl.method_resolution,
                         decl.signature(),
                         Some(&decl.parent_generics),
                     )
                 } else {
                     comparer.signatures_equal(
-                        &method.method_resolution,
-                        method.signature(),
-                        Some(&method.parent_generics),
+                        &method_for_lookup.method_resolution,
+                        method_for_lookup.signature(),
+                        Some(&method_for_lookup.parent_generics),
                         &decl.method_resolution,
                         decl.signature(),
                         Some(&decl.parent_generics),
@@ -382,8 +400,7 @@ where
         // Signature-side generics must follow the base declaration's declaring type
         // (e.g., Iterator<T>), while candidate-side generics follow the current
         // runtime type being searched (e.g., IteratorSelectIterator<TSource,TResult>).
-        let mut signature_lookup = method.parent_generics.clone();
-        signature_lookup.method_generics = generics.method_generics.clone();
+        let signature_lookup = method_for_lookup.parent_generics.clone();
 
         if let Some(this_method) = self.loader.find_method_in_type_internal(
             this_type.clone(),
