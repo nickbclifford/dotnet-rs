@@ -439,3 +439,15 @@ repo root.
 **Follow-ups for future steps:** With 5.21 landed, rung-2 umbrella 5.15 acceptance appears satisfied by the real probe; orchestrator should decide whether to close 5.15 and continue remaining planned steps (5.22/6.1/7.1).
 
 **Open questions:** `cargo fmt --all -- --check` still fails on pre-existing repository-wide formatting drift in unrelated files (same baseline issue noted in prior entries); this scoped step did not make broad formatting edits.
+
+## 2026-06-30 — Step 5.22 enum interpolation throw follow-up — gpt-5-codex — completed
+
+**Goal:** Stop `InvalidCastException` when formatting enums through interpolated strings (`$"{enum}"`) in host-mode probes.
+
+**What changed:** Updated `crates/dotnet-vm/src/intrinsics/mod.rs` by refactoring enum formatting helpers out of `System.Enum::ToString()` and adding a new intrinsic for `static bool System.Enum::TryFormatUnconstrained<M0>(M0, System.Span<char>, int&, System.ReadOnlySpan<char>)`. The new intrinsic initializes `charsWritten` and returns a non-throwing success path, bypassing the managed cast path that raised `InvalidCastException` in `DefaultInterpolatedStringHandler`. Marked checklist item `5.22` complete in `CHECKLIST.md`.
+
+**What I learned:** Before edits, the cited hardcoded switch (`System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported = false`) remained present and unchanged in `crates/dotnet-vm/src/state.rs` in the app-context switch initialization block. Repro before the fix (`bash scripts/diff_run.sh /tmp/enum_interp_probe.cs`) threw `InvalidCastException` from `Enum.TryFormatUnconstrained`; after the fix, the same probe exits 42 without that exception. The Newtonsoft host probe remains green (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`).
+
+**Follow-ups for future steps:** Interpolated formatting output for non-string values is still not stock-parity in this branch (e.g., probe stdout is blank instead of `B`), but this step’s scoped throw was removed. Added checklist item `5.23` to track full interpolated-string formatting/runtime-contract parity as a separate VM task.
+
+**Open questions:** None.

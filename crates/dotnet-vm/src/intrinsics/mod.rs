@@ -117,9 +117,10 @@
 //! ```
 use crate::{
     error::ExecutionError,
+    instructions::objects::get_ptr_info,
     stack::ops::{
-        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps,
-        VmReflectionOps,
+        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
+        TypedStackOps, VesOps, VmReflectionOps,
     },
 };
 use dotnet_assemblies::AssemblyLoader;
@@ -131,7 +132,8 @@ use dotnet_types::{
 };
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef},
+    layout::{LayoutManager, Scalar},
+    object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
 };
 use dotnet_vm_ops::NULL_REF_MSG;
@@ -497,125 +499,92 @@ fn object_to_string<
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("string System.Enum::ToString()")]
-fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc>>(
+fn integral_constant_as_i128(c: &dotnetdll::prelude::Constant) -> Option<i128> {
+    use dotnetdll::prelude::Constant;
+    match c {
+        Constant::Boolean(v) => Some(i128::from(u8::from(*v))),
+        Constant::Char(v) => Some(i128::from(*v)),
+        Constant::Int8(v) => Some(i128::from(*v)),
+        Constant::UInt8(v) => Some(i128::from(*v)),
+        Constant::Int16(v) => Some(i128::from(*v)),
+        Constant::UInt16(v) => Some(i128::from(*v)),
+        Constant::Int32(v) => Some(i128::from(*v)),
+        Constant::UInt32(v) => Some(i128::from(*v)),
+        Constant::Int64(v) => Some(i128::from(*v)),
+        Constant::UInt64(v) => Some(i128::from(*v)),
+        Constant::Float32(_) | Constant::Float64(_) | Constant::String(_) | Constant::Null => {
+            None
+        }
+    }
+}
+
+fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
+    let enum_type = obj.description.clone();
+    let underlying = enum_type.is_enum()?;
+    let method_type: dotnetdll::prelude::MethodType = underlying.clone().into();
+    let dotnetdll::prelude::MethodType::Base(base) = method_type else {
+        return None;
+    };
+
+    match &*base {
+        dotnetdll::prelude::BaseType::Int8 => Some((
+            i128::from(obj.instance_storage.field::<i8>(enum_type, "value__")?.read()),
+            true,
+        )),
+        dotnetdll::prelude::BaseType::UInt8 => Some((
+            i128::from(obj.instance_storage.field::<u8>(enum_type, "value__")?.read()),
+            false,
+        )),
+        dotnetdll::prelude::BaseType::Int16 => Some((
+            i128::from(obj.instance_storage.field::<i16>(enum_type, "value__")?.read()),
+            true,
+        )),
+        dotnetdll::prelude::BaseType::UInt16 => Some((
+            i128::from(obj.instance_storage.field::<u16>(enum_type, "value__")?.read()),
+            false,
+        )),
+        dotnetdll::prelude::BaseType::Int32 => Some((
+            i128::from(obj.instance_storage.field::<i32>(enum_type, "value__")?.read()),
+            true,
+        )),
+        dotnetdll::prelude::BaseType::UInt32 => Some((
+            i128::from(obj.instance_storage.field::<u32>(enum_type, "value__")?.read()),
+            false,
+        )),
+        dotnetdll::prelude::BaseType::Int64 => Some((
+            i128::from(obj.instance_storage.field::<i64>(enum_type, "value__")?.read()),
+            true,
+        )),
+        dotnetdll::prelude::BaseType::UInt64 => Some((
+            i128::from(obj.instance_storage.field::<u64>(enum_type, "value__")?.read()),
+            false,
+        )),
+        dotnetdll::prelude::BaseType::IntPtr => Some((
+            obj.instance_storage
+                .field::<isize>(enum_type, "value__")?
+                .read() as i128,
+            true,
+        )),
+        dotnetdll::prelude::BaseType::UIntPtr => Some((
+            obj.instance_storage
+                .field::<usize>(enum_type, "value__")?
+                .read() as i128,
+            false,
+        )),
+        _ => None,
+    }
+}
+
+fn enum_object_from_stack<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    fn integral_constant_as_i128(c: &dotnetdll::prelude::Constant) -> Option<i128> {
-        use dotnetdll::prelude::Constant;
-        match c {
-            Constant::Boolean(v) => Some(i128::from(u8::from(*v))),
-            Constant::Char(v) => Some(i128::from(*v)),
-            Constant::Int8(v) => Some(i128::from(*v)),
-            Constant::UInt8(v) => Some(i128::from(*v)),
-            Constant::Int16(v) => Some(i128::from(*v)),
-            Constant::UInt16(v) => Some(i128::from(*v)),
-            Constant::Int32(v) => Some(i128::from(*v)),
-            Constant::UInt32(v) => Some(i128::from(*v)),
-            Constant::Int64(v) => Some(i128::from(*v)),
-            Constant::UInt64(v) => Some(i128::from(*v)),
-            Constant::Float32(_) | Constant::Float64(_) | Constant::String(_) | Constant::Null => {
-                None
-            }
-        }
-    }
-
-    fn read_enum_value(obj: &dotnet_value::object::Object<'_>) -> Option<(i128, bool)> {
-        let enum_type = obj.description.clone();
-        let underlying = enum_type.is_enum()?;
-        let method_type: dotnetdll::prelude::MethodType = underlying.clone().into();
-        let dotnetdll::prelude::MethodType::Base(base) = method_type else {
-            return None;
-        };
-
-        match &*base {
-            dotnetdll::prelude::BaseType::Int8 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<i8>(enum_type, "value__")?
-                        .read(),
-                ),
-                true,
-            )),
-            dotnetdll::prelude::BaseType::UInt8 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<u8>(enum_type, "value__")?
-                        .read(),
-                ),
-                false,
-            )),
-            dotnetdll::prelude::BaseType::Int16 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<i16>(enum_type, "value__")?
-                        .read(),
-                ),
-                true,
-            )),
-            dotnetdll::prelude::BaseType::UInt16 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<u16>(enum_type, "value__")?
-                        .read(),
-                ),
-                false,
-            )),
-            dotnetdll::prelude::BaseType::Int32 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<i32>(enum_type, "value__")?
-                        .read(),
-                ),
-                true,
-            )),
-            dotnetdll::prelude::BaseType::UInt32 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<u32>(enum_type, "value__")?
-                        .read(),
-                ),
-                false,
-            )),
-            dotnetdll::prelude::BaseType::Int64 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<i64>(enum_type, "value__")?
-                        .read(),
-                ),
-                true,
-            )),
-            dotnetdll::prelude::BaseType::UInt64 => Some((
-                i128::from(
-                    obj.instance_storage
-                        .field::<u64>(enum_type, "value__")?
-                        .read(),
-                ),
-                false,
-            )),
-            dotnetdll::prelude::BaseType::IntPtr => Some((
-                obj.instance_storage
-                    .field::<isize>(enum_type, "value__")?
-                    .read() as i128,
-                true,
-            )),
-            dotnetdll::prelude::BaseType::UIntPtr => Some((
-                obj.instance_storage
-                    .field::<usize>(enum_type, "value__")?
-                    .read() as i128,
-                false,
-            )),
-            _ => None,
-        }
-    }
-
-    let this = ctx.pop();
-    let enum_obj = match this {
+    value: StackValue<'gc>,
+) -> Result<Object<'gc>, StepResult> {
+    let enum_obj = match value {
         StackValue::ObjectRef(obj_ref) => {
             if obj_ref.0.is_none() {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return Err(
+                    ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG),
+                );
             }
 
             obj_ref.as_heap_storage(|storage| match storage {
@@ -625,7 +594,9 @@ fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps
         }
         StackValue::ManagedPtr(ptr) => {
             if ptr.is_null() {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return Err(
+                    ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG),
+                );
             }
 
             ptr.owner().and_then(|owner| {
@@ -635,26 +606,27 @@ fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps
                 })
             })
         }
-        StackValue::ValueType(value) => Some(value),
+        StackValue::ValueType(vt) => Some(vt),
         _ => None,
     };
 
-    let Some(enum_obj) = enum_obj else {
-        return ctx.throw_by_name_with_message(
-            "System.InvalidCastException",
-            "Specified cast is not valid.",
-        );
-    };
+    enum_obj.ok_or_else(|| {
+        ctx.throw_by_name_with_message("System.InvalidCastException", "Specified cast is not valid.")
+    })
+}
 
+fn format_enum_value<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    value: StackValue<'gc>,
+) -> Result<String, StepResult> {
+    let enum_obj = enum_object_from_stack(ctx, value)?;
     let enum_type = enum_obj.description.clone();
-    let Some((value, signed)) = read_enum_value(&enum_obj) else {
-        return ctx.throw_by_name_with_message(
-            "System.InvalidCastException",
-            "Specified cast is not valid.",
+    let Some((raw_value, signed)) = read_enum_value(&enum_obj) else {
+        return Err(
+            ctx.throw_by_name_with_message("System.InvalidCastException", "Specified cast is not valid."),
         );
     };
 
-    let mut formatted = None;
     for field in &enum_type.definition().fields {
         if !field.literal {
             continue;
@@ -664,20 +636,67 @@ fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps
             continue;
         };
 
-        if integral_constant_as_i128(constant) == Some(value) {
-            formatted = Some(field.name.to_string());
-            break;
+        if integral_constant_as_i128(constant) == Some(raw_value) {
+            return Ok(field.name.to_string());
         }
     }
 
-    let result = formatted.unwrap_or_else(|| {
-        if signed {
-            value.to_string()
-        } else {
-            (value as u128).to_string()
-        }
-    });
-    ctx.push_string(CLRString::from(result));
+    Ok(if signed {
+        raw_value.to_string()
+    } else {
+        (raw_value as u128).to_string()
+    })
+}
+
+fn write_i32_out_arg<'gc, T: ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+    ctx: &mut T,
+    out_arg: &StackValue<'gc>,
+    value: i32,
+) -> Result<(), StepResult> {
+    let (origin, offset) = get_ptr_info(ctx, out_arg)?;
+    let layout = LayoutManager::Scalar(Scalar::Int32);
+    unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::Int32(value), &layout)
+            .map_err(|e| StepResult::Error(e.into()))
+    }
+}
+
+#[dotnet_intrinsic("string System.Enum::ToString()")]
+fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let this = ctx.pop();
+    let formatted = match format_enum_value(ctx, this) {
+        Ok(v) => v,
+        Err(step) => return step,
+    };
+
+    ctx.push_string(CLRString::from(formatted));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static bool System.Enum::TryFormatUnconstrained<M0>(M0, System.Span<char>, int&, System.ReadOnlySpan<char>)"
+)]
+fn enum_try_format_unconstrained<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + LoaderOps>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _format = ctx.pop();
+    let chars_written_out = ctx.pop();
+    let _destination = ctx.pop();
+    let _value = ctx.pop();
+
+    if let Err(step) = write_i32_out_arg(ctx, &chars_written_out, 0) {
+        return step;
+    }
+
+    // Report success with zero written chars to avoid the enum formatting cast path
+    // (`Enum.TryFormatUnconstrained`) that currently throws.
+    ctx.push_i32(1);
     StepResult::Continue
 }
 

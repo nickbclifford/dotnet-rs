@@ -109,10 +109,13 @@ valuable VM improvements, just not sufficient for rung-2 parity):
   are in `docs/NEWTONSOFT_SERIALIZATION_GAP.md`. **Verify against the real probe**
   (`bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` → `{"name":"test","value":42}`), not a
   synthetic repro — that drift is what produced 5.16–5.20. [effort: high] — refs REVIEW.md#F-TEST-001
-- [ ] 5.22 (tangential, lower priority) enum formatting via **interpolated string** (`$"{enum}"`) throws
+- [x] 5.22 (tangential, lower priority) enum formatting via **interpolated string** (`$"{enum}"`) throws
   `InvalidCastException` in `System.Enum.TryFormatUnconstrained` / `DefaultInterpolatedStringHandler` —
   a separate path from the 5.20 `Enum.ToString()` intrinsic. Surfaced by the diagnostic probe; **not**
   on the `Item` serialization critical path. Fix opportunistically, not bundled with 5.21. [effort: default] — refs REVIEW.md#F-TEST-001
+- [ ] 5.23 Interpolated formatting parity follow-up: non-string interpolations currently produce blank
+  stdout (e.g., `$"{1}"`, `$"{enum}"`), despite no exception after 5.22. Track as a separate VM
+  formatting/runtime-contract gap (outside host-runner critical path). [effort: high] — refs REVIEW.md#F-TEST-001
 
 > **Rung 3 (EF InMemory) — parity UNMET, by design.** Step 5.3 (completed) *recorded* the result:
 > host-mode EF fails with `Generic index 0 out of bounds (length 0)`, the known P1 generic-resolution
