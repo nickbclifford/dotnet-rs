@@ -451,10 +451,136 @@ pub fn resolve_framework_from_runtimeconfig(
         .find_map(|base_dir| select_framework_version(&base_dir, framework, policy))
 }
 
+/// Classification of an entry file passed to the runner.
+///
+/// Only `Managed` images (a PE/PE32+ carrying a CLI/COR header — this includes
+/// ReadyToRun, which still embeds IL) can be interpreted. NativeAOT and
+/// single-file bundles carry no usable IL and must fail loudly rather than
+/// surfacing a confusing downstream parse error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A managed assembly with a CLI header (incl. ReadyToRun).
+    Managed,
+    /// A NativeAOT-published native image (ELF/Mach-O, or a PE without a CLI header).
+    NativeAot,
+    /// A single-file bundle (native host with an appended bundle manifest).
+    SingleFileBundle,
+}
+
+/// The 16-byte signature the .NET single-file bundler embeds in the host so the
+/// runtime can locate the appended bundle manifest. Searched for near the tail.
+/// (Matches `bundle_marker` in the dotnet runtime host.)
+const SINGLE_FILE_BUNDLE_SIGNATURE: [u8; 16] = [
+    0x8b, 0x12, 0x02, 0xb9, 0x6a, 0x61, 0x20, 0x38, 0x72, 0x7b, 0x93, 0x02, 0x14, 0xd7, 0xa0, 0x32,
+];
+
+/// Probe an entry file and classify it. On any read/parse uncertainty this
+/// returns [`EntryKind::Managed`] (the status-quo path), so the caller's
+/// existing loader produces the real error — i.e. we never *misclassify a real
+/// managed assembly as native*, only confidently flag the unsupported kinds.
+pub fn probe_entry_kind(path: &Path) -> EntryKind {
+    match fs::read(path) {
+        Ok(bytes) => classify_entry_bytes(&bytes),
+        // Let the downstream loader produce the canonical "not found"/IO error.
+        Err(_) => EntryKind::Managed,
+    }
+}
+
+/// Byte-level classifier behind [`probe_entry_kind`] (split out for unit tests).
+fn classify_entry_bytes(bytes: &[u8]) -> EntryKind {
+    // A single-file bundle is a native host with the bundle signature appended.
+    // Check this first: it applies regardless of the host's own binary format.
+    if tail_contains_bundle_signature(bytes) {
+        return EntryKind::SingleFileBundle;
+    }
+
+    // ELF (Linux) / Mach-O (macOS) magic ⇒ a native image. Managed assemblies
+    // are always PE, so this is an unambiguous NativeAOT signal on those OSes.
+    const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
+    const MACHO_MAGICS: [[u8; 4]; 4] = [
+        [0xfe, 0xed, 0xfa, 0xce], // MH_MAGIC (32-bit)
+        [0xfe, 0xed, 0xfa, 0xcf], // MH_MAGIC_64
+        [0xcf, 0xfa, 0xed, 0xfe], // MH_CIGAM_64 (byte-swapped)
+        [0xca, 0xfe, 0xba, 0xbe], // FAT_MAGIC (universal)
+    ];
+    if bytes.len() >= 4 {
+        let head = [bytes[0], bytes[1], bytes[2], bytes[3]];
+        if head == ELF_MAGIC || MACHO_MAGICS.contains(&head) {
+            return EntryKind::NativeAot;
+        }
+    }
+
+    // PE: only downgrade to NativeAot when we can *confidently* read a zero CLI
+    // (COM descriptor, data directory index 14) header. Any parse uncertainty
+    // falls through to Managed.
+    if bytes.len() >= 2 && &bytes[0..2] == b"MZ" {
+        match pe_has_cli_header(bytes) {
+            Some(false) => return EntryKind::NativeAot,
+            Some(true) | None => return EntryKind::Managed,
+        }
+    }
+
+    // Unknown/short: be conservative — let the loader speak.
+    EntryKind::Managed
+}
+
+fn tail_contains_bundle_signature(bytes: &[u8]) -> bool {
+    // The signature lives near the end; scan a bounded tail window.
+    const TAIL_WINDOW: usize = 4096;
+    let start = bytes.len().saturating_sub(TAIL_WINDOW);
+    bytes[start..]
+        .windows(SINGLE_FILE_BUNDLE_SIGNATURE.len())
+        .any(|w| w == SINGLE_FILE_BUNDLE_SIGNATURE)
+}
+
+/// Returns `Some(true)` if the PE has a non-empty CLI/COR header (managed),
+/// `Some(false)` if it parses as a PE with an empty COM descriptor directory
+/// (NativeAOT), or `None` if the headers can't be read with confidence.
+fn pe_has_cli_header(bytes: &[u8]) -> Option<bool> {
+    let read_u16 = |off: usize| -> Option<u16> {
+        bytes
+            .get(off..off + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let read_u32 = |off: usize| -> Option<u32> {
+        bytes
+            .get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+
+    // e_lfanew @ 0x3C → offset of the PE signature.
+    let pe_off = read_u32(0x3C)? as usize;
+    if bytes.get(pe_off..pe_off + 4)? != b"PE\0\0" {
+        return None;
+    }
+
+    // COFF header (20 bytes) follows the signature; the optional header follows that.
+    let opt_off = pe_off + 4 + 20;
+    // Optional header magic: 0x10b = PE32, 0x20b = PE32+.
+    let magic = read_u16(opt_off)?;
+    // NumberOfRvaAndSizes lives at a magic-dependent offset; the data directory
+    // array starts right after it. COM descriptor is directory index 14.
+    let (num_dirs_off, data_dir_off) = match magic {
+        0x10b => (opt_off + 92, opt_off + 96),   // PE32
+        0x20b => (opt_off + 108, opt_off + 112), // PE32+
+        _ => return None,
+    };
+    let num_dirs = read_u32(num_dirs_off)?;
+    if num_dirs < 15 {
+        // No COM descriptor slot at all ⇒ not a managed image.
+        return Some(false);
+    }
+    let com_off = data_dir_off + 14 * 8; // each IMAGE_DATA_DIRECTORY is 8 bytes
+    let com_rva = read_u32(com_off)?;
+    let com_size = read_u32(com_off + 4)?;
+    Some(com_rva != 0 && com_size != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameworkRef, RollForwardPolicy, derive_managed_probing_paths, derive_native_search_dirs,
+        EntryKind, FrameworkRef, RollForwardPolicy, SINGLE_FILE_BUNDLE_SIGNATURE,
+        classify_entry_bytes, derive_managed_probing_paths, derive_native_search_dirs,
         parse_deps_json, parse_runtimeconfig, resolve_framework_from_runtimeconfig,
         select_framework_version,
     };
@@ -676,5 +802,71 @@ mod tests {
         );
 
         fs::remove_dir_all(&base_dir).expect("test runtime base should be removed");
+    }
+
+    /// Build a minimal PE (`MZ`…`PE\0\0` + optional header + data dirs) whose
+    /// COM-descriptor (dir 14) RVA/size are set per `cli_present`.
+    fn synthetic_pe(cli_present: bool) -> Vec<u8> {
+        let pe_off: usize = 0x80;
+        let opt_off = pe_off + 4 + 20; // after PE sig + COFF header
+        let data_dir_off = opt_off + 96; // PE32 data directory array
+        let total = data_dir_off + 16 * 8; // 16 directory entries
+        let mut buf = vec![0u8; total];
+        buf[0] = b'M';
+        buf[1] = b'Z';
+        buf[0x3C..0x40].copy_from_slice(&(pe_off as u32).to_le_bytes());
+        buf[pe_off..pe_off + 4].copy_from_slice(b"PE\0\0");
+        buf[opt_off..opt_off + 2].copy_from_slice(&0x10bu16.to_le_bytes()); // PE32
+        buf[opt_off + 92..opt_off + 96].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
+        if cli_present {
+            let com_off = data_dir_off + 14 * 8;
+            buf[com_off..com_off + 4].copy_from_slice(&0x2000u32.to_le_bytes()); // RVA
+            buf[com_off + 4..com_off + 8].copy_from_slice(&0x48u32.to_le_bytes()); // size
+        }
+        buf
+    }
+
+    #[test]
+    fn classifies_managed_pe_with_cli_header() {
+        assert_eq!(
+            classify_entry_bytes(&synthetic_pe(true)),
+            EntryKind::Managed
+        );
+    }
+
+    #[test]
+    fn classifies_pe_without_cli_header_as_nativeaot() {
+        assert_eq!(
+            classify_entry_bytes(&synthetic_pe(false)),
+            EntryKind::NativeAot
+        );
+    }
+
+    #[test]
+    fn classifies_elf_as_nativeaot() {
+        let mut buf = vec![0u8; 256];
+        buf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        assert_eq!(classify_entry_bytes(&buf), EntryKind::NativeAot);
+    }
+
+    #[test]
+    fn classifies_bundle_signature_as_single_file() {
+        // ELF host with the bundle signature appended near the tail.
+        let mut buf = vec![0u8; 8192];
+        buf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        let at = buf.len() - 64;
+        buf[at..at + 16].copy_from_slice(&SINGLE_FILE_BUNDLE_SIGNATURE);
+        assert_eq!(
+            classify_entry_bytes(&buf),
+            EntryKind::SingleFileBundle,
+            "bundle signature must win even over a native host format"
+        );
+    }
+
+    #[test]
+    fn short_or_unknown_input_defaults_to_managed() {
+        // Conservative: never misclassify a real managed assembly as native.
+        assert_eq!(classify_entry_bytes(b"hi"), EntryKind::Managed);
+        assert_eq!(classify_entry_bytes(&[]), EntryKind::Managed);
     }
 }

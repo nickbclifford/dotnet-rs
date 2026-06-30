@@ -56,6 +56,29 @@ pub fn run_cli() -> ExitCode {
     let args = Args::parse();
     let entrypoint_path = PathBuf::from(&args.entrypoint);
 
+    // Fail loudly on inputs that carry no usable IL, rather than surfacing a
+    // confusing downstream parse error. ReadyToRun images keep a CLI header and
+    // are classified as Managed.
+    match dotnet_assemblies::probe_entry_kind(&entrypoint_path) {
+        dotnet_assemblies::EntryKind::Managed => {}
+        dotnet_assemblies::EntryKind::NativeAot => {
+            eprintln!(
+                "error: '{}' appears to be a NativeAOT native image, which is not supported \
+                 (it contains no IL). Use a framework-dependent or ReadyToRun build instead.",
+                entrypoint_path.display(),
+            );
+            return ExitCode::from(1);
+        }
+        dotnet_assemblies::EntryKind::SingleFileBundle => {
+            eprintln!(
+                "error: '{}' is a single-file bundle, which is not supported. \
+                 Publish without -p:PublishSingleFile=true instead.",
+                entrypoint_path.display(),
+            );
+            return ExitCode::from(1);
+        }
+    }
+
     let loader = match args.assemblies {
         Some(assemblies_dir) => match dotnet_assemblies::AssemblyLoader::new(assemblies_dir) {
             Ok(l) => Arc::new(l),

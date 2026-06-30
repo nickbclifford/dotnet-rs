@@ -264,12 +264,14 @@ main() {
         [[ -n "$shared_framework_dir" ]] || fail "could not locate Microsoft.NETCore.App shared framework directory"
     fi
 
-    local dotnet_rs_bin
+    local dotnet_rs_bin=""
     local use_cargo_run=0
-    if dotnet_rs_bin="$(resolve_dotnet_rs_runner || true)"; then
-        :
-    else
+    # NB: do not wrap resolve_dotnet_rs_runner in `|| true` — that masks its
+    # non-zero "not found" exit so the `if` always takes the success branch and
+    # we end up invoking an empty command. Check the exit status and the result.
+    if ! dotnet_rs_bin="$(resolve_dotnet_rs_runner)" || [[ -z "$dotnet_rs_bin" ]]; then
         use_cargo_run=1
+        dotnet_rs_bin=""
     fi
 
     local dotnet_stdout="$TMP_DIFF_RUN_DIR/dotnet.stdout"

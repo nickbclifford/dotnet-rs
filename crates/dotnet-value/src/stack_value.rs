@@ -678,10 +678,10 @@ impl<'gc> StackValue<'gc> {
     /// variants are returned unchanged.
     #[must_use]
     pub fn coerce_enum_to_underlying(self) -> Self {
-        if let StackValue::ValueType(ref obj) = self {
-            if let Some(coerced) = enum_value_type_to_underlying(obj) {
-                return coerced;
-            }
+        if let StackValue::ValueType(ref obj) = self
+            && let Some(coerced) = enum_value_type_to_underlying(obj)
+        {
+            return coerced;
         }
         self
     }
