@@ -1,55 +1,143 @@
 # CHECKLIST — NuGet Host Runner (Option A Milestones 1–2 + EF Spike)
 
-> Branch: `supervised/nuget-host-runner`. Tick each box as you complete the step.
+> Branch: `supervised/nuget-host-runner`. Rewritten 2026-06-29 to reflect actual state
+> after Phase 5 ballooned into an open-ended VM/reflection debugging effort.
 
-## Phase 1: EF InMemory Spike (empirical, read-only)
+---
 
-- [x] 1.1 Assemble EF flat directory (framework DLLs + EF closure DLLs), run `dotnet-rs -a <flat-dir> /tmp/ef-probe-out/EfApp.dll`, capture every failure, write prioritized gap backlog to `docs/EF_GAP_BACKLOG.md` — does NOT fix any gaps [effort: high] — refs REVIEW.md#F-SPIKE-001
+## Ultimate goal
 
-## Phase 2: `runtimeconfig.json` Parser + Roll-forward (Option A Milestone 1)
+Make `dotnet-rs <app.dll>` run a framework-dependent .NET app with **no `-a` flag**, by reading the
+machine-readable metadata `dotnet build` already emits next to the app:
 
-- [x] 2.1 Add `crates/dotnet-assemblies/src/host.rs` with `RuntimeConfig` / `RuntimeOptions` / `FrameworkRef` / `RollForwardPolicy` serde types and `parse_runtimeconfig(path) -> Result<RuntimeConfig, HostError>`; add `serde` + `serde_json` to workspace `Cargo.toml` and `crates/dotnet-assemblies/Cargo.toml`; unit test parsing a real fixture runtimeconfig [effort: default] — refs REVIEW.md#F-HOST-001
-- [x] 2.2 Implement `select_framework_version(base_dir, requested, policy) -> Option<PathBuf>` in `host.rs` covering all six roll-forward policies (`Disable`, `LatestPatch`, `Minor`, `LatestMinor`, `Major`, `LatestMajor`); unit tests against installed runtimes 8.0.28 and 10.0.9 for a 10.0.0 request [effort: high] — refs REVIEW.md#F-HOST-002
-- [x] 2.3 Add `resolve_framework_from_runtimeconfig(config: &RuntimeConfig, override_base: Option<&Path>) -> Option<PathBuf>` wiring together parse + selection; respect `DOTNET_ROOT` env var; unit test end-to-end from a fixture runtimeconfig path to a resolved directory [effort: default] — refs REVIEW.md#F-HOST-001, REVIEW.md#F-HOST-002
+- `*.runtimeconfig.json` → select the shared framework with correct roll-forward.
+- `*.deps.json` → probe managed assemblies and native assets across roots (framework dir, app output
+  dir, NuGet global cache).
 
-## Phase 3: `deps.json` Parser + Multi-root Probing (Option A Milestone 2)
+…while `--assemblies <DIR>` keeps working **exactly** as before (the integration harness depends on it).
+Two supporting deliverables: an **EF InMemory spike** (record gaps, fix nothing) and a **3-rung test
+ladder** (fixtures → Newtonsoft → EF) that *demonstrates* the host runner end-to-end.
 
-- [x] 3.1 Add `DepsJson` / `TargetLibrary` / `LibraryInfo` serde types and `parse_deps_json(path) -> Result<DepsJson, HostError>` in `host.rs`; add `derive_managed_probing_paths(deps, nuget_global) -> Vec<(String, PathBuf)>` and `derive_native_search_dirs(deps, nuget_global) -> Vec<PathBuf>`; add `nuget_global_packages_dir() -> PathBuf`; unit test with both the fixture deps.json (no NuGet) and the Newtonsoft.Json deps.json (one NuGet package) [effort: default] — refs REVIEW.md#F-HOST-003
-- [x] 3.2 Add `probing_paths: DashMap<String, PathBuf>` field to `AssemblyLoader`; update `load_and_register` to check `probing_paths` before constructing the `assembly_root`-based path; add `add_scan_root(root: &Path) -> Result<(), AssemblyLoadError>` (scans flat dir, inserts into both `external` and `probing_paths` for names not already loaded); add `register_probing_path(name: &str, path: PathBuf)` helper; confirm all existing fixture tests pass with no behavior change [effort: high] — refs REVIEW.md#F-LOAD-001, REVIEW.md#F-LOAD-002
-- [x] 3.3 Add `AssemblyLoader::new_from_host(entrypoint: &Path, nuget_global: Option<&Path>) -> Result<Self, HostError>`: parse runtimeconfig → roll-forward → `new(framework_dir)` → `add_scan_root(app_dir)` → parse deps.json → `register_probing_path` for each NuGet asset; expose `host.rs` types from `crates/dotnet-assemblies/src/lib.rs` [effort: default] — refs REVIEW.md#F-LOAD-003
-- [x] 3.4 Wire host-derived native search directories/runtime native assets into `dotnet-pinvoke::NativeLibraries` / VM state so framework native libraries such as `libSystem.Native` resolve without manually copying `.so` files into the assembly root [effort: high] — refs REVIEW.md#F-HOST-003
+---
 
-## Phase 4: CLI Host Mode
+## Status at a glance
 
-- [x] 4.1 Change `Args.assemblies` from `String` to `Option<String>` in `crates/dotnet-cli/src/lib.rs`; in `run_cli()`: if `Some(dir)` → existing `AssemblyLoader::new(dir)` path (unchanged); if `None` → `AssemblyLoader::new_from_host(entrypoint_path, None)` with a clear error if no runtimeconfig found; update `--assemblies` / `-a` clap annotation to `required = false` [effort: default] — refs REVIEW.md#F-CLI-001
+| Area | Status |
+|---|---|
+| **Host-runner core** (runtimeconfig + roll-forward + deps.json + multi-root probing + CLI host mode) | ✅ **DONE & verified** |
+| Hard constraint: `--assemblies` unchanged | ✅ Holds — fixture suite **158/158** green via the harness's `-a` path (2026-06-29) |
+| EF spike → `docs/EF_GAP_BACKLOG.md` | ✅ DONE |
+| Rung 1 — fixtures via host path (no `-a`) | ✅ PASS (re-verified 2026-06-29) |
+| Rung 2 — Newtonsoft serialization parity | ❌ **NOT met** — still prints `{}` not `{"name":"test","value":42}` (exit 42 matches) |
+| Rung 3 — EF InMemory parity | ❌ NOT met — known P1 `Generic index 0 out of bounds`, **out of scope** per the spike |
+| Phase 6 — fail-loud NativeAOT / single-file | ⬜ not started |
+| Phase 7 — roadmap doc update | ⬜ not started |
 
-## Phase 5: Test Ladder
+**The branch's actual deliverable — the NuGet host runner — is complete and working.** What is *not*
+done is full execution correctness for reflection-heavy library code (Newtonsoft, EF). That is a
+VM/reflection-completeness problem, **not** a host-loading problem; see the Decision Point below.
 
-- [x] 5.1 Rung 1: build `expression_compile_42` fixture (or reuse prebuilt), run `dotnet-rs /path/to/SingleFile.dll` (no `-a` flag), confirm exit code 42; run full fixture suite via `DOTNET_USE_PREBUILT_FIXTURES=1 cargo nextest run --no-default-features -p dotnet-cli` and confirm no regressions [effort: default] — refs REVIEW.md#F-TEST-001
-- [x] 5.2 Rung 2 initial attempt: first host-mode run of the Newtonsoft.Json probe (`dotnet-rs /tmp/nuget-probe-out/App.dll`, no `-a`) — loading path works but execution stalls due to generic-substitution recursion in `callvirt_constrained`; confirms host load is functional but opens the rung-2 debug chain (steps 5.4–5.9) [effort: default] — refs REVIEW.md#F-TEST-001
-- [x] 5.3 Rung 3: build or reuse the EF InMemory probe (`/tmp/ef-probe/EfApp.csproj` or `/tmp/ef-probe-out/`), run `dotnet-rs /tmp/ef-probe-out/EfApp.dll` (no `-a`), compare against stock `dotnet` exit code; record pass/fail and any new gaps not in `docs/EF_GAP_BACKLOG.md` [effort: default] — refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001
-- [x] 5.4 Rung-2 debug — fix 1 (constrained callvirt hang): root-cause and fix generic-substitution recursion in `callvirt_constrained`; probe no longer stalls; new blocker surfaces: `FieldInfo.GetRawConstantValue` throws `NotSupported_AbstractNonCLS` on the `Enum.GetNames` path [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.5 Extend differential tooling so rung 2/3 can compare host-mode runs (no `-a`) without regressing existing `-a` workflows; adds `--host`/`--assemblies` modes to `scripts/diff_run.sh` [effort: default] — refs REVIEW.md#F-TEST-001
-- [x] 5.6 Rung-2 debug — blocker 2 root cause (`FieldInfo.GetRawConstantValue`): `System.Reflection.FieldInfo.GetRawConstantValue()` dispatches to the abstract base (throws `NotSupported_AbstractNonCLS`) instead of the runtime override on the `Type.GetEnumData → Enum.GetNames → Newtonsoft...EnumUtils.InitializeValuesAndNames` path; `DotnetRs.FieldInfo` has no override and the intrinsic table has no handler; do NOT fix here — produce root-cause writeup + fix plan in `docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md` [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.7 Rung-2 debug — fix 2 (`FieldInfo.GetRawConstantValue`): add `GetRawConstantValue` override to `DotnetRs.FieldInfo` + intrinsic constant materialization for enum literal fields; new blocker surfaces: `System.InvalidProgramException` in `SortHandleCache.GetCachedSortHandle` on the enum initialization path [effort: high] — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
-- [x] 5.8 Rung-2 debug — fix 3 (reflection completeness): close adjacent gaps discovered during 5.6; implements `GetFieldAttributes`, `GetValue(object)`, `GetCustomAttributes`, `IsDefined` on `DotnetRs.FieldInfo/MethodInfo/ConstructorInfo`; `Type.GetEnumUnderlyingType()`, `Type.IsGenericTypeDefinition`, `ParameterInfo.Member`, generic type definition open-args representation, intrinsic signature parser (`valuetype`/`class` IL qualifiers) [effort: default] — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
-- [x] 5.9 Rung-2 debug — fix 4 (enum coercion): `InvalidProgramException` in `SortHandleCache.GetCachedSortHandle` root-caused to enum `ValueType` values on the eval stack not coerced to their underlying primitive before arithmetic/comparison/branch/conv opcodes (ECMA-335 §III.1.1.1); implements `StackValue::coerce_enum_to_underlying()` applied at all affected opcode sites; also fixes `String.Equals(StringComparison)` intrinsic, `unbox.any` fast-path for already-unboxed primitives, `ldfld` intercept for `String._stringLength`/`_firstChar`, PInvoke enum return unwrapping [effort: high] — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
-- [x] 5.10 Rung-2 parity verification: re-run `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj` after all blocker fixes (5.4–5.9); exit code and stdout must match stock `dotnet`; if a new failure surfaces, diagnose, record here, and add a follow-up fix step [effort: default] — refs REVIEW.md#F-TEST-001
-- [x] 5.11 Rung-2 debug — fix 5 (post-5.9 memory/object read corruption): root-cause and fix host-mode Newtonsoft failure `Invalid magic in ObjectInner` panic from `ldfld`/`read_unaligned` during `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`; restore parity exit code + stdout with stock `dotnet` [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.12 Rung-2 debug prerequisite: fresh no-default builds currently panic earlier in `DotnetRs.ParameterInfo::GetMember` (`unhandled ParameterInfo intrinsic` in `crates/dotnet-intrinsics-reflection/src/parameters.rs`), diverging from the recorded 5.10 baseline; resolve/triage this drift before continuing 5.11 memory-corruption root-cause work [effort: default] — refs REVIEW.md#F-TEST-001
-- [ ] 5.13 Rung-2 debug — fix 6 (`RuntimeType.GetProperties` stub): host-mode probe now runs without `Invalid magic` panic after 5.11 but still diverges (`0`, `0`, `{}`) because `crates/dotnet-intrinsics-reflection/src/types/type_members.rs::handle_get_properties` currently returns an empty array unconditionally; implement real property enumeration/filtering (and matching `GetPropertyImpl`) to restore Newtonsoft parity stdout [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.14 Rung-2 follow-up blocker after 5.13: with non-empty property enumeration restored (`2`, `2`), Newtonsoft host-mode now aborts at `Method not found` resolving `System.Collections.Generic.ICollection<T>.CopyTo` virtual dispatch in `System.Collections.Generic.List<System.Reflection.PropertyInfo>` during serialization; fix generic interface-virtual implementation lookup so rung-2 can complete JSON output parity [effort: high] — refs REVIEW.md#F-TEST-001
-- [ ] 5.15 Rung-2 follow-up blocker after 5.14: after fixing `ICollection<T>.CopyTo` dispatch (`Method not found` removed), Newtonsoft host-mode still diverges on stdout with `{}` instead of `{"name":"test","value":42}` (`2`,`2` counts remain); diagnose/fix remaining contract/property serialization gap to restore full rung-2 JSON parity [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.16 Rung-2 follow-up after 5.15 investigation: once property-member matching is corrected, Newtonsoft host-mode currently advances past `{}` but aborts during `JsonPrimitiveContract` construction with `System.AccessViolationException` (`JsonPrimitiveContract::.ctor`/`set_TypeCode` path) before emitting JSON; root-cause/fix this constructor/enum-contract write path so serializer can complete [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.17 Rung-2 follow-up after 5.16: `MethodBase.Invoke` still mis-marshals boxed enum/value-type parameters for invoked methods declared outside the ambient resolution context (repro: reflective enum auto-property setter invocation fails with `NullReferenceException` at setter `stfld`); fix invoke-parameter unboxing to resolve parameter concrete types via the invoked method context/lookup, not caller ambient `make_concrete` [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.18 Follow-up from 5.17: `MethodInfo.Invoke` return-value marshalling still diverges on some overload paths — invoking `void` targets can underflow at caller `pop`, and invoking value-returning targets via the 5-arg overload can leak boxed return-state into the caller frame (`expected Int32, got boxed Int32` at entrypoint exit). Ensure invoke-return bookkeeping always returns `null` for `void` and clears `awaiting_invoke_return` exactly once. [effort: high] — refs REVIEW.md#F-TEST-001
-- [x] 5.19 Follow-up from 5.18: 5-arg `MethodInfo.Invoke` on a `void` enum-property setter currently panics after return marshalling (`expected ObjectRef, received ManagedPtr(...)` in `stack_value.rs`); triage/fix this remaining invoke path divergence. [effort: default] — refs REVIEW.md#F-TEST-001
-- [x] 5.20 Follow-up from 5.19: enum formatting still fails after panic removal (`System.Enum.ToString()` now throws `InvalidCastException` on `Console.WriteLine(enum)` / `/tmp/enum-invoke-probe-out/EnumInvokeProbe.dll`), indicating a separate `System.Enum` runtime-type path bug outside invoke-return bookkeeping; triage and fix independently. [effort: default] — refs REVIEW.md#F-TEST-001
+---
 
-## Phase 6: Fail-loud Compat Handling
+## ✅ Part A — Host-runner deliverable (DONE & verified)
 
-- [ ] 6.1 Add `probe_entry_kind(path: &Path) -> EntryKind` in `crates/dotnet-assemblies/src/host.rs` detecting NativeAOT (no CLI metadata header) and single-file bundles (bundle magic bytes in tail); call it in `run_cli()` before loading, emitting an explicit human-readable error message and exiting 1 for unsupported kinds [effort: default] — refs REVIEW.md#F-COMPAT-001
+These are the steps that fulfill the ultimate goal. All complete; rung-1 re-verified 2026-06-29.
 
-## Phase 7: Roadmap Documentation Update
+- [x] 1.1 EF InMemory flat-dir spike → prioritized gap backlog in `docs/EF_GAP_BACKLOG.md` (read-only; fixes nothing) — refs REVIEW.md#F-SPIKE-001
+- [x] 2.1 `runtimeconfig.json` serde types + `parse_runtimeconfig()` in `crates/dotnet-assemblies/src/host.rs`; serde deps wired — refs REVIEW.md#F-HOST-001
+- [x] 2.2 `select_framework_version()` — all six roll-forward policies, unit-tested against installed 8.0.28 / 10.0.9 — refs REVIEW.md#F-HOST-002
+- [x] 2.3 `resolve_framework_from_runtimeconfig()` (parse + select + `DOTNET_ROOT`), e2e unit test — refs REVIEW.md#F-HOST-001, REVIEW.md#F-HOST-002
+- [x] 3.1 `deps.json` serde types + `parse_deps_json()` + `derive_managed_probing_paths()` + `derive_native_search_dirs()` + `nuget_global_packages_dir()` — refs REVIEW.md#F-HOST-003
+- [x] 3.2 `probing_paths: DashMap` on `AssemblyLoader`; `load_and_register` checks it first; `add_scan_root()` + `register_probing_path()`; no behavior change for existing callers — refs REVIEW.md#F-LOAD-001, REVIEW.md#F-LOAD-002
+- [x] 3.3 `AssemblyLoader::new_from_host(entrypoint, nuget_global)` constructor; `host.rs` types re-exported — refs REVIEW.md#F-LOAD-003
+- [x] 3.4 Host-derived native search dirs wired into `dotnet-pinvoke::NativeLibraries` / VM state (framework `.so`s resolve without manual copying) — refs REVIEW.md#F-HOST-003
+- [x] 4.1 `Args.assemblies: Option<String>`; `run_cli()` auto-detects host mode from `<name>.runtimeconfig.json` when `-a` absent; clear error if neither present — refs REVIEW.md#F-CLI-001
+- [x] 5.1 **Rung 1**: `expression_compile_42` via host path (no `-a`) → exit 42; full suite `158 passed, 3 skipped, 0 regressions` — refs REVIEW.md#F-TEST-001
+- [x] 5.5 Differential tooling: `--host` / `--assemblies` modes in `scripts/diff_run.sh` (default host); legacy `-a` workflows preserved — refs REVIEW.md#F-TEST-001
 
-- [ ] 7.1 Update `docs/USERLAND_TESTING_ROADMAP.md`: mark §10 probe 5 with spike result (✅/❌ + date + reference to `docs/EF_GAP_BACKLOG.md`); mark Option A milestones 1–2 as completed with date; add one-paragraph summary of gap backlog findings under §5 or §10 [effort: default] — refs REVIEW.md#F-DOC-001
+---
+
+## ⚠️ Part B — Rung-2/3 execution-parity track (open; scope question — see Decision Point)
+
+**What happened.** Rung 2 was meant to *verify* the host runner by running a real NuGet app
+(Newtonsoft.Json) end-to-end. The host runner loads and runs it fine — but the VM's reflection/runtime
+behavior is not yet complete enough to produce correct serializer output. Each fix below uncovered the
+next gap, and the chain drifted away from the acceptance test: **steps 5.16–5.20 were verified only
+against synthetic minimal repros (`jsonprimitive-probe`, `enum-invoke-probe`, `step51x-min`), not
+against the actual Newtonsoft probe.** As of 2026-06-29 the real probe still diverges.
+
+**Standing acceptance test (UNMET):**
+```
+bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj   # or run App.dll directly
+# stock dotnet : {"name":"test","value":42}   exit 42
+# dotnet-rs    : {}                            exit 42   ← stdout still wrong
+```
+
+Individual fixes that *did* land (each preserves the 158/158 fixture baseline — these are real,
+valuable VM improvements, just not sufficient for rung-2 parity):
+
+- [x] 5.2 First host-mode Newtonsoft run — load works; execution stalled (opened the debug chain) — refs REVIEW.md#F-TEST-001
+- [x] 5.4 Fixed constrained-`callvirt` generic-substitution infinite recursion (`StructMultiKey<…>::GetHashCode`) — refs REVIEW.md#F-TEST-001
+- [x] 5.6 Root-cause writeup `docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md` (`FieldInfo.GetRawConstantValue` hits throwing abstract base) — refs REVIEW.md#F-TEST-001
+- [x] 5.7 `DotnetRs.FieldInfo.GetRawConstantValue()` override + enum-literal constant materialization — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
+- [x] 5.8 Reflection completeness: `GetFieldAttributes`, `GetValue(object)`, `GetCustomAttributes`, `IsDefined`, `Type.GetEnumUnderlyingType`, `IsGenericTypeDefinition`, `ParameterInfo.Member`, intrinsic signature parser — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
+- [x] 5.9 `StackValue::coerce_enum_to_underlying()` at affected opcode sites (ECMA-335 §III.1.1.1); `String.Equals(StringComparison)`, `unbox.any` fast-path, `ldfld` string-intercept, PInvoke enum return — refs docs/NEWTONSOFT_ENUM_REFLECTION_BLOCKER.md
+- [x] 5.11 GC write barrier for heap-backed atomic mutations (fixed intermittent `Invalid magic in ObjectInner`) — refs REVIEW.md#F-TEST-001
+- [x] 5.12 `DotnetRs.ParameterInfo::GetMember()` intrinsic (restored post-5.10 baseline) — refs REVIEW.md#F-TEST-001
+- [x] 5.13 `handle_get_properties` real property enumeration + `GetPropertyImpl` — **landed in-tree** (`crates/dotnet-intrinsics-reflection/src/types/type_members.rs`); orchestrator DB still tags it `blocked` (stale — close it) — refs REVIEW.md#F-TEST-001
+- [x] 5.14 Generic interface-virtual lookup: `ICollection<T>.CopyTo` on `List<PropertyInfo>` (`Method not found` removed) — refs REVIEW.md#F-TEST-001
+- [x] 5.16 Enum value-type → scalar field coercion in `extract_int/long/native_int` (fixed `JsonPrimitiveContract::.ctor`/`set_TypeCode` AccessViolation **on the synthetic repro**) — refs REVIEW.md#F-TEST-001
+- [x] 5.17 `MethodBase.Invoke` arg unboxing uses invoked-method context (`lookup.make_concrete`); `MethodInfo.Attributes`, `RuntimeType.BaseType` for intrinsic types — refs REVIEW.md#F-TEST-001
+- [x] 5.18 Invoke-return bookkeeping: consume `awaiting_invoke_return` from caller frame; `void` → `null` exactly once — refs REVIEW.md#F-TEST-001
+- [x] 5.19 `System.Object::GetType()` accepts `ManagedPtr`/`ValueType` receivers (fixed enum-setter invoke panic) — refs REVIEW.md#F-TEST-001
+- [x] 5.20 `System.Enum::ToString()` intrinsic (fixed `InvalidCastException` on `Console.WriteLine(enum)`) — refs REVIEW.md#F-TEST-001
+
+**The actual open blocker (the umbrella these fixes were chasing):**
+
+- [ ] 5.15 ❗ **Newtonsoft host-mode stdout parity still UNMET** — real probe prints `{}` not
+  `{"name":"test","value":42}`. Per the 5.15 investigation notes, the lead root cause is
+  `Newtonsoft…GetSerializableMembers` dropping every property because repeated `GetProperties()`
+  results are not equality-comparable (reflection objects must compare equal across calls). This is
+  the next thing to fix **iff** continuing rung-2. — refs REVIEW.md#F-TEST-001
+
+> **Rung 3 (EF InMemory) — parity UNMET, by design.** Step 5.3 (completed) *recorded* the result:
+> host-mode EF fails with `Generic index 0 out of bounds (length 0)`, the known P1 generic-resolution
+> blocker in `docs/EF_GAP_BACKLOG.md`. The spike explicitly does **not** fix this — it is a tracked
+> gap, not branch work. (refs REVIEW.md#F-TEST-001, REVIEW.md#F-SPIKE-001)
+
+---
+
+## 🔀 Decision point — where to continue
+
+The host-runner deliverable (Part A) is complete. Rung-2/3 parity (Part B) is gated on
+reflection/runtime-execution completeness that is **out of the original "NuGet host runner" scope** and
+is open-ended (every fix has surfaced the next). Two ways forward — pick one before doing more work:
+
+- **Option A — draw the line and ship (recommended).** Declare the host runner done. Demote the
+  remaining rung-2/3 parity work to a tracked gap document (mirroring `docs/EF_GAP_BACKLOG.md`) titled
+  e.g. `docs/NEWTONSOFT_SERIALIZATION_GAP.md`, capturing the `{}` root cause (member-equality in
+  `GetSerializableMembers`) and the fixes already landed. Then finish Part C (6.1, 7.1), finalize, and
+  merge. Rung 1 is the parity proof the host runner needs; rung 2/3 become follow-up branches.
+
+- **Option B — keep grinding rung-2.** Continue the chain at **5.15**: make reflection member objects
+  (`PropertyInfo`/`MemberInfo`) compare equal across repeated `GetProperties()` calls so
+  `GetSerializableMembers` stops dropping them. Expect further blockers after that; rung-3 (EF) is
+  deeper still. Only choose this if full library-execution fidelity is a goal of *this* branch.
+
+> Re-verify after **every** rung-2 change with the real probe, not a minimal repro:
+> `bash scripts/diff_run.sh /tmp/nuget-probe/App.csproj`. A green synthetic repro is necessary but not
+> sufficient — 5.16–5.20 are the cautionary example.
+
+---
+
+## ⬜ Part C — Remaining in-scope work (do regardless of the decision)
+
+- [ ] 6.1 Add `probe_entry_kind(path) -> EntryKind` in `host.rs` detecting NativeAOT (no CLI metadata header) and single-file bundles (bundle magic in tail); call it in `run_cli()` before loading, emitting a clear human-readable error and exiting 1 for unsupported kinds — refs REVIEW.md#F-COMPAT-001
+- [ ] 7.1 Update `docs/USERLAND_TESTING_ROADMAP.md`: mark §10 probe 5 with the EF spike result (❌ + date + link to `docs/EF_GAP_BACKLOG.md`); mark Option A milestones 1–2 ✅ with date; one-paragraph gap-backlog summary; note rung-2 Newtonsoft parity status per the Decision Point — refs REVIEW.md#F-DOC-001
+
+---
+
+## Finalize (after the decision + Part C)
+
+- [ ] Whole-branch finalizer audit (high-effort): confirm `--assemblies` parity, `cargo fmt --all -- --check`, fixture suite green, host-mode rung-1 green; reconcile orchestrator DB step states (5.13/5.15 tags) with reality.
+- [ ] Remove refactor scratch artifacts (`REVIEW.md`, `CHECKLIST.md`, `AGENT_MEMORY.md`, `AGENT_PROMPT.md`) before merge to `main`.

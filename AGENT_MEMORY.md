@@ -395,4 +395,21 @@ repo root.
 
 **Follow-ups for future steps:** Keep monitoring for format-specifier coverage gaps if tests start exercising `Enum.ToString(string)` variants beyond default/general behavior; this step only targeted the failing default formatting path reached by `Console.WriteLine(enum)`. `cargo fmt --all -- --check` still reports repository-wide pre-existing formatting drift in unrelated files (same baseline issue noted in prior steps).
 
+## 2026-06-29 — Checklist rewrite + DB reconciliation (not a step) — claude-opus-4-8 — completed
+
+**Goal:** Take stock after Phase 5 ballooned into an open-ended VM/reflection debugging effort; rewrite `CHECKLIST.md` to clearly separate done vs. open vs. goal, and reconcile the orchestrator DB with reality.
+
+**What changed:**
+- Rewrote `CHECKLIST.md`: *Ultimate goal* → *Status at a glance* → **Part A** (host-runner core, DONE & verified) → **Part B** (rung-2/3 parity track, honest status) → **Decision Point** → **Part C** (remaining in-scope: 6.1, 7.1) → *Finalize*. Step IDs preserved so the git/DB audit trail still maps.
+- Reconciled orchestrator DB: step **5.13** `blocked → completed` (its `handle_get_properties`/`GetPropertyImpl` enumeration actually landed in commit `aab622b5`, the 5.14 commit; the `blocked` tag was stale). Step **5.15** left **blocked** (genuinely open).
+
+**What I learned (verified empirically, not from prior notes):**
+- The **host-runner deliverable is complete and works.** Rung-1 re-verified 2026-06-29: `DOTNET_USE_PREBUILT_FIXTURES=1 cargo nextest run --no-default-features -p dotnet-cli` = **158 passed, 3 skipped, 0 regressions**. The `--assemblies` hard constraint holds (harness uses `-a`).
+- **Rung-2 (Newtonsoft) never reached its acceptance test.** Rebuilt the (ephemeral) probe and ran it: `dotnet-rs /tmp/nuget-probe-out/App.dll` prints `{}` (exit 42) vs stock `{"name":"test","value":42}` (exit 42). This is the *original* 5.15 blocker, still unmet. Steps **5.16–5.20** were each verified only against *synthetic minimal repros* (`jsonprimitive-probe`, `enum-invoke-probe`, `step51x-min`), never against the real Newtonsoft probe — so they are real VM fixes but did not move the headline output off `{}`.
+- Rung-3 (EF) host-mode still fails with the documented P1 `Generic index 0 out of bounds (length 0)` — out of scope per the spike.
+
+**Where to start next (for the orchestrator):** A **decision** is required first (see CHECKLIST "Decision point"). Recommended **Option A**: declare the host runner done, split the rung-2 `{}` work out as a tracked gap doc (`docs/NEWTONSOFT_SERIALIZATION_GAP.md`; root cause = `GetSerializableMembers` dropping properties because repeated `GetProperties()` results aren't equality-comparable), then do the in-scope remaining steps **6.1** (fail-loud NativeAOT/single-file) and **7.1** (roadmap doc), finalize, merge. **Option B**: keep grinding rung-2 from **5.15** (make reflection member objects compare equal across calls). 6.1 and 7.1 are worth doing regardless of the decision.
+
+**Open questions:** Which option does the maintainer want? Until chosen, 5.15 stays `blocked` (parked, needs decision) and 6.1/7.1 are the next runnable steps.
+
 **Open questions:** None.
