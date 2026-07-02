@@ -139,7 +139,7 @@ use dotnet_value::{
     string::CLRString,
 };
 use dotnet_vm_ops::NULL_REF_MSG;
-use dotnetdll::prelude::{TypeSource, UserType};
+use dotnetdll::prelude::{BaseType, TypeSource, UserType};
 
 use std::sync::Arc;
 
@@ -897,9 +897,42 @@ fn object_get_type<
         }
     }
 
+    fn runtime_type_from_object(loader: &AssemblyLoader, object: &Object<'_>) -> RuntimeType {
+        let type_arity = object.description.definition().generic_parameters.len();
+        if type_arity == 0 {
+            return runtime_type_from_desc(object.description.clone());
+        }
+
+        let type_args: Vec<_> = object
+            .generics
+            .type_generics
+            .iter()
+            .take(type_arity)
+            .cloned()
+            .collect();
+
+        if type_args.len() != type_arity {
+            return RuntimeType::Type(object.description.clone());
+        }
+
+        let concrete = ConcreteType::new(
+            object.description.resolution.clone(),
+            BaseType::Type {
+                source: TypeSource::Generic {
+                    base: UserType::Definition(object.description.index),
+                    parameters: type_args,
+                },
+                value_kind: None,
+            },
+        );
+
+        runtime_type_from_concrete(loader, &concrete)
+            .unwrap_or_else(|| RuntimeType::Type(object.description.clone()))
+    }
+
     fn runtime_type_from_heap(loader: &AssemblyLoader, object_ref: ObjectRef<'_>) -> RuntimeType {
         object_ref.as_heap_storage(|storage| match storage {
-            HeapStorage::Obj(o) => RuntimeType::Type(o.description.clone()),
+            HeapStorage::Obj(o) => runtime_type_from_object(loader, o),
             HeapStorage::Str(_) => RuntimeType::String,
             HeapStorage::Vec(v) => {
                 let element_rt =
@@ -910,7 +943,7 @@ fn object_get_type<
                     RuntimeType::Array(Box::new(element_rt), v.dims.len() as u32)
                 }
             }
-            HeapStorage::Boxed(o) => runtime_type_from_desc(o.description.clone()),
+            HeapStorage::Boxed(o) => runtime_type_from_object(loader, o),
         })
     }
 

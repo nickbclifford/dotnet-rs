@@ -44,3 +44,22 @@ pub fn intrinsic_thread_get_current_processor_fallback<'gc, T: ThreadingIntrinsi
     ctx.push_i32(PROCESSOR_ID_FALLBACK);
     StepResult::Continue
 }
+
+/// System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)
+///
+/// dotnet-rs currently runs managed code on a single interpreter thread and does
+/// not provide a background worker pool. Queue requests from DI warm-up paths
+/// are therefore treated as accepted no-ops.
+#[dotnet_intrinsic(
+    "static bool System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)"
+)]
+pub fn intrinsic_threadpool_unsafe_queue_user_work_item<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _state = ctx.pop();
+    let _callback = ctx.pop();
+    ctx.push_i32(1);
+    StepResult::Continue
+}

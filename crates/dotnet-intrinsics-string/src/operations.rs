@@ -63,6 +63,24 @@ fn extend_from_string_chunk<'gc, T: RawMemoryOps<'gc>>(
     }
 }
 
+fn string_comparison_ignore_case(comparison: StackValue<'_>) -> bool {
+    matches!(
+        comparison.coerce_enum_to_underlying(),
+        StackValue::Int32(1 | 3 | 5)
+    )
+}
+
+fn string_slices_equal_with_comparison(a: &[u16], b: &[u16], ignore_case: bool) -> bool {
+    if ignore_case {
+        a.iter().zip(b.iter()).all(|(ac, bc)| {
+            char::from_u32(u32::from(*ac)).map(|c| c.to_ascii_uppercase())
+                == char::from_u32(u32::from(*bc)).map(|c| c.to_ascii_uppercase())
+        })
+    } else {
+        a == b
+    }
+}
+
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
 /// System.String::Equals(object)
@@ -155,14 +173,15 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     StepResult::Continue
 }
 
-/// `String.Equals(string, string, StringComparison)` — compares two strings using the given
-/// comparison mode. dotnet-rs maps all comparison modes to ordinal (byte-level) comparison
-/// because locale-sensitive collation is not yet implemented; this is correct for
-/// `Ordinal` and `OrdinalIgnoreCase`, and a conservative approximation for culture-specific
-/// modes.
+/// `String.Equals(string, string, StringComparison)` and
+/// `String.Equals(string, StringComparison)` — compares strings using the given comparison
+/// mode. dotnet-rs maps all comparison modes to ordinal (byte-level) comparison because
+/// locale-sensitive collation is not yet implemented; this is correct for `Ordinal` and
+/// `OrdinalIgnoreCase`, and a conservative approximation for culture-specific modes.
 #[dotnet_intrinsic(
     "static bool System.String::Equals(string, string, valuetype System.StringComparison)"
 )]
+#[dotnet_intrinsic("bool System.String::Equals(string, valuetype System.StringComparison)")]
 pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
@@ -172,11 +191,7 @@ pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemory
     let b_val = ctx.pop();
     let a_val = ctx.pop();
 
-    // Extract the StringComparison enum value; use Ordinal as fallback.
-    let ignore_case = match comparison.coerce_enum_to_underlying() {
-        StackValue::Int32(1 | 3 | 5) => true, // *IgnoreCase variants
-        _ => false,
-    };
+    let ignore_case = string_comparison_ignore_case(comparison);
 
     let res = match (a_val, b_val) {
         (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
@@ -192,13 +207,8 @@ pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemory
                 (HeapStorage::Str(a), HeapStorage::Str(b)) => {
                     if a.len() != b.len() {
                         false
-                    } else if ignore_case {
-                        a.iter().zip(b.iter()).all(|(ac, bc)| {
-                            char::from_u32(u32::from(*ac)).map(|c| c.to_ascii_uppercase())
-                                == char::from_u32(u32::from(*bc)).map(|c| c.to_ascii_uppercase())
-                        })
                     } else {
-                        a[..] == b[..]
+                        string_slices_equal_with_comparison(a, b, ignore_case)
                     }
                 }
                 _ => false,
@@ -208,6 +218,148 @@ pub fn intrinsic_string_equals_comparison<'gc, T: TypedStackOps<'gc> + RawMemory
     };
 
     ctx.push_i32(if res { 1 } else { 0 });
+    StepResult::Continue
+}
+
+/// `String.StartsWith(string, StringComparison)` — checks whether the current string begins
+/// with `value` using the provided comparison mode. dotnet-rs currently maps all comparison
+/// modes to ordinal behavior with optional ASCII case-folding for `*IgnoreCase` variants.
+#[dotnet_intrinsic("bool System.String::StartsWith(string, valuetype System.StringComparison)")]
+pub fn intrinsic_string_starts_with_comparison<
+    'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let comparison = ctx.pop();
+    let value = ctx.pop();
+    let this = ctx.pop();
+
+    let ignore_case = string_comparison_ignore_case(comparison);
+
+    let this_handle = match this {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => handle,
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+        _ => {
+            return StepResult::type_error(
+                "string",
+                format!("invalid this for System.String::StartsWith: {:?}", this),
+            );
+        }
+    };
+
+    let value_handle = match value {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => handle,
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.ArgumentNullException", "value");
+        }
+        _ => {
+            return StepResult::type_error(
+                "string",
+                format!(
+                    "invalid argument for System.String::StartsWith: {:?}",
+                    value
+                ),
+            );
+        }
+    };
+
+    let res = {
+        let this_heap = this_handle.borrow();
+        let value_heap = value_handle.borrow();
+
+        match (&this_heap.storage, &value_heap.storage) {
+            (HeapStorage::Str(this_str), HeapStorage::Str(value_str)) => {
+                if value_str.len() > this_str.len() {
+                    false
+                } else {
+                    let this_prefix = &this_str[..value_str.len()];
+                    string_slices_equal_with_comparison(this_prefix, value_str, ignore_case)
+                }
+            }
+            _ => {
+                return StepResult::internal_error(
+                    "System.String::StartsWith called on non-string object",
+                );
+            }
+        }
+    };
+
+    ctx.push_i32(res as i32);
+    StepResult::Continue
+}
+
+/// `String.EndsWith(string, StringComparison)` — checks whether the current string ends
+/// with `value` using the provided comparison mode. dotnet-rs currently maps all comparison
+/// modes to ordinal behavior with optional ASCII case-folding for `*IgnoreCase` variants.
+#[dotnet_intrinsic("bool System.String::EndsWith(string, valuetype System.StringComparison)")]
+pub fn intrinsic_string_ends_with_comparison<
+    'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let comparison = ctx.pop();
+    let value = ctx.pop();
+    let this = ctx.pop();
+
+    let ignore_case = string_comparison_ignore_case(comparison);
+
+    let this_handle = match this {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => handle,
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+        _ => {
+            return StepResult::type_error(
+                "string",
+                format!("invalid this for System.String::EndsWith: {:?}", this),
+            );
+        }
+    };
+
+    let value_handle = match value {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => handle,
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.ArgumentNullException", "value");
+        }
+        _ => {
+            return StepResult::type_error(
+                "string",
+                format!("invalid argument for System.String::EndsWith: {:?}", value),
+            );
+        }
+    };
+
+    let res = {
+        let this_heap = this_handle.borrow();
+        let value_heap = value_handle.borrow();
+
+        match (&this_heap.storage, &value_heap.storage) {
+            (HeapStorage::Str(this_str), HeapStorage::Str(value_str)) => {
+                if value_str.len() > this_str.len() {
+                    false
+                } else {
+                    let suffix_start = this_str.len() - value_str.len();
+                    let this_suffix = &this_str[suffix_start..];
+                    string_slices_equal_with_comparison(this_suffix, value_str, ignore_case)
+                }
+            }
+            _ => {
+                return StepResult::internal_error(
+                    "System.String::EndsWith called on non-string object",
+                );
+            }
+        }
+    };
+
+    ctx.push_i32(res as i32);
     StepResult::Continue
 }
 

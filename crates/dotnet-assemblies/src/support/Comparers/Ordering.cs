@@ -9,9 +9,14 @@ public class Ordering
     {
         public override int Compare(T? x, T? y)
         {
+            if (ReferenceEquals(x, y))
+            {
+                return 0;
+            }
+
             if (x is null)
             {
-                return y is null ? 0 : -1;
+                return -1;
             }
 
             if (y is null)
@@ -27,6 +32,11 @@ public class Ordering
             if (x is IComparable comparable)
             {
                 return comparable.CompareTo(y);
+            }
+
+            if (y is IComparable reverseComparable)
+            {
+                return -reverseComparable.CompareTo(x);
             }
 
             throw new ArgumentException("At least one object must implement IComparable.");

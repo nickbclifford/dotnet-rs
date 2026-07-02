@@ -3,37 +3,45 @@
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
 use crate::{BEGIN_END_NOT_SUPPORTED_MSG, DelegateInvokeHost, invoke::invoke_delegate};
-use dotnet_types::{
-    TypeDescription,
-    generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
-};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_ops::{
     StepResult,
     ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps},
 };
 
-/// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
-pub fn is_delegate_type<'gc, T: LoaderOps + ResolutionOps<'gc>>(
-    ctx: &T,
-    td: TypeDescription,
-) -> bool {
-    let delegate = match ctx.loader().corlib_type("System.Delegate") {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let multicast = match ctx.loader().corlib_type("System.MulticastDelegate") {
-        Ok(v) => v,
-        Err(_) => return false,
+/// Check if a type is a delegate type (inherits from System.Delegate or
+/// System.MulticastDelegate).
+///
+/// We intentionally use raw type-hierarchy metadata here (TypeDescription ancestry)
+/// instead of `is_a` over `ConcreteType`: delegate `Invoke` methods are declared on
+/// open generic delegate types like `System.Func`N, and assignability checks on those
+/// open shapes can conservatively fail even though the type is unquestionably in the
+/// delegate hierarchy.
+pub fn is_delegate_type<T: LoaderOps>(ctx: &T, td: TypeDescription) -> bool {
+    is_type_or_ancestor_named(ctx, td.clone(), |canonical| {
+        canonical == "System.Delegate" || canonical == "System.MulticastDelegate"
+    })
+}
+
+fn is_type_or_ancestor_named<T, F>(ctx: &T, td: TypeDescription, matches_name: F) -> bool
+where
+    T: LoaderOps,
+    F: Fn(&str) -> bool,
+{
+    let candidate_matches = |candidate: &TypeDescription| {
+        let raw_type_name = candidate.type_name();
+        let canonical = ctx.loader().canonical_type_name(&raw_type_name);
+        matches_name(canonical)
     };
 
-    let td_concrete = ConcreteType::from(td);
-    ctx.is_a(td_concrete.clone(), ConcreteType::from(delegate))
-        .unwrap_or(false)
-        || ctx
-            .is_a(td_concrete, ConcreteType::from(multicast))
-            .unwrap_or(false)
+    if candidate_matches(&td) {
+        return true;
+    }
+
+    ctx.loader()
+        .ancestors(td)
+        .any(|(ancestor, _)| candidate_matches(&ancestor))
 }
 
 /// Try to dispatch a delegate runtime method. Returns Some(result) if handled.
@@ -97,13 +105,9 @@ pub(super) fn get_multicast_targets_ref<'gc, T: LoaderOps + ResolutionOps<'gc>>(
             .corlib_type("System.MulticastDelegate")
             .expect("System.MulticastDelegate must exist");
 
-        if !ctx
-            .is_a(
-                ConcreteType::from(instance.description.clone()),
-                ConcreteType::from(multicast_type.clone()),
-            )
-            .unwrap_or(false)
-        {
+        if !is_type_or_ancestor_named(ctx, instance.description.clone(), |canonical| {
+            canonical == "System.MulticastDelegate"
+        }) {
             return None;
         }
 

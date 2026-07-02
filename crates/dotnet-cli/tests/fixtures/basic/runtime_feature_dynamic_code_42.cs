@@ -4,12 +4,12 @@ public static class Program
 {
     public static int Main()
     {
-        if (RuntimeFeature.IsDynamicCodeSupported)
+        if (!RuntimeFeature.IsDynamicCodeSupported)
         {
             return 1;
         }
 
-        if (RuntimeFeature.IsDynamicCodeCompiled)
+        if (!RuntimeFeature.IsDynamicCodeCompiled)
         {
             return 2;
         }

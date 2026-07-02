@@ -61,6 +61,9 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     [MethodImpl(MethodImplOptions.InternalCall)]
     public virtual extern void SetValue(object? value, params int[] indices);
 
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public static extern System.Array CreateInstance(System.Type elementType, int length);
+
     public object Clone() => MemberwiseClone();
 
     // IList implementation
@@ -195,6 +198,23 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     public static void Copy(Array sourceArray, Array destinationArray, int length)
     {
         Copy(sourceArray, 0, destinationArray, 0, length);
+    }
+
+    public static void Reverse<T>(T[] array)
+    {
+        ArgumentNullException.ThrowIfNull(array);
+
+        int left = 0;
+        int right = array.Length - 1;
+
+        while (left < right)
+        {
+            T value = array[left];
+            array[left] = array[right];
+            array[right] = value;
+            left++;
+            right--;
+        }
     }
 
     public static void Copy(Array sourceArray, int sourceIndex, Array destinationArray, int destinationIndex, int length)
