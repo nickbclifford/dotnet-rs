@@ -77,13 +77,42 @@ pub fn resolve_runtime_type<'gc>(
     obj: ObjectRef<'gc>,
 ) -> Result<RuntimeType, ExecutionError> {
     obj.try_as_object(|instance| {
-        let index = instance
+        let index_field = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "index")
-            .unwrap()
-            .read();
-        ctx.reflection_runtime_type_by_index(index)
-    })
+            .or_else(|| {
+                ctx.loader()
+                    .corlib_type("System.RuntimeType")
+                    .ok()
+                    .and_then(|owner| instance.instance_storage.field::<usize>(owner, "index"))
+            });
+
+        if let Some(index_field) = index_field {
+            return Ok(ctx.reflection_runtime_type_by_index(index_field.read()));
+        }
+
+        if let Some(type_impl) = ctx
+            .loader()
+            .corlib_type("System.Reflection.TypeDelegator")
+            .ok()
+            .and_then(|owner| {
+                instance
+                    .instance_storage
+                    .field::<ObjectRef<'gc>>(owner, "typeImpl")
+            })
+            .map(|f| f.read())
+        {
+            return resolve_runtime_type(ctx, type_impl);
+        }
+
+        Err(ExecutionError::InternalError(
+            format!(
+                "Reflection runtime type object missing index field: {}",
+                instance.description.type_name()
+            )
+            .into(),
+        ))
+    })?
 }
 
 pub fn resolve_runtime_method<'gc>(

@@ -46,6 +46,7 @@ pub mod common;
 pub mod fields;
 pub mod methods;
 pub mod parameters;
+pub mod resources;
 pub mod types;
 
 pub trait RuntimeTypeContext {
@@ -117,6 +118,9 @@ pub trait ReflectionRegistryHost<'gc> {
     -> Option<ObjectRef<'gc>>;
 
     fn reflection_cache_runtime_assembly(&self, resolution: ResolutionS, object: ObjectRef<'gc>);
+
+    fn reflection_runtime_assembly_resolution(&self, object: ObjectRef<'gc>)
+    -> Option<ResolutionS>;
 
     fn reflection_cached_runtime_type(&self, target: &RuntimeType) -> Option<ObjectRef<'gc>>;
 

@@ -5,8 +5,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ThreadOps, VmCallOps,
-            VmLoaderOps, VmReflectionOps, VmResolutionOps, VmStaticsOps,
+            EvalStackOps, IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ReflectionOps,
+            ThreadOps, VmCallOps, VmLoaderOps, VmReflectionOps, VmResolutionOps, VmStaticsOps,
         },
     },
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
@@ -21,7 +21,10 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_utils::ArenaId;
-use dotnet_value::object::{Object, ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::{Object, ObjectRef},
+};
 use dotnetdll::prelude::{FieldSource, MethodType as DllMethodType, UserType};
 
 #[cfg(feature = "multithreading")]
@@ -230,9 +233,41 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
     fn reflection_dispatch_method(
         &mut self,
         method: MethodDescription,
-        lookup: GenericLookup,
+        mut lookup: GenericLookup,
     ) -> StepResult {
-        self.dispatch_method(method, lookup)
+        let mut dispatch_method = method;
+
+        if dispatch_method.signature().instance && dispatch_method.method().virtual_member {
+            let num_args = 1 + dispatch_method.signature().parameters.len();
+            if let StackValue::ObjectRef(this_obj) = self.peek_stack_at(num_args - 1)
+                && this_obj.0.is_some()
+            {
+                let this_type = dotnet_vm_ops::vm_try!(self.get_heap_description(this_obj));
+                dispatch_method = dotnet_vm_ops::vm_try!(self.resolver().resolve_virtual_method(
+                    dispatch_method,
+                    this_type,
+                    &lookup,
+                    &self.current_context(),
+                ));
+
+                let parent_arity = dispatch_method.parent.definition().generic_parameters.len();
+                if parent_arity == 0 {
+                    lookup.type_generics = Vec::new().into();
+                } else if dispatch_method.parent_generics.type_generics.len() == parent_arity {
+                    lookup.type_generics = dispatch_method.parent_generics.type_generics.clone();
+                } else {
+                    lookup.type_generics = lookup
+                        .type_generics
+                        .iter()
+                        .take(parent_arity)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+            }
+        }
+
+        self.dispatch_method(dispatch_method, lookup)
     }
 
     fn reflection_constructor_frame(
@@ -261,7 +296,22 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
     }
 
     fn reflection_cache_runtime_assembly(&self, resolution: ResolutionS, object: ObjectRef<'gc>) {
-        self.reflection().asms_write().insert(resolution, object);
+        self.reflection()
+            .asms_write()
+            .insert(resolution.clone(), object);
+        self.reflection()
+            .asm_resolutions_write()
+            .insert(object, resolution);
+    }
+
+    fn reflection_runtime_assembly_resolution(
+        &self,
+        object: ObjectRef<'gc>,
+    ) -> Option<ResolutionS> {
+        self.reflection()
+            .asm_resolutions_read()
+            .get(&object)
+            .cloned()
     }
 
     fn reflection_cached_runtime_type(&self, target: &RuntimeType) -> Option<ObjectRef<'gc>> {

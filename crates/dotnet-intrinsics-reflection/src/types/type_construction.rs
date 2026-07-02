@@ -6,7 +6,10 @@ use dotnet_types::{
     members::MethodDescription,
     runtime::RuntimeType,
 };
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::TypedStackOps;
 use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
@@ -46,6 +49,43 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
     }
 
     let _ = ctx.pop();
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static System.Array System.Array::CreateInstance(System.Type, int)")]
+pub fn intrinsic_array_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let length = ctx.pop_i32();
+    let element_type = ctx.pop_obj();
+
+    if element_type.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentNullException",
+            "Value cannot be null. (Parameter 'elementType')",
+        );
+    }
+
+    if length < 0 {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentOutOfRangeException",
+            "length must be non-negative.",
+        );
+    }
+
+    let element_runtime_type =
+        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, element_type));
+    let vector = dotnet_vm_ops::vm_try!(ctx.new_vector(
+        element_runtime_type.to_concrete(ctx.loader().as_ref()),
+        length as usize,
+    ));
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let array_ref = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector)));
+    ctx.register_new_object(&array_ref);
+    ctx.push_obj(array_ref);
     StepResult::Continue
 }
 
@@ -113,6 +153,113 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             .into(),
         )))
     }
+}
+
+#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])")]
+pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let ctor_args_obj = ctx.pop_obj();
+    let target_type_obj = ctx.pop_obj();
+
+    if target_type_obj.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentNullException",
+            "Value cannot be null. (Parameter 'type')",
+        );
+    }
+
+    let target_runtime_type = match crate::common::resolve_runtime_type(ctx, target_type_obj) {
+        Ok(t) => t,
+        Err(_) => {
+            return ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType");
+        }
+    };
+
+    let (target_td, lookup, invoke_return_type) = match target_runtime_type {
+        RuntimeType::Type(td) => (td.clone(), GenericLookup::default(), RuntimeType::Type(td)),
+        RuntimeType::Generic(td, type_args) => {
+            let lookup = GenericLookup::new(
+                type_args
+                    .iter()
+                    .map(|arg| arg.to_concrete(ctx.loader().as_ref()))
+                    .collect(),
+            );
+            (
+                td.clone(),
+                lookup,
+                RuntimeType::Generic(td, type_args.clone()),
+            )
+        }
+        _ => {
+            return ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType");
+        }
+    };
+
+    let ctor_args = if ctor_args_obj.0.is_none() {
+        Vec::new()
+    } else {
+        dotnet_vm_ops::vm_try!(ctor_args_obj.try_as_vector(
+            |v: &dotnet_value::object::Vector<'gc>| {
+                v.get()
+                    .chunks_exact(ObjectRef::SIZE)
+                    .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
+                    .map(StackValue::ObjectRef)
+                    .collect::<Vec<_>>()
+            }
+        ))
+    };
+
+    let Some(ctor_desc) =
+        target_td
+            .definition()
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(index, method)| {
+                if method.name != ".ctor" {
+                    return None;
+                }
+
+                let candidate = MethodDescription::new(
+                    target_td.clone(),
+                    lookup.clone(),
+                    target_td.resolution.clone(),
+                    MethodMemberIndex::Method(index),
+                );
+                let signature = candidate.signature();
+                (signature.instance && signature.parameters.len() == ctor_args.len())
+                    .then_some(candidate)
+            })
+    else {
+        return ctx.throw_by_name_with_message(
+            "System.MissingMethodException",
+            "No matching constructor found.",
+        );
+    };
+
+    let instance =
+        dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(target_td.clone(), &lookup));
+    let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
+    ctx.register_new_object(&this_obj);
+
+    // Preserve the created instance so return-frame reflection boxing can return it
+    // after the constructor (which itself returns void) completes.
+    ctx.push_obj(this_obj);
+
+    // Constructor call arguments: `this` first, then positional constructor args.
+    ctx.push_obj(this_obj);
+    for arg in ctor_args {
+        ctx.push(arg);
+    }
+
+    ctx.frame_stack_mut()
+        .current_frame_mut()
+        .awaiting_invoke_return = Some(invoke_return_type);
+    ctx.reflection_dispatch_method(ctor_desc, lookup)
 }
 
 pub fn handle_create_instance_check_this<'gc, T: TypedStackOps<'gc>>(

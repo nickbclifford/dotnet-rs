@@ -1,6 +1,7 @@
 use crate::{NULL_REF_MSG, ReflectionIntrinsicHost};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    TypeDescription,
     error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -15,7 +16,7 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::prelude::MethodMemberIndex;
+use dotnetdll::prelude::{BaseType, MemberType, MethodMemberIndex};
 
 pub mod type_construction;
 pub mod type_members;
@@ -411,6 +412,17 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
         StackValue::ObjectRef(ObjectRef(None)) => {
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
+        StackValue::ManagedPtr(ptr) => {
+            if let Some(o @ ObjectRef(Some(_))) = ptr.owner() {
+                ctx.get_heap_description(o)
+            } else {
+                let message = format!(
+                    "Invalid type on stack ({:?}); expected object reference.",
+                    StackValue::ManagedPtr(ptr)
+                );
+                return ctx.throw_by_name_with_message("System.InvalidCastException", &message);
+            }
+        }
         value => {
             let message = format!(
                 "Invalid type on stack ({:?}); expected object reference.",
@@ -422,6 +434,129 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
 
     let mt_ptr = dotnet_vm_ops::vm_try!(object_type).definition() as *const _;
     ctx.push_isize(mt_ptr as isize);
+    StepResult::Continue
+}
+
+const ELEMENT_TYPE_END: i32 = 0;
+const ELEMENT_TYPE_BOOLEAN: i32 = 2;
+const ELEMENT_TYPE_CHAR: i32 = 3;
+const ELEMENT_TYPE_I1: i32 = 4;
+const ELEMENT_TYPE_U1: i32 = 5;
+const ELEMENT_TYPE_I2: i32 = 6;
+const ELEMENT_TYPE_U2: i32 = 7;
+const ELEMENT_TYPE_I4: i32 = 8;
+const ELEMENT_TYPE_U4: i32 = 9;
+const ELEMENT_TYPE_I8: i32 = 10;
+const ELEMENT_TYPE_U8: i32 = 11;
+const ELEMENT_TYPE_R4: i32 = 12;
+const ELEMENT_TYPE_R8: i32 = 13;
+const ELEMENT_TYPE_I: i32 = 24;
+const ELEMENT_TYPE_U: i32 = 25;
+
+fn cor_element_type_from_member_type(member: &MemberType) -> Option<i32> {
+    let MemberType::Base(base) = member else {
+        return None;
+    };
+
+    Some(match &**base {
+        BaseType::Boolean => ELEMENT_TYPE_BOOLEAN,
+        BaseType::Char => ELEMENT_TYPE_CHAR,
+        BaseType::Int8 => ELEMENT_TYPE_I1,
+        BaseType::UInt8 => ELEMENT_TYPE_U1,
+        BaseType::Int16 => ELEMENT_TYPE_I2,
+        BaseType::UInt16 => ELEMENT_TYPE_U2,
+        BaseType::Int32 => ELEMENT_TYPE_I4,
+        BaseType::UInt32 => ELEMENT_TYPE_U4,
+        BaseType::Int64 => ELEMENT_TYPE_I8,
+        BaseType::UInt64 => ELEMENT_TYPE_U8,
+        BaseType::Float32 => ELEMENT_TYPE_R4,
+        BaseType::Float64 => ELEMENT_TYPE_R8,
+        BaseType::IntPtr => ELEMENT_TYPE_I,
+        BaseType::UIntPtr => ELEMENT_TYPE_U,
+        _ => return None,
+    })
+}
+
+fn primitive_cor_element_type(td: &TypeDescription) -> i32 {
+    if let Some(enum_underlying) = td.is_enum()
+        && let Some(cor_type) = cor_element_type_from_member_type(enum_underlying)
+    {
+        return cor_type;
+    }
+
+    match td.type_name().as_str() {
+        "System.Boolean" => ELEMENT_TYPE_BOOLEAN,
+        "System.Char" => ELEMENT_TYPE_CHAR,
+        "System.SByte" => ELEMENT_TYPE_I1,
+        "System.Byte" => ELEMENT_TYPE_U1,
+        "System.Int16" => ELEMENT_TYPE_I2,
+        "System.UInt16" => ELEMENT_TYPE_U2,
+        "System.Int32" => ELEMENT_TYPE_I4,
+        "System.UInt32" => ELEMENT_TYPE_U4,
+        "System.Int64" => ELEMENT_TYPE_I8,
+        "System.UInt64" => ELEMENT_TYPE_U8,
+        "System.Single" => ELEMENT_TYPE_R4,
+        "System.Double" => ELEMENT_TYPE_R8,
+        "System.IntPtr" => ELEMENT_TYPE_I,
+        "System.UIntPtr" => ELEMENT_TYPE_U,
+        _ => ELEMENT_TYPE_END,
+    }
+}
+
+fn resolve_method_table_type<T: LoaderOps>(
+    ctx: &T,
+    method_table_ptr: usize,
+) -> Option<TypeDescription> {
+    if method_table_ptr == 0 {
+        return None;
+    }
+
+    for resolution in ctx.loader().assemblies() {
+        for (idx, _) in resolution.definition().type_definitions.iter().enumerate() {
+            let Some(type_index) = resolution.definition().type_definition_index(idx) else {
+                continue;
+            };
+            let td = TypeDescription::new(resolution.clone(), type_index);
+            let td_ptr = td.definition() as *const _ as usize;
+            if td_ptr == method_table_ptr {
+                return Some(td);
+            }
+        }
+    }
+
+    None
+}
+
+#[dotnet_intrinsic(
+    "System.Reflection.CorElementType System.Runtime.CompilerServices.MethodTable::GetPrimitiveCorElementType()"
+)]
+pub fn intrinsic_method_table_get_primitive_cor_element_type<
+    'gc,
+    T: ReflectionIntrinsicHost<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let method_table_value = ctx.pop();
+    let method_table_ptr = match method_table_value {
+        StackValue::NativeInt(v) => v as usize,
+        StackValue::UnmanagedPtr(v) => v.0.as_ptr().expose_provenance(),
+        value => {
+            let message = format!(
+                "Invalid type on stack ({:?}); expected method table pointer.",
+                value
+            );
+            return ctx.throw_by_name_with_message("System.InvalidCastException", &message);
+        }
+    };
+
+    let Some(td) = resolve_method_table_type(ctx, method_table_ptr) else {
+        let message = format!("Unknown method table pointer: 0x{method_table_ptr:X}");
+        return ctx.throw_by_name_with_message("System.InvalidCastException", &message);
+    };
+
+    ctx.push_i32(primitive_cor_element_type(&td));
     StepResult::Continue
 }
 

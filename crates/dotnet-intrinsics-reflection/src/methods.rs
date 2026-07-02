@@ -1,10 +1,11 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    TypeDescription,
     error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
-    runtime::RuntimeType,
+    runtime::{RuntimeType, runtime_type_from_concrete},
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -142,9 +143,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
             let obj = ctx.pop_obj();
-            let (method, _) =
+            let (method, lookup) =
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, obj));
-            let rt_obj = crate::common::get_runtime_type(ctx, RuntimeType::Type(method.parent));
+            let declaring_type = declaring_runtime_type(ctx, &method, &lookup);
+            let rt_obj = crate::common::get_runtime_type(ctx, declaring_type);
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
@@ -296,7 +298,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let (method, lookup) =
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
 
-            let instance = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
+            let instance = dotnet_vm_ops::vm_try!(
+                ctx.reflection_new_object_with_lookup(method.parent.clone(), &lookup)
+            );
             let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
             ctx.register_new_object(&this_obj);
 
@@ -441,6 +445,23 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+fn is_type_or_ancestor_named<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    td: &TypeDescription,
+    canonical_name: &str,
+) -> bool {
+    let is_named = |candidate: &TypeDescription| {
+        let raw_type_name = candidate.type_name();
+        ctx.loader().canonical_type_name(&raw_type_name) == canonical_name
+    };
+
+    is_named(td)
+        || ctx
+            .loader()
+            .ancestors(td.clone())
+            .any(|(ancestor, _)| is_named(&ancestor))
+}
+
 fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method_obj: ObjectRef<'gc>,
@@ -463,9 +484,7 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
     };
 
     let delegate_base = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
-    let delegate_concrete = ConcreteType::from(delegate_td.clone());
-    let delegate_base_concrete = ConcreteType::from(delegate_base.clone());
-    if !dotnet_vm_ops::vm_try!(ctx.is_a(delegate_concrete, delegate_base_concrete)) {
+    if !is_type_or_ancestor_named(ctx, &delegate_td, "System.Delegate") {
         return ctx.throw_by_name_with_message(
             "System.ArgumentException",
             "Type must derive from System.Delegate.",
@@ -497,10 +516,7 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let multicast_type =
         dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-    if dotnet_vm_ops::vm_try!(ctx.is_a(
-        ConcreteType::from(delegate_td),
-        ConcreteType::from(multicast_type.clone()),
-    )) {
+    if is_type_or_ancestor_named(ctx, &delegate_td, "System.MulticastDelegate") {
         let mut targets =
             dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(delegate_base), 1));
         delegate_ref.write(&mut targets.get_mut()[..ObjectRef::SIZE]);
@@ -601,6 +617,35 @@ fn resolve_return_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
         Some(ParameterType::TypedReference) => RuntimeType::TypedReference,
         None => RuntimeType::Void,
     }
+}
+
+fn declaring_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+) -> RuntimeType {
+    let parent_arity = method.parent.definition().generic_parameters.len();
+    if parent_arity == 0 {
+        return RuntimeType::Type(method.parent.clone());
+    }
+
+    let type_generics = if lookup.type_generics.len() >= parent_arity {
+        &lookup.type_generics[..parent_arity]
+    } else if method.parent_generics.type_generics.len() >= parent_arity {
+        &method.parent_generics.type_generics[..parent_arity]
+    } else {
+        return RuntimeType::Type(method.parent.clone());
+    };
+
+    let Some(args) = type_generics
+        .iter()
+        .map(|t| runtime_type_from_concrete(ctx.loader().as_ref(), t))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return RuntimeType::Type(method.parent.clone());
+    };
+
+    RuntimeType::Generic(method.parent.clone(), args)
 }
 
 fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(

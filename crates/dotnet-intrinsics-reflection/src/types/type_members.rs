@@ -4,7 +4,6 @@ use crate::{
         build_generic_lookup_from_runtime_type, populate_reflection_array, string_from_heap_obj,
     },
 };
-use dotnet_assemblies::SUPPORT_ASSEMBLY;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
@@ -23,28 +22,97 @@ use dotnet_vm_ops::{
 };
 use dotnetdll::prelude::{
     Accessibility, AlwaysFailsResolver, BaseType, FixedArg, IntegralParam, MemberAccessibility,
-    MemberType, MethodMemberIndex, MethodReferenceParent, ParameterType, TypeDefinition,
-    TypeSource, UserMethod,
+    MemberType, MethodMemberIndex, MethodReferenceParent, ParameterType, TypeSource, UserMethod,
 };
 
+#[dotnet_intrinsic(
+    "System.Reflection.AssemblyName System.Reflection.RuntimeAssembly::GetName(bool)"
+)]
+pub fn intrinsic_runtime_assembly_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _copied_name = ctx.pop_i32();
+    let runtime_assembly_obj = ctx.pop_obj();
+
+    let Some(resolution) = ctx.reflection_runtime_assembly_resolution(runtime_assembly_obj) else {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidOperationException",
+            "RuntimeAssembly resolution is unavailable.",
+        );
+    };
+
+    let assembly_name_value = resolution
+        .definition()
+        .assembly
+        .as_ref()
+        .map(|assembly| assembly.name.to_string())
+        .unwrap_or_default();
+
+    let assembly_name_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.AssemblyName"));
+    let assembly_name_instance = dotnet_vm_ops::vm_try!(ctx.new_object(assembly_name_type.clone()));
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let assembly_name_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(assembly_name_instance)));
+    ctx.register_new_object(&assembly_name_obj);
+
+    let name_obj = ObjectRef::new(gc, HeapStorage::Str(assembly_name_value.into()));
+    ctx.register_new_object(&name_obj);
+
+    assembly_name_obj.as_object_mut(gc, |instance| {
+        instance
+            .instance_storage
+            .field::<ObjectRef<'gc>>(assembly_name_type.clone(), "_name")
+            .expect("AssemblyName._name field must exist")
+            .write(name_obj);
+    });
+
+    ctx.push_obj(assembly_name_obj);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
-pub fn intrinsic_assembly_get_custom_attributes<
-    'gc,
-    T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps,
->(
+#[dotnet_intrinsic(
+    "object[] System.Reflection.RuntimeAssembly::GetCustomAttributes(System.Type, bool)"
+)]
+#[dotnet_intrinsic("object[] System.Reflection.RuntimeAssembly::GetCustomAttributes(bool)")]
+#[dotnet_intrinsic(
+    "static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.Assembly, System.Type, bool)"
+)]
+pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let num_args =
-        method.signature().parameters.len() + if method.signature().instance { 1 } else { 0 };
-    for _ in 0..num_args {
-        let _ = ctx.pop();
-    }
+    let attribute_type = match method.signature().parameters.len() {
+        1 => {
+            let _inherit = ctx.pop_i32();
+            let _assembly = ctx.pop_obj();
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            RuntimeType::Type(object_type).to_concrete(ctx.loader().as_ref())
+        }
+        _ => {
+            let _inherit = ctx.pop_i32();
+            let attribute_type_obj = ctx.pop_obj();
+            let _assembly = ctx.pop_obj();
 
-    let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
-    let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
+            if attribute_type_obj.0.is_some() {
+                let attribute_runtime_type = dotnet_vm_ops::vm_try!(
+                    crate::common::resolve_runtime_type(ctx, attribute_type_obj)
+                );
+                attribute_runtime_type.to_concrete(ctx.loader().as_ref())
+            } else {
+                let attribute_type =
+                    dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
+                RuntimeType::Type(attribute_type).to_concrete(ctx.loader().as_ref())
+            }
+        }
+    };
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type, 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array)));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
@@ -94,30 +162,16 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Continue;
     }
 
-    let support_res = ctx
-        .loader()
-        .get_assembly(SUPPORT_ASSEMBLY)
-        .expect("support library must be loadable");
-    let (index, _definition) = support_res
-        .definition()
-        .type_definitions
-        .iter()
-        .enumerate()
-        .find(|(_, a): &(usize, &TypeDefinition)| a.type_name() == "DotnetRs.Assembly")
-        .expect("could find DotnetRs.Assembly in support library");
-    let type_index = support_res.type_definition_index(index).unwrap();
-    let asm_handle =
-        dotnet_vm_ops::vm_try!(ctx.new_object(TypeDescription::new(support_res, type_index)));
-    asm_handle
-        .instance_storage
-        .field::<usize>(asm_handle.description.clone(), "resolution")
-        .unwrap()
-        .write(resolution.as_raw() as usize);
-    let v = ObjectRef::new(gc, HeapStorage::Obj(Box::new(asm_handle)));
-    ctx.register_new_object(&v);
+    let runtime_assembly_type = dotnet_vm_ops::vm_try!(
+        ctx.loader()
+            .corlib_type("System.Reflection.RuntimeAssembly")
+    );
+    let asm_handle = dotnet_vm_ops::vm_try!(ctx.new_object(runtime_assembly_type));
+    let assembly_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(asm_handle)));
+    ctx.register_new_object(&assembly_obj);
 
-    ctx.reflection_cache_runtime_assembly(resolution, v);
-    ctx.push_obj(v);
+    ctx.reflection_cache_runtime_assembly(resolution, assembly_obj);
+    ctx.push_obj(assembly_obj);
     StepResult::Continue
 }
 

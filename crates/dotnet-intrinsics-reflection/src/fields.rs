@@ -3,7 +3,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
-    runtime::RuntimeType,
+    runtime::{RuntimeType, runtime_type_from_concrete},
 };
 use dotnet_value::{CLRString, StackValue};
 use dotnet_vm_ops::{
@@ -107,6 +107,32 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, T: ReflectionIntrinsicHost<'
     let obj_ref = ctx.pop_obj();
     let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
     let rt_obj = crate::common::get_runtime_type(ctx, RuntimeType::Type(field.parent));
+    ctx.push_obj(rt_obj);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetFieldType()")]
+pub fn intrinsic_field_info_get_field_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj_ref = ctx.pop_obj();
+    let (field, lookup) =
+        dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, obj_ref));
+    let field_type: dotnetdll::prelude::MethodType = field.field().return_type.clone().into();
+
+    let runtime_type = lookup
+        .make_concrete(
+            field.resolution(),
+            field_type.clone(),
+            ctx.loader().as_ref(),
+        )
+        .ok()
+        .and_then(|concrete| runtime_type_from_concrete(ctx.loader().as_ref(), &concrete))
+        .unwrap_or_else(|| ctx.reflection_make_runtime_type_with_lookup(&field_type, &lookup));
+
+    let rt_obj = crate::common::get_runtime_type(ctx, runtime_type);
     ctx.push_obj(rt_obj);
     StepResult::Continue
 }
