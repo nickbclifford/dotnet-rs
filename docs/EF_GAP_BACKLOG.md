@@ -190,6 +190,37 @@ Per the trace above, the failing instantiation is the **generic static method**
 `DbContextOptions..ctor`. The method-generic arguments are not reaching the resolution context where
 `!!0`/`!!1` are looked up (the lookup carries zero args), so the `!!0` lookup underflows.
 
+### Exact empty-lookup occurrence (Step 1.3 instrumentation, 2026-06-30)
+
+Running host mode without `DOTNET_RS_TRACE`:
+
+```bash
+./target/debug/dotnet-rs /tmp/ef-probe-out/EfApp.dll
+```
+
+emits:
+
+```text
+[GENERIC-OOB] make_concrete caller=ResolutionS(System.Private.CoreLib @ 0x...) requested=TypeGeneric(0) lookup={}
+Internal VM error: Type resolution failed: Generic index 0 out of bounds (length 0)
+```
+
+Stack context for this exact occurrence (from the rung-3 trace chain) is:
+
+```text
+BlogContext::.ctor
+  -> DbContext::.ctor
+    -> DbContextOptions`1<BlogContext>::.ctor
+      -> DbContextOptions::.ctor
+        -> call ImmutableSortedDictionary.Create<System.Type, ValueTuple<IDbContextOptionsExtension,int>>(...)
+          -> ImmutableSortedDictionary.Create<TKey,TValue>
+            -> IL_0000: ldsfld ImmutableSortedDictionary`2<!!TKey,!!TValue>::Empty
+               -> GenericLookup::make_concrete(TypeGeneric(0), lookup={})  // underflow
+```
+
+This pins the blocker to an **empty `GenericLookup` at `make_concrete`** while resolving
+`ImmutableSortedDictionary`2<!!0,!!1>::Empty` on the EF startup path.
+
 This is the **same class** as the 5.4 constrained-callvirt bug (method generics not propagated to the
 dispatched context). Start at `crates/dotnet-runtime-resolver/src/methods.rs::find_generic_method`
 (~52–76, where `new_lookup.method_generics = params.into()`) and trace whether the dispatched frame's
@@ -201,3 +232,49 @@ the real fix is upstream propagation, **not** another fallback heuristic.
 **Scope reality:** unlike rung-2 (a contained reflection-completeness gap that one cache fix unblocked),
 this is a core generic type/method substitution bug, and EF is a large framework — clearing this blocker
 will surface further ones. Treat rung-3/EF as a **separate epic**, not a quick follow-on to rung-2.
+
+## EF epic handoff after supervised/ef-core finalization (2026-07-02)
+
+The `supervised/ef-core` branch advanced the host-mode EF probe through the original generic
+lookup failure and many downstream runtime/reflection/delegate/string blockers, but rung 3 is
+still **FAIL** and should not be marked complete.
+
+Final verification commands:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo test --workspace
+cargo build -p dotnet-cli --bin dotnet-rs --no-default-features
+bash scripts/diff_run.sh --host /tmp/ef-probe-out/EfApp.dll
+```
+
+Observed results:
+
+- `cargo fmt --all -- --check`: PASS.
+- `cargo clippy --all-targets --no-default-features -- -D warnings`: PASS.
+- `cargo test --workspace`: PASS (requires `/tmp/fixture-probe` and `/tmp/nuget-probe-out`
+  host-test artifacts to be present).
+- `cargo build -p dotnet-cli --bin dotnet-rs --no-default-features`: PASS.
+- Stock `dotnet /tmp/ef-probe-out/EfApp.dll`: prints `Hello`, exits `42`.
+- Host-mode `dotnet-rs /tmp/ef-probe-out/EfApp.dll`: exits `1`.
+
+Current next blocker:
+
+```text
+Unhandled Exception: System.NotImplementedException: Arg_NotImplementedException
+Stack Trace:
+   at System.Reflection.MemberInfo.GetCustomAttributesData() in IP 1
+   at System.Reflection.NullabilityInfoContext.Create(System.Reflection.PropertyInfo propertyInfo) in IP 32
+   at Microsoft.EntityFrameworkCore.Metadata.Conventions.NonNullableConventionBase.TryGetNullabilityInfo(...) in IP 38
+   at Microsoft.EntityFrameworkCore.Metadata.Conventions.NonNullableReferencePropertyConvention.Process(...) in IP 11
+   ...
+   at Microsoft.EntityFrameworkCore.Internal.InternalDbSet`1.Add(T0 entity) in IP 2
+   at Program.Main() in IP 10
+```
+
+This means the branch cleared the immediately prior missing-string-intrinsic blockers
+(`StartsWith(string, StringComparison)` and `EndsWith(string, StringComparison)`) and now reaches
+EF model nullability convention processing. The next refactor should start from
+`System.Reflection.MemberInfo.GetCustomAttributesData()`/`NullabilityInfoContext` support rather
+than continuing the old generic-lookup triage.
