@@ -3,7 +3,10 @@ use crate::{
     resolution::TypeResolutionExt,
     stack::{
         context::VesContext,
-        ops::{EvalStackOps, LoaderOps, StaticsOps, VmCallOps, VmLoaderOps, VmResolutionOps},
+        ops::{
+            EvalStackOps, LoaderOps, StaticsOps, TypedStackOps, VmCallOps, VmLoaderOps,
+            VmResolutionOps,
+        },
     },
 };
 use dotnet_types::{
@@ -15,7 +18,16 @@ use dotnet_value::{
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
 };
-use dotnetdll::prelude::{Instruction, MethodSource};
+use dotnetdll::prelude::{
+    BaseType, Instruction, MethodMemberIndex, MethodSource, MethodType, ParameterType,
+};
+use std::{
+    fmt::Write as _,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
+};
 
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(
@@ -76,6 +88,190 @@ fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
     }
 
     None
+}
+
+fn is_boolean_parameter(parameter: &ParameterType<MethodType>) -> bool {
+    matches!(
+        parameter,
+        ParameterType::Value(MethodType::Base(base)) if matches!(&**base, BaseType::Boolean)
+    )
+}
+
+fn try_redirect_expression_compile_to_interpreter(
+    method: &MethodDescription,
+) -> Option<MethodDescription> {
+    let parent_name = method.parent.type_name();
+    if parent_name != "System.Linq.Expressions.LambdaExpression"
+        && parent_name != "System.Linq.Expressions.Expression`1"
+    {
+        return None;
+    }
+
+    if method.method().name.as_ref() != "Compile" {
+        return None;
+    }
+
+    if !method.signature().parameters.is_empty() {
+        return None;
+    }
+
+    method
+        .parent
+        .definition()
+        .methods
+        .iter()
+        .enumerate()
+        .find_map(|(index, m)| {
+            if m.name.as_ref() != "Compile" {
+                return None;
+            }
+
+            let candidate = MethodDescription::new(
+                method.parent.clone(),
+                method.parent_generics.clone(),
+                method.method_resolution.clone(),
+                MethodMemberIndex::Method(index),
+            );
+
+            let signature = candidate.signature();
+            if signature.parameters.len() == 1 && is_boolean_parameter(&signature.parameters[0].1) {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+}
+
+fn triage_call_sample_interval() -> Option<u64> {
+    static INTERVAL: OnceLock<Option<u64>> = OnceLock::new();
+    *INTERVAL.get_or_init(|| {
+        let Ok(raw) = std::env::var("DOTNET_RS_TRIAGE_CALLS") else {
+            return None;
+        };
+        let raw = raw.trim();
+        if raw.is_empty() || raw == "0" || raw.eq_ignore_ascii_case("off") {
+            return None;
+        }
+        if raw == "1" || raw.eq_ignore_ascii_case("true") {
+            return Some(1_000);
+        }
+        raw.parse::<u64>().ok().filter(|interval| *interval > 0)
+    })
+}
+
+fn trace_call_frame_sample(ctx: &VesContext<'_, '_>, method: &MethodInfo<'static>) {
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    static FIND_NAV_CALLS: AtomicU64 = AtomicU64::new(0);
+
+    let Some(interval) = triage_call_sample_interval() else {
+        return;
+    };
+
+    let call = CALLS.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+    let target_type = method.source.parent.type_name();
+    let target_method = method.source.method().name.as_ref();
+    let find_nav_call = if target_type
+        == "Microsoft.EntityFrameworkCore.Metadata.Internal.EntityType"
+        && target_method == "FindNavigation"
+        && std::env::var_os("DOTNET_RS_TRIAGE_FINDNAV").is_some()
+    {
+        FIND_NAV_CALLS.fetch_add(1, AtomicOrdering::Relaxed) + 1
+    } else {
+        0
+    };
+    let force_find_nav_sample = (1..=8).contains(&find_nav_call);
+
+    if !force_find_nav_sample && call > 20 && !call.is_multiple_of(interval) {
+        return;
+    }
+
+    let mut frames = String::new();
+    let frame_count = ctx.frame_stack.frames.len();
+    let frame_window = if force_find_nav_sample { 24 } else { 8 };
+    let start = frame_count.saturating_sub(frame_window);
+    for (idx, frame) in ctx.frame_stack.frames.iter().enumerate().skip(start) {
+        let source = &frame.state.info_handle.source;
+        let _ = writeln!(
+            frames,
+            "\n    #{idx} {}.{} ip={} stack_height={}",
+            source.parent.type_name(),
+            source.method().name,
+            frame.state.ip,
+            frame.stack_height.as_usize()
+        );
+    }
+
+    eprintln!(
+        "[CALL-TRIAGE] call={} find_nav_call={} depth_before={} eval_slots={} heap_live={} target={}.{}{}",
+        call,
+        find_nav_call,
+        frame_count,
+        ctx.evaluation_stack.stack.len(),
+        ctx.local.heap.live_object_count(),
+        target_type,
+        target_method,
+        frames
+    );
+}
+
+const DEFAULT_MANAGED_FRAME_LIMIT: usize = 65_536;
+const MANAGED_FRAME_ABORT_WINDOW: usize = 8;
+
+fn managed_frame_limit() -> Option<usize> {
+    static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let Ok(raw) = std::env::var("DOTNET_RS_MANAGED_FRAME_LIMIT") else {
+            return Some(DEFAULT_MANAGED_FRAME_LIMIT);
+        };
+        let raw = raw.trim();
+        if raw.is_empty() || raw == "0" || raw.eq_ignore_ascii_case("off") {
+            return None;
+        }
+        raw.parse::<usize>()
+            .ok()
+            .and_then(|limit| (limit > 0).then_some(limit))
+            .or(Some(DEFAULT_MANAGED_FRAME_LIMIT))
+    })
+}
+
+fn managed_frame_abort(
+    ctx: &VesContext<'_, '_>,
+    method: &MethodInfo<'static>,
+) -> Option<crate::error::VmError> {
+    let limit = managed_frame_limit()?;
+
+    let depth_before = ctx.frame_stack.frames.len();
+    let depth_after = depth_before.saturating_add(1);
+    if depth_after <= limit {
+        return None;
+    }
+
+    let mut top_frames = String::new();
+    let start = depth_before.saturating_sub(MANAGED_FRAME_ABORT_WINDOW);
+    for (idx, frame) in ctx.frame_stack.frames.iter().enumerate().skip(start) {
+        let source = &frame.state.info_handle.source;
+        let _ = writeln!(
+            top_frames,
+            "\n    #{idx} {}.{} ip={} stack_height={}",
+            source.parent.type_name(),
+            source.method().name,
+            frame.state.ip,
+            frame.stack_height.as_usize()
+        );
+    }
+
+    let message = format!(
+        "managed frame depth budget exceeded: limit={limit} depth_before={depth_before} depth_after={depth_after} eval_slots={} heap_live={} target={}.{} top_frames:{}",
+        ctx.evaluation_stack.stack.len(),
+        ctx.local.heap.live_object_count(),
+        method.source.parent.type_name(),
+        method.source.method().name,
+        top_frames,
+    );
+
+    Some(crate::error::VmError::Execution(
+        crate::error::ExecutionError::Aborted(message.into()),
+    ))
 }
 
 impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
@@ -145,6 +341,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
+        trace_call_frame_sample(self, &method);
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
             self.shared
@@ -280,6 +477,16 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             }
         }
 
+        if let Some(compile_bool_overload) = try_redirect_expression_compile_to_interpreter(&method)
+        {
+            // dotnet-rs does not implement DynamicMethod emission yet.
+            // Route parameterless Expression/Lambda Compile() through Compile(bool)
+            // with preferInterpretation=true so System.Linq.Expressions uses the
+            // interpreter path instead of Reflection.Emit.
+            self.push_i32(1);
+            return self.dispatch_method(compile_bool_overload, lookup);
+        }
+
         let intrinsic_metadata = crate::intrinsics::classify_intrinsic(
             method.clone(),
             self.loader(),
@@ -318,6 +525,9 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
                     Ok(v) => v,
                     Err(e) => return StepResult::Error(e.into()),
                 };
+            if let Some(err) = self.managed_frame_abort_error(&info) {
+                return StepResult::Error(err);
+            }
             dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }
@@ -400,6 +610,13 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn managed_frame_abort_error(
+        &self,
+        method: &MethodInfo<'static>,
+    ) -> Option<crate::error::VmError> {
+        managed_frame_abort(self, method)
+    }
+
     #[inline]
     fn unified_dispatch_common(
         &mut self,
@@ -603,6 +820,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let arg_count = info.signature.instance as usize + info.signature.parameters.len();
         if !self.should_honor_tail_call(arg_count) {
+            if let Some(err) = self.managed_frame_abort_error(&info) {
+                return StepResult::Error(err);
+            }
             dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
             return StepResult::FramePushed;
         }
@@ -643,6 +863,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         *self.call_args_buffer = args;
 
+        if let Some(err) = self.managed_frame_abort_error(&info) {
+            return StepResult::Error(err);
+        }
         dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
     }
@@ -747,6 +970,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             Err(e) => return StepResult::Error(e.into()),
         };
 
+        if let Some(err) = self.managed_frame_abort_error(&info) {
+            return StepResult::Error(err);
+        }
         dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
     }

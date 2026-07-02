@@ -106,7 +106,7 @@ pub fn intrinsic_gc_keep_alive<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _obj = ctx.pop_obj();
+    let _obj = ctx.pop();
     StepResult::Continue
 }
 

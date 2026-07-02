@@ -883,6 +883,9 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));
 
+            if let Some(err) = self.managed_frame_abort_error(&method_info) {
+                return StepResult::Error(err);
+            }
             dotnet_vm_ops::vm_try!(self.call_frame(method_info, generics));
             self.current_frame_mut().is_finalizer = true;
             return StepResult::FramePushed;

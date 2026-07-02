@@ -16,11 +16,84 @@ use dotnet_utils::ByteOffset;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, Object, ObjectRef},
     pointer::ManagedPtr,
 };
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
+
+fn vector_matches_generic_array_interfaces(
+    loader: &impl dotnet_types::TypeResolver,
+    element: &ConcreteType,
+    target: &ConcreteType,
+) -> bool {
+    let comparer = dotnet_types::comparer::TypeComparer::new(loader);
+
+    [
+        "System.Collections.Generic.IEnumerable`1",
+        "System.Collections.Generic.ICollection`1",
+        "System.Collections.Generic.IList`1",
+        "System.Collections.Generic.IReadOnlyCollection`1",
+        "System.Collections.Generic.IReadOnlyList`1",
+    ]
+    .iter()
+    .any(|interface_name| {
+        let Ok(interface_td) = loader.corlib_type(interface_name) else {
+            return false;
+        };
+
+        let interface_ct = ConcreteType::new(
+            interface_td.resolution.clone(),
+            BaseType::Type {
+                source: TypeSource::Generic {
+                    base: UserType::Definition(interface_td.index),
+                    parameters: vec![element.clone()],
+                },
+                value_kind: None,
+            },
+        );
+
+        comparer.is_assignable_to(&interface_ct, target)
+    })
+}
+
+fn object_runtime_concrete_type(object: &Object<'_>) -> ConcreteType {
+    let type_arity = object.description.definition().generic_parameters.len();
+    if type_arity == 0 {
+        return object.description.clone().into();
+    }
+
+    let type_args: Vec<_> = object
+        .generics
+        .type_generics
+        .iter()
+        .take(type_arity)
+        .cloned()
+        .collect();
+
+    if type_args.len() != type_arity {
+        return object.description.clone().into();
+    }
+
+    ConcreteType::new(
+        object.description.resolution.clone(),
+        BaseType::Type {
+            source: TypeSource::Generic {
+                base: UserType::Definition(object.description.index),
+                parameters: type_args,
+            },
+            value_kind: None,
+        },
+    )
+}
+
+fn heap_runtime_concrete_type(storage: &HeapStorage<'_>) -> Option<ConcreteType> {
+    match storage {
+        HeapStorage::Obj(o) => Some(object_runtime_concrete_type(o)),
+        HeapStorage::Boxed(o) => Some(object_runtime_concrete_type(o)),
+        _ => None,
+    }
+}
 
 #[dotnet_instruction(BoxValue(param0))]
 pub fn box_value<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
@@ -213,8 +286,30 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         };
         if let ObjectRef(Some(o)) = target_obj {
-            let obj_type = dotnet_vm_ops::vm_try!(res_ctx.get_heap_description(o));
-            if dotnet_vm_ops::vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
+            let array_interface_match =
+                dotnet_vm_ops::vm_try!(target_obj.try_as_heap_storage(|storage| match storage {
+                    HeapStorage::Vec(v) => vector_matches_generic_array_interfaces(
+                        ctx.loader().as_ref(),
+                        &v.element,
+                        &target_ct,
+                    ),
+                    _ => false,
+                },));
+
+            if array_interface_match {
+                ctx.push(StackValue::ObjectRef(target_obj));
+                return StepResult::Continue;
+            }
+
+            let source_ct = if let Some(source_ct) = dotnet_vm_ops::vm_try!(
+                target_obj.try_as_heap_storage(|storage| heap_runtime_concrete_type(storage),)
+            ) {
+                source_ct
+            } else {
+                dotnet_vm_ops::vm_try!(res_ctx.get_heap_description(o)).into()
+            };
+
+            if dotnet_vm_ops::vm_try!(res_ctx.is_a(source_ct, target_ct)) {
                 ctx.push(StackValue::ObjectRef(target_obj));
             } else {
                 return ctx

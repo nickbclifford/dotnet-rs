@@ -445,15 +445,7 @@ impl SharedGlobalState {
             #[cfg(feature = "multithreading")]
             reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),
-            app_context_switches: {
-                let switches = DashMap::new();
-                switches.insert(
-                    "System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported"
-                        .to_string(),
-                    false,
-                );
-                switches
-            },
+            app_context_switches: DashMap::new(),
         };
 
         state
@@ -613,6 +605,7 @@ impl Drop for SharedGlobalState {
 /// this type to be both `Collect`-traceable and writable from shared arena access patterns.
 pub struct ReflectionLocalState<'gc> {
     pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
+    pub runtime_asm_resolutions: RefCell<HashMap<ObjectRef<'gc>, ResolutionS>>,
     pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
     pub runtime_types_list: RefCell<Vec<RuntimeType>>,
     pub runtime_methods: RefCell<Vec<(MethodDescription, GenericLookup)>>,
@@ -626,6 +619,7 @@ impl<'gc> ReflectionLocalState<'gc> {
     pub fn new() -> Self {
         Self {
             runtime_asms: RefCell::new(HashMap::new()),
+            runtime_asm_resolutions: RefCell::new(HashMap::new()),
             runtime_types: RefCell::new(HashMap::new()),
             runtime_types_list: RefCell::new(vec![]),
             runtime_methods: RefCell::new(vec![]),
@@ -649,6 +643,9 @@ impl<'gc> Default for ReflectionLocalState<'gc> {
 unsafe impl<'gc> Collect<'gc> for ReflectionLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for o in self.runtime_asms.borrow().values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_asm_resolutions.borrow().keys() {
             o.trace(cc);
         }
         for o in self.runtime_types.borrow().values() {
@@ -710,6 +707,14 @@ impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
 
     pub fn asms_write(&self) -> RefMut<'a, HashMap<ResolutionS, ObjectRef<'gc>>> {
         self.local.runtime_asms.borrow_mut()
+    }
+
+    pub fn asm_resolutions_read(&self) -> Ref<'a, HashMap<ObjectRef<'gc>, ResolutionS>> {
+        self.local.runtime_asm_resolutions.borrow()
+    }
+
+    pub fn asm_resolutions_write(&self) -> RefMut<'a, HashMap<ObjectRef<'gc>, ResolutionS>> {
+        self.local.runtime_asm_resolutions.borrow_mut()
     }
 
     pub fn types_read(&self) -> Ref<'a, HashMap<RuntimeType, ObjectRef<'gc>>> {

@@ -377,14 +377,15 @@ impl<'gc> ExecutionEngine<'gc> {
                 return no_body_in_method_step_result(&method);
             }
 
-            dotnet_vm_ops::vm_try!(ctx.call_frame(
-                dotnet_vm_ops::vm_try!(ctx.shared().caches.get_method_info(
-                    method,
-                    &lookup,
-                    ctx.shared().clone()
-                )),
-                lookup,
+            let info = dotnet_vm_ops::vm_try!(ctx.shared().caches.get_method_info(
+                method,
+                &lookup,
+                ctx.shared().clone()
             ));
+            if let Some(err) = ctx.managed_frame_abort_error(&info) {
+                return StepResult::Error(err);
+            }
+            dotnet_vm_ops::vm_try!(ctx.call_frame(info, lookup));
             StepResult::FramePushed
         }
     }

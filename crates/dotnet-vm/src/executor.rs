@@ -338,6 +338,9 @@ impl Executor {
                         .collect(),
                 };
 
+                if let Some(err) = ctx.managed_frame_abort_error(&info) {
+                    return Err(err);
+                }
                 ctx.entrypoint_frame(info, Default::default(), entrypoint_args)?;
                 Ok(())
             })
