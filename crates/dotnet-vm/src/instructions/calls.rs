@@ -5,13 +5,37 @@ use crate::{
     resolution::TypeResolutionExt,
     stack::ops::{VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
 };
-use dotnet_types::TypeDescription;
-use dotnet_value::pointer::PointerOrigin;
+use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+    pointer::PointerOrigin,
+};
 
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
-use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
+
+fn merge_receiver_type_generics_into_lookup(
+    lookup: &GenericLookup,
+    receiver: ObjectRef<'_>,
+) -> GenericLookup {
+    let mut merged = lookup.clone();
+
+    if receiver.0.is_some() {
+        let receiver_lookup = receiver.as_heap_storage(|storage| match storage {
+            HeapStorage::Obj(instance) => instance.generics.clone(),
+            HeapStorage::Boxed(instance) => instance.generics.clone(),
+            HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
+        });
+
+        if !receiver_lookup.type_generics.is_empty() {
+            merged.type_generics = receiver_lookup.type_generics;
+        }
+    }
+
+    merged
+}
 
 #[dotnet_instruction(Jump(param0))]
 pub fn jmp<'gc, T: VmCallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
@@ -184,7 +208,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             &base_method.method().name,
             base_method.signature(),
             base_method.resolution(),
-            &constraint_lookup,
+            &lookup,
             false,
         ) {
             // Value type has its own implementation: run it under the constraint
@@ -224,13 +248,14 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&constraint_type_source, value));
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(boxed));
+            let dispatch_lookup = merge_receiver_type_generics_into_lookup(&lookup, boxed);
             let resolved = ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
-                &lookup,
+                &dispatch_lookup,
                 &ctx.current_context(),
             );
-            (resolved, lookup.clone())
+            (resolved, dispatch_lookup)
         }
     } else {
         // Reference type: the 'this' may already be an ObjectRef (common case),
@@ -286,7 +311,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
             &base_method.method().name,
             base_method.signature(),
             base_method.resolution(),
-            &constraint_lookup,
+            &lookup,
             false,
         ) {
             // Implementation found on the constraint type: run it under that type's
@@ -295,13 +320,14 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
         } else {
             // Fall back to normal virtual dispatch
             let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj_ref));
+            let dispatch_lookup = merge_receiver_type_generics_into_lookup(&lookup, obj_ref);
             let resolved = ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
-                &lookup,
+                &dispatch_lookup,
                 &ctx.current_context(),
             );
-            (resolved, lookup.clone())
+            (resolved, dispatch_lookup)
         }
     };
 

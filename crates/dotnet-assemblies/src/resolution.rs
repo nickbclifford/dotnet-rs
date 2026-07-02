@@ -583,9 +583,25 @@ impl AssemblyLoader {
                 {
                     return Ok(stub_method);
                 }
+                let parent_arity = parent_type.definition().generic_parameters.len();
+                let parent_lookup = GenericLookup {
+                    type_generics: if parent_arity == 0 {
+                        Vec::new().into()
+                    } else {
+                        generic_inst
+                            .type_generics
+                            .iter()
+                            .take(parent_arity)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into()
+                    },
+                    method_generics: generic_inst.method_generics.clone(),
+                };
+
                 Ok(MethodDescription::new(
                     parent_type,
-                    GenericLookup::default(),
+                    parent_lookup,
                     resolution.clone(),
                     member_index,
                 ))

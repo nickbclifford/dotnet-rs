@@ -100,9 +100,10 @@ where
 
         match self.new_cts_value_with_lookup(&t, data, t.resolution(), ctx.generics())? {
             CTSValue::Value(v) => {
-                let td = self.loader.find_concrete_type(t)?;
+                let td = self.loader.find_concrete_type(t.clone())?;
+                let boxed_lookup = t.make_lookup();
                 let obj_instance =
-                    self.new_object_with_lookup(td, ctx.resolution().clone(), ctx.generics())?;
+                    self.new_object_with_lookup(td, ctx.resolution().clone(), &boxed_lookup)?;
                 let dest_len = obj_instance.instance_storage.with_data(|data| data.len());
                 match v {
                     ValueType::Struct(source) => {
@@ -672,6 +673,7 @@ where
 fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
     data: StackValue<'_>,
 ) -> Result<T, TypeResolutionError> {
+    let data = data.coerce_enum_to_underlying();
     match data {
         StackValue::Int32(i) => i.try_into().map_err(|_| {
             TypeResolutionError::InvalidLayout(
@@ -723,6 +725,7 @@ fn convert_i64<T: TryFrom<i64>>(data: StackValue<'_>) -> Result<T, TypeResolutio
 where
     T::Error: Error,
 {
+    let data = data.coerce_enum_to_underlying();
     match data {
         StackValue::Int64(i) => i.try_into().map_err(|e| {
             TypeResolutionError::InvalidLayout(
@@ -741,6 +744,7 @@ where
 }
 
 fn reinterpret_i64_as_u64(data: StackValue<'_>) -> Result<u64, TypeResolutionError> {
+    let data = data.coerce_enum_to_underlying();
     match data {
         StackValue::Int64(i) => Ok(i as u64),
         other => Err(TypeResolutionError::InvalidLayout(

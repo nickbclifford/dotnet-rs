@@ -12,7 +12,6 @@ use dotnet_value::{
     object::{ObjectHandle, ValueType},
 };
 use dotnetdll::prelude::*;
-use std::collections::{HashSet, VecDeque};
 
 impl<C, L> ResolverService<C, L>
 where
@@ -81,36 +80,7 @@ where
             return Ok(cached);
         }
 
-        let value_td = self.loader.find_concrete_type(value.clone())?;
-        let ancestor_td = self.loader.find_concrete_type(ancestor.clone())?;
-
-        let mut seen = HashSet::new();
-        let mut queue = VecDeque::new();
-
-        for (a, _) in self.loader.ancestors(value_td) {
-            queue.push_back(a);
-        }
-
-        let mut result = false;
-        while let Some(current) = queue.pop_front() {
-            if current == ancestor_td {
-                result = true;
-                break;
-            }
-            if !seen.insert(current.clone()) {
-                continue;
-            }
-
-            for (_, interface_source) in &current.definition().implements {
-                let handle = match interface_source {
-                    TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
-                };
-                let interface = self
-                    .loader
-                    .locate_type(current.resolution.clone(), handle)?;
-                queue.push_back(interface);
-            }
-        }
+        let result = self.loader.comparer().is_assignable_to(&value, &ancestor);
 
         self.caches.set_hierarchy_cached(value, ancestor, result);
         Ok(result)

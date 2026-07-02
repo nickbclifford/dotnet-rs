@@ -87,7 +87,15 @@ where
             tracing::debug!("find_generic_method: parent_type concrete={:?}", parent);
             // Use make_lookup() which goes through the thread-local LRU cache.
             let parent_lookup = parent.make_lookup();
-            if !parent_lookup.type_generics.is_empty() {
+            let parent_arity = self
+                .loader
+                .find_concrete_type(parent.clone())?
+                .definition()
+                .generic_parameters
+                .len();
+            if parent_arity == 0 {
+                new_lookup.type_generics = Arc::new([]);
+            } else if !parent_lookup.type_generics.is_empty() {
                 new_lookup.type_generics = parent_lookup.type_generics;
             }
             parent_type = Some(parent);
@@ -228,6 +236,17 @@ where
                     method_generics: generics.method_generics.clone(),
                 };
             }
+        }
+
+        if is_interface && base_method.body().is_some() {
+            self.caches.record_vmt_key_clones(3);
+            self.caches.set_vmt_cached(
+                base_method.clone(),
+                this_type.clone(),
+                generics.clone(),
+                base_method.clone(),
+            );
+            return Ok(base_method);
         }
 
         Err(TypeResolutionError::MethodNotFound(
@@ -402,6 +421,12 @@ where
         // runtime type being searched (e.g., IteratorSelectIterator<TSource,TResult>).
         let signature_lookup = method_for_lookup.parent_generics.clone();
 
+        let is_public_implicit_impl = |candidate: &MethodDescription| {
+            candidate.method().accessibility == MemberAccessibility::Access(Accessibility::Public)
+        };
+
+        // Exact signature matches are preferred for implicit interface implementation.
+        // This preserves the expected precedence where exact public implementations beat DIM.
         if let Some(this_method) = self.loader.find_method_in_type_internal(
             this_type.clone(),
             &method.method().name,
@@ -409,8 +434,41 @@ where
             method.resolution(),
             Some(&signature_lookup),
             Some(generics),
-            allow_variance,
+            false,
         ) {
+            if allow_variance && !is_public_implicit_impl(&this_method) {
+                return Ok(None);
+            }
+
+            self.caches.record_vmt_key_clones(3);
+            self.caches
+                .set_vmt_cached(method, this_type, generics.clone(), this_method.clone());
+            return Ok(Some(this_method));
+        }
+
+        // If the interface declaration provides a default body (DIM), do not let
+        // variance-only public wrappers shadow it. Those wrappers can recursively
+        // delegate back to the interface callvirt (EF `EntityType.FindNavigation`).
+        // Explicit MethodImpl mappings above remain authoritative.
+        if allow_variance && method.body().is_some() {
+            return Ok(None);
+        }
+
+        if allow_variance
+            && let Some(this_method) = self.loader.find_method_in_type_internal(
+                this_type.clone(),
+                &method.method().name,
+                method.signature(),
+                method.resolution(),
+                Some(&signature_lookup),
+                Some(generics),
+                true,
+            )
+        {
+            if !is_public_implicit_impl(&this_method) {
+                return Ok(None);
+            }
+
             self.caches.record_vmt_key_clones(3);
             self.caches
                 .set_vmt_cached(method, this_type, generics.clone(), this_method.clone());
