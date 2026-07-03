@@ -6,7 +6,8 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef, Vector},
 };
 use dotnet_vm_ops::{
-    NULL_REF_MSG, StepResult,
+    StepResult,
+    intrinsic_args::{ArgPolicy, apply_object_policy, expect_stack_object, pop_object_ref},
     ops::{EvalStackOps, ExceptionOps, MemoryOps, TypedStackOps},
 };
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
@@ -47,9 +48,12 @@ pub fn intrinsic_array_get_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj();
-    let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let obj = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let heap = handle.borrow();
@@ -68,9 +72,12 @@ pub fn intrinsic_array_get_rank<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj();
-    let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let obj = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let heap = handle.borrow();
@@ -90,9 +97,12 @@ pub fn intrinsic_array_get_lower_bound<'gc, T: TypedStackOps<'gc> + ExceptionOps
     _generics: &GenericLookup,
 ) -> StepResult {
     let dimension = ctx.pop_i32();
-    let obj = ctx.pop_obj();
-    let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let obj = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let heap = handle.borrow();
@@ -118,9 +128,12 @@ pub fn intrinsic_array_get_upper_bound<'gc, T: TypedStackOps<'gc> + ExceptionOps
     _generics: &GenericLookup,
 ) -> StepResult {
     let dimension = ctx.pop_i32();
-    let obj = ctx.pop_obj();
-    let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let obj = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let heap = handle.borrow();
@@ -150,8 +163,16 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     // Handles GetValue(int), GetValue(long), and GetValue(params int[]) overloads.
     let arg = ctx.pop();
     let this_val = ctx.pop();
-    let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let this_obj = match expect_stack_object(&this_val, "array object reference") {
+        Ok(obj) => obj,
+        Err(_) => ObjectRef(None),
+    };
+    let this_obj = match apply_object_policy(ctx, this_obj, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = this_obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let index = match arg {
@@ -203,8 +224,16 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
     let value = ctx.pop();
     let this_val = ctx.pop();
 
-    let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+    let this_obj = match expect_stack_object(&this_val, "array object reference") {
+        Ok(obj) => obj,
+        Err(_) => ObjectRef(None),
+    };
+    let this_obj = match apply_object_policy(ctx, this_obj, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = this_obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
     };
 
     let index = match index_arg {

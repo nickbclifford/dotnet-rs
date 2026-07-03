@@ -27,7 +27,6 @@ use dotnet_types::{
 };
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::{MethodInfo, StepResult};
-use dotnet_vm_ops::NULL_REF_MSG;
 
 pub mod helpers;
 pub mod invoke;

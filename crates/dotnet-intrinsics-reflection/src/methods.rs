@@ -2,7 +2,6 @@ use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
-    error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete},
@@ -14,6 +13,7 @@ use dotnet_value::{
     object::{CTSValue, HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
@@ -342,10 +342,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let type_arg_refs = dotnet_vm_ops::vm_try!(type_args_obj.try_as_vector(
                 |v: &dotnet_value::object::Vector<'gc>| {
-                    v.get()
-                        .chunks_exact(ObjectRef::SIZE)
-                        .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
-                        .collect::<Vec<_>>()
+                    v.object_ref_elements(&gc).collect::<Vec<_>>()
                 }
             ));
 
@@ -659,12 +656,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     match param_type {
         ParameterType::TypedReference => {
             if arg.0.is_none() {
-                return Err(StepResult::Error(VmError::Execution(
-                    ExecutionError::TypeMismatch {
-                        expected: "boxed System.TypedReference",
-                        actual: "null".into(),
-                    },
-                )));
+                return Err(type_mismatch("boxed System.TypedReference", "null"));
             }
 
             let val = match arg.as_heap_storage(|s| {
@@ -681,12 +673,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }) {
                 Ok(v) => v,
                 Err(actual) => {
-                    return Err(StepResult::Error(VmError::Execution(
-                        ExecutionError::TypeMismatch {
-                            expected: "boxed System.TypedReference",
-                            actual: actual.into(),
-                        },
-                    )));
+                    return Err(type_mismatch("boxed System.TypedReference", actual));
                 }
             };
 
@@ -725,12 +712,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     }) {
                         Ok(v) => v,
                         Err(actual) => {
-                            return Err(StepResult::Error(VmError::Execution(
-                                ExecutionError::TypeMismatch {
-                                    expected: "boxed value",
-                                    actual: actual.into(),
-                                },
-                            )));
+                            return Err(type_mismatch("boxed value", actual));
                         }
                     };
 
@@ -762,20 +744,15 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }) {
             Ok(v) => v,
             Err(actual) => {
-                return Err(StepResult::Error(VmError::Execution(
-                    ExecutionError::TypeMismatch {
-                        expected: "object[]",
-                        actual: actual.into(),
-                    },
-                )));
+                return Err(type_mismatch("object[]", actual));
             }
         };
 
+        let mut elements = vector.object_ref_elements(gc);
         for i in 0..vector.layout.length {
-            let mut element_bytes = [0u8; ObjectRef::SIZE];
-            element_bytes
-                .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
-            let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
+            let arg_obj = elements
+                .next()
+                .expect("invoke parameters storage must match vector length");
             let param_type = &method.signature().parameters[i].1;
             let arg = unbox_param_to_stack_value(ctx, arg_obj, method, param_type, lookup, i)?;
             args.push(arg);

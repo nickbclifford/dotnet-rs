@@ -694,7 +694,7 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let span = ctx.pop_managed_ptr();
 
-    let element_type = &generics.type_generics[0];
+    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
     let element_desc =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 

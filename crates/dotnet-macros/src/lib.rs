@@ -15,6 +15,11 @@ use std::{
 };
 use syn::{ItemFn, LitStr, parse_macro_input};
 
+/// Returns the `BaseType` discriminator used by generated intrinsic filters.
+///
+/// This intentionally only recognizes primitive/base-shape aliases that can be
+/// matched directly from signature metadata. More complex shapes (arrays,
+/// generics, refs, user types, etc.) are left to runtime intrinsic handlers.
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
         "bool" | "Boolean" | "System.Boolean" => Some(quote! { BaseType::<MethodType>::Boolean }),
@@ -41,18 +46,10 @@ fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     }
 }
 
-#[proc_macro_attribute]
-pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr_str = parse_macro_input!(attr as LitStr);
-    let func = parse_macro_input!(item as ItemFn);
-    let func_name = &func.sig.ident;
-
-    let sig_str = attr_str.value();
-    let parsed: ParsedSignature = match syn::parse_str(&sig_str) {
-        Ok(s) => s,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
+fn generate_intrinsic_filter_fn(
+    func_name: &syn::Ident,
+    parsed: &ParsedSignature,
+) -> proc_macro2::TokenStream {
     // Reconstruct normalized signature string
     // Format: "ReturnType ClassName::MethodName(Param1, Param2)"
     let params_str = parsed.parameters.join(", ");
@@ -95,6 +92,9 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         } else {
+            // Validation boundary: non-primitive signature shapes intentionally
+            // do not emit macro-level checks. Intrinsic handlers/runtime helpers
+            // own null/type/generic/byref validation for those arguments.
             quote! {}
         }
     });
@@ -104,12 +104,27 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
         func_name.span(),
     );
 
-    let filter_fn = quote! {
+    quote! {
         pub fn #filter_name(method: &dotnet_types::members::MethodDescription) -> bool {
             #(#param_checks)*
             true
         }
+    }
+}
+
+#[proc_macro_attribute]
+pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr_str = parse_macro_input!(attr as LitStr);
+    let func = parse_macro_input!(item as ItemFn);
+    let func_name = &func.sig.ident;
+
+    let sig_str = attr_str.value();
+    let parsed: ParsedSignature = match syn::parse_str(&sig_str) {
+        Ok(s) => s,
+        Err(e) => return e.to_compile_error().into(),
     };
+
+    let filter_fn = generate_intrinsic_filter_fn(func_name, &parsed);
 
     let output = quote! {
         #func
@@ -161,6 +176,49 @@ mod tests {
     use super::*;
     use dotnet_macros_core::FieldMapping;
     use syn::{Ident, punctuated::Punctuated};
+
+    fn expand_intrinsic_to_file(signature: &str, handler_name: &str) -> syn::File {
+        let parsed: ParsedSignature =
+            syn::parse_str(signature).expect("signature should parse for intrinsic test");
+        let ident = Ident::new(handler_name, proc_macro2::Span::call_site());
+        let handler_fn: ItemFn = syn::parse_quote! {
+            fn #ident() {}
+        };
+        let filter_fn = generate_intrinsic_filter_fn(&ident, &parsed);
+
+        syn::parse2(quote! {
+            #handler_fn
+            #filter_fn
+        })
+        .expect("generated intrinsic expansion should parse as a file")
+    }
+
+    fn find_filter_fn<'a>(file: &'a syn::File, handler_name: &str) -> &'a syn::ItemFn {
+        let filter_prefix = format!("{}_filter_", handler_name);
+        file.items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(function)
+                    if function.sig.ident.to_string().starts_with(&filter_prefix) =>
+                {
+                    Some(function)
+                }
+                _ => None,
+            })
+            .expect("expanded intrinsic should contain generated filter function")
+    }
+
+    fn assert_filter_tail_is_true(filter: &syn::ItemFn) {
+        match filter.block.stmts.last() {
+            Some(syn::Stmt::Expr(syn::Expr::Lit(expr), _)) => match &expr.lit {
+                syn::Lit::Bool(value) => {
+                    assert!(value.value, "filter tail should evaluate to true")
+                }
+                _ => panic!("expected filter tail literal to be a bool"),
+            },
+            _ => panic!("expected filter tail statement to be a literal expression"),
+        }
+    }
 
     #[test]
     fn test_parse_instruction_mapping() {
@@ -251,5 +309,39 @@ mod tests {
             Instruction::LoadField { param0: p0, .. } => my_func(ctx, *p0)
         };
         assert_eq!(arm.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn intrinsic_filter_checks_only_primitive_parameter_shapes() {
+        let file = expand_intrinsic_to_file(
+            "static void DotnetRs.MacroBoundary::Mixed(int, T, T[], T&)",
+            "mixed_boundary_handler",
+        );
+        let filter = find_filter_fn(&file, "mixed_boundary_handler");
+
+        // One primitive parameter (`int`) emits one check block, and the rest are
+        // intentionally left to runtime handler validation.
+        assert_eq!(
+            filter.block.stmts.len(),
+            2,
+            "expected one generated primitive check plus final true tail"
+        );
+        assert_filter_tail_is_true(filter);
+    }
+
+    #[test]
+    fn intrinsic_filter_is_true_only_when_all_parameters_are_non_primitive_shapes() {
+        let file = expand_intrinsic_to_file(
+            "static void DotnetRs.MacroBoundary::NonPrimitiveOnly(T, T[], T&, System.Type)",
+            "non_primitive_boundary_handler",
+        );
+        let filter = find_filter_fn(&file, "non_primitive_boundary_handler");
+
+        assert_eq!(
+            filter.block.stmts.len(),
+            1,
+            "non-primitive signature shapes should not emit macro checks"
+        );
+        assert_filter_tail_is_true(filter);
     }
 }

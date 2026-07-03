@@ -285,6 +285,43 @@ impl GenericLookup {
         }
     }
 
+    /// Returns a bounded reference to a type generic argument.
+    ///
+    /// Use this when the generic slot comes from metadata/runtime binding. If the slot is
+    /// malformed or missing, this returns `TypeResolutionError::GenericIndexOutOfBounds`
+    /// instead of panicking, preserving the host-error (`VmError`) path at callers.
+    pub fn type_arg(&self, index: usize) -> Result<&ConcreteType, TypeResolutionError> {
+        Self::bounded_generic_arg(&self.type_generics, index)
+    }
+
+    pub fn cloned_type_arg(&self, index: usize) -> Result<ConcreteType, TypeResolutionError> {
+        self.type_arg(index).cloned()
+    }
+
+    /// Returns a bounded reference to a method generic argument.
+    ///
+    /// Like `type_arg`, this accessor classifies out-of-bounds generic slots as
+    /// `TypeResolutionError::GenericIndexOutOfBounds` rather than a panic.
+    pub fn method_arg(&self, index: usize) -> Result<&ConcreteType, TypeResolutionError> {
+        Self::bounded_generic_arg(&self.method_generics, index)
+    }
+
+    pub fn cloned_method_arg(&self, index: usize) -> Result<ConcreteType, TypeResolutionError> {
+        self.method_arg(index).cloned()
+    }
+
+    fn bounded_generic_arg(
+        generics: &[ConcreteType],
+        index: usize,
+    ) -> Result<&ConcreteType, TypeResolutionError> {
+        generics
+            .get(index)
+            .ok_or(TypeResolutionError::GenericIndexOutOfBounds {
+                index,
+                length: generics.len(),
+            })
+    }
+
     fn lookup_method_generic_with_fallback_indices(&self, i: usize) -> Option<ConcreteType> {
         let type_arity = self.type_generics.len();
         let method_arity = self.method_generics.len();
@@ -1024,5 +1061,62 @@ impl Debug for GenericLookup {
                     .map(|(i, t)| (GenericIndexFormatter('M', i), t)),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod generic_lookup_arg_tests {
+    use super::*;
+
+    fn sample_type() -> ConcreteType {
+        ConcreteType::new(ResolutionS::NULL, BaseType::Int32)
+    }
+
+    fn sample_method_type() -> ConcreteType {
+        ConcreteType::new(ResolutionS::NULL, BaseType::UInt32)
+    }
+
+    #[test]
+    fn type_arg_returns_requested_slot() {
+        let ty = sample_type();
+        let lookup = GenericLookup {
+            type_generics: vec![ty.clone()].into(),
+            method_generics: Arc::new([]),
+        };
+
+        assert_eq!(lookup.type_arg(0), Ok(&ty));
+        assert_eq!(lookup.cloned_type_arg(0), Ok(ty));
+    }
+
+    #[test]
+    fn method_arg_returns_requested_slot() {
+        let ty = sample_method_type();
+        let lookup = GenericLookup {
+            type_generics: Arc::new([]),
+            method_generics: vec![ty.clone()].into(),
+        };
+
+        assert_eq!(lookup.method_arg(0), Ok(&ty));
+        assert_eq!(lookup.cloned_method_arg(0), Ok(ty));
+    }
+
+    #[test]
+    fn bounded_accessors_return_generic_index_out_of_bounds() {
+        let lookup = GenericLookup::default();
+
+        assert_eq!(
+            lookup.type_arg(0),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 0,
+                length: 0,
+            })
+        );
+        assert_eq!(
+            lookup.method_arg(1),
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 1,
+                length: 0,
+            })
+        );
     }
 }

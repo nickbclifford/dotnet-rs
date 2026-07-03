@@ -7,6 +7,7 @@
 //! Compatibility re-exports remain here for downstream crates.
 //! This crate is intentionally separate from `dotnet-vm-data` to allow downstream
 //! crates to depend on operation traits without pulling in any VM data structures.
+pub mod intrinsic_args;
 mod macros;
 pub mod ops;
 

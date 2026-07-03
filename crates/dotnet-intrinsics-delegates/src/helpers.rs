@@ -148,15 +148,13 @@ pub(super) fn get_invocation_list<'gc, T: LoaderOps + ResolutionOps<'gc> + Memor
 ) -> Vec<ObjectRef<'gc>> {
     if let Some(targets_ref) = get_multicast_targets_ref(ctx, obj) {
         targets_ref.as_vector(|v| {
-            let len = v.layout.length;
-            let mut result = Vec::with_capacity(len);
-            for i in 0..len {
-                let entry = unsafe {
-                    ObjectRef::read_branded(
-                        &v.get()[i * ObjectRef::SIZE..],
-                        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                    )
-                };
+            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+            let mut elements = v.object_ref_elements(&gc);
+            let mut result = Vec::with_capacity(v.layout.length);
+            for _ in 0..v.layout.length {
+                let entry = elements
+                    .next()
+                    .expect("multicast invocation list storage must match vector length");
                 result.push(entry);
             }
             result

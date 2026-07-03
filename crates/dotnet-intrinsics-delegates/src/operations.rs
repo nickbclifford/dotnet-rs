@@ -2,7 +2,7 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{DelegateInvokeHost, NULL_REF_MSG, helpers::*};
+use crate::{DelegateInvokeHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -14,6 +14,7 @@ use dotnet_value::{
 };
 use dotnet_vm_ops::{
     StepResult,
+    intrinsic_args::{ArgPolicy, pop_object_ref},
     ops::{
         EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps,
         TypedStackOps,
@@ -36,11 +37,11 @@ fn read_invocation_list_delegate<'gc, T: MemoryOps<'gc>>(
     invocation_list: ObjectRef<'gc>,
     index: usize,
 ) -> ObjectRef<'gc> {
-    invocation_list.as_vector(|v| unsafe {
-        ObjectRef::read_branded(
-            &v.get()[index * ObjectRef::SIZE..],
-            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        )
+    invocation_list.as_vector(|v| {
+        let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+        v.object_ref_elements(&gc)
+            .nth(index)
+            .expect("invocation list index must be in bounds")
     })
 }
 
@@ -61,9 +62,7 @@ fn push_delegate_with_invocation_list<'gc, T: DelegateEqualsHost<'gc>>(
     ctx.register_new_object(&array_obj);
 
     array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
-        for (i, &el) in invocation_list.iter().enumerate() {
-            el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-        }
+        v.write_object_ref_elements_mut(invocation_list);
     });
 
     let multicast_type =
@@ -89,10 +88,10 @@ pub fn delegate_get_target<'gc, T: DelegateEqualsHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj();
-    if this.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let this = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(this) => this,
+        Err(step) => return step,
+    };
 
     let target = this.as_object(|instance| {
         let delegate_type = ctx
@@ -116,10 +115,10 @@ pub fn delegate_get_method<'gc, T: DelegateEqualsHost<'gc> + DelegateInvokeHost<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj();
-    if this.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let this = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(this) => this,
+        Err(step) => return step,
+    };
 
     let method_index = this.as_object(|instance| {
         let delegate_type = ctx
@@ -147,11 +146,10 @@ pub fn delegate_equals<'gc, T: DelegateEqualsHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let other_val = ctx.pop();
-    let this_obj = ctx.pop_obj();
-
-    if this_obj.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let this_obj = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(this_obj) => this_obj,
+        Err(step) => return step,
+    };
 
     let other_obj = match other_val {
         StackValue::ObjectRef(obj) => obj,
@@ -232,10 +230,10 @@ pub fn delegate_get_hash_code<'gc, T: DelegateEqualsHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj();
-    if this.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
+    let this = match pop_object_ref(ctx, ArgPolicy::ManagedNullNre) {
+        Ok(this) => this,
+        Err(step) => return step,
+    };
 
     let (target, index) = get_delegate_info(ctx, this);
     let mut hash = index as i32;

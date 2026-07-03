@@ -56,7 +56,7 @@ pub fn intrinsic_equality_comparer_get_default<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_type = generics.type_generics[0].clone();
+    let target_type = dotnet_vm_ops::vm_try!(generics.cloned_type_arg(0));
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,
@@ -74,7 +74,7 @@ pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + Typed
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_type = generics.type_generics[0].clone();
+    let target_type = dotnet_vm_ops::vm_try!(generics.cloned_type_arg(0));
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,

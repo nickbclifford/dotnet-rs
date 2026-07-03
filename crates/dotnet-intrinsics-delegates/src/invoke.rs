@@ -3,18 +3,15 @@
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
 use crate::{
-    DelegateInvokeHost, NULL_REF_MSG,
+    DelegateInvokeHost,
     helpers::{get_delegate_info, get_multicast_targets_ref},
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{
-    error::{ExecutionError, VmError},
-    generics::GenericLookup,
-    members::MethodDescription,
-};
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_value::StackValue;
 use dotnet_vm_ops::{
     MulticastState, StepResult,
+    intrinsic_args::{ArgPolicy, expect_stack_object_with_policy},
     ops::{DelegateIntrinsicHost, ExceptionOps},
 };
 
@@ -29,22 +26,18 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     // pop_multiple returns them in order they were on stack.
     let args = ctx.pop_multiple(num_invoke_args + 1);
 
-    let delegate_ref = match &args[0] {
-        StackValue::ObjectRef(r) => r,
-        actual => {
-            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "delegate object reference",
-                actual: format!("{actual:?}").into(),
-            }));
-        }
+    let delegate_ref = match expect_stack_object_with_policy(
+        ctx,
+        &args[0],
+        "delegate object reference",
+        ArgPolicy::ManagedNullNre,
+    ) {
+        Ok(delegate_ref) => delegate_ref,
+        Err(step) => return step,
     };
 
-    if delegate_ref.0.is_none() {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
-    }
-
     // Check for multicast targets
-    let multicast_targets = if let Some(targets_ref) = get_multicast_targets_ref(ctx, *delegate_ref)
+    let multicast_targets = if let Some(targets_ref) = get_multicast_targets_ref(ctx, delegate_ref)
     {
         let targets_len = targets_ref.as_vector(|v| v.layout.length);
         if targets_len > 1 {
@@ -52,15 +45,12 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
         } else {
             // If len == 1, check if it's not 'this'
             let first_target = targets_ref.as_vector(|v| {
-                let offset = 0;
-                unsafe {
-                    ObjectRef::read_branded(
-                        &v.get()[offset..],
-                        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                    )
-                }
+                let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+                v.object_ref_elements(&gc)
+                    .next()
+                    .expect("multicast targets vector must contain first element")
             });
-            if first_target != *delegate_ref {
+            if first_target != delegate_ref {
                 Some(targets_ref.0.unwrap())
             } else {
                 None
@@ -91,7 +81,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
         return StepResult::FramePushed;
     }
 
-    let (target, method_index) = get_delegate_info(ctx, *delegate_ref);
+    let (target, method_index) = get_delegate_info(ctx, delegate_ref);
 
     // Look up the actual method from the registry
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);

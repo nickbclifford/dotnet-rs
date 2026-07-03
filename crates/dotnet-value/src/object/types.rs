@@ -12,7 +12,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
 };
 use dotnet_utils::DebugStr;
-use gc_arena::{Collect, collect::Trace};
+use gc_arena::{Collect, Mutation, collect::Trace};
 use std::{
     collections::HashSet,
     fmt::{self, Debug, Formatter},
@@ -302,6 +302,52 @@ impl<'gc> Vector<'gc> {
         &mut self.storage
     }
 
+    /// Iterates this vector's bytes as serialized [`super::ObjectRef`] elements.
+    ///
+    /// The iterator advances in `ObjectRef::SIZE` chunks and brands each element
+    /// with the supplied GC mutation context.
+    ///
+    /// # Invariants
+    ///
+    /// This helper is only valid for vectors whose element layout is object
+    /// references. Consume it inside the current `as_vector` borrow scope so the
+    /// branded references do not outlive the active GC handle.
+    pub fn object_ref_elements<'a>(
+        &'a self,
+        gc: &'a Mutation<'gc>,
+    ) -> impl ExactSizeIterator<Item = super::ObjectRef<'gc>> + 'a {
+        self.validate_magic();
+        let chunks = self.storage.chunks_exact(super::ObjectRef::SIZE);
+        debug_assert!(chunks.remainder().is_empty());
+        chunks.map(move |chunk| unsafe { super::ObjectRef::read_branded(chunk, gc) })
+    }
+
+    /// Writes serialized object-reference elements into this vector in order.
+    ///
+    /// Uses `ObjectRef::SIZE` stride centrally so callers do not repeat manual
+    /// offset arithmetic.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `elements` contains more entries than this vector can store.
+    pub fn write_object_ref_elements_mut(&mut self, elements: &[super::ObjectRef<'gc>]) {
+        self.validate_magic();
+        debug_assert_eq!(self.storage.len() % super::ObjectRef::SIZE, 0);
+        let mut chunks = self.storage.chunks_exact_mut(super::ObjectRef::SIZE);
+        let vector_len = self.layout.length;
+
+        for element in elements {
+            let chunk = chunks.next().unwrap_or_else(|| {
+                panic!(
+                    "write_object_ref_elements_mut received {} elements for vector length {}",
+                    elements.len(),
+                    vector_len
+                )
+            });
+            element.write(chunk);
+        }
+    }
+
     /// Returns a pointer to the raw data without taking a field access guard.
     ///
     /// # Safety
@@ -487,5 +533,68 @@ impl Debug for Object<'_> {
                 self.instance_storage.with_data(|d| d.as_ptr())
             )))
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod vector_object_ref_tests {
+    use super::*;
+    use crate::{
+        layout::{ArrayLayoutManager, LayoutManager, Scalar},
+        object::{HeapStorage, ObjectRef},
+        test_helpers::with_test_gc_context,
+    };
+    use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
+    use dotnetdll::prelude::BaseType;
+
+    fn object_ref_vector<'gc>(length: usize, fill_byte: u8) -> Vector<'gc> {
+        Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::Object),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
+                length,
+            },
+            vec![fill_byte; length * ObjectRef::SIZE],
+            vec![length],
+        )
+    }
+
+    fn collect_object_ref_elements<'gc>(
+        vector: &Vector<'gc>,
+        gc: &Mutation<'gc>,
+    ) -> Vec<ObjectRef<'gc>> {
+        vector.object_ref_elements(gc).collect()
+    }
+
+    #[test]
+    fn object_ref_elements_reads_pointer_sized_stride_with_gc_branding() {
+        with_test_gc_context(|gc| {
+            let first = ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("a")));
+            let second = ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("b")));
+            let mut vector = object_ref_vector(3, 0);
+
+            vector.write_object_ref_elements_mut(&[first, ObjectRef(None), second]);
+
+            let collected = collect_object_ref_elements(&vector, &gc);
+            assert_eq!(collected, vec![first, ObjectRef(None), second]);
+        });
+    }
+
+    #[test]
+    fn write_object_ref_elements_mut_uses_pointer_stride_and_preserves_tail() {
+        with_test_gc_context(|gc| {
+            let first = ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("x")));
+            let second = ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("y")));
+            let mut vector = object_ref_vector(3, 0x01);
+
+            vector.write_object_ref_elements_mut(&[first, second]);
+
+            let mut iter = vector.object_ref_elements(&gc);
+            assert_eq!(iter.next(), Some(first));
+            assert_eq!(iter.next(), Some(second));
+
+            let tail = &vector.get()[2 * ObjectRef::SIZE..3 * ObjectRef::SIZE];
+            assert_eq!(tail, &[0x01; ObjectRef::SIZE]);
+        });
     }
 }
