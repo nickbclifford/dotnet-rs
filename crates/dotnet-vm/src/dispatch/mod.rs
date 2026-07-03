@@ -5,13 +5,13 @@
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
     ExceptionState, ResolutionContext, StackSlotIndex, StepResult,
-    error::ExecutionError,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
-use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
+use dotnet_value::{layout::HasLayout, object::ObjectRef};
+use dotnet_vm_ops::prepared_call::PreparedCall;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
 use std::sync::OnceLock;
@@ -45,49 +45,6 @@ fn invalid_ip_step_result(ip: usize) -> StepResult {
     StepResult::Error(crate::error::VmError::Execution(
         crate::error::ExecutionError::InvalidIP(ip),
     ))
-}
-
-#[cold]
-#[inline(never)]
-fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
-    StepResult::Error(
-        ExecutionError::NotImplemented(format!("intrinsic not found: {:?}", method).into()).into(),
-    )
-}
-
-#[cold]
-#[inline(never)]
-fn no_body_in_method_step_result(method: &MethodDescription) -> StepResult {
-    StepResult::Error(
-        ExecutionError::NotImplemented(
-            format!(
-                "no body in executing method: {}.{}",
-                method.parent.type_name(),
-                method.method().name
-            )
-            .into(),
-        )
-        .into(),
-    )
-}
-
-fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
-    ctx: &mut T,
-    method: &MethodDescription,
-) -> Option<StepResult> {
-    if method.parent.type_name() == "System.Dynamic.Utils.DelegateHelpers"
-        && method.method().name.as_ref()
-            == "<CreateObjectArrayDelegateRefEmit>g__ForceAllowDynamicCode|19_1"
-    {
-        // This method is a compiler-generated UnsafeAccessor extern with no IL body.
-        // dotnet-rs doesn't support DynamicMethod emission, so treat ForceAllowDynamicCode
-        // scope creation as a no-op and return null IDisposable.
-        let _ = ctx.pop();
-        ctx.push(StackValue::ObjectRef(ObjectRef(None)));
-        return Some(StepResult::Continue);
-    }
-
-    None
 }
 
 fn dispatch_safe_point_poll_interval() -> usize {
@@ -349,45 +306,7 @@ impl<'gc> ExecutionEngine<'gc> {
             method.method().pinvoke,
             method.method().internal_call
         );
-        // Instrumented benchmarks for current workloads report intrinsic_call_total=0, so this
-        // branch is expected to be cold on the measured hot path.
-        if vm_unlikely!(ctx.is_intrinsic_cached(method.clone())) {
-            crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
-        } else if method.method().pinvoke.is_some() {
-            let shared = ctx.shared().clone();
-            dotnet_pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
-        } else {
-            if method.method().internal_call {
-                return intrinsic_not_found_step_result(&method);
-            }
-
-            if method.body().is_none() {
-                if let Some(result) = try_no_body_runtime_stub(&mut ctx, &method) {
-                    return result;
-                }
-
-                if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
-                    &mut ctx,
-                    method.clone(),
-                    &lookup,
-                ) {
-                    return result;
-                }
-
-                return no_body_in_method_step_result(&method);
-            }
-
-            let info = dotnet_vm_ops::vm_try!(ctx.shared().caches.get_method_info(
-                method,
-                &lookup,
-                ctx.shared().clone()
-            ));
-            if let Some(err) = ctx.managed_frame_abort_error(&info) {
-                return StepResult::Error(err);
-            }
-            dotnet_vm_ops::vm_try!(ctx.call_frame(info, lookup));
-            StepResult::FramePushed
-        }
+        ctx.dispatch_resolved_method_for_engine_api(method, lookup)
     }
 
     fn handle_multicast_step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -428,11 +347,6 @@ impl<'gc> ExecutionEngine<'gc> {
         };
 
         if let Some(target_delegate) = target_delegate {
-            ctx.push(StackValue::ObjectRef(target_delegate));
-            for arg in args {
-                ctx.push(arg);
-            }
-
             let invoke_method = ctx
                 .frame_stack
                 .current_frame()
@@ -441,6 +355,11 @@ impl<'gc> ExecutionEngine<'gc> {
                 .source
                 .clone();
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
+
+            let prepared_call =
+                PreparedCall::for_multicast_step(invoke_method, lookup, target_delegate, args);
+            let call_target = prepared_call.push_arguments(&mut ctx);
+            let (invoke_method, lookup) = call_target.into_parts();
 
             ctx.dispatch_method(invoke_method, lookup)
         } else {

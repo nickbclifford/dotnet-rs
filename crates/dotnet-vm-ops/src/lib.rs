@@ -10,6 +10,7 @@
 pub mod intrinsic_args;
 mod macros;
 pub mod ops;
+pub mod prepared_call;
 
 pub const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 

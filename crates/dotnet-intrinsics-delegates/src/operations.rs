@@ -65,18 +65,7 @@ fn push_delegate_with_invocation_list<'gc, T: DelegateEqualsHost<'gc>>(
         v.write_object_ref_elements_mut(invocation_list);
     });
 
-    let multicast_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-    new_delegate.as_object_mut(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        |instance| {
-            array_obj.write(
-                &mut instance
-                    .instance_storage
-                    .get_field_mut_local(multicast_type, "targets"),
-            );
-        },
-    );
+    DelegateViewMut::new(ctx, new_delegate).set_multicast_targets(array_obj);
 
     ctx.push_obj(new_delegate);
     StepResult::Continue
@@ -93,17 +82,7 @@ pub fn delegate_get_target<'gc, T: DelegateEqualsHost<'gc>>(
         Err(step) => return step,
     };
 
-    let target = this.as_object(|instance| {
-        let delegate_type = ctx
-            .loader()
-            .corlib_type("System.Delegate")
-            .expect("System.Delegate must exist");
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(delegate_type, "_target")
-            .unwrap()
-            .read()
-    });
+    let target = DelegateView::new(ctx, this).target();
 
     ctx.push_obj(target);
     StepResult::Continue
@@ -120,17 +99,7 @@ pub fn delegate_get_method<'gc, T: DelegateEqualsHost<'gc> + DelegateInvokeHost<
         Err(step) => return step,
     };
 
-    let method_index = this.as_object(|instance| {
-        let delegate_type = ctx
-            .loader()
-            .corlib_type("System.Delegate")
-            .expect("System.Delegate must exist");
-        instance
-            .instance_storage
-            .field::<usize>(delegate_type, "_method")
-            .unwrap()
-            .read()
-    });
+    let method_index = DelegateView::new(ctx, this).method_index();
 
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
     let method_obj = ctx.delegate_runtime_method_obj(target_method, target_lookup);

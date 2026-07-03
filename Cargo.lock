@@ -454,6 +454,7 @@ name = "dotnet-intrinsics-reflection"
 version = "0.1.0"
 dependencies = [
  "dotnet-assemblies",
+ "dotnet-intrinsics-delegates",
  "dotnet-macros",
  "dotnet-types",
  "dotnet-utils",

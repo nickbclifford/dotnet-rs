@@ -1,4 +1,7 @@
 use crate::ReflectionIntrinsicHost;
+use dotnet_intrinsics_delegates::helpers::{
+    set_delegate_multicast_targets, set_delegate_target_method,
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
@@ -497,22 +500,8 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx.register_new_object(&delegate_ref);
 
     let method_index = ctx.reflection_runtime_method_index_get_or_insert(method, lookup);
+    set_delegate_target_method(ctx, delegate_ref, target_obj, method_index);
 
-    delegate_ref.as_object_mut(gc, |instance| {
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(delegate_base.clone(), "_target")
-            .unwrap()
-            .write(target_obj);
-        instance
-            .instance_storage
-            .field::<usize>(delegate_base.clone(), "_method")
-            .unwrap()
-            .write(method_index);
-    });
-
-    let multicast_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
     if is_type_or_ancestor_named(ctx, &delegate_td, "System.MulticastDelegate") {
         let mut targets =
             dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(delegate_base), 1));
@@ -520,13 +509,7 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
         let targets_ref = ObjectRef::new(gc, HeapStorage::Vec(Box::new(targets)));
         ctx.register_new_object(&targets_ref);
 
-        delegate_ref.as_object_mut(gc, |instance| {
-            instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(multicast_type.clone(), "targets")
-                .unwrap()
-                .write(targets_ref);
-        });
+        set_delegate_multicast_targets(ctx, delegate_ref, targets_ref);
     }
 
     ctx.push_obj(delegate_ref);

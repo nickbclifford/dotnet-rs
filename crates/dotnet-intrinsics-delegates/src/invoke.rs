@@ -8,11 +8,11 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_value::StackValue;
 use dotnet_vm_ops::{
     MulticastState, StepResult,
     intrinsic_args::{ArgPolicy, expect_stack_object_with_policy},
     ops::{DelegateIntrinsicHost, ExceptionOps},
+    prepared_call::PreparedCall,
 };
 
 pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
@@ -86,19 +86,14 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     // Look up the actual method from the registry
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
 
-    // Push arguments back onto stack.
-    // For closed static delegates created via MethodInfo.CreateDelegate(delegateType, target),
-    // `_target` is a bound first argument even though the target method is static.
-    if target_method.signature().instance || target.0.is_some() {
-        ctx.push(StackValue::ObjectRef(target));
-    }
+    let prepared_call =
+        PreparedCall::for_delegate_target(target_method, target_lookup, target, args[1..].to_vec());
 
-    for arg in &args[1..] {
-        ctx.push(arg.clone());
-    }
+    let call_target = prepared_call.push_arguments(ctx);
+    let (target_method, target_lookup) = call_target.into_parts();
 
     // Dispatch to the target method
-    ctx.delegate_dispatch_method(target_method, target_lookup.clone())
+    ctx.delegate_dispatch_method(target_method, target_lookup)
 }
 
 #[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]

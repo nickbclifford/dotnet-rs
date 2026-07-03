@@ -57,6 +57,17 @@ vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current 
 
 #[cold]
 #[inline(never)]
+fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
+    StepResult::Error(
+        crate::error::ExecutionError::NotImplemented(
+            format!("intrinsic not found: {:?}", method).into(),
+        )
+        .into(),
+    )
+}
+
+#[cold]
+#[inline(never)]
 fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
         crate::error::ExecutionError::NotImplemented(
@@ -140,6 +151,12 @@ fn try_redirect_expression_compile_to_interpreter(
                 None
             }
         })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResolvedMethodDispatchMode {
+    VmContext,
+    ExecutionEngineApi,
 }
 
 fn triage_call_sample_interval() -> Option<u64> {
@@ -487,50 +504,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             return self.dispatch_method(compile_bool_overload, lookup);
         }
 
-        let intrinsic_metadata = crate::intrinsics::classify_intrinsic(
-            method.clone(),
-            self.loader(),
-            Some(&self.shared.caches.intrinsic_registry),
-        );
-        // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
-        if vm_unlikely!(intrinsic_metadata.is_some()) {
-            let metadata = intrinsic_metadata.unwrap();
-            crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
-        } else if method.method().pinvoke.is_some() {
-            let shared = self.shared.clone();
-            dotnet_pinvoke::external_call(self, method, &shared.pinvoke)
-        } else {
-            if method.body().is_none() {
-                if let Some(result) = try_no_body_runtime_stub(self, &method) {
-                    return result;
-                }
-
-                if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
-                    self,
-                    method.clone(),
-                    &lookup,
-                ) {
-                    return result;
-                }
-
-                return no_body_in_executing_method_step_result(&method);
-            }
-
-            let info =
-                match self
-                    .shared
-                    .caches
-                    .get_method_info(method, &lookup, self.shared.clone())
-                {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-            if let Some(err) = self.managed_frame_abort_error(&info) {
-                return StepResult::Error(err);
-            }
-            dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
-            StepResult::FramePushed
-        }
+        self.dispatch_resolved_method(method, lookup)
     }
 
     #[inline]
@@ -615,6 +589,99 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         method: &MethodInfo<'static>,
     ) -> Option<crate::error::VmError> {
         managed_frame_abort(self, method)
+    }
+
+    pub(crate) fn dispatch_resolved_method(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_resolved_method_with_mode(
+            method,
+            lookup,
+            ResolvedMethodDispatchMode::VmContext,
+        )
+    }
+
+    pub(crate) fn dispatch_resolved_method_for_engine_api(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_resolved_method_with_mode(
+            method,
+            lookup,
+            ResolvedMethodDispatchMode::ExecutionEngineApi,
+        )
+    }
+
+    fn dispatch_resolved_method_with_mode(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+        mode: ResolvedMethodDispatchMode,
+    ) -> StepResult {
+        let intrinsic_metadata = crate::intrinsics::classify_intrinsic(
+            method.clone(),
+            self.loader(),
+            Some(&self.shared.caches.intrinsic_registry),
+        );
+        // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
+        if vm_unlikely!(intrinsic_metadata.is_some()) {
+            return match mode {
+                ResolvedMethodDispatchMode::VmContext => {
+                    let metadata = intrinsic_metadata.expect("intrinsic metadata must exist");
+                    crate::intrinsics::dispatch_method_intrinsic(
+                        metadata.handler,
+                        self,
+                        method,
+                        &lookup,
+                    )
+                }
+                ResolvedMethodDispatchMode::ExecutionEngineApi => {
+                    crate::intrinsics::intrinsic_call(self, method, &lookup)
+                }
+            };
+        }
+
+        if method.method().pinvoke.is_some() {
+            let shared = self.shared.clone();
+            return dotnet_pinvoke::external_call(self, method, &shared.pinvoke);
+        }
+
+        if method.body().is_none() {
+            if mode == ResolvedMethodDispatchMode::ExecutionEngineApi
+                && method.method().internal_call
+            {
+                return intrinsic_not_found_step_result(&method);
+            }
+
+            if let Some(result) = try_no_body_runtime_stub(self, &method) {
+                return result;
+            }
+
+            if let Some(result) =
+                dotnet_intrinsics_delegates::try_delegate_dispatch(self, method.clone(), &lookup)
+            {
+                return result;
+            }
+
+            return no_body_in_executing_method_step_result(&method);
+        }
+
+        let info = match self
+            .shared
+            .caches
+            .get_method_info(method, &lookup, self.shared.clone())
+        {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+        if let Some(err) = self.managed_frame_abort_error(&info) {
+            return StepResult::Error(err);
+        }
+        dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
+        StepResult::FramePushed
     }
 
     #[inline]
