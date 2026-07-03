@@ -16,6 +16,58 @@ pub struct TypeComparer<'a, R: TypeResolver> {
     assignability_in_progress: RefCell<HashSet<(ConcreteType, ConcreteType)>>,
 }
 
+#[derive(Clone, Copy)]
+enum TypeIdentityComparison {
+    CanonicalNameFallback,
+    DefinitionNameFallback,
+}
+
+#[derive(Clone, Copy)]
+enum TypeResolutionFailureBehavior {
+    ReturnFalse,
+    PanicOnFailure,
+    CompareResultsThenReturnFalse,
+}
+
+#[derive(Clone, Copy)]
+struct TypeComparisonPolicy {
+    type_identity: TypeIdentityComparison,
+    resolution_failure: TypeResolutionFailureBehavior,
+}
+
+impl TypeComparisonPolicy {
+    const TYPES_EQUAL: Self = Self {
+        type_identity: TypeIdentityComparison::CanonicalNameFallback,
+        resolution_failure: TypeResolutionFailureBehavior::ReturnFalse,
+    };
+
+    const CONCRETE_EQUALS_BASE_TYPE: Self = Self {
+        type_identity: TypeIdentityComparison::DefinitionNameFallback,
+        resolution_failure: TypeResolutionFailureBehavior::PanicOnFailure,
+    };
+
+    const CONCRETE_TYPES_EQUAL: Self = Self {
+        type_identity: TypeIdentityComparison::DefinitionNameFallback,
+        resolution_failure: TypeResolutionFailureBehavior::CompareResultsThenReturnFalse,
+    };
+}
+
+#[derive(Clone, Copy)]
+enum NormalizedTypeRef<'a> {
+    Method {
+        resolution: &'a ResolutionS,
+        ty: &'a MethodType,
+        generics: Option<&'a GenericLookup>,
+    },
+    Concrete(&'a ConcreteType),
+}
+
+#[derive(Clone, Copy)]
+enum SignatureCompareMode {
+    Invariant,
+    Variant,
+}
+
 impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     pub fn new(loader: &'a R) -> Self {
         Self {
@@ -54,120 +106,19 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
-        // Preserve identity of matching generic placeholders before any concrete substitution.
-        // If we substitute first, cross-resolution concrete equality can spuriously fail even
-        // when both signatures reference the same generic slot (e.g. T0 vs T0).
-        match (a, b) {
-            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) if i1 == i2 => {
-                return true;
-            }
-            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) if i1 == i2 => {
-                return true;
-            }
-            _ => {}
-        }
-
-        if let Some(concrete) = Self::resolve_generic_type(generics1, a) {
-            return self.concrete_equals_method_type(concrete, res2, b, generics2);
-        }
-
-        match (a, b) {
-            (MethodType::Base(l), MethodType::Base(r)) => match (l.as_ref(), r.as_ref()) {
-                (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
-                    let (ut1, generics1_list) = decompose_type_source(ts1);
-                    let (ut2, generics2_list) = decompose_type_source(ts2);
-                    let td1 = self.loader.locate_type(ResolutionS::clone(res1), ut1);
-                    let td2 = self.loader.locate_type(ResolutionS::clone(res2), ut2);
-                    let same_type = match (td1, td2) {
-                        (Ok(left), Ok(right)) => {
-                            let left_type_name = left.type_name();
-                            let right_type_name = right.type_name();
-                            left == right
-                                || (!left.is_null()
-                                    && !right.is_null()
-                                    && self.loader.canonical_type_name(&left_type_name)
-                                        == self.loader.canonical_type_name(&right_type_name))
-                        }
-                        _ => false,
-                    };
-
-                    same_type
-                        && self.type_slices_equal(
-                            res1,
-                            &generics1_list,
-                            generics1,
-                            res2,
-                            &generics2_list,
-                            generics2,
-                        )
-                }
-                (BaseType::Boolean, BaseType::Boolean) => true,
-                (BaseType::Char, BaseType::Char) => true,
-                (BaseType::Int8, BaseType::Int8) => true,
-                (BaseType::UInt8, BaseType::UInt8) => true,
-                (BaseType::Int16, BaseType::Int16) => true,
-                (BaseType::UInt16, BaseType::UInt16) => true,
-                (BaseType::Int32, BaseType::Int32) => true,
-                (BaseType::UInt32, BaseType::UInt32) => true,
-                (BaseType::Int64, BaseType::Int64) => true,
-                (BaseType::UInt64, BaseType::UInt64) => true,
-                (BaseType::Float32, BaseType::Float32) => true,
-                (BaseType::Float64, BaseType::Float64) => true,
-                (BaseType::IntPtr, BaseType::IntPtr) => true,
-                (BaseType::UIntPtr, BaseType::UIntPtr) => true,
-                (BaseType::Object, BaseType::Object) => true,
-                (BaseType::String, BaseType::String) => true,
-                (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
-                    self.types_equal(res1, l, generics1, res2, r, generics2)
-                }
-                (BaseType::Array(l, _), BaseType::Array(r, _)) => {
-                    self.types_equal(res1, l, generics1, res2, r, generics2)
-                }
-                (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
-                    match (l.as_ref(), r.as_ref()) {
-                        (None, None) => true,
-                        (Some(t1), Some(t2)) => {
-                            self.types_equal(res1, t1, generics1, res2, t2, generics2)
-                        }
-                        _ => false,
-                    }
-                }
-                // Function pointer signature comparison is not implemented yet.
-                // Conservatively treat funcptr types as not equal.
-                (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
-                _ => false,
+        self.normalized_types_equal(
+            NormalizedTypeRef::Method {
+                resolution: res1,
+                ty: a,
+                generics: generics1,
             },
-            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => {
-                if i1 == i2 {
-                    return true;
-                }
-                if let (Some(c1), Some(c2)) = (
-                    generics1.and_then(|g| g.type_generics.get(*i1)),
-                    generics2.and_then(|g| g.type_generics.get(*i2)),
-                ) {
-                    return c1 == c2;
-                }
-                false
-            }
-            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) => {
-                if i1 == i2 {
-                    return true;
-                }
-                if let (Some(c1), Some(c2)) = (
-                    generics1.and_then(|g| g.method_generics.get(*i1)),
-                    generics2.and_then(|g| g.method_generics.get(*i2)),
-                ) {
-                    return c1 == c2;
-                }
-                false
-            }
-            _ => {
-                if let Some(concrete) = Self::resolve_generic_type(generics2, b) {
-                    return self.concrete_equals_method_type(concrete, res1, a, generics1);
-                }
-                false
-            }
-        }
+            NormalizedTypeRef::Method {
+                resolution: res2,
+                ty: b,
+                generics: generics2,
+            },
+            TypeComparisonPolicy::TYPES_EQUAL,
+        )
     }
 
     fn resolve_generic_type<'g>(
@@ -179,6 +130,338 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             MethodType::TypeGeneric(idx) => generics.type_generics.get(*idx),
             MethodType::MethodGeneric(idx) => generics.method_generics.get(*idx),
             _ => None,
+        }
+    }
+
+    fn same_generic_placeholder(left: &MethodType, right: &MethodType) -> bool {
+        match (left, right) {
+            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) if i1 == i2 => true,
+            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) if i1 == i2 => true,
+            _ => false,
+        }
+    }
+
+    fn normalized_method_types_equal(
+        &self,
+        left_resolution: &ResolutionS,
+        left: &MethodType,
+        left_generics: Option<&GenericLookup>,
+        right_resolution: &ResolutionS,
+        right: &MethodType,
+        right_generics: Option<&GenericLookup>,
+        policy: TypeComparisonPolicy,
+    ) -> bool {
+        // Preserve identity of matching generic placeholders before any concrete substitution.
+        // If we substitute first, cross-resolution concrete equality can spuriously fail even
+        // when both signatures reference the same generic slot (e.g. T0 vs T0).
+        if Self::same_generic_placeholder(left, right) {
+            return true;
+        }
+
+        if let Some(concrete) = Self::resolve_generic_type(left_generics, left) {
+            return self.normalized_concrete_equals_method_type(
+                concrete,
+                right_resolution,
+                right,
+                right_generics,
+                policy,
+            );
+        }
+
+        if let Some(concrete) = Self::resolve_generic_type(right_generics, right) {
+            return self.normalized_concrete_equals_method_type(
+                concrete,
+                left_resolution,
+                left,
+                left_generics,
+                policy,
+            );
+        }
+
+        match (left, right) {
+            (MethodType::Base(left_base), MethodType::Base(right_base)) => self
+                .normalized_base_types_equal(
+                    ResolutionS::clone(left_resolution),
+                    left_base,
+                    ResolutionS::clone(right_resolution),
+                    right_base,
+                    policy,
+                    |left_child, right_child| {
+                        self.normalized_types_equal(
+                            NormalizedTypeRef::Method {
+                                resolution: left_resolution,
+                                ty: left_child,
+                                generics: left_generics,
+                            },
+                            NormalizedTypeRef::Method {
+                                resolution: right_resolution,
+                                ty: right_child,
+                                generics: right_generics,
+                            },
+                            policy,
+                        )
+                    },
+                ),
+            _ => false,
+        }
+    }
+
+    fn normalized_concrete_equals_method_type(
+        &self,
+        concrete: &ConcreteType,
+        method_resolution: &ResolutionS,
+        method_type: &MethodType,
+        method_generics: Option<&GenericLookup>,
+        policy: TypeComparisonPolicy,
+    ) -> bool {
+        if let Some(other) = Self::resolve_generic_type(method_generics, method_type) {
+            return concrete == other;
+        }
+
+        match method_type {
+            MethodType::Base(base_type) => self.normalized_base_types_equal(
+                concrete.resolution(),
+                concrete.get(),
+                ResolutionS::clone(method_resolution),
+                base_type,
+                policy,
+                |left_child, right_child| {
+                    self.normalized_types_equal(
+                        NormalizedTypeRef::Concrete(left_child),
+                        NormalizedTypeRef::Method {
+                            resolution: method_resolution,
+                            ty: right_child,
+                            generics: method_generics,
+                        },
+                        policy,
+                    )
+                },
+            ),
+            _ => false,
+        }
+    }
+
+    fn normalized_types_equal(
+        &self,
+        left: NormalizedTypeRef<'_>,
+        right: NormalizedTypeRef<'_>,
+        policy: TypeComparisonPolicy,
+    ) -> bool {
+        match (left, right) {
+            (
+                NormalizedTypeRef::Method {
+                    resolution: left_resolution,
+                    ty: left_type,
+                    generics: left_generics,
+                },
+                NormalizedTypeRef::Method {
+                    resolution: right_resolution,
+                    ty: right_type,
+                    generics: right_generics,
+                },
+            ) => self.normalized_method_types_equal(
+                left_resolution,
+                left_type,
+                left_generics,
+                right_resolution,
+                right_type,
+                right_generics,
+                policy,
+            ),
+            (
+                NormalizedTypeRef::Concrete(left_concrete),
+                NormalizedTypeRef::Method {
+                    resolution,
+                    ty,
+                    generics,
+                },
+            ) => self.normalized_concrete_equals_method_type(
+                left_concrete,
+                resolution,
+                ty,
+                generics,
+                policy,
+            ),
+            (
+                NormalizedTypeRef::Method {
+                    resolution,
+                    ty,
+                    generics,
+                },
+                NormalizedTypeRef::Concrete(right_concrete),
+            ) => self.normalized_concrete_equals_method_type(
+                right_concrete,
+                resolution,
+                ty,
+                generics,
+                policy,
+            ),
+            (
+                NormalizedTypeRef::Concrete(left_concrete),
+                NormalizedTypeRef::Concrete(right_concrete),
+            ) => {
+                if left_concrete == right_concrete {
+                    return true;
+                }
+
+                self.normalized_base_types_equal(
+                    left_concrete.resolution(),
+                    left_concrete.get(),
+                    right_concrete.resolution(),
+                    right_concrete.get(),
+                    policy,
+                    |left_child, right_child| {
+                        self.normalized_types_equal(
+                            NormalizedTypeRef::Concrete(left_child),
+                            NormalizedTypeRef::Concrete(right_child),
+                            policy,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    fn resolve_type_with_policy(
+        &self,
+        resolution: ResolutionS,
+        user_type: UserType,
+        policy: TypeComparisonPolicy,
+    ) -> Option<TypeDescription> {
+        match policy.resolution_failure {
+            TypeResolutionFailureBehavior::ReturnFalse => {
+                self.loader.locate_type(resolution, user_type).ok()
+            }
+            TypeResolutionFailureBehavior::PanicOnFailure => Some(
+                self.loader
+                    .locate_type(resolution, user_type)
+                    .expect("Type resolution failed during comparison"),
+            ),
+            TypeResolutionFailureBehavior::CompareResultsThenReturnFalse => {
+                self.loader.locate_type(resolution, user_type).ok()
+            }
+        }
+    }
+
+    fn resolved_types_equal(
+        &self,
+        left: &TypeDescription,
+        right: &TypeDescription,
+        policy: TypeComparisonPolicy,
+    ) -> bool {
+        if left == right {
+            return true;
+        }
+
+        match policy.type_identity {
+            TypeIdentityComparison::CanonicalNameFallback => {
+                !left.is_null()
+                    && !right.is_null()
+                    && self.loader.canonical_type_name(&left.type_name())
+                        == self.loader.canonical_type_name(&right.type_name())
+            }
+            TypeIdentityComparison::DefinitionNameFallback => {
+                let left_definition = left.definition();
+                let right_definition = right.definition();
+                left_definition.name == right_definition.name
+                    && left_definition.namespace == right_definition.namespace
+            }
+        }
+    }
+
+    fn normalized_base_types_equal<L: Clone, Rhs: Clone, F>(
+        &self,
+        left_resolution: ResolutionS,
+        left: &BaseType<L>,
+        right_resolution: ResolutionS,
+        right: &BaseType<Rhs>,
+        policy: TypeComparisonPolicy,
+        mut child_equal: F,
+    ) -> bool
+    where
+        F: FnMut(&L, &Rhs) -> bool,
+    {
+        match (left, right) {
+            (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
+                let (ut1, generics1) = decompose_type_source(ts1);
+                let (ut2, generics2) = decompose_type_source(ts2);
+
+                let same_type = match policy.resolution_failure {
+                    TypeResolutionFailureBehavior::CompareResultsThenReturnFalse => {
+                        let left_result = self.loader.locate_type(left_resolution, ut1);
+                        let right_result = self.loader.locate_type(right_resolution, ut2);
+
+                        if left_result == right_result {
+                            true
+                        } else {
+                            let Ok(left_type) = left_result else {
+                                return false;
+                            };
+                            let Ok(right_type) = right_result else {
+                                return false;
+                            };
+                            self.resolved_types_equal(&left_type, &right_type, policy)
+                        }
+                    }
+                    _ => {
+                        let Some(left_type) =
+                            self.resolve_type_with_policy(left_resolution, ut1, policy)
+                        else {
+                            return false;
+                        };
+                        let Some(right_type) =
+                            self.resolve_type_with_policy(right_resolution, ut2, policy)
+                        else {
+                            return false;
+                        };
+                        self.resolved_types_equal(&left_type, &right_type, policy)
+                    }
+                };
+
+                if !same_type {
+                    return false;
+                }
+
+                if generics1.len() != generics2.len() {
+                    return false;
+                }
+
+                for (g1, g2) in generics1.iter().zip(generics2.iter()) {
+                    if !child_equal(g1, g2) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (BaseType::Boolean, BaseType::Boolean) => true,
+            (BaseType::Char, BaseType::Char) => true,
+            (BaseType::Int8, BaseType::Int8) => true,
+            (BaseType::UInt8, BaseType::UInt8) => true,
+            (BaseType::Int16, BaseType::Int16) => true,
+            (BaseType::UInt16, BaseType::UInt16) => true,
+            (BaseType::Int32, BaseType::Int32) => true,
+            (BaseType::UInt32, BaseType::UInt32) => true,
+            (BaseType::Int64, BaseType::Int64) => true,
+            (BaseType::UInt64, BaseType::UInt64) => true,
+            (BaseType::Float32, BaseType::Float32) => true,
+            (BaseType::Float64, BaseType::Float64) => true,
+            (BaseType::IntPtr, BaseType::IntPtr) => true,
+            (BaseType::UIntPtr, BaseType::UIntPtr) => true,
+            (BaseType::Object, BaseType::Object) => true,
+            (BaseType::String, BaseType::String) => true,
+            (BaseType::Vector(_, l), BaseType::Vector(_, r)) => child_equal(l, r),
+            (BaseType::Array(l, _), BaseType::Array(r, _)) => child_equal(l, r),
+            (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
+                match (l.as_ref(), r.as_ref()) {
+                    (None, None) => true,
+                    (Some(l_element), Some(r_element)) => child_equal(l_element, r_element),
+                    _ => false,
+                }
+            }
+            // Function pointer signature comparison is not implemented yet.
+            // Conservatively treat funcptr types as not equal.
+            (BaseType::FunctionPointer(_), BaseType::FunctionPointer(_)) => false,
+            _ => false,
         }
     }
 
@@ -221,8 +504,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         true
     }
 
-    pub fn signatures_compatible_with_variance(
+    #[allow(clippy::too_many_arguments)]
+    fn signatures_match(
         &self,
+        mode: SignatureCompareMode,
         res1: &ResolutionS,
         a: &ManagedMethod<MethodType>,
         generics1: Option<&GenericLookup>,
@@ -237,65 +522,175 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
 
-        let lookup1 = generics1.cloned().unwrap_or_default();
-        let lookup2 = generics2.cloned().unwrap_or_default();
+        let variance_lookups = match mode {
+            SignatureCompareMode::Invariant => None,
+            SignatureCompareMode::Variant => Some((
+                generics1.cloned().unwrap_or_default(),
+                generics2.cloned().unwrap_or_default(),
+            )),
+        };
 
-        // Return type: Covariant (b's return type must be assignable to a's)
-        match (&a.return_type, &b.return_type) {
-            (ReturnType(_, None), ReturnType(_, None)) => {}
-            (ReturnType(_, Some(l_p)), ReturnType(_, Some(r_p))) => {
-                let l_m = match l_p {
-                    ParameterType::Value(v) | ParameterType::Ref(v) => v,
-                    ParameterType::TypedReference => return false, // Not variant
-                };
-                let r_m = match r_p {
-                    ParameterType::Value(v) | ParameterType::Ref(v) => v,
-                    ParameterType::TypedReference => return false, // Not variant
-                };
-                let Ok(l_concrete) =
-                    lookup1.make_concrete(ResolutionS::clone(res1), l_m.clone(), self.loader)
-                else {
-                    return false;
-                };
-                let Ok(r_concrete) =
-                    lookup2.make_concrete(ResolutionS::clone(res2), r_m.clone(), self.loader)
-                else {
-                    return false;
-                };
-                if !self.is_assignable_to(&r_concrete, &l_concrete) {
-                    return false;
-                }
-            }
-            _ => return false,
+        if !self.signature_return_types_match(
+            mode,
+            res1,
+            &a.return_type,
+            generics1,
+            res2,
+            &b.return_type,
+            generics2,
+            variance_lookups.as_ref().map(|(l, r)| (l, r)),
+        ) {
+            return false;
         }
 
-        // Parameters: Contravariant (a's parameters must be assignable to b's)
-        for (Parameter(_, a_p), Parameter(_, b_p)) in a.parameters.iter().zip(b.parameters.iter()) {
-            match (a_p, b_p) {
-                (ParameterType::Value(a_v), ParameterType::Value(b_v)) => {
-                    let Ok(a_concrete) =
-                        lookup1.make_concrete(ResolutionS::clone(res1), a_v.clone(), self.loader)
-                    else {
-                        return false;
-                    };
-                    let Ok(b_concrete) =
-                        lookup2.make_concrete(ResolutionS::clone(res2), b_v.clone(), self.loader)
-                    else {
-                        return false;
-                    };
-                    if !self.is_assignable_to(&a_concrete, &b_concrete) {
-                        return false;
-                    }
-                }
-                _ => {
-                    // Non-value parameters (ByRef, Pinned) must match exactly
-                    if !self.param_types_equal(res1, a_p, generics1, res2, b_p, generics2) {
-                        return false;
-                    }
-                }
+        for (Parameter(_, a_parameter), Parameter(_, b_parameter)) in
+            a.parameters.iter().zip(b.parameters.iter())
+        {
+            if !self.signature_parameter_types_match(
+                mode,
+                res1,
+                a_parameter,
+                generics1,
+                res2,
+                b_parameter,
+                generics2,
+                variance_lookups.as_ref().map(|(l, r)| (l, r)),
+            ) {
+                return false;
             }
         }
+
         true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn signature_return_types_match(
+        &self,
+        mode: SignatureCompareMode,
+        res1: &ResolutionS,
+        left: &ReturnType<MethodType>,
+        generics1: Option<&GenericLookup>,
+        res2: &ResolutionS,
+        right: &ReturnType<MethodType>,
+        generics2: Option<&GenericLookup>,
+        variance_lookups: Option<(&GenericLookup, &GenericLookup)>,
+    ) -> bool {
+        let ReturnType(_, left_return) = left;
+        let ReturnType(_, right_return) = right;
+
+        match (left_return, right_return) {
+            (None, None) => true,
+            (Some(left_type), Some(right_type)) => match mode {
+                SignatureCompareMode::Invariant => {
+                    self.param_types_equal(res1, left_type, generics1, res2, right_type, generics2)
+                }
+                SignatureCompareMode::Variant => {
+                    let Some((lookup1, lookup2)) = variance_lookups else {
+                        unreachable!("variance lookups should exist in variant mode");
+                    };
+
+                    let left_method_type = match left_type {
+                        ParameterType::Value(ty) | ParameterType::Ref(ty) => ty,
+                        ParameterType::TypedReference => return false,
+                    };
+                    let right_method_type = match right_type {
+                        ParameterType::Value(ty) | ParameterType::Ref(ty) => ty,
+                        ParameterType::TypedReference => return false,
+                    };
+
+                    // Return type covariance: candidate (`right`) must be assignable to target (`left`).
+                    self.variance_assignable_method_types(
+                        res2,
+                        right_method_type,
+                        lookup2,
+                        res1,
+                        left_method_type,
+                        lookup1,
+                    )
+                }
+            },
+            _ => false,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn signature_parameter_types_match(
+        &self,
+        mode: SignatureCompareMode,
+        res1: &ResolutionS,
+        left: &ParameterType<MethodType>,
+        generics1: Option<&GenericLookup>,
+        res2: &ResolutionS,
+        right: &ParameterType<MethodType>,
+        generics2: Option<&GenericLookup>,
+        variance_lookups: Option<(&GenericLookup, &GenericLookup)>,
+    ) -> bool {
+        match mode {
+            SignatureCompareMode::Invariant => {
+                self.param_types_equal(res1, left, generics1, res2, right, generics2)
+            }
+            SignatureCompareMode::Variant => match (left, right) {
+                (ParameterType::Value(left_type), ParameterType::Value(right_type)) => {
+                    let Some((lookup1, lookup2)) = variance_lookups else {
+                        unreachable!("variance lookups should exist in variant mode");
+                    };
+
+                    // Parameter contravariance: target (`left`) must be assignable to candidate (`right`).
+                    self.variance_assignable_method_types(
+                        res1, left_type, lookup1, res2, right_type, lookup2,
+                    )
+                }
+                // ByRef and TypedReference parameters remain exact in variant mode.
+                _ => self.param_types_equal(res1, left, generics1, res2, right, generics2),
+            },
+        }
+    }
+
+    fn variance_assignable_method_types(
+        &self,
+        source_resolution: &ResolutionS,
+        source: &MethodType,
+        source_lookup: &GenericLookup,
+        target_resolution: &ResolutionS,
+        target: &MethodType,
+        target_lookup: &GenericLookup,
+    ) -> bool {
+        let Ok(source_concrete) = source_lookup.make_concrete(
+            ResolutionS::clone(source_resolution),
+            source.clone(),
+            self.loader,
+        ) else {
+            return false;
+        };
+        let Ok(target_concrete) = target_lookup.make_concrete(
+            ResolutionS::clone(target_resolution),
+            target.clone(),
+            self.loader,
+        ) else {
+            return false;
+        };
+
+        self.is_assignable_to(&source_concrete, &target_concrete)
+    }
+
+    pub fn signatures_compatible_with_variance(
+        &self,
+        res1: &ResolutionS,
+        a: &ManagedMethod<MethodType>,
+        generics1: Option<&GenericLookup>,
+        res2: &ResolutionS,
+        b: &ManagedMethod<MethodType>,
+        generics2: Option<&GenericLookup>,
+    ) -> bool {
+        self.signatures_match(
+            SignatureCompareMode::Variant,
+            res1,
+            a,
+            generics1,
+            res2,
+            b,
+            generics2,
+        )
     }
 
     pub fn signatures_equal(
@@ -307,32 +702,15 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &ManagedMethod<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
-        if a.instance != b.instance {
-            return false;
-        }
-        match (&a.return_type, &b.return_type) {
-            (ReturnType(_, None), ReturnType(_, None)) => self.params_equal(
-                res1,
-                &a.parameters,
-                generics1,
-                res2,
-                &b.parameters,
-                generics2,
-            ),
-            (ReturnType(_, Some(l)), ReturnType(_, Some(r)))
-                if self.param_types_equal(res1, l, generics1, res2, r, generics2) =>
-            {
-                self.params_equal(
-                    res1,
-                    &a.parameters,
-                    generics1,
-                    res2,
-                    &b.parameters,
-                    generics2,
-                )
-            }
-            _ => false,
-        }
+        self.signatures_match(
+            SignatureCompareMode::Invariant,
+            res1,
+            a,
+            generics1,
+            res2,
+            b,
+            generics2,
+        )
     }
 
     pub fn concrete_equals_method_type(
@@ -342,27 +720,15 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
-        if let Some(generics) = generics2 {
-            match b {
-                MethodType::TypeGeneric(idx) => {
-                    if let Some(other) = generics.type_generics.get(*idx) {
-                        return concrete == other;
-                    }
-                }
-                MethodType::MethodGeneric(idx) => {
-                    if let Some(other) = generics.method_generics.get(*idx) {
-                        return concrete == other;
-                    }
-                }
-                _ => {}
-            }
-        }
-        match b {
-            MethodType::Base(b_base) => {
-                self.concrete_equals_base_type(concrete, res2, b_base, generics2)
-            }
-            _ => false,
-        }
+        self.normalized_types_equal(
+            NormalizedTypeRef::Concrete(concrete),
+            NormalizedTypeRef::Method {
+                resolution: res2,
+                ty: b,
+                generics: generics2,
+            },
+            TypeComparisonPolicy::CONCRETE_EQUALS_BASE_TYPE,
+        )
     }
 
     pub fn concrete_equals_base_type(
@@ -372,77 +738,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &BaseType<MethodType>,
         generics2: Option<&GenericLookup>,
     ) -> bool {
-        let res1 = concrete.resolution();
-        let a = concrete.get();
-
-        match (a, b) {
-            (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
-                let (ut1, generics1) = decompose_type_source(ts1);
-                let (ut2, generics2_list) = decompose_type_source(ts2);
-                let td1 = self
-                    .loader
-                    .locate_type(res1, ut1)
-                    .expect("Type resolution failed during comparison");
-                let td2 = self
-                    .loader
-                    .locate_type(ResolutionS::clone(res2), ut2)
-                    .expect("Type resolution failed during comparison");
-
-                if td1 != td2 {
-                    let d1 = td1.definition();
-                    let d2 = td2.definition();
-                    if d1.name != d2.name || d1.namespace != d2.namespace {
-                        return false;
-                    }
-                }
-
-                if generics1.len() != generics2_list.len() {
-                    return false;
-                }
-
-                for (g1, g2) in generics1.iter().zip(generics2_list.iter()) {
-                    if !self.concrete_equals_method_type(g1, res2, g2, generics2) {
-                        return false;
-                    }
-                }
-                true
-            }
-            (BaseType::Boolean, BaseType::Boolean) => true,
-            (BaseType::Char, BaseType::Char) => true,
-            (BaseType::Int8, BaseType::Int8) => true,
-            (BaseType::UInt8, BaseType::UInt8) => true,
-            (BaseType::Int16, BaseType::Int16) => true,
-            (BaseType::UInt16, BaseType::UInt16) => true,
-            (BaseType::Int32, BaseType::Int32) => true,
-            (BaseType::UInt32, BaseType::UInt32) => true,
-            (BaseType::Int64, BaseType::Int64) => true,
-            (BaseType::UInt64, BaseType::UInt64) => true,
-            (BaseType::Float32, BaseType::Float32) => true,
-            (BaseType::Float64, BaseType::Float64) => true,
-            (BaseType::IntPtr, BaseType::IntPtr) => true,
-            (BaseType::UIntPtr, BaseType::UIntPtr) => true,
-            (BaseType::Object, BaseType::Object) => true,
-            (BaseType::String, BaseType::String) => true,
-            (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
-                self.concrete_equals_method_type(l, res2, r, generics2)
-            }
-            (BaseType::Array(l, _), BaseType::Array(r, _)) => {
-                self.concrete_equals_method_type(l, res2, r, generics2)
-            }
-            (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
-                match (l.as_ref(), r.as_ref()) {
-                    (None, None) => true,
-                    (Some(l_concrete), Some(r_method)) => {
-                        self.concrete_equals_method_type(l_concrete, res2, r_method, generics2)
-                    }
-                    _ => false,
-                }
-            }
-            // Function pointer signature comparison is not implemented yet.
-            // Conservatively treat funcptr types as not equal.
-            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
-            _ => false,
-        }
+        self.normalized_base_types_equal(
+            concrete.resolution(),
+            concrete.get(),
+            ResolutionS::clone(res2),
+            b,
+            TypeComparisonPolicy::CONCRETE_EQUALS_BASE_TYPE,
+            |left, right| self.concrete_equals_method_type(left, res2, right, generics2),
+        )
     }
 
     pub fn is_assignable_to(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
@@ -805,81 +1108,11 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     }
 
     pub fn concrete_types_equal(&self, c1: &ConcreteType, c2: &ConcreteType) -> bool {
-        if c1 == c2 {
-            return true;
-        }
-
-        let res1 = c1.resolution();
-        let a = c1.get();
-        let res2 = c2.resolution();
-        let b = c2.get();
-
-        match (a, b) {
-            (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
-                let (ut1, generics1) = decompose_type_source(ts1);
-                let (ut2, generics2) = decompose_type_source(ts2);
-                let td1 = self.loader.locate_type(res1, ut1);
-                let td2 = self.loader.locate_type(res2, ut2);
-
-                if td1 != td2 {
-                    let td1 = match td1 {
-                        Ok(t) => t,
-                        Err(_) => return false,
-                    };
-                    let td2 = match td2 {
-                        Ok(t) => t,
-                        Err(_) => return false,
-                    };
-                    let d1 = td1.definition();
-                    let d2 = td2.definition();
-                    if d1.name != d2.name || d1.namespace != d2.namespace {
-                        return false;
-                    }
-                }
-
-                if generics1.len() != generics2.len() {
-                    return false;
-                }
-
-                for (g1, g2) in generics1.iter().zip(generics2.iter()) {
-                    if !self.concrete_types_equal(g1, g2) {
-                        return false;
-                    }
-                }
-                true
-            }
-            (BaseType::Boolean, BaseType::Boolean) => true,
-            (BaseType::Char, BaseType::Char) => true,
-            (BaseType::Int8, BaseType::Int8) => true,
-            (BaseType::UInt8, BaseType::UInt8) => true,
-            (BaseType::Int16, BaseType::Int16) => true,
-            (BaseType::UInt16, BaseType::UInt16) => true,
-            (BaseType::Int32, BaseType::Int32) => true,
-            (BaseType::UInt32, BaseType::UInt32) => true,
-            (BaseType::Int64, BaseType::Int64) => true,
-            (BaseType::UInt64, BaseType::UInt64) => true,
-            (BaseType::Float32, BaseType::Float32) => true,
-            (BaseType::Float64, BaseType::Float64) => true,
-            (BaseType::IntPtr, BaseType::IntPtr) => true,
-            (BaseType::UIntPtr, BaseType::UIntPtr) => true,
-            (BaseType::Object, BaseType::Object) => true,
-            (BaseType::String, BaseType::String) => true,
-            (BaseType::Vector(_, l), BaseType::Vector(_, r)) => self.concrete_types_equal(l, r),
-            (BaseType::Array(l, _), BaseType::Array(r, _)) => self.concrete_types_equal(l, r),
-            (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
-                match (l.as_ref(), r.as_ref()) {
-                    (None, None) => true,
-                    (Some(l_concrete), Some(r_concrete)) => {
-                        self.concrete_types_equal(l_concrete, r_concrete)
-                    }
-                    _ => false,
-                }
-            }
-            // Function pointer signature comparison is not implemented yet.
-            // Conservatively treat funcptr types as not equal.
-            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => false,
-            _ => false,
-        }
+        self.normalized_types_equal(
+            NormalizedTypeRef::Concrete(c1),
+            NormalizedTypeRef::Concrete(c2),
+            TypeComparisonPolicy::CONCRETE_TYPES_EQUAL,
+        )
     }
 }
 pub fn decompose_type_source<T: Clone>(t: &TypeSource<T>) -> (UserType, Vec<T>) {
@@ -932,6 +1165,107 @@ mod tests {
         }
     }
 
+    struct SelectiveFailResolver {
+        failing_definitions: Vec<TypeIndex>,
+        fail_all_definitions: bool,
+    }
+
+    impl SelectiveFailResolver {
+        fn for_definitions(failing_definitions: Vec<TypeIndex>) -> Self {
+            Self {
+                failing_definitions,
+                fail_all_definitions: false,
+            }
+        }
+
+        fn fail_all() -> Self {
+            Self {
+                failing_definitions: Vec::new(),
+                fail_all_definitions: true,
+            }
+        }
+
+        fn should_fail(&self, definition: TypeIndex) -> bool {
+            self.fail_all_definitions || self.failing_definitions.contains(&definition)
+        }
+    }
+
+    impl TypeResolver for SelectiveFailResolver {
+        fn corlib_type(&self, _name: &str) -> Result<TypeDescription, TypeResolutionError> {
+            Ok(TypeDescription::new(
+                ResolutionS::NULL,
+                crate::sentinel_type_index(),
+            ))
+        }
+
+        fn locate_type(
+            &self,
+            res: ResolutionS,
+            handle: UserType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            match handle {
+                UserType::Definition(definition) => {
+                    if self.should_fail(definition) {
+                        Err(TypeResolutionError::TypeNotFound("missing".into()))
+                    } else {
+                        Ok(TypeDescription::new(res, definition))
+                    }
+                }
+                UserType::Reference(_) => {
+                    Ok(TypeDescription::new(res, crate::sentinel_type_index()))
+                }
+            }
+        }
+
+        fn find_concrete_type(
+            &self,
+            _ty: ConcreteType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Ok(TypeDescription::new(
+                ResolutionS::NULL,
+                crate::sentinel_type_index(),
+            ))
+        }
+    }
+
+    fn method_user_type(definition: TypeIndex) -> MethodType {
+        MethodType::Base(Box::new(BaseType::Type {
+            value_kind: None,
+            source: TypeSource::User(UserType::Definition(definition)),
+        }))
+    }
+
+    fn concrete_user_type(resolution: ResolutionS, definition: TypeIndex) -> ConcreteType {
+        ConcreteType::new(
+            resolution,
+            BaseType::Type {
+                value_kind: None,
+                source: TypeSource::User(UserType::Definition(definition)),
+            },
+        )
+    }
+
+    fn method_signature(
+        return_type: Option<ParameterType<MethodType>>,
+        parameters: Vec<ParameterType<MethodType>>,
+    ) -> ManagedMethod<MethodType> {
+        ManagedMethod {
+            instance: true,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: parameters
+                .into_iter()
+                .map(|parameter| Parameter(vec![], parameter))
+                .collect(),
+            return_type: ReturnType(vec![], return_type),
+            varargs: None,
+        }
+    }
+
+    fn primitive(ty: BaseType<MethodType>) -> MethodType {
+        MethodType::Base(Box::new(ty))
+    }
+
     #[test]
     fn test_types_equal_primitive() {
         let resolver = MockResolver;
@@ -958,6 +1292,154 @@ mod tests {
 
         assert!(comparer.param_types_equal(&res, &t1, None, &res, &t2, None));
         assert!(!comparer.param_types_equal(&res, &t1, None, &res, &t3, None));
+    }
+
+    #[test]
+    fn signatures_variance_keeps_return_covariance_and_parameter_contravariance() {
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let invariant_target = method_signature(
+            Some(ParameterType::Value(primitive(BaseType::Object))),
+            vec![ParameterType::Value(primitive(BaseType::String))],
+        );
+        let variant_candidate = method_signature(
+            Some(ParameterType::Value(primitive(BaseType::String))),
+            vec![ParameterType::Value(primitive(BaseType::Object))],
+        );
+
+        assert!(comparer.signatures_compatible_with_variance(
+            &res,
+            &invariant_target,
+            None,
+            &res,
+            &variant_candidate,
+            None,
+        ));
+        assert!(!comparer.signatures_equal(
+            &res,
+            &invariant_target,
+            None,
+            &res,
+            &variant_candidate,
+            None,
+        ));
+    }
+
+    #[test]
+    fn signatures_variance_rejects_typed_reference_return_type() {
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let left = method_signature(Some(ParameterType::TypedReference), vec![]);
+        let right = method_signature(Some(ParameterType::TypedReference), vec![]);
+
+        assert!(
+            !comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,)
+        );
+        assert!(comparer.signatures_equal(&res, &left, None, &res, &right, None));
+    }
+
+    #[test]
+    fn signatures_variance_keeps_byref_parameters_exact() {
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let left = method_signature(
+            Some(ParameterType::Value(primitive(BaseType::Object))),
+            vec![ParameterType::Ref(primitive(BaseType::Object))],
+        );
+        let right = method_signature(
+            Some(ParameterType::Value(primitive(BaseType::String))),
+            vec![ParameterType::Ref(primitive(BaseType::String))],
+        );
+
+        assert!(
+            !comparer.signatures_compatible_with_variance(&res, &left, None, &res, &right, None,)
+        );
+    }
+
+    #[test]
+    fn types_equal_preserves_same_placeholder_identity_before_substitution() {
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let lookup_left = GenericLookup::new(vec![ConcreteType::new(res.clone(), BaseType::Int32)]);
+        let lookup_right =
+            GenericLookup::new(vec![ConcreteType::new(res.clone(), BaseType::Int64)]);
+
+        assert!(comparer.types_equal(
+            &res,
+            &MethodType::TypeGeneric(0),
+            Some(&lookup_left),
+            &res,
+            &MethodType::TypeGeneric(0),
+            Some(&lookup_right),
+        ));
+    }
+
+    #[test]
+    fn types_equal_returns_false_on_resolution_failure_after_generic_substitution() {
+        let failing_definition = crate::type_index_from_usize(42);
+        let resolver = SelectiveFailResolver::for_definitions(vec![failing_definition]);
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let concrete = concrete_user_type(res.clone(), failing_definition);
+        let lookup = GenericLookup::new(vec![concrete]);
+        let target = method_user_type(failing_definition);
+
+        assert!(
+            !comparer.types_equal(
+                &res,
+                &MethodType::TypeGeneric(0),
+                Some(&lookup),
+                &res,
+                &target,
+                None,
+            ),
+            "types_equal must return false (not panic) when substitution hits locate_type failure"
+        );
+    }
+
+    #[test]
+    fn concrete_equals_method_type_panics_on_resolution_failure() {
+        let failing_definition = crate::type_index_from_usize(7);
+        let resolver = SelectiveFailResolver::for_definitions(vec![failing_definition]);
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let concrete = concrete_user_type(res.clone(), failing_definition);
+        let target = method_user_type(failing_definition);
+
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            comparer.concrete_equals_method_type(&concrete, &res, &target, None)
+        }));
+
+        assert!(
+            panic_result.is_err(),
+            "concrete_equals_method_type should preserve panic-on-resolution-failure behavior"
+        );
+    }
+
+    #[test]
+    fn concrete_types_equal_keeps_equal_error_result_behavior() {
+        let resolver = SelectiveFailResolver::fail_all();
+        let comparer = TypeComparer::new(&resolver);
+        let res = ResolutionS::NULL;
+
+        let c1 = concrete_user_type(res.clone(), crate::type_index_from_usize(1));
+        let c2 = concrete_user_type(res.clone(), crate::type_index_from_usize(2));
+
+        assert_ne!(c1, c2);
+        assert!(
+            comparer.concrete_types_equal(&c1, &c2),
+            "legacy CompareResultsThenReturnFalse mode treats identical locate_type errors as equal"
+        );
     }
 
     // Regression test for property getter method lookup.

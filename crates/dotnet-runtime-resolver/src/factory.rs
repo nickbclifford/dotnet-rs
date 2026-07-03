@@ -10,13 +10,14 @@ use dotnet_types::{
 use dotnet_utils::{ByteOffset, gc::GCHandle};
 use dotnet_value::{
     StackValue,
+    cts_cli_conversion::{CliToCts, CtsScalarKind},
     layout::{FieldLayoutManager, HasLayout},
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
-use std::{any, error::Error, ptr::NonNull, sync::Arc};
+use std::{ptr::NonNull, sync::Arc};
 
 impl<C, L> ResolverService<C, L>
 where
@@ -274,36 +275,59 @@ where
         use ValueType::*;
         let t = self.normalize_type(t.clone())?;
         match t.get() {
-            BaseType::Boolean => Ok(CTSValue::Value(Bool(convert_num::<u8>(data)? != 0))),
-            BaseType::Char => Ok(CTSValue::Value(Char(convert_num(data)?))),
-            BaseType::Int8 => Ok(CTSValue::Value(Int8(convert_num(data)?))),
-            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(convert_num(data)?))),
-            BaseType::Int16 => Ok(CTSValue::Value(Int16(convert_num(data)?))),
-            BaseType::UInt16 => Ok(CTSValue::Value(UInt16(convert_num(data)?))),
-            BaseType::Int32 => Ok(CTSValue::Value(Int32(convert_num(data)?))),
-            BaseType::UInt32 => Ok(CTSValue::Value(UInt32(convert_num(data)?))),
-            BaseType::Int64 => Ok(CTSValue::Value(Int64(convert_i64(data)?))),
-            BaseType::UInt64 => Ok(CTSValue::Value(UInt64(reinterpret_i64_as_u64(data)?))),
-            BaseType::Float32 => match data {
-                StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float32(f as f32))),
-                other => Err(TypeResolutionError::InvalidLayout(
-                    format!("invalid stack value {:?} for conversion into f32", other).into(),
-                )),
-            },
-            BaseType::Float64 => match data {
-                StackValue::NativeFloat(f) => Ok(CTSValue::Value(Float64(f))),
-                other => Err(TypeResolutionError::InvalidLayout(
-                    format!("invalid stack value {:?} for conversion into f64", other).into(),
-                )),
-            },
-            BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(convert_num(data)?))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Ok(CTSValue::Value(NativeUInt(convert_num(data)?)))
-            }
+            BaseType::Boolean => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Boolean,
+            )?)),
+            BaseType::Char => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Char,
+            )?)),
+            BaseType::Int8 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Int8,
+            )?)),
+            BaseType::UInt8 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::UInt8,
+            )?)),
+            BaseType::Int16 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Int16,
+            )?)),
+            BaseType::UInt16 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::UInt16,
+            )?)),
+            BaseType::Int32 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Int32,
+            )?)),
+            BaseType::UInt32 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::UInt32,
+            )?)),
+            BaseType::Int64 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::Int64,
+            )?)),
+            BaseType::UInt64 => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::UInt64,
+            )?)),
+            BaseType::Float32 => Ok(CTSValue::Value(CliToCts::narrow_float32(data)?)),
+            BaseType::Float64 => Ok(CTSValue::Value(CliToCts::narrow_float64(data)?)),
+            BaseType::IntPtr => Ok(CTSValue::Value(CliToCts::narrow_scalar_value(
+                data,
+                CtsScalarKind::NativeInt,
+            )?)),
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => Ok(CTSValue::Value(
+                CliToCts::narrow_scalar_value(data, CtsScalarKind::NativeUInt)?,
+            )),
             BaseType::ValuePointer(_modifiers, inner) => match data {
                 StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p.into_inner()))),
                 _ => {
-                    let ptr = convert_num::<usize>(data)?;
+                    let ptr = CliToCts::convert_num::<usize>(data)?;
                     let inner_type = self.resolve_pointer_inner_type(inner)?;
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
                         NonNull::new(std::ptr::with_exposed_provenance_mut(ptr)),
@@ -452,42 +476,59 @@ where
         use ValueType::*;
         let t = self.normalize_type(t.clone())?;
         match t.get() {
-            BaseType::Boolean => Ok(CTSValue::Value(Bool(data[0] != 0))),
-            BaseType::Char => Ok(CTSValue::Value(Char(u16::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::Int8 => Ok(CTSValue::Value(Int8(data[0] as i8))),
-            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(data[0]))),
-            BaseType::Int16 => Ok(CTSValue::Value(Int16(i16::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::UInt16 => Ok(CTSValue::Value(UInt16(u16::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::Int32 => Ok(CTSValue::Value(Int32(i32::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::UInt32 => Ok(CTSValue::Value(UInt32(u32::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::Int64 => Ok(CTSValue::Value(Int64(i64::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::UInt64 => Ok(CTSValue::Value(UInt64(u64::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
+            BaseType::Boolean => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Boolean,
+                data,
+            ))),
+            BaseType::Char => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Char,
+                data,
+            ))),
+            BaseType::Int8 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Int8,
+                data,
+            ))),
+            BaseType::UInt8 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::UInt8,
+                data,
+            ))),
+            BaseType::Int16 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Int16,
+                data,
+            ))),
+            BaseType::UInt16 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::UInt16,
+                data,
+            ))),
+            BaseType::Int32 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Int32,
+                data,
+            ))),
+            BaseType::UInt32 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::UInt32,
+                data,
+            ))),
+            BaseType::Int64 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::Int64,
+                data,
+            ))),
+            BaseType::UInt64 => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::UInt64,
+                data,
+            ))),
             BaseType::Float32 => Ok(CTSValue::Value(Float32(f32::from_ne_bytes(
                 data.try_into().unwrap(),
             )))),
             BaseType::Float64 => Ok(CTSValue::Value(Float64(f64::from_ne_bytes(
                 data.try_into().unwrap(),
             )))),
-            BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(isize::from_ne_bytes(
-                data.try_into().unwrap(),
-            )))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => Ok(CTSValue::Value(NativeUInt(
-                usize::from_ne_bytes(data.try_into().unwrap()),
+            BaseType::IntPtr => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
+                CtsScalarKind::NativeInt,
+                data,
             ))),
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => Ok(CTSValue::Value(
+                CliToCts::read_scalar_storage(CtsScalarKind::NativeUInt, data),
+            )),
             BaseType::ValuePointer(_modifiers, inner) => {
                 let inner_type = self.resolve_pointer_inner_type(inner)?;
 
@@ -667,107 +708,5 @@ where
             vec![0; total_size.as_usize()],
             vec![size],
         ))
-    }
-}
-
-fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(
-    data: StackValue<'_>,
-) -> Result<T, TypeResolutionError> {
-    let data = data.coerce_enum_to_underlying();
-    match data {
-        StackValue::Int32(i) => i.try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(
-                format!("failed to convert from i32 into {}", any::type_name::<T>()).into(),
-            )
-        }),
-        StackValue::NativeInt(i) => i.try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(
-                format!(
-                    "failed to convert from isize into {}",
-                    any::type_name::<T>()
-                )
-                .into(),
-            )
-        }),
-        StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_provenance().try_into().map_err(|_| {
-            TypeResolutionError::InvalidLayout(
-                format!(
-                    "failed to convert unmanaged pointer into {}",
-                    any::type_name::<T>()
-                )
-                .into(),
-            )
-        }),
-        StackValue::ManagedPtr(p) => {
-            let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-            ptr.expose_provenance().try_into().map_err(|_| {
-                TypeResolutionError::InvalidLayout(
-                    format!(
-                        "failed to convert managed pointer into {}",
-                        any::type_name::<T>()
-                    )
-                    .into(),
-                )
-            })
-        }
-        other => Err(TypeResolutionError::InvalidLayout(
-            format!(
-                "invalid stack value {:?} for conversion into {}",
-                other,
-                any::type_name::<T>()
-            )
-            .into(),
-        )),
-    }
-}
-
-fn convert_i64<T: TryFrom<i64>>(data: StackValue<'_>) -> Result<T, TypeResolutionError>
-where
-    T::Error: Error,
-{
-    let data = data.coerce_enum_to_underlying();
-    match data {
-        StackValue::Int64(i) => i.try_into().map_err(|e| {
-            TypeResolutionError::InvalidLayout(
-                format!(
-                    "failed to convert from i64 to {} ({})",
-                    any::type_name::<T>(),
-                    e
-                )
-                .into(),
-            )
-        }),
-        other => Err(TypeResolutionError::InvalidLayout(
-            format!("invalid stack value {:?} for integer conversion", other).into(),
-        )),
-    }
-}
-
-fn reinterpret_i64_as_u64(data: StackValue<'_>) -> Result<u64, TypeResolutionError> {
-    let data = data.coerce_enum_to_underlying();
-    match data {
-        StackValue::Int64(i) => Ok(i as u64),
-        other => Err(TypeResolutionError::InvalidLayout(
-            format!("invalid stack value {:?} for u64 reinterpretation", other).into(),
-        )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::convert_i64;
-    use dotnet_types::error::TypeResolutionError;
-    use dotnet_value::StackValue;
-
-    #[test]
-    fn convert_i64_rejects_non_int64_input() {
-        let result = convert_i64::<i64>(StackValue::Int32(7));
-        match result {
-            Err(TypeResolutionError::InvalidLayout(message)) => {
-                assert!(message.contains("invalid stack value"));
-                assert!(message.contains("integer conversion"));
-            }
-            other => panic!("expected InvalidLayout error, got {:?}", other),
-        }
     }
 }

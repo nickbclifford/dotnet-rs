@@ -1,5 +1,6 @@
 use crate::{
     StackValue,
+    cts_cli_conversion::CtsToCli,
     layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
     storage::FieldStorage,
@@ -109,28 +110,7 @@ pub enum CTSValue<'gc> {
 
 impl<'gc> CTSValue<'gc> {
     pub fn into_stack(self) -> StackValue<'gc> {
-        use CTSValue::*;
-        use ValueType::*;
-        match self {
-            Value(Bool(b)) => StackValue::Int32(b as i32),
-            Value(Char(c)) => StackValue::Int32(c as i32),
-            Value(Int8(i)) => StackValue::Int32(i as i32),
-            Value(UInt8(i)) => StackValue::Int32(i as i32),
-            Value(Int16(i)) => StackValue::Int32(i as i32),
-            Value(UInt16(i)) => StackValue::Int32(i as i32),
-            Value(Int32(i)) => StackValue::Int32(i),
-            Value(UInt32(i)) => StackValue::Int32(i as i32),
-            Value(Int64(i)) => StackValue::Int64(i),
-            Value(UInt64(i)) => StackValue::Int64(i as i64),
-            Value(NativeInt(i)) => StackValue::NativeInt(i),
-            Value(NativeUInt(i)) => StackValue::NativeInt(i as isize),
-            Value(Pointer(p)) => StackValue::ManagedPtr(p.into()),
-            Value(Float32(f)) => StackValue::NativeFloat(f as f64),
-            Value(Float64(f)) => StackValue::NativeFloat(f),
-            Value(TypedRef(p, t)) => StackValue::TypedRef(p.into(), t),
-            Value(Struct(s)) => StackValue::ValueType(s),
-            Ref(o) => StackValue::ObjectRef(o),
-        }
+        CtsToCli::widen(self)
     }
 
     pub fn write(&self, dest: &mut [u8]) {

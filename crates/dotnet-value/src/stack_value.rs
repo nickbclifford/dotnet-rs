@@ -4,7 +4,8 @@ use crate::object::ObjectPtr;
 use dotnet_utils::{ArenaId, gc::record_cross_arena_ref};
 
 use crate::{
-    object::{self, HeapStorage, Object, ObjectHandle, ObjectRef},
+    cts_cli_conversion::CtsToCli,
+    object::{HeapStorage, Object, ObjectHandle, ObjectRef},
     pointer::{self, ManagedPtr, PointerOrigin, UnmanagedPtr},
     string::CLRString,
 };
@@ -12,7 +13,7 @@ use dotnet_types::{TypeDescription, error::ExecutionError};
 use dotnet_utils::{
     ByteOffset, StackSlotIndex,
     atomic::{AtomicAccess, StandardAtomicAccess},
-    gc::{GCHandle, ThreadSafeLock},
+    gc::GCHandle,
     sync::Ordering as AtomicOrdering,
     validate_alignment,
 };
@@ -194,25 +195,7 @@ fn enum_value_type_to_underlying<'gc>(obj: &Object<'gc>) -> Option<StackValue<'g
     let MemberType::Base(base) = member else {
         return None;
     };
-    let read = |n: usize| -> u64 {
-        obj.with_data(|d| {
-            let mut buf = [0u8; 8];
-            buf[..n].copy_from_slice(&d[..n]);
-            u64::from_le_bytes(buf)
-        })
-    };
-    Some(match &**base {
-        BaseType::Boolean | BaseType::UInt8 => StackValue::Int32(read(1) as u8 as i32),
-        BaseType::Int8 => StackValue::Int32(read(1) as i8 as i32),
-        BaseType::Char | BaseType::UInt16 => StackValue::Int32(read(2) as u16 as i32),
-        BaseType::Int16 => StackValue::Int32(read(2) as i16 as i32),
-        BaseType::Int32 | BaseType::UInt32 => StackValue::Int32(read(4) as u32 as i32),
-        BaseType::Int64 | BaseType::UInt64 => StackValue::Int64(read(8) as i64),
-        BaseType::IntPtr | BaseType::UIntPtr => {
-            StackValue::NativeInt(read(size_of::<isize>()) as isize)
-        }
-        _ => return None,
-    })
+    obj.with_data(|data| CtsToCli::widen_enum_underlying_bytes(base.as_ref(), data))
 }
 
 #[inline]
@@ -766,28 +749,7 @@ impl<'gc> StackValue<'gc> {
 
         let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
 
-        match t {
-            LoadType::Int8 => Self::Int32(val as i8 as i32),
-            LoadType::UInt8 => Self::Int32(val as u8 as i32),
-            LoadType::Int16 => Self::Int32(val as i16 as i32),
-            LoadType::UInt16 => Self::Int32(val as u16 as i32),
-            LoadType::Int32 | LoadType::UInt32 => Self::Int32(val as i32),
-            LoadType::Int64 => Self::Int64(val as i64),
-            LoadType::Float32 => Self::NativeFloat(f32::from_bits(val as u32) as f64),
-            LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
-            LoadType::IntPtr => Self::NativeInt(val as isize),
-            LoadType::Object => {
-                let ptr = std::ptr::with_exposed_provenance::<
-                    ThreadSafeLock<object::ObjectInner<'gc>>,
-                >(val as usize);
-                let obj = if ptr.is_null() {
-                    None
-                } else {
-                    Some(unsafe { Gc::from_ptr(ptr) })
-                };
-                Self::ObjectRef(ObjectRef(obj))
-            }
-        }
+        CtsToCli::widen_load_atomic_raw(t, val)
     }
 
     /// # Safety

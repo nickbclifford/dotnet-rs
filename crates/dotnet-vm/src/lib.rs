@@ -22,6 +22,8 @@ mod macros;
 
 pub(crate) mod branch_hint;
 pub mod context;
+#[cfg(test)]
+mod conversion_regression_tests;
 pub mod dispatch;
 pub mod error;
 mod executor;
