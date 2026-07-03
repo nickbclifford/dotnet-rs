@@ -30,6 +30,8 @@ use dotnetdll::prelude::{FieldSource, MethodType as DllMethodType, UserType};
 #[cfg(feature = "multithreading")]
 use dashmap::{DashMap, mapref::entry::Entry};
 #[cfg(feature = "multithreading")]
+use dotnet_metrics::{CacheEvent, CacheKind};
+#[cfg(feature = "multithreading")]
 use dotnet_utils::sync::Ordering;
 
 #[cfg(feature = "multithreading")]
@@ -329,11 +331,15 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
             let registry = &shared.reflection_registry;
             match registry.runtime_types.entry(target.clone()) {
                 Entry::Occupied(entry) => {
-                    shared.metrics.record_shared_runtime_types_cache_hit();
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Hit);
                     *entry.get()
                 }
                 Entry::Vacant(entry) => {
-                    shared.metrics.record_shared_runtime_types_cache_miss();
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Miss);
                     let idx = registry.next_type_index.fetch_add(1, Ordering::Relaxed);
                     registry.runtime_types_rev.insert(idx, target);
                     entry.insert(idx);
@@ -388,8 +394,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
                 &registry.next_method_index,
                 key,
                 value,
-                || shared.metrics.record_shared_runtime_methods_cache_hit(),
-                || shared.metrics.record_shared_runtime_methods_cache_miss(),
+                || {
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Hit)
+                },
+                || {
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Miss)
+                },
             )
         }
 
@@ -438,8 +452,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
                 &registry.next_field_index,
                 key,
                 value,
-                || shared.metrics.record_shared_runtime_fields_cache_hit(),
-                || shared.metrics.record_shared_runtime_fields_cache_miss(),
+                || {
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Hit)
+                },
+                || {
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Miss)
+                },
             )
         }
 

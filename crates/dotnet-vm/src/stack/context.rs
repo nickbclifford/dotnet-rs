@@ -1,5 +1,5 @@
 use crate::{
-    ResolutionContext, StepResult,
+    MethodInfo, ResolutionContext, StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::ops::*,
     state::{ArenaLocalState, SharedGlobalState},
@@ -47,29 +47,36 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     #[inline]
     pub(crate) fn trace_push(&self, value: &StackValue<'gc>) {
-        if self.tracer_enabled() {
+        let _ = self.tracer().enabled_emit(self.indent(), |trace| {
             let val_str = format!("{:?}", value);
-            self.tracer()
-                .trace_stack_op(self.indent(), "PUSH", &val_str);
-        }
+            trace.stack_op("PUSH", &val_str);
+        });
     }
 
     #[inline]
     pub(crate) fn trace_pop(&self, value: &StackValue<'gc>) {
-        if self.tracer_enabled() {
+        let _ = self.tracer().enabled_emit(self.indent(), |trace| {
             let val_str = format!("{:?}", value);
-            self.tracer().trace_stack_op(self.indent(), "POP", &val_str);
-        }
+            trace.stack_op("POP", &val_str);
+        });
+    }
+
+    #[inline]
+    pub(crate) fn trace_method_entry_for_call_frame(&self, method: &MethodInfo<'static>) {
+        // Managed-method tracing must follow frame lifecycle: entry is emitted at call setup,
+        // and exits are emitted from frame pop/return/unwind paths.
+        let _ = self.tracer().enabled_emit(self.indent(), |trace| {
+            let method_desc = format!("{:?}", method.source);
+            trace.method_entry(&method_desc, "");
+        });
     }
 
     #[inline]
     pub(crate) fn trace_method_exit_for_frame(&self, frame: &dotnet_vm_ops::StackFrame<'gc>) {
-        if self.tracer_enabled() {
+        let _ = self.tracer().enabled_emit(self.frame_stack.len(), |trace| {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.shared
-                .tracer
-                .trace_method_exit(self.frame_stack.len(), &method_name);
-        }
+            trace.method_exit(&method_name);
+        });
     }
 
     #[inline]

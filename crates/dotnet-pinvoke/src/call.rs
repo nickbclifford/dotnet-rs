@@ -592,16 +592,16 @@ fn external_call_impl<'gc>(
     let function = p.import_name.as_ref();
     let type_name = method.parent.type_name();
 
-    if ctx.tracer_enabled() {
-        ctx.tracer().trace_interop(
-            ctx.indent(),
+    let _pinvoke_scope = ctx.tracer().enabled_emit(ctx.indent(), |trace| {
+        trace.interop_span_with_exit(
             "CALL",
             &format!(
                 "Invoking P/Invoke: [{}] function [{}] in type [{}]",
                 module, function, type_name
             ),
-        );
-    }
+            "RETURN",
+        )
+    });
 
     let target_res = if ctx.tracer_enabled() {
         let guard = ctx.tracer();
@@ -907,13 +907,12 @@ fn external_call_impl<'gc>(
 
     let target_fn = *target.as_fun();
 
-    if ctx.tracer_enabled() {
-        ctx.tracer().trace_interop(
-            ctx.indent(),
+    let _ = ctx.tracer().enabled_emit(ctx.indent(), |trace| {
+        trace.interop(
             "CALLING",
             &format!("{}::{} with {} args", module, function, arg_ptrs.len()),
         );
-    }
+    });
 
     let mut call_data = PInvokeCallData {
         cif: &cif,

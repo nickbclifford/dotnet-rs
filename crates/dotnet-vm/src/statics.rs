@@ -2,7 +2,7 @@ use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::VmLayoutFactory,
     threading::ThreadManagerOps,
 };
-use dotnet_metrics::RuntimeMetrics;
+use dotnet_metrics::{CacheEvent, CacheKind, RuntimeMetrics};
 use dotnet_types::{
     TypeDescription, error::TypeResolutionError, generics::GenericLookup,
     members::MethodDescription,
@@ -109,6 +109,54 @@ pub struct StaticStorageManager {
 
 const NUM_SHARDS: usize = 16;
 
+/// RAII guard for a single static-initialization wait-graph edge.
+///
+/// While armed, dropping this guard removes `wait_graph[waiter]`.
+struct WaitGraphEdgeGuard<'a> {
+    wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
+    waiter: u64,
+    armed: bool,
+}
+
+impl<'a> WaitGraphEdgeGuard<'a> {
+    fn new(
+        wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
+        waiter: u64,
+    ) -> Self {
+        Self {
+            wait_graph,
+            waiter,
+            armed: true,
+        }
+    }
+
+    fn update(&self, target: u64) {
+        if target == 0 || target == self.waiter {
+            return;
+        }
+
+        let mut wait_graph = self.wait_graph.lock();
+        wait_graph.insert(self.waiter, target);
+    }
+
+    /// Disarm cleanup when edge ownership is explicitly transferred elsewhere.
+    #[allow(dead_code)]
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WaitGraphEdgeGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let mut wait_graph = self.wait_graph.lock();
+        wait_graph.remove(&self.waiter);
+    }
+}
+
 // SAFETY: `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
@@ -207,13 +255,13 @@ impl StaticStorageManager {
 
         if let Some(cached) = context.caches().static_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
-                m.record_static_field_layout_cache_hit();
+                m.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Hit);
             }
             return Ok(Arc::clone(&cached));
         }
 
         if let Some(m) = metrics {
-            m.record_static_field_layout_cache_miss();
+            m.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Miss);
         }
         let result = Arc::new(VmLayoutFactory::static_fields(
             description.clone(),
@@ -437,6 +485,7 @@ impl StaticStorageManager {
     ) -> bool {
         let storage = self.get(description, generics);
         let mut should_yield = false;
+        let edge_guard = WaitGraphEdgeGuard::new(&self.wait_graph, thread_id.as_u64());
 
         loop {
             // Check state before acquiring lock
@@ -447,10 +496,7 @@ impl StaticStorageManager {
 
             // Ensure our wait edge is up-to-date
             let target_thread = storage.initializing_thread.load(Ordering::Acquire);
-            if target_thread != 0 && target_thread != thread_id.as_u64() {
-                let mut wait_graph = self.wait_graph.lock();
-                wait_graph.insert(thread_id.as_u64(), target_thread);
-            }
+            edge_guard.update(target_thread);
 
             // Check for GC safe point before waiting
             if thread_manager.is_gc_stop_requested() {
@@ -481,9 +527,7 @@ impl StaticStorageManager {
             }
         }
 
-        // Remove from wait graph before exit
-        let mut wait_graph = self.wait_graph.lock();
-        wait_graph.remove(&thread_id.as_u64());
+        drop(edge_guard);
         should_yield
     }
 
@@ -497,5 +541,61 @@ impl StaticStorageManager {
             current = next;
         }
         false
+    }
+}
+
+#[cfg(all(test, feature = "multithreading"))]
+mod wait_graph_guard_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn wait_graph_edge_guard_removes_edge_on_scope_exit() {
+        let wait_graph =
+            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
+
+        {
+            let edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 10);
+            edge_guard.update(20);
+
+            {
+                let map = wait_graph.lock();
+                assert_eq!(map.get(&10), Some(&20));
+            }
+        }
+
+        let map = wait_graph.lock();
+        assert_eq!(map.get(&10), None);
+    }
+
+    #[test]
+    fn wait_graph_edge_guard_removes_edge_during_unwind() {
+        let wait_graph =
+            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 30);
+            edge_guard.update(40);
+            panic!("forced unwind to verify wait-graph edge cleanup");
+        }));
+
+        let map = wait_graph.lock();
+        assert_eq!(map.get(&30), None);
+    }
+
+    #[test]
+    fn wait_graph_edge_guard_disarm_transfers_cleanup_responsibility() {
+        let wait_graph =
+            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
+
+        {
+            let mut edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 50);
+            edge_guard.update(60);
+            edge_guard.disarm();
+        }
+
+        let mut map = wait_graph.lock();
+        assert_eq!(map.get(&50), Some(&60));
+        map.remove(&50);
     }
 }

@@ -359,12 +359,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
         trace_call_frame_sample(self, &method);
-        if self.tracer_enabled() {
-            let method_desc = format!("{:?}", method.source);
-            self.shared
-                .tracer
-                .trace_method_entry(self.indent(), &method_desc, "");
-        }
+        self.trace_method_entry_for_call_frame(&method);
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();
         let Some(argument_base) = self.evaluation_stack.top_of_stack().checked_sub(num_args) else {

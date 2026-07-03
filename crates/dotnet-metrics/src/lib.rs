@@ -119,6 +119,30 @@ pub struct CacheSizes {
     pub shared_runtime_fields_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheKind {
+    Layout,
+    Intrinsic,
+    IntrinsicField,
+    Hierarchy,
+    Vmt,
+    StaticFieldLayout,
+    InstanceFieldLayout,
+    ValueType,
+    HasFinalizer,
+    Overrides,
+    MethodInfo,
+    SharedRuntimeTypes,
+    SharedRuntimeMethods,
+    SharedRuntimeFields,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheEvent {
+    Hit,
+    Miss,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum OpcodeCategory {
@@ -397,155 +421,248 @@ impl RuntimeMetrics {
     }
 
     #[inline]
+    pub fn record_cache(&self, kind: CacheKind, event: CacheEvent) {
+        match (kind, event) {
+            (CacheKind::Layout, CacheEvent::Hit) => {
+                self.layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Layout, CacheEvent::Miss) => {
+                self.layout_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Intrinsic, CacheEvent::Hit) => {
+                self.intrinsic_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Intrinsic, CacheEvent::Miss) => {
+                self.intrinsic_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::IntrinsicField, CacheEvent::Hit) => {
+                self.intrinsic_field_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::IntrinsicField, CacheEvent::Miss) => {
+                self.intrinsic_field_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Hierarchy, CacheEvent::Hit) => {
+                self.hierarchy_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Hierarchy, CacheEvent::Miss) => {
+                self.hierarchy_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Vmt, CacheEvent::Hit) => {
+                self.vmt_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Vmt, CacheEvent::Miss) => {
+                self.vmt_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::StaticFieldLayout, CacheEvent::Hit) => {
+                self.static_field_layout_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::StaticFieldLayout, CacheEvent::Miss) => {
+                self.static_field_layout_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::InstanceFieldLayout, CacheEvent::Hit) => {
+                self.instance_field_layout_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::InstanceFieldLayout, CacheEvent::Miss) => {
+                self.instance_field_layout_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::ValueType, CacheEvent::Hit) => {
+                self.value_type_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::ValueType, CacheEvent::Miss) => {
+                self.value_type_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::HasFinalizer, CacheEvent::Hit) => {
+                self.has_finalizer_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::HasFinalizer, CacheEvent::Miss) => {
+                self.has_finalizer_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Overrides, CacheEvent::Hit) => {
+                self.overrides_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::Overrides, CacheEvent::Miss) => {
+                self.overrides_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::MethodInfo, CacheEvent::Hit) => {
+                self.method_info_cache_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::MethodInfo, CacheEvent::Miss) => {
+                self.method_info_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeTypes, CacheEvent::Hit) => {
+                self.shared_runtime_types_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeTypes, CacheEvent::Miss) => {
+                self.shared_runtime_types_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeMethods, CacheEvent::Hit) => {
+                self.shared_runtime_methods_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeMethods, CacheEvent::Miss) => {
+                self.shared_runtime_methods_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeFields, CacheEvent::Hit) => {
+                self.shared_runtime_fields_cache_hits
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            (CacheKind::SharedRuntimeFields, CacheEvent::Miss) => {
+                self.shared_runtime_fields_cache_misses
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[inline]
     pub fn record_layout_cache_hit(&self) {
-        self.layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Layout, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_layout_cache_miss(&self) {
-        self.layout_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Layout, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_intrinsic_cache_hit(&self) {
-        self.intrinsic_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Intrinsic, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_intrinsic_cache_miss(&self) {
-        self.intrinsic_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Intrinsic, CacheEvent::Miss);
     }
 
+    #[inline]
     pub fn record_intrinsic_field_cache_hit(&self) {
-        self.intrinsic_field_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::IntrinsicField, CacheEvent::Hit);
     }
 
+    #[inline]
     pub fn record_intrinsic_field_cache_miss(&self) {
-        self.intrinsic_field_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::IntrinsicField, CacheEvent::Miss);
     }
 
+    #[inline]
     pub fn record_hierarchy_cache_hit(&self) {
-        self.hierarchy_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Hierarchy, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_hierarchy_cache_miss(&self) {
-        self.hierarchy_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Hierarchy, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_vmt_cache_hit(&self) {
-        self.vmt_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Vmt, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_vmt_cache_miss(&self) {
-        self.vmt_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Vmt, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_static_field_layout_cache_hit(&self) {
-        self.static_field_layout_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_static_field_layout_cache_miss(&self) {
-        self.static_field_layout_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_instance_field_layout_cache_hit(&self) {
-        self.instance_field_layout_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_instance_field_layout_cache_miss(&self) {
-        self.instance_field_layout_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_value_type_cache_hit(&self) {
-        self.value_type_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::ValueType, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_value_type_cache_miss(&self) {
-        self.value_type_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::ValueType, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_has_finalizer_cache_hit(&self) {
-        self.has_finalizer_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::HasFinalizer, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_has_finalizer_cache_miss(&self) {
-        self.has_finalizer_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::HasFinalizer, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_overrides_cache_hit(&self) {
-        self.overrides_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Overrides, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_overrides_cache_miss(&self) {
-        self.overrides_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::Overrides, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_method_info_cache_hit(&self) {
-        self.method_info_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::MethodInfo, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_method_info_cache_miss(&self) {
-        self.method_info_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::MethodInfo, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_shared_runtime_types_cache_hit(&self) {
-        self.shared_runtime_types_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_shared_runtime_types_cache_miss(&self) {
-        self.shared_runtime_types_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_shared_runtime_methods_cache_hit(&self) {
-        self.shared_runtime_methods_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_shared_runtime_methods_cache_miss(&self) {
-        self.shared_runtime_methods_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Miss);
     }
 
     #[inline]
     pub fn record_shared_runtime_fields_cache_hit(&self) {
-        self.shared_runtime_fields_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Hit);
     }
 
     #[inline]
     pub fn record_shared_runtime_fields_cache_miss(&self) {
-        self.shared_runtime_fields_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Miss);
     }
 
     #[cfg(feature = "bench-instrumentation")]
@@ -1367,6 +1484,25 @@ mod tests {
             shared_runtime_fields_size: 0,
             shared_runtime_fields_bytes: 0,
         }
+    }
+
+    #[test]
+    fn record_cache_updates_cache_statistics_for_selected_kinds() {
+        let metrics = RuntimeMetrics::new();
+
+        metrics.record_cache(CacheKind::Layout, CacheEvent::Hit);
+        metrics.record_cache(CacheKind::Layout, CacheEvent::Miss);
+        metrics.record_cache(CacheKind::MethodInfo, CacheEvent::Hit);
+        metrics.record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Miss);
+
+        let stats = metrics.cache_statistics(empty_cache_sizes());
+
+        assert_eq!(stats.layout.hits, 1);
+        assert_eq!(stats.layout.misses, 1);
+        assert_eq!(stats.method_info.hits, 1);
+        assert_eq!(stats.method_info.misses, 0);
+        assert_eq!(stats.shared_runtime_fields.hits, 0);
+        assert_eq!(stats.shared_runtime_fields.misses, 1);
     }
 
     #[test]

@@ -2,9 +2,9 @@
 macro_rules! vm_msg {
     // Default to Debug level - format string with args
     ($src:expr, $($format:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().msg(dotnet_tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.msg(dotnet_tracer::TraceLevel::Debug, format_args!($($format)*));
+        });
     }
 }
 
@@ -12,36 +12,36 @@ macro_rules! vm_msg {
 #[macro_export]
 macro_rules! vm_error {
     ($src:expr, $($format:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().msg(dotnet_tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.msg(dotnet_tracer::TraceLevel::Error, format_args!($($format)*));
+        });
     }
 }
 
 #[macro_export]
 macro_rules! vm_info {
     ($src:expr, $($format:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().msg(dotnet_tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.msg(dotnet_tracer::TraceLevel::Info, format_args!($($format)*));
+        });
     }
 }
 
 #[macro_export]
 macro_rules! vm_debug {
     ($src:expr, $($format:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().msg(dotnet_tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.msg(dotnet_tracer::TraceLevel::Debug, format_args!($($format)*));
+        });
     }
 }
 
 #[macro_export]
 macro_rules! vm_trace {
     ($src:expr, $($format:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().msg(dotnet_tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.msg(dotnet_tracer::TraceLevel::Trace, format_args!($($format)*));
+        });
     }
 }
 
@@ -49,115 +49,108 @@ macro_rules! vm_trace {
 #[macro_export]
 macro_rules! vm_trace_instruction {
     ($src:expr, $ip:expr, $instr:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer().trace_instruction($src.indent(), $ip, $instr);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.instruction($ip, $instr);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_method_entry {
     ($src:expr, $name:expr, $sig:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer().trace_method_entry($src.indent(), $name, $sig);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.method_entry($name, $sig);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_intrinsic {
     ($src:expr, $op:expr, $details:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer().trace_intrinsic($src.indent(), $op, $details);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.intrinsic($op, $details);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_interop {
     ($src:expr, $op:expr, $($arg:tt)*) => {
-        if $src.tracer_enabled() {
-            $src.tracer().trace_interop($src.indent(), $op, &format!($($arg)*));
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.interop($op, &format!($($arg)*));
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_method_exit {
     ($src:expr, $name:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer().trace_method_exit($src.indent(), $name);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.method_exit($name);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_stack {
     ($src:expr, $op:expr, $val:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_stack_op($src.indent(), $op, &format!("{:?}", $val));
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.stack_op($op, &format!("{:?}", $val));
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_gc {
     ($src:expr, $event:expr, $details:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_gc_event($src.indent(), $event, $details);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.gc_event($event, $details);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_gc_allocation {
     ($src:expr, $type_name:expr, $size:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_gc_allocation($src.indent(), $type_name, $size);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.gc_allocation($type_name, $size);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_gc_collection_start {
     ($src:expr, $gen:expr, $reason:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_gc_collection_start($src.indent(), $gen, $reason);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.gc_collection_start($gen, $reason);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_gc_collection_end {
     ($src:expr, $gen:expr, $collected:expr, $duration:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_gc_collection_end($src.indent(), $gen, $collected, $duration);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.gc_collection_end($gen, $collected, $duration);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_branch {
     ($src:expr, $type:expr, $target:expr, $taken:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_branch($src.indent(), $type, $target, $taken);
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.branch($type, $target, $taken);
+        });
     };
 }
 
 #[macro_export]
 macro_rules! vm_trace_field {
     ($src:expr, $op:expr, $field:expr, $val:expr) => {
-        if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_field_access($src.indent(), $op, $field, &format!("{:?}", $val));
-        }
+        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
+            trace.field_access($op, $field, &format!("{:?}", $val));
+        });
     };
 }
 

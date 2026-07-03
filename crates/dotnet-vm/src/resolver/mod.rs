@@ -6,6 +6,7 @@ use crate::{
     sync::{Arc, Weak},
 };
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_metrics::{CacheEvent, CacheKind};
 use dotnet_runtime_resolver::{
     IntrinsicCacheAdapter, ResolverLayoutAdapter, TypePropertyCacheAdapter, VmtCacheAdapter,
 };
@@ -186,12 +187,16 @@ impl IntrinsicCacheAdapter for VmResolverCaches {
     fn get_intrinsic_cached(&self, method: &MethodDescription) -> Option<bool> {
         if let Some(cached) = self.caches.intrinsic_cache.read().get(method).copied() {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_intrinsic_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Intrinsic, CacheEvent::Hit);
             }
             Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_intrinsic_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Intrinsic, CacheEvent::Miss);
             }
             None
         }
@@ -211,12 +216,16 @@ impl IntrinsicCacheAdapter for VmResolverCaches {
     fn get_intrinsic_field_cached(&self, field: &FieldDescription) -> Option<bool> {
         if let Some(cached) = self.caches.intrinsic_field_cache.read().get(field).copied() {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_intrinsic_field_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::IntrinsicField, CacheEvent::Hit);
             }
             Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_intrinsic_field_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::IntrinsicField, CacheEvent::Miss);
             }
             None
         }
@@ -247,7 +256,7 @@ impl VmtCacheAdapter for VmResolverCaches {
             {
                 if let Some(shared) = self.shared_state() {
                     shared.metrics.record_vmt_front_cache_hit();
-                    shared.metrics.record_vmt_cache_hit();
+                    shared.metrics.record_cache(CacheKind::Vmt, CacheEvent::Hit);
                 }
                 return Some(front_cached);
             }
@@ -262,7 +271,7 @@ impl VmtCacheAdapter for VmResolverCaches {
         let key = (base_method.clone(), this_type.clone(), generics.clone());
         if let Some(cached) = self.caches.vmt_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_vmt_cache_hit();
+                shared.metrics.record_cache(CacheKind::Vmt, CacheEvent::Hit);
             }
             let cached_method = cached.clone();
             drop(cached);
@@ -281,7 +290,9 @@ impl VmtCacheAdapter for VmResolverCaches {
             Some(cached_method)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_vmt_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Vmt, CacheEvent::Miss);
             }
             None
         }
@@ -322,12 +333,16 @@ impl VmtCacheAdapter for VmResolverCaches {
     ) -> Option<Arc<HashMap<MethodDescription, MethodDescription>>> {
         if let Some(cached) = self.caches.overrides_cache.get(key) {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_overrides_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Overrides, CacheEvent::Hit);
             }
             Some(cached.clone())
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_overrides_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Overrides, CacheEvent::Miss);
             }
             None
         }
@@ -350,7 +365,9 @@ impl TypePropertyCacheAdapter for VmResolverCaches {
             {
                 if let Some(shared) = self.shared_state() {
                     shared.metrics.record_hierarchy_front_cache_hit();
-                    shared.metrics.record_hierarchy_cache_hit();
+                    shared
+                        .metrics
+                        .record_cache(CacheKind::Hierarchy, CacheEvent::Hit);
                 }
                 return Some(front_cached);
             }
@@ -365,7 +382,9 @@ impl TypePropertyCacheAdapter for VmResolverCaches {
         let key = (child.clone(), parent.clone());
         if let Some(cached) = self.caches.hierarchy_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_hierarchy_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Hierarchy, CacheEvent::Hit);
             }
             let cached_value = *cached;
             drop(cached);
@@ -383,7 +402,9 @@ impl TypePropertyCacheAdapter for VmResolverCaches {
             Some(cached_value)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_hierarchy_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Hierarchy, CacheEvent::Miss);
             }
             None
         }
@@ -413,12 +434,16 @@ impl TypePropertyCacheAdapter for VmResolverCaches {
     fn get_value_type_cached(&self, td: &TypeDescription) -> Option<bool> {
         if let Some(cached) = self.caches.value_type_cache.read().get(td).copied() {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_value_type_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::ValueType, CacheEvent::Hit);
             }
             Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_value_type_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::ValueType, CacheEvent::Miss);
             }
             None
         }
@@ -434,12 +459,16 @@ impl TypePropertyCacheAdapter for VmResolverCaches {
     fn get_has_finalizer_cached(&self, td: &TypeDescription) -> Option<bool> {
         if let Some(cached) = self.caches.has_finalizer_cache.read().get(td).copied() {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_has_finalizer_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::HasFinalizer, CacheEvent::Hit);
             }
             Some(cached)
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_has_finalizer_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::HasFinalizer, CacheEvent::Miss);
             }
             None
         }
@@ -473,12 +502,16 @@ impl ResolverLayoutAdapter for VmResolverLayout {
     fn get_layout_cached(&self, key: &ConcreteType) -> Option<Arc<LayoutManager>> {
         if let Some(cached) = self.caches.layout_cache.get(key) {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_layout_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Layout, CacheEvent::Hit);
             }
             Some(cached.clone())
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_layout_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::Layout, CacheEvent::Miss);
             }
             None
         }
@@ -494,12 +527,16 @@ impl ResolverLayoutAdapter for VmResolverLayout {
     ) -> Option<Arc<FieldLayoutManager>> {
         if let Some(cached) = self.caches.instance_field_layout_cache.get(key) {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_instance_field_layout_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Hit);
             }
             Some(cached.clone())
         } else {
             if let Some(shared) = self.shared_state() {
-                shared.metrics.record_instance_field_layout_cache_miss();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Miss);
             }
             None
         }

@@ -145,11 +145,14 @@ impl<'gc> ExecutionEngine<'gc> {
 
         self.ring_buffer.push(ip, i.name());
 
-        if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
-            let resolution = self.stack.state().info_handle.source.resolution();
-            let instr_text = i.show(resolution.definition());
-            vm_trace_instruction!(self.stack, ip, &instr_text);
-        }
+        let _ = self
+            .stack
+            .tracer()
+            .enabled_emit(self.stack.indent(), |trace| {
+                let resolution = self.stack.state().info_handle.source.resolution();
+                let instr_text = i.show(resolution.definition());
+                trace.instruction(ip, &instr_text);
+            });
 
         tracing::debug!(
             "step_normal: frame={}, ip={}, instr={:?}",

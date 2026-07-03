@@ -79,12 +79,173 @@ enum LogEntry {
     Flush,
 }
 
+/// Guarded trace emitter bound to an indentation level.
+pub struct TraceSink<'a> {
+    tracer: &'a Tracer,
+    indent: usize,
+}
+
+/// RAII scope that emits a paired exit trace event when dropped.
+#[must_use = "TraceSpan emits the exit event on drop; bind it to keep the scope alive"]
+pub struct TraceSpan {
+    sender: Sender<LogEntry>,
+    dropped_by_backpressure: Arc<AtomicU64>,
+    exit_entry: Option<LogEntry>,
+}
+
 pub struct Tracer {
     sender: Option<Sender<LogEntry>>,
     dropped_by_backpressure: Arc<AtomicU64>,
 }
 
 static_collect!(Tracer);
+
+impl Drop for TraceSpan {
+    fn drop(&mut self) {
+        let Some(exit_entry) = self.exit_entry.take() else {
+            return;
+        };
+
+        Tracer::send_with(
+            &self.sender,
+            self.dropped_by_backpressure.as_ref(),
+            exit_entry,
+        );
+    }
+}
+
+impl<'a> TraceSink<'a> {
+    #[inline]
+    pub fn msg(&self, level: TraceLevel, args: Arguments) {
+        let msg = format!("{:indent$}{}", "", args, indent = self.indent.min(100) * 2);
+        self.tracer.send(LogEntry::Msg(level, self.indent, msg));
+    }
+
+    #[inline]
+    pub fn instruction(&self, ip: usize, instruction: &str) {
+        self.tracer.send(LogEntry::Instruction(
+            self.indent,
+            ip,
+            instruction.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn method_entry(&self, name: &str, signature: &str) {
+        self.tracer.send(LogEntry::MethodEntry(
+            self.indent,
+            name.to_string(),
+            signature.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn method_exit(&self, name: &str) {
+        self.tracer
+            .send(LogEntry::MethodExit(self.indent, name.to_string()));
+    }
+
+    #[inline]
+    pub fn stack_op(&self, op: &str, value: &str) {
+        self.tracer.send(LogEntry::StackOp(
+            self.indent,
+            op.to_string(),
+            value.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn field_access(&self, op: &str, field: &str, value: &str) {
+        self.tracer.send(LogEntry::FieldAccess(
+            self.indent,
+            op.to_string(),
+            field.to_string(),
+            value.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn branch(&self, branch_type: &str, target: usize, taken: bool) {
+        self.tracer.send(LogEntry::Branch(
+            self.indent,
+            branch_type.to_string(),
+            target,
+            taken,
+        ));
+    }
+
+    #[inline]
+    pub fn gc_event(&self, event: &str, details: &str) {
+        self.tracer.send(LogEntry::GcEvent(
+            self.indent,
+            event.to_string(),
+            details.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn gc_collection_start(&self, generation: usize, reason: &str) {
+        self.tracer.send(LogEntry::GcCollectionStart(
+            self.indent,
+            generation,
+            reason.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn gc_collection_end(&self, generation: usize, collected: usize, duration_us: u64) {
+        self.tracer.send(LogEntry::GcCollectionEnd(
+            self.indent,
+            generation,
+            collected,
+            duration_us,
+        ));
+    }
+
+    #[inline]
+    pub fn gc_allocation(&self, type_name: &str, size_bytes: usize) {
+        self.tracer.send(LogEntry::GcAllocation(
+            self.indent,
+            type_name.to_string(),
+            size_bytes,
+        ));
+    }
+
+    #[inline]
+    pub fn intrinsic(&self, operation: &str, details: &str) {
+        self.tracer.send(LogEntry::Intrinsic(
+            self.indent,
+            operation.to_string(),
+            details.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn interop(&self, operation: &str, details: &str) {
+        self.tracer.send(LogEntry::Interop(
+            self.indent,
+            operation.to_string(),
+            details.to_string(),
+        ));
+    }
+
+    #[inline]
+    pub fn interop_span_with_exit(
+        &self,
+        enter_operation: &str,
+        details: &str,
+        exit_operation: &str,
+    ) -> TraceSpan {
+        self.interop(enter_operation, details);
+        self.tracer
+            .span_from_exit_entry(LogEntry::Interop(
+                self.indent,
+                exit_operation.to_string(),
+                details.to_string(),
+            ))
+            .expect("TraceSink is only constructed when tracer is enabled")
+    }
+}
 
 impl Tracer {
     pub fn new() -> Self {
@@ -314,8 +475,8 @@ impl Tracer {
         }
     }
 
-    fn try_emit_drop_report(&self, sender: &Sender<LogEntry>) {
-        let dropped = self.dropped_by_backpressure.swap(0, Ordering::Relaxed);
+    fn try_emit_drop_report_with(sender: &Sender<LogEntry>, dropped_counter: &AtomicU64) {
+        let dropped = dropped_counter.swap(0, Ordering::Relaxed);
         if dropped == 0 {
             return;
         }
@@ -326,26 +487,53 @@ impl Tracer {
                 | TrySendError::Disconnected(LogEntry::DroppedByBackpressure(count)) => count,
                 _ => dropped,
             };
-            self.dropped_by_backpressure
-                .fetch_add(count, Ordering::Relaxed);
+            dropped_counter.fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    fn send_with(sender: &Sender<LogEntry>, dropped_counter: &AtomicU64, entry: LogEntry) {
+        match sender.try_send(entry) {
+            Ok(()) => Self::try_emit_drop_report_with(sender, dropped_counter),
+            Err(TrySendError::Full(_entry)) => {
+                dropped_counter.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Disconnected(_entry)) => {}
         }
     }
 
     fn send(&self, entry: LogEntry) {
         if let Some(ref sender) = self.sender {
-            match sender.try_send(entry) {
-                Ok(()) => self.try_emit_drop_report(sender),
-                Err(TrySendError::Full(_entry)) => {
-                    self.dropped_by_backpressure.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_entry)) => {}
-            }
+            Self::send_with(sender, self.dropped_by_backpressure.as_ref(), entry);
         }
     }
 
     #[inline(always)]
     pub fn is_enabled(&self) -> bool {
         self.sender.is_some()
+    }
+
+    #[inline]
+    pub fn enabled_emit<R, F>(&self, indent: usize, emit: F) -> Option<R>
+    where
+        F: FnOnce(TraceSink<'_>) -> R,
+    {
+        if !self.is_enabled() {
+            return None;
+        }
+
+        Some(emit(TraceSink {
+            tracer: self,
+            indent,
+        }))
+    }
+
+    fn span_from_exit_entry(&self, exit_entry: LogEntry) -> Option<TraceSpan> {
+        let sender = self.sender.as_ref()?.clone();
+        Some(TraceSpan {
+            sender,
+            dropped_by_backpressure: Arc::clone(&self.dropped_by_backpressure),
+            exit_entry: Some(exit_entry),
+        })
     }
 
     pub fn msg(&self, level: TraceLevel, indent: usize, args: Arguments) {
@@ -784,5 +972,53 @@ mod tests {
         let (processed, reported_drops) = worker.join().expect("consumer worker panicked");
         let dropped = dropped.load(Ordering::Relaxed);
         assert_eq!(processed as u64 + reported_drops + dropped, TOTAL as u64);
+    }
+
+    #[test]
+    fn enabled_emit_skips_closure_when_tracer_is_disabled() {
+        let tracer = Tracer {
+            sender: None,
+            dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+        };
+        let called = std::sync::atomic::AtomicBool::new(false);
+
+        let res = tracer.enabled_emit(0, |_| {
+            called.store(true, Ordering::Relaxed);
+        });
+
+        assert!(res.is_none());
+        assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn interop_span_emits_balanced_exit_on_drop() {
+        let dropped_by_backpressure = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = bounded::<LogEntry>(8);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure,
+        };
+
+        {
+            let _span = tracer.enabled_emit(2, |trace| {
+                trace.interop_span_with_exit("CALL", "demo", "RETURN")
+            });
+        }
+
+        let first = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .expect("enter trace should be emitted");
+        let second = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .expect("exit trace should be emitted");
+
+        assert!(matches!(
+            first,
+            LogEntry::Interop(2, ref op, ref details) if op == "CALL" && details == "demo"
+        ));
+        assert!(matches!(
+            second,
+            LogEntry::Interop(2, ref op, ref details) if op == "RETURN" && details == "demo"
+        ));
     }
 }

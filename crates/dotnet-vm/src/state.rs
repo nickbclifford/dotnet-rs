@@ -7,7 +7,9 @@ use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
 #[cfg(feature = "multithreading")]
 use dotnet_metrics::ArenaGcPressureSnapshot;
-use dotnet_metrics::{CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot};
+use dotnet_metrics::{
+    CacheEvent, CacheKind, CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot,
+};
 use dotnet_pinvoke::NativeLibraries;
 use dotnet_runtime_memory::HeapManager;
 use dotnet_tracer::{TraceLevel, Tracer};
@@ -365,7 +367,9 @@ impl GlobalCaches {
                 METHOD_INFO_FRONT_CACHE.with(|cache| cache.borrow_mut().get(&method, generics))
             {
                 shared.metrics.record_method_info_front_cache_hit();
-                shared.metrics.record_method_info_cache_hit();
+                shared
+                    .metrics
+                    .record_cache(CacheKind::MethodInfo, CacheEvent::Hit);
                 return Ok((*front_cached).clone());
             }
             shared.metrics.record_method_info_front_cache_miss();
@@ -374,7 +378,9 @@ impl GlobalCaches {
         shared.metrics.record_method_info_key_clones(2);
         let key = (method.clone(), generics.clone());
         if let Some(cached) = cache_map_get_cloned(&self.method_info_cache, &key) {
-            shared.metrics.record_method_info_cache_hit();
+            shared
+                .metrics
+                .record_cache(CacheKind::MethodInfo, CacheEvent::Hit);
             if self.front_cache_enabled() {
                 let (method_key, generic_key) = key;
                 METHOD_INFO_FRONT_CACHE.with(|cache| {
@@ -388,7 +394,9 @@ impl GlobalCaches {
             }
             return Ok((*cached).clone());
         }
-        shared.metrics.record_method_info_cache_miss();
+        shared
+            .metrics
+            .record_cache(CacheKind::MethodInfo, CacheEvent::Miss);
         let built = crate::build_method_info(method, generics, shared.clone())?;
         let built_arc = Arc::new(built.clone());
         insert_with_optional_capacity(
