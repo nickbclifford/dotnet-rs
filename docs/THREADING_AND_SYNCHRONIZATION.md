@@ -191,9 +191,9 @@ The static-init deadlock detector is modeled as a per-thread edge map:
 Lifecycle rules:
 - `StaticStorageManager::init` inserts the edge before returning `StaticInitResult::Waiting`.
 - `StaticStorageManager::wait_for_init` may refresh/update that edge as ownership changes while polling.
-- `StaticStorageManager::wait_for_init` must remove `wait_graph[waiter]` on **every** return path.
+- `StaticStorageManager::wait_for_init` owns the edge through a private `WaitGraphEdgeGuard`; dropping the guard removes `wait_graph[waiter]` on **every** return path.
 
-The remove-on-all-returns rule is mandatory because `init` uses `causes_cycle()` over `wait_graph` before admitting another wait edge. A stale edge can create false-positive cycle detection and incorrectly force `StaticInitResult::Recursive`.
+The remove-on-all-returns rule is mandatory because `init` uses `causes_cycle()` over `wait_graph` before admitting another wait edge. A stale edge can create false-positive cycle detection and incorrectly force `StaticInitResult::Recursive`. The guard is intentionally scoped so the wait-graph lock is only held for short insert/remove operations, never across the static-init mutex, condition-variable wait, or GC safe-point checks.
 
 Call path:
 - `VesContext::initialize_static_storage`
@@ -238,7 +238,7 @@ Acquire locks only in the listed direction. Any reverse acquisition is a lock-or
 - `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
 - `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena`, `get_all_arenas`, `command_finished`).
 - `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
-- `StaticStorageManager::wait_for_init` must remove `wait_graph[thread_id]` before every return (including GC-yield returns) to prevent stale-edge cycle false positives.
+- `StaticStorageManager::wait_for_init` must keep wait-graph cleanup RAII-owned (`WaitGraphEdgeGuard`) so `wait_graph[thread_id]` is removed before every return (including GC-yield returns) and stale-edge cycle false positives cannot persist.
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
 - Callers of `SyncBlockManager::get_or_create_sync_block` must publish the returned sync-block index only after the call returns (after `blocks` is released).
 - `SyncBlock::state` must be dropped before any safe-point check (`is_gc_stop_requested` / `check_gc_safe_point`) to avoid blocking STW progress while waiting on monitor ownership.

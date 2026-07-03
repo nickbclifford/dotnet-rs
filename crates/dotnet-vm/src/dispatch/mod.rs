@@ -10,7 +10,7 @@ use crate::{
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
-use dotnet_value::{layout::HasLayout, object::ObjectRef};
+use dotnet_value::object::ObjectRef;
 use dotnet_vm_ops::prepared_call::PreparedCall;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
@@ -339,8 +339,9 @@ impl<'gc> ExecutionEngine<'gc> {
             let index = state.next_index;
             if index < targets_len {
                 let target = ObjectRef(Some(state.targets)).as_vector(|v| {
-                    let offset = (v.layout.element_layout.as_ref().size() * index).as_usize();
-                    unsafe { ObjectRef::read_branded(&v.get()[offset..], &gc) }
+                    v.object_ref_elements(&gc)
+                        .nth(index)
+                        .expect("multicast targets vector storage must match vector length")
                 });
                 state.next_index += 1;
                 (Some(target), state.args.clone(), index)

@@ -505,7 +505,7 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
     if is_type_or_ancestor_named(ctx, &delegate_td, "System.MulticastDelegate") {
         let mut targets =
             dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(delegate_base), 1));
-        delegate_ref.write(&mut targets.get_mut()[..ObjectRef::SIZE]);
+        targets.write_object_ref_elements_mut(&[delegate_ref]);
         let targets_ref = ObjectRef::new(gc, HeapStorage::Vec(Box::new(targets)));
         ctx.register_new_object(&targets_ref);
 

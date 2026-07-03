@@ -197,7 +197,6 @@ pub(super) struct DelegateViewMut<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> {
     delegate_type: TypeDescription,
 }
 
-#[allow(dead_code)] // DelegateViewMut provides a symmetric API; not all helpers are used yet.
 impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
     pub(super) fn new(ctx: &'a T, obj: ObjectRef<'gc>) -> Self {
         let delegate_type = ctx
@@ -209,49 +208,6 @@ impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
             ctx,
             obj,
             delegate_type,
-        }
-    }
-
-    pub(super) fn target(&self) -> ObjectRef<'gc> {
-        DelegateView {
-            ctx: self.ctx,
-            obj: self.obj,
-            delegate_type: self.delegate_type.clone(),
-        }
-        .target()
-    }
-
-    pub(super) fn method_index(&self) -> usize {
-        DelegateView {
-            ctx: self.ctx,
-            obj: self.obj,
-            delegate_type: self.delegate_type.clone(),
-        }
-        .method_index()
-    }
-
-    pub(super) fn multicast_targets(&self) -> Option<ObjectRef<'gc>> {
-        DelegateView {
-            ctx: self.ctx,
-            obj: self.obj,
-            delegate_type: self.delegate_type.clone(),
-        }
-        .multicast_targets()
-    }
-
-    pub(super) fn invocation_list_iter(&self) -> DelegateInvocationListIter<'gc> {
-        DelegateView {
-            ctx: self.ctx,
-            obj: self.obj,
-            delegate_type: self.delegate_type.clone(),
-        }
-        .invocation_list_iter()
-    }
-
-    pub(super) fn identity(&self) -> DelegateIdentity<'gc> {
-        DelegateIdentity {
-            target: self.target(),
-            method_index: self.method_index(),
         }
     }
 

@@ -1148,10 +1148,7 @@ fn parse_runtime_type_array<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let type_objs = types_obj
         .try_as_vector(|v: &dotnet_value::object::Vector<'gc>| {
-            v.get()
-                .chunks_exact(ObjectRef::SIZE)
-                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
-                .collect::<Vec<_>>()
+            v.object_ref_elements(&gc).collect::<Vec<_>>()
         })
         .map_err(VmError::from)?;
 

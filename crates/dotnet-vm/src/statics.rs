@@ -100,7 +100,8 @@ pub struct StaticStorageManager {
     /// Lifecycle contract:
     /// - `init()` inserts `wait_graph[waiter] = owner` before returning `StaticInitResult::Waiting`.
     /// - `wait_for_init()` may refresh that edge while polling.
-    /// - `wait_for_init()` must remove `wait_graph[waiter]` on every return path.
+    /// - `wait_for_init()` owns that edge through `WaitGraphEdgeGuard`, whose `Drop`
+    ///   implementation removes `wait_graph[waiter]` on every return path.
     ///
     /// The remove-on-all-returns rule is required because stale edges feed
     /// `causes_cycle()`, which can falsely report recursion/cycles for later unrelated init calls.

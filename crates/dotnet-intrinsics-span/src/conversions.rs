@@ -91,7 +91,9 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
             let element_type = if !generics.method_generics.is_empty() {
-                generics.method_generics[0].clone()
+                generics
+                    .cloned_method_arg(0)
+                    .map_err(|e| StepResult::Error(e.into()))?
             } else {
                 make_char_element_type(ctx)?
             };
@@ -295,7 +297,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let element_type = &generics.method_generics[0];
+    let element_type = dotnet_vm_ops::vm_try!(generics.method_arg(0));
     let element_size = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone())).size();
 
     let field_handle = ctx.pop_value_type();
@@ -642,7 +644,7 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
     let array_ref = ctx.pop_obj();
 
     let element_type = if !generics.method_generics.is_empty() {
-        generics.method_generics[0].clone()
+        dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0))
     } else {
         return StepResult::Error(
             ExecutionError::NotImplemented("GetArrayData expected generic argument".into()).into(),

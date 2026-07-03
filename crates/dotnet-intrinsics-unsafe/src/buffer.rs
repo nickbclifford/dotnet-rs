@@ -80,7 +80,7 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let total_count = if generics.method_generics.is_empty() {
         len as usize
     } else {
-        let target = &generics.method_generics[0];
+        let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
         let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
         (layout.size() * (len as usize)).as_usize()
     };
@@ -122,7 +122,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
-    let target = generics.method_generics[0].clone();
+    let target = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
     let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target));
     let elem_size = layout.size().as_usize();
 

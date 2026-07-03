@@ -70,9 +70,9 @@ Before normal method resolution, the call instruction checks if the target is a 
 
 Single delegate invocation:
 1. Pop the delegate object from the stack
-2. Extract target object and method index from delegate fields
+2. Read target object and method index through `DelegateView` (centralizing the `_target`/`_method` layout invariant)
 3. Resolve the method from the index
-4. Push target and arguments, then dispatch the resolved method
+4. Build a `PreparedCall` so bound-`this` insertion and argument repush order are shared with multicast stepping, then dispatch the resolved method
 
 ### Multicast Delegate Stepping Protocol
 
@@ -89,8 +89,8 @@ pub struct MulticastState<'gc> {
 
 **Stepping Protocol** (`ExecutionEngine::handle_multicast_step` in `dispatch/mod.rs`):
 1. **Return Handling**: When `handle_multicast_step` is entered, it first checks if the previous target just returned. If the delegate signature has a return value, it pops and discards it (only the *last* target's return value is kept).
-2. **Next Target**: It reads the next delegate object from the `targets` array using `next_index` (which is then incremented).
-3. **Dispatch**: It pushes the target object and the preserved `args` back onto the evaluation stack, then calls `dispatch_method` for the new target.
+2. **Next Target**: It reads the next delegate object from the `targets` array using `next_index` (which is then incremented) via the branded object-reference vector iterator.
+3. **Dispatch**: It builds a multicast `PreparedCall`, pushes the target object and preserved `args` back onto the evaluation stack in call order, then calls `dispatch_method` for the new target.
 4. **Completion**: If `next_index` reaches the end of the array, `handle_multicast_step` delegates to `ctx.handle_return()` to finalize the multicast invocation and propagate the last return value to the caller.
 
 ### Key Delegate Intrinsics
@@ -127,11 +127,11 @@ pub struct MulticastState<'gc> {
 ## Intrinsic Dispatch
 
 ### Call Interception Path
-When a method call is about to be dispatched:
-1. Check `GlobalCaches` intrinsic cache (is this method intrinsic?)
-2. If cache miss, query `IntrinsicRegistry` and cache the result
-3. If intrinsic, call `intrinsic_call` which looks up the native handler
-4. Native handler executes directly, manipulating the stack via `VesOps` traits
+When a resolved method call is about to be dispatched, both VM-context and `ExecutionEngine` API entrypoints route through the VM-local resolved-method dispatcher:
+1. Classify the method against the generated/runtime intrinsic registry (using the shared intrinsic cache when available)
+2. If intrinsic, dispatch the native handler directly
+3. Otherwise handle P/Invoke, supported no-body runtime stubs, and delegate runtime methods
+4. If none of those apply, push a managed call frame for normal IL execution
 
 ### Special Cases
 - `Object.ToString` and `Object.GetType` have hardcoded intrinsic handling in `intrinsics/mod.rs`

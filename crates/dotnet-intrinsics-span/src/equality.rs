@@ -102,7 +102,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         }
     };
 
-    let element_type = &generics.method_generics[0];
+    let element_type = dotnet_vm_ops::vm_try!(generics.method_arg(0));
 
     // Check length
     let fallback_equal = (a_val == b_val) as i32;

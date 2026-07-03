@@ -245,12 +245,7 @@ pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'
         Ok(v) => v,
         Err(e) => return StepResult::Error(e.into()),
     };
-    for (item, chunk) in items
-        .into_iter()
-        .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
-    {
-        item.write(chunk);
-    }
+    vector.write_object_ref_elements_mut(&items);
     ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector))));
     StepResult::Continue
 }
@@ -568,7 +563,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, T: ReflectionIntrinsi
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = &generics.method_generics[0];
+    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
     let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let value = match &*layout {
         LayoutManager::Scalar(Scalar::ObjectRef) => false,
@@ -590,7 +585,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = &generics.method_generics[0];
+    let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
     let layout = dotnet_vm_ops::vm_try!(ctx.reflection_type_layout(target.clone()));
     let res = layout.is_or_contains_refs();
 

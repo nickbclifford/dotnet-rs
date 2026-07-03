@@ -95,7 +95,7 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target_ct = generics.method_generics[0].clone();
+    let target_ct = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
     let target_td = ctx
         .loader()
         .find_concrete_type(target_ct.clone())
@@ -204,9 +204,7 @@ pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsic
     } else {
         dotnet_vm_ops::vm_try!(ctor_args_obj.try_as_vector(
             |v: &dotnet_value::object::Vector<'gc>| {
-                v.get()
-                    .chunks_exact(ObjectRef::SIZE)
-                    .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
+                v.object_ref_elements(&gc)
                     .map(StackValue::ObjectRef)
                     .collect::<Vec<_>>()
             }
@@ -287,10 +285,7 @@ pub fn handle_make_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
         let param_objs = dotnet_vm_ops::vm_try!(parameters.try_as_vector(
             |v: &dotnet_value::object::Vector<'gc>| {
-                v.get()
-                    .chunks_exact(ObjectRef::SIZE)
-                    .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
-                    .collect::<Vec<_>>()
+                v.object_ref_elements(&gc).collect::<Vec<_>>()
             }
         ));
         let mut new_generics = Vec::with_capacity(param_objs.len());

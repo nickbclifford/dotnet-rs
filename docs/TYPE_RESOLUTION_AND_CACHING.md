@@ -98,7 +98,7 @@ Provides a scoped view of the resolution state:
 - Method-level generics (`Foo<M>` → `Foo<string>`)
 - Nested generics (e.g., `Dictionary<K, List<V>>`)
 
-`GenericLookup` contains two arrays: `type_generics` and `method_generics` (both `Arc<[ConcreteType]>`). When `GenericLookup::make_concrete()` is called with a `MethodType` (e.g., a generic type parameter `!!0`), it indexes into the appropriate array to substitute the parameter with its concrete instantiation. If the input is a base type (e.g., an array of `!0`), it recursively substitutes the inner types to produce a new `ConcreteType`.
+`GenericLookup` contains two arrays: `type_generics` and `method_generics` (both `Arc<[ConcreteType]>`). Runtime call sites should use the bounded accessors (`type_arg`, `method_arg`, and cloned variants) when an index comes from metadata or intrinsic binding; missing slots become `TypeResolutionError::GenericIndexOutOfBounds` instead of unchecked slice panics. When `GenericLookup::make_concrete()` is called with a `MethodType` (e.g., a generic type parameter `!!0`), it indexes into the appropriate array to substitute the parameter with its concrete instantiation and reports the same bounded error for malformed slots. If the input is a base type (e.g., an array of `!0`), it recursively substitutes the inner types to produce a new `ConcreteType`.
 
 ### Interaction with Layout
 Generic type instantiation affects layout because different type arguments may have different sizes and GC descriptors. Layout computation must be done per-concrete-instantiation.
