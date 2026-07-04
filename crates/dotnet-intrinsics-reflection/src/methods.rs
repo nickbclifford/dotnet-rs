@@ -16,7 +16,7 @@ use dotnet_value::{
     layout::HasLayout,
     object::{CTSValue, HeapStorage, ObjectRef},
 };
-use dotnet_vm_data::StepResult;
+use dotnet_vm_data::{FrameReturnAction, StepResult};
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
 
@@ -372,9 +372,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 resolve_return_type(ctx, &method, &lookup)
             };
 
-            ctx.frame_stack_mut()
-                .current_frame_mut()
-                .awaiting_invoke_return = Some(return_type);
+            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(return_type));
 
             for arg in args {
                 ctx.push(arg);
@@ -410,9 +408,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 };
             args.append(&mut invoke_args);
 
-            ctx.frame_stack_mut()
-                .current_frame_mut()
-                .awaiting_invoke_return = Some(RuntimeType::Type(method.parent.clone()));
+            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(RuntimeType::Type(
+                method.parent.clone(),
+            )));
 
             for arg in args {
                 ctx.push(arg);

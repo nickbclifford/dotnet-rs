@@ -18,7 +18,66 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
 };
+use dotnet_vm_data::FrameReturnAction;
 use dotnetdll::prelude::{MethodMemberIndex, MethodType};
+
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// Yield to a GC safe point and retry the current instruction on resume.
+    /// Marks `VmContinuation::RetryInstruction` when no traced continuation state is already
+    /// queued, then restores the IP/stack snapshot. Existing handler-unwind state is preserved;
+    /// the retry itself is encoded by `back_up_ip()`.
+    #[inline]
+    pub fn yield_and_retry(&mut self) -> StepResult {
+        if matches!(
+            &*self.continuation,
+            dotnet_vm_ops::VmContinuation::None | dotnet_vm_ops::VmContinuation::RetryInstruction
+        ) {
+            *self.continuation = dotnet_vm_ops::VmContinuation::RetryInstruction;
+        }
+        self.back_up_ip();
+        StepResult::Yield
+    }
+
+    /// Yield to a GC safe point with no state change.
+    /// For simple spinning yields (e.g., WaitForPendingFinalizers).
+    #[inline]
+    pub fn yield_spin(&mut self) -> StepResult {
+        StepResult::Yield
+    }
+
+    /// Set the frame return action before a reflection-dispatched call.
+    #[inline]
+    pub fn set_frame_return_action(&mut self, action: FrameReturnAction) {
+        self.frame_stack.current_frame_mut().frame_continuation = Some(action);
+    }
+
+    /// Push a handler unwind state into `VmContinuation::HandlerUnwinds`.
+    #[inline]
+    pub fn push_handler_unwind(&mut self, state: dotnet_vm_ops::UnwindState<'gc>) {
+        match self.continuation {
+            dotnet_vm_ops::VmContinuation::HandlerUnwinds(unwinds) => unwinds.push(state),
+            _ => {
+                *self.continuation = dotnet_vm_ops::VmContinuation::HandlerUnwinds(vec![state]);
+            }
+        }
+    }
+
+    /// Pop a handler unwind state from `VmContinuation::HandlerUnwinds`.
+    /// Returns `None` if no pending unwinds.
+    #[inline]
+    pub fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_ops::UnwindState<'gc>> {
+        match self.continuation {
+            dotnet_vm_ops::VmContinuation::HandlerUnwinds(unwinds) => {
+                let state = unwinds.pop();
+                if unwinds.is_empty() {
+                    *self.continuation = dotnet_vm_ops::VmContinuation::None;
+                }
+                state
+            }
+            _ => None,
+        }
+    }
+}
 
 impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     #[inline]
@@ -540,8 +599,7 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                         thread_id,
                         &self.shared.gc_coordinator,
                     ) {
-                        self.back_up_ip();
-                        return StepResult::Yield;
+                        return self.yield_and_retry();
                     }
                     // Re-check initialization state after waiting.
                     // If the .cctor failed in another thread, we must throw TypeInitializationException.
@@ -621,6 +679,11 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    fn yield_spin(&mut self) -> StepResult {
+        VesContext::yield_spin(self)
+    }
+
+    #[inline]
     fn state(&self) -> &MethodState {
         self.frame_stack.state()
     }
@@ -690,8 +753,8 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn suspended_handler_unwinds_mut(&mut self) -> &mut Vec<dotnet_vm_ops::UnwindState<'gc>> {
-        self.suspended_handler_unwinds
+    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_ops::UnwindState<'gc>> {
+        VesContext::pop_handler_unwind(self)
     }
 }
 

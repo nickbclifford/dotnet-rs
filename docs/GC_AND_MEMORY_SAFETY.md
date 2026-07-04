@@ -169,6 +169,67 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 3. Always use `GcScopeGuard::enter(ctx, token)` when holding heap borrows in instruction handlers/intrinsics.
 4. Chunk large operations — e.g., in string/span/unsafe intrinsic handlers (`dotnet-intrinsics-string`, `dotnet-intrinsics-span`, `dotnet-intrinsics-unsafe`) — and check `ctx.check_gc_safe_point()` periodically, dropping and re-acquiring `GcScopeGuard` between chunks.
 
+## Cross-GC-Safe-Point Continuations
+
+The interpreter only reaches GC safe points at `StepResult::Yield` boundaries between
+`arena.mutate_root(|gc, engine| engine.run(gc))` calls. Any VM state that must survive that unwind
+must live in `Collect`-traced storage reachable from the root (`ExecutionEngine<'gc>` →
+`CallStack<'gc>` → `ThreadContext<'gc>`), or in traced per-frame state (`StackFrame<'gc>`).
+
+### Two resume families
+
+1. **Re-run/resume interpreter control flow in-place**
+   - Uses `VmContinuation<'gc>` on `ThreadContext<'gc>`.
+   - Covers retrying the current instruction and preserving nested handler-unwind queues.
+2. **Resume with return-value post-processing after a managed call returns**
+   - Uses per-frame `FrameReturnAction` on `StackFrame<'gc>`.
+   - Covers reflection-driven call flows that must box/coerce the return value after callee return.
+
+### `VmContinuation<'gc>`
+
+`VmContinuation<'gc>` is the unified, `Collect`-traced encoding of cross-safe-point interpreter
+continuation state:
+
+- `None` — no pending continuation state.
+- `RetryInstruction` — previous safe-point yield requested an instruction retry (IP/stack restored
+  before yielding). This marker is cleared on VM re-entry; the restored IP/stack is what actually
+  drives the retry.
+- `HandlerUnwinds(Vec<UnwindState<'gc>>)` — queued unwind states for nested `leave`/`finally`
+  transitions that may span safe points.
+
+### `FrameReturnAction`
+
+`FrameReturnAction` is a per-frame continuation action for return handling. The current variant is:
+
+- `InvokeReturn(RuntimeType)` — after the callee returns, apply reflection `Invoke` return
+  semantics (including boxing/coercion/null handling) using the captured return type metadata.
+
+Because `FrameReturnAction` contains only `'static` metadata (`RuntimeType`), it does not add any
+new GC references to trace.
+
+### `VesContext` continuation API
+
+`VesContext` exposes explicit helpers for continuation state transitions:
+
+- `yield_and_retry()` — records `VmContinuation::RetryInstruction` when no traced continuation
+  state is already queued, restores the instruction snapshot via `back_up_ip`, then returns
+  `StepResult::Yield`. If handler-unwind state is already present, that state is preserved because
+  the retry itself is encoded by the restored IP/stack snapshot.
+- `yield_spin()` — returns `StepResult::Yield` without changing continuation state.
+- `set_frame_return_action(action)` — stores the per-frame `FrameReturnAction` for post-return
+  handling.
+- `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
+  `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
+
+### Async/await prohibition (reference: F-SAFETY-001)
+
+Rust `async`/`await` is prohibited in this layer. `gc-arena` brands `Gc<'gc, T>` handles with an
+invariant `'gc` lifetime scoped to `mutate_root` closures, while compiler-generated futures cannot
+provide custom `Collect<'gc>` tracing for locals captured across `.await`. Holding `Gc` handles in
+an untraced future across safe points would permit collection of still-referenced objects.
+
+Reference: `REVIEW.md` §`F-SAFETY-001`.
+
 ## Panic-Safety Guarantees During STW
 
 `ThreadManager::request_stop_the_world` uses a `ResumeOnPanic` guard (`crates/dotnet-vm/src/threading/basic.rs`) that calls `resume_threads()` if any panic occurs before ownership is handed to `StopTheWorldGuard`. This prevents mutator threads from being left permanently paused.

@@ -37,7 +37,7 @@ use dotnet_value::{
     layout::LayoutManager,
     object::{Object, ObjectRef},
 };
-use dotnet_vm_data::MethodInfo;
+use dotnet_vm_data::{FrameReturnAction, MethodInfo};
 use dotnet_vm_ops::{NULL_REF_MSG, ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost};
 use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
@@ -99,6 +99,8 @@ pub trait ResolutionContextHost<'gc> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> dotnet_vm_data::StepResult;
+
+    fn set_frame_return_action(&mut self, action: FrameReturnAction);
 
     fn reflection_constructor_frame(
         &mut self,

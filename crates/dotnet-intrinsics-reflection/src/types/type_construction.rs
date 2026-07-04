@@ -10,7 +10,7 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_data::StepResult;
+use dotnet_vm_data::{FrameReturnAction, StepResult};
 use dotnet_vm_ops::ops::TypedStackOps;
 use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
@@ -254,9 +254,7 @@ pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsic
         ctx.push(arg);
     }
 
-    ctx.frame_stack_mut()
-        .current_frame_mut()
-        .awaiting_invoke_return = Some(invoke_return_type);
+    ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(invoke_return_type));
     ctx.reflection_dispatch_method(ctor_desc, lookup)
 }
 

@@ -26,7 +26,8 @@ pub use exceptions::{
     UnwindState, UnwindTarget,
 };
 pub use stack::{
-    BasePointer, EvaluationStack, FrameStack, MulticastState, PinnedLocals, StackFrame,
+    BasePointer, EvaluationStack, FrameReturnAction, FrameStack, MulticastState, PinnedLocals,
+    StackFrame,
 };
 
 /// Per-frame execution state for a single active method invocation.

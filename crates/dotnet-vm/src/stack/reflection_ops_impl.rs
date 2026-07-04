@@ -272,6 +272,10 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
         self.dispatch_method(dispatch_method, lookup)
     }
 
+    fn set_frame_return_action(&mut self, action: dotnet_vm_data::FrameReturnAction) {
+        VesContext::set_frame_return_action(self, action);
+    }
+
     fn reflection_constructor_frame(
         &mut self,
         instance: Object<'gc>,

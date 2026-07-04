@@ -203,6 +203,17 @@ impl<'gc> ExecutionEngine<'gc> {
 
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        // `RetryInstruction` records the reason for the previous safe-point yield. The actual
+        // retry is already encoded in the restored IP/stack snapshot, so clear the marker once the
+        // executor re-enters the VM. Do this outside the batched instruction loop to keep the hot
+        // dispatch path free of continuation polling.
+        if matches!(
+            &self.stack.execution.continuation,
+            dotnet_vm_ops::VmContinuation::RetryInstruction
+        ) {
+            self.stack.execution.continuation = dotnet_vm_ops::VmContinuation::None;
+        }
+
         loop {
             if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
                 // Final snapshot before aborting to ensures correct dump in test harness

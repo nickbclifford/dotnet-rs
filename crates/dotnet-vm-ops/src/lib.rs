@@ -12,7 +12,28 @@ mod macros;
 pub mod ops;
 pub mod prepared_call;
 
+use gc_arena::Collect;
+
 pub const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
+/// A `Collect`-able unified encoding of cross-GC-safe-point VM resumption state.
+/// Stored as `ThreadContext::continuation` so yield/resume state survives between
+/// `mutate_root` calls without escaping `'gc`.
+/// Replaces the ad-hoc combination of `suspended_handler_unwinds` and the
+/// undocumented `back_up_ip + Yield` idiom.
+#[derive(Collect)]
+#[collect(no_drop, gc_lifetime = 'gc)]
+pub enum VmContinuation<'gc> {
+    /// No pending cross-safe-point state; normal execution.
+    None,
+    /// The current instruction yielded for a GC-safe-point retry.
+    /// `back_up_ip` was called before yielding; IP is already restored. This marker is cleared
+    /// when the executor re-enters the VM because the retry is encoded in the restored frame state.
+    RetryInstruction,
+    /// Nested exception-handler unwind states suspended during `leave`.
+    /// Restored on the next exception-unwind completion.
+    HandlerUnwinds(Vec<UnwindState<'gc>>),
+}
 
 pub use dotnet_macros::trait_alias;
 pub use dotnet_vm_data::{

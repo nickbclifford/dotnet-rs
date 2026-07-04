@@ -16,6 +16,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     storage::FieldStorage,
 };
+use dotnet_vm_data::FrameReturnAction;
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
@@ -33,8 +34,8 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) thread_id: &'a std::cell::Cell<dotnet_utils::ArenaId>,
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
+    pub(crate) continuation: &'a mut dotnet_vm_ops::VmContinuation<'gc>,
     pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
-    pub(crate) suspended_handler_unwinds: &'a mut Vec<dotnet_vm_ops::UnwindState<'gc>>,
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
@@ -289,12 +290,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.push(return_value);
         }
 
-        let invoke_return_type = self
+        let frame_continuation = self
             .frame_stack
             .current_frame_opt_mut()
-            .and_then(|caller| caller.awaiting_invoke_return.take());
+            .and_then(|caller| caller.frame_continuation.take());
 
-        if let Some(return_type) = invoke_return_type {
+        if let Some(FrameReturnAction::InvokeReturn(return_type)) = frame_continuation {
             if matches!(return_type, RuntimeType::Void) {
                 self.push(StackValue::null());
             } else {
@@ -456,8 +457,8 @@ pub struct ThreadContext<'gc> {
     pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
+    pub continuation: dotnet_vm_ops::VmContinuation<'gc>,
     pub call_args_buffer: Vec<StackValue<'gc>>,
-    pub suspended_handler_unwinds: Vec<dotnet_vm_ops::UnwindState<'gc>>,
 }
 
 #[cfg(test)]

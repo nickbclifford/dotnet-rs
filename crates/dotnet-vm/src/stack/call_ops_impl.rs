@@ -903,7 +903,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if frame.state.info_handle.is_cctor
             || frame.is_finalizer
             || frame.multicast_state.is_some()
-            || frame.awaiting_invoke_return.is_some()
+            || frame.frame_continuation.is_some()
         {
             return false;
         }

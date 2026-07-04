@@ -731,6 +731,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnetdll",
+ "gc-arena",
 ]
 
 [[package]]

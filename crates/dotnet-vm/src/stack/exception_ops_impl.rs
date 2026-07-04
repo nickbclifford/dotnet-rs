@@ -111,7 +111,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
             && state.cursor.frame_index < frame_index
         {
-            self.suspended_handler_unwinds.push(state);
+            self.push_handler_unwind(state);
         }
 
         let cursor = HandlerAddress {

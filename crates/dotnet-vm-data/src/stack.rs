@@ -42,6 +42,15 @@ pub const STACKFRAME_POOL_LIMIT: usize = 64;
 pub type ExceptionStack<'gc> = SmallVec<[ObjectRef<'gc>; STACKFRAME_EXCEPTION_INLINE_CAPACITY]>;
 pub type PinnedLocals = SmallVec<[bool; STACKFRAME_PINNED_LOCALS_INLINE_CAPACITY]>;
 
+/// Per-frame continuation action used when caller-side return handling must resume
+/// after a reflection-dispatched managed call returns.
+/// Replaces `awaiting_invoke_return: Option<RuntimeType>` on `StackFrame`.
+#[derive(Debug, Clone)]
+pub enum FrameReturnAction {
+    /// Box/coerce the dispatched method's return value using this type descriptor.
+    InvokeReturn(RuntimeType),
+}
+
 pub struct StackFrame<'gc> {
     pub stack_height: StackSlotIndex,
     pub base: BasePointer,
@@ -53,7 +62,7 @@ pub struct StackFrame<'gc> {
     pub pinned_locals: PinnedLocals,
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
-    pub awaiting_invoke_return: Option<RuntimeType>,
+    pub frame_continuation: Option<FrameReturnAction>,
 }
 
 impl<'gc> StackFrame<'gc> {
@@ -73,7 +82,7 @@ impl<'gc> StackFrame<'gc> {
             pinned_locals,
             is_finalizer: false,
             multicast_state: None,
-            awaiting_invoke_return: None,
+            frame_continuation: None,
         }
     }
 
@@ -93,7 +102,7 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals = pinned_locals;
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.awaiting_invoke_return = None;
+        self.frame_continuation = None;
     }
 
     pub fn prepare_for_pool(&mut self) {
@@ -103,12 +112,13 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals.clear();
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.awaiting_invoke_return = None;
+        self.frame_continuation = None;
     }
 }
 
 // SAFETY: `StackFrame` traces all GC-managed fields it can contain:
 // `exception_stack` entries and optional `multicast_state`.
+// `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has no GC references.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for exception in &self.exception_stack {

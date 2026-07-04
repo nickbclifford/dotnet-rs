@@ -677,7 +677,7 @@ impl ExceptionHandlingSystem {
         if let UnwindTarget::Instruction(target_ip) = target
             && target_ip != usize::MAX
         {
-            resumed_handler_unwind = ctx.suspended_handler_unwinds_mut().pop();
+            resumed_handler_unwind = ctx.pop_handler_unwind();
         }
 
         if let Some(state) = resumed_handler_unwind {

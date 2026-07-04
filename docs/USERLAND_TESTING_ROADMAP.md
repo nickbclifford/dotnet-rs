@@ -39,7 +39,7 @@ A capability snapshot, filtered to what matters for running *real* userland code
 
 **Reflection — read path good, invoke works, emit absent.**
 - Type/MethodInfo/FieldInfo/ParameterInfo introspection, `typeof`, `GetType`, generic reflection, `Activator.CreateInstance` are implemented (`crates/dotnet-intrinsics-reflection/`).
-- `MethodInfo.Invoke` / `ConstructorInfo.Invoke` *are* implemented via an `awaiting_invoke_return` re-entrancy mechanism (`crates/dotnet-intrinsics-reflection/src/methods.rs:191-263`, `crates/dotnet-vm-data/src/stack.rs:56`, `crates/dotnet-vm/src/stack/context.rs:288`).
+- `MethodInfo.Invoke` / `ConstructorInfo.Invoke` *are* implemented via a per-frame `frame_continuation` (`FrameReturnAction`) re-entrancy mechanism (`crates/dotnet-intrinsics-reflection/src/methods.rs`, `crates/dotnet-vm-data/src/stack.rs`, `crates/dotnet-vm/src/stack/context.rs`).
 - **No `System.Reflection.Emit`, no `DynamicMethod`, no `ILGenerator`.** This is the single biggest userland blocker and the hinge for Sections 3.1, 5, and 7.
 
 **Async — runs synchronously, no scheduler.** The embedded `AsyncTaskMethodBuilder` (`crates/dotnet-assemblies/src/support/AsyncMethodBuilders.cs`) drives the state machine inline on the calling thread: `Start` calls `MoveNext`, continuations are plain `Action`s. So `await` over already-completed / `TaskCompletionSource`-driven work passes (see `crates/dotnet-cli/tests/fixtures/async/`), but there is **no thread pool, no `TaskScheduler`, no timer** — `Task.Run`, `Task.Delay`, and genuine background concurrency have nothing to run on.

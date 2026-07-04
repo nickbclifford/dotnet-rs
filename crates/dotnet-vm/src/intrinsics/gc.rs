@@ -193,11 +193,11 @@ pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesI
     let _generation = ctx.pop_i32();
     ctx.heap().needs_full_collect.set(true);
     ctx.increment_ip();
-    StepResult::Yield
+    ctx.yield_spin()
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
-pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
+pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc> + VesInternals<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -206,7 +206,7 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
     // yield to wait (this effectively spins until finalizers complete)
     if !ctx.heap().pending_finalization.borrow().is_empty() || ctx.heap().processing_finalizer.get()
     {
-        return StepResult::Yield;
+        return ctx.yield_spin();
     }
     StepResult::Continue
 }

@@ -481,6 +481,9 @@ pub trait VesInternals<'gc> {
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
+    fn yield_spin(&mut self) -> StepResult {
+        StepResult::Yield
+    }
     fn state(&self) -> &MethodState;
     fn state_mut(&mut self) -> &mut MethodState;
 
@@ -501,7 +504,7 @@ pub trait VesInternals<'gc> {
     fn evaluation_stack_mut(&mut self) -> &mut crate::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &crate::FrameStack<'gc>;
     fn frame_stack_mut(&mut self) -> &mut crate::FrameStack<'gc>;
-    fn suspended_handler_unwinds_mut(&mut self) -> &mut Vec<crate::UnwindState<'gc>>;
+    fn pop_handler_unwind(&mut self) -> Option<crate::UnwindState<'gc>>;
 }
 
 pub trait StaticsOps<'gc> {
