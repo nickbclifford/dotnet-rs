@@ -575,6 +575,31 @@ mod tests {
         std::env::temp_dir().join(format!("dotnet_rs_loader_{label}_{nanos}"))
     }
 
+    #[cfg(not(miri))]
+    fn fixture_probe_dir() -> PathBuf {
+        if let Some(base) = std::env::var_os("DOTNET_FIXTURES_BASE") {
+            let path = PathBuf::from(base).join("basic").join("basic_42");
+            if path.exists() {
+                return path;
+            }
+        }
+
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        if let Some(repo_root) = manifest_dir.parent().and_then(Path::parent) {
+            let path = repo_root
+                .join("target")
+                .join("debug")
+                .join("dotnet-fixtures")
+                .join("basic")
+                .join("basic_42");
+            if path.exists() {
+                return path;
+            }
+        }
+
+        PathBuf::from("/tmp/fixture-probe")
+    }
+
     #[test]
     #[cfg(not(miri))]
     fn register_probing_path_adds_lazy_external_entry() {
@@ -654,14 +679,15 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn new_from_host_uses_fixture_runtimeconfig_and_app_scan_root() {
-        let entrypoint = Path::new("/tmp/fixture-probe/SingleFile.dll");
+        let fixture_dir = fixture_probe_dir();
+        let entrypoint = fixture_dir.join("SingleFile.dll");
         assert!(
             entrypoint.exists(),
             "missing fixture entrypoint at {}; build fixtures first",
             entrypoint.display()
         );
 
-        let loader = AssemblyLoader::new_from_host(entrypoint, None)
+        let loader = AssemblyLoader::new_from_host(&entrypoint, None)
             .expect("new_from_host should initialize loader");
 
         assert!(loader.external.read().contains_key("SingleFile"));
@@ -670,13 +696,9 @@ mod tests {
                 .probing_paths
                 .get("SingleFile")
                 .map(|entry| entry.value().clone()),
-            Some(Path::new("/tmp/fixture-probe/SingleFile.dll").to_path_buf()),
+            Some(entrypoint.clone()),
         );
-        assert!(
-            loader
-                .native_search_dirs()
-                .contains(&Path::new("/tmp/fixture-probe").to_path_buf())
-        );
+        assert!(loader.native_search_dirs().contains(&fixture_dir));
     }
 
     #[test]

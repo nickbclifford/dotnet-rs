@@ -590,17 +590,45 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn fixture_probe_dir() -> PathBuf {
+        if let Some(base) = std::env::var_os("DOTNET_FIXTURES_BASE") {
+            let path = PathBuf::from(base).join("basic").join("basic_42");
+            if path.exists() {
+                return path;
+            }
+        }
+
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        if let Some(repo_root) = manifest_dir.parent().and_then(Path::parent) {
+            let path = repo_root
+                .join("target")
+                .join("debug")
+                .join("dotnet-fixtures")
+                .join("basic")
+                .join("basic_42");
+            if path.exists() {
+                return path;
+            }
+        }
+
+        PathBuf::from("/tmp/fixture-probe")
+    }
+
+    fn fixture_probe_path(file_name: &str) -> PathBuf {
+        fixture_probe_dir().join(file_name)
+    }
+
     #[test]
     #[cfg(not(miri))]
     fn parses_fixture_runtimeconfig() {
-        let path = Path::new("/tmp/fixture-probe/SingleFile.runtimeconfig.json");
+        let path = fixture_probe_path("SingleFile.runtimeconfig.json");
         assert!(
             path.exists(),
             "missing fixture runtimeconfig at {}; build fixtures first",
             path.display()
         );
 
-        let config = parse_runtimeconfig(path).expect("runtimeconfig should parse");
+        let config = parse_runtimeconfig(&path).expect("runtimeconfig should parse");
         let options = config.runtime_options;
 
         assert_eq!(options.tfm.as_deref(), Some("net10.0"));
@@ -621,14 +649,14 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn parses_fixture_deps_and_derives_no_nuget_probing_paths() {
-        let deps_path = Path::new("/tmp/fixture-probe/SingleFile.deps.json");
+        let deps_path = fixture_probe_path("SingleFile.deps.json");
         assert!(
             deps_path.exists(),
             "missing fixture deps.json at {}; build fixtures first",
             deps_path.display()
         );
 
-        let deps = parse_deps_json(deps_path).expect("deps.json should parse");
+        let deps = parse_deps_json(&deps_path).expect("deps.json should parse");
         let nuget_global = Path::new("/tmp/fixture-probe-nuget-root");
 
         assert_eq!(deps.runtime_target.name, ".NETCoreApp,Version=v10.0");
@@ -639,14 +667,54 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn parses_newtonsoft_deps_and_derives_package_probing_paths() {
-        let deps_path = Path::new("/tmp/nuget-probe-out/App.deps.json");
-        assert!(
-            deps_path.exists(),
-            "missing Newtonsoft probe deps.json at {}; rebuild probe first",
-            deps_path.display()
-        );
+        let probe_dir = create_runtime_base(&[]);
+        let deps_path = probe_dir.join("App.deps.json");
+        fs::write(
+            &deps_path,
+            r#"{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "App/1.0.0": {
+        "dependencies": {
+          "Newtonsoft.Json": "13.0.3"
+        },
+        "runtime": {
+          "App.dll": {}
+        }
+      },
+      "Newtonsoft.Json/13.0.3": {
+        "runtime": {
+          "lib/net6.0/Newtonsoft.Json.dll": {
+            "assemblyVersion": "13.0.0.0",
+            "fileVersion": "13.0.3.27908"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "App/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Newtonsoft.Json/13.0.3": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "",
+      "path": "newtonsoft.json/13.0.3",
+      "hashPath": "newtonsoft.json.13.0.3.nupkg.sha512"
+    }
+  }
+}"#,
+        )
+        .expect("Newtonsoft probe deps.json should be written");
 
-        let deps = parse_deps_json(deps_path).expect("deps.json should parse");
+        let deps = parse_deps_json(&deps_path).expect("deps.json should parse");
         let nuget_global = Path::new("/tmp/nuget-global");
 
         let managed = derive_managed_probing_paths(&deps, nuget_global);
@@ -661,6 +729,8 @@ mod tests {
             )
         );
         assert!(derive_native_search_dirs(&deps, nuget_global).is_empty());
+
+        fs::remove_dir_all(&probe_dir).expect("Newtonsoft probe dir should be removed");
     }
 
     fn create_runtime_base(version_dirs: &[&str]) -> PathBuf {
@@ -699,14 +769,14 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn resolves_framework_from_fixture_runtimeconfig_with_override_base() {
-        let path = Path::new("/tmp/fixture-probe/SingleFile.runtimeconfig.json");
+        let path = fixture_probe_path("SingleFile.runtimeconfig.json");
         assert!(
             path.exists(),
             "missing fixture runtimeconfig at {}; build fixtures first",
             path.display()
         );
 
-        let config = parse_runtimeconfig(path).expect("runtimeconfig should parse");
+        let config = parse_runtimeconfig(&path).expect("runtimeconfig should parse");
         let base_dir = create_runtime_base(&["8.0.28", "10.0.9"]);
 
         assert_eq!(
@@ -724,14 +794,14 @@ mod tests {
             .lock()
             .expect("environment lock should not be poisoned");
 
-        let path = Path::new("/tmp/fixture-probe/SingleFile.runtimeconfig.json");
+        let path = fixture_probe_path("SingleFile.runtimeconfig.json");
         assert!(
             path.exists(),
             "missing fixture runtimeconfig at {}; build fixtures first",
             path.display()
         );
 
-        let config = parse_runtimeconfig(path).expect("runtimeconfig should parse");
+        let config = parse_runtimeconfig(&path).expect("runtimeconfig should parse");
         let dotnet_root = create_runtime_base(&[]);
         let framework_base = dotnet_root.join("shared").join("Microsoft.NETCore.App");
         fs::create_dir_all(framework_base.join("8.0.28"))
