@@ -4,13 +4,15 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            EvalStackOps, LoaderOps, StaticsOps, TypedStackOps, VmCallOps, VmLoaderOps,
-            VmResolutionOps,
+            EvalStackOps, ExceptionOps, LoaderOps, StaticsOps, TypedStackOps, VmCallOps,
+            VmLoaderOps, VmResolutionOps,
         },
     },
 };
 use dotnet_types::{
-    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
+    TypeDescription,
+    error::TypeResolutionError,
+    generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
 use dotnet_value::{
@@ -18,16 +20,12 @@ use dotnet_value::{
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
 };
+use dotnet_vm_ops::NULL_REF_MSG;
 use dotnetdll::prelude::{
-    BaseType, Instruction, MethodMemberIndex, MethodSource, MethodType, ParameterType,
+    BaseType, Instruction, Kind, MethodMemberIndex, MethodSource, MethodType, ParameterType,
+    TypeSource, UserType,
 };
-use std::{
-    fmt::Write as _,
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
-    },
-};
+use std::{fmt::Write as _, sync::OnceLock};
 
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(
@@ -54,6 +52,8 @@ vm_cold_panic!(
 vm_cold_panic!(fn panic_tail_call_requires_current_frame() => "tail call requires a current frame");
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current frame");
+
+const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 
 #[cold]
 #[inline(never)]
@@ -99,6 +99,61 @@ fn try_no_body_runtime_stub<'gc, T: EvalStackOps<'gc>>(
     }
 
     None
+}
+
+fn concrete_from_type_description_and_lookup(
+    ty: &TypeDescription,
+    lookup: &GenericLookup,
+) -> ConcreteType {
+    let arity = ty.definition().generic_parameters.len();
+    if arity == 0 {
+        return ty.clone().into();
+    }
+
+    let parameters: Vec<_> = lookup.type_generics.iter().take(arity).cloned().collect();
+    if parameters.len() != arity {
+        return ty.clone().into();
+    }
+
+    ConcreteType::new(
+        ty.resolution.clone(),
+        BaseType::Type {
+            source: TypeSource::Generic {
+                base: UserType::Definition(ty.index),
+                parameters,
+            },
+            value_kind: None,
+        },
+    )
+}
+
+fn concrete_from_method_parent(method: &MethodDescription) -> ConcreteType {
+    let arity = method.parent.definition().generic_parameters.len();
+    if arity == 0 {
+        return method.parent.clone().into();
+    }
+
+    let parameters: Vec<_> = method
+        .parent_generics
+        .type_generics
+        .iter()
+        .take(arity)
+        .cloned()
+        .collect();
+    if parameters.len() != arity {
+        return method.parent.clone().into();
+    }
+
+    ConcreteType::new(
+        method.parent.resolution.clone(),
+        BaseType::Type {
+            source: TypeSource::Generic {
+                base: UserType::Definition(method.parent.index),
+                parameters,
+            },
+            value_kind: None,
+        },
+    )
 }
 
 fn is_boolean_parameter(parameter: &ParameterType<MethodType>) -> bool {
@@ -157,78 +212,6 @@ fn try_redirect_expression_compile_to_interpreter(
 enum ResolvedMethodDispatchMode {
     VmContext,
     ExecutionEngineApi,
-}
-
-fn triage_call_sample_interval() -> Option<u64> {
-    static INTERVAL: OnceLock<Option<u64>> = OnceLock::new();
-    *INTERVAL.get_or_init(|| {
-        let Ok(raw) = std::env::var("DOTNET_RS_TRIAGE_CALLS") else {
-            return None;
-        };
-        let raw = raw.trim();
-        if raw.is_empty() || raw == "0" || raw.eq_ignore_ascii_case("off") {
-            return None;
-        }
-        if raw == "1" || raw.eq_ignore_ascii_case("true") {
-            return Some(1_000);
-        }
-        raw.parse::<u64>().ok().filter(|interval| *interval > 0)
-    })
-}
-
-fn trace_call_frame_sample(ctx: &VesContext<'_, '_>, method: &MethodInfo<'static>) {
-    static CALLS: AtomicU64 = AtomicU64::new(0);
-    static FIND_NAV_CALLS: AtomicU64 = AtomicU64::new(0);
-
-    let Some(interval) = triage_call_sample_interval() else {
-        return;
-    };
-
-    let call = CALLS.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-    let target_type = method.source.parent.type_name();
-    let target_method = method.source.method().name.as_ref();
-    let find_nav_call = if target_type
-        == "Microsoft.EntityFrameworkCore.Metadata.Internal.EntityType"
-        && target_method == "FindNavigation"
-        && std::env::var_os("DOTNET_RS_TRIAGE_FINDNAV").is_some()
-    {
-        FIND_NAV_CALLS.fetch_add(1, AtomicOrdering::Relaxed) + 1
-    } else {
-        0
-    };
-    let force_find_nav_sample = (1..=8).contains(&find_nav_call);
-
-    if !force_find_nav_sample && call > 20 && !call.is_multiple_of(interval) {
-        return;
-    }
-
-    let mut frames = String::new();
-    let frame_count = ctx.frame_stack.frames.len();
-    let frame_window = if force_find_nav_sample { 24 } else { 8 };
-    let start = frame_count.saturating_sub(frame_window);
-    for (idx, frame) in ctx.frame_stack.frames.iter().enumerate().skip(start) {
-        let source = &frame.state.info_handle.source;
-        let _ = writeln!(
-            frames,
-            "\n    #{idx} {}.{} ip={} stack_height={}",
-            source.parent.type_name(),
-            source.method().name,
-            frame.state.ip,
-            frame.stack_height.as_usize()
-        );
-    }
-
-    eprintln!(
-        "[CALL-TRIAGE] call={} find_nav_call={} depth_before={} eval_slots={} heap_live={} target={}.{}{}",
-        call,
-        find_nav_call,
-        frame_count,
-        ctx.evaluation_stack.stack.len(),
-        ctx.local.heap.live_object_count(),
-        target_type,
-        target_method,
-        frames
-    );
 }
 
 const DEFAULT_MANAGED_FRAME_LIMIT: usize = 65_536;
@@ -358,7 +341,6 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
-        trace_call_frame_sample(self, &method);
         self.trace_method_entry_for_call_frame(&method);
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();
@@ -661,6 +643,15 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 return result;
             }
 
+            // Some interface implementation bodies use `call` to reach an abstract
+            // virtual/interface slot. Resolve those like a last-chance callvirt
+            // instead of executing the declaration itself.
+            if let Some(result) =
+                self.try_dispatch_no_body_abstract_virtual(method.clone(), lookup.clone())
+            {
+                return result;
+            }
+
             return no_body_in_executing_method_step_result(&method);
         }
 
@@ -677,6 +668,102 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
+    }
+
+    fn try_dispatch_no_body_abstract_virtual(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> Option<StepResult> {
+        if !method.signature().instance
+            || !method.method().virtual_member
+            || !method.method().abstract_member
+        {
+            return None;
+        }
+
+        let num_args = 1 + method.signature().parameters.len();
+        let this_value = self.peek_stack_at(num_args - 1);
+        let this_type = match this_value {
+            StackValue::ObjectRef(ObjectRef(None)) => {
+                let _ = self.pop_multiple(num_args);
+                return Some(
+                    self.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG),
+                );
+            }
+            StackValue::ObjectRef(ObjectRef(Some(o))) => {
+                match self.current_context().get_heap_description(o) {
+                    Ok(v) => v,
+                    Err(e) => return Some(StepResult::Error(e.into())),
+                }
+            }
+            StackValue::ManagedPtr(m) => m.inner_type(),
+            rest => {
+                let _ = self.pop_multiple(num_args);
+                return Some(StepResult::type_error(
+                    "ObjectRef or ManagedPtr",
+                    format!("{:?}", rest),
+                ));
+            }
+        };
+
+        let mut dispatch_lookup = lookup;
+        self.merge_receiver_lookup_for_virtual_dispatch(&method, &mut dispatch_lookup);
+
+        let resolved = match self.resolver().resolve_virtual_method(
+            method.clone(),
+            this_type.clone(),
+            &dispatch_lookup,
+            &self.current_context(),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                if let Some(result) = self.try_interface_method_not_found_invalid_cast(
+                    &method,
+                    &this_type,
+                    &dispatch_lookup,
+                    &e,
+                ) {
+                    return Some(result);
+                }
+                return Some(StepResult::Error(e.into()));
+            }
+        };
+
+        if resolved == method {
+            return None;
+        }
+
+        self.rebind_lookup_to_resolved_method(&mut dispatch_lookup, &resolved);
+        Some(self.dispatch_method(resolved, dispatch_lookup))
+    }
+
+    fn try_interface_method_not_found_invalid_cast(
+        &mut self,
+        base_method: &MethodDescription,
+        this_type: &TypeDescription,
+        lookup: &GenericLookup,
+        err: &TypeResolutionError,
+    ) -> Option<StepResult> {
+        if !matches!(err, TypeResolutionError::MethodNotFound(_)) {
+            return None;
+        }
+
+        if !matches!(base_method.parent.definition().flags.kind, Kind::Interface) {
+            return None;
+        }
+
+        let receiver_type = concrete_from_type_description_and_lookup(this_type, lookup);
+        let interface_type = concrete_from_method_parent(base_method);
+        if self
+            .loader()
+            .comparer()
+            .is_assignable_to(&receiver_type, &interface_type)
+        {
+            return None;
+        }
+
+        Some(self.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG))
     }
 
     #[inline]
@@ -708,12 +795,21 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let had_receiver = this_type.is_some();
         let final_method = if let Some(this_type) = this_type {
-            match self
-                .resolver()
-                .resolve_virtual_method(resolved, this_type, &lookup, &context)
-            {
+            match self.resolver().resolve_virtual_method(
+                resolved.clone(),
+                this_type.clone(),
+                &lookup,
+                &context,
+            ) {
                 Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
+                Err(e) => {
+                    if let Some(result) = self.try_interface_method_not_found_invalid_cast(
+                        &resolved, &this_type, &lookup, &e,
+                    ) {
+                        return result;
+                    }
+                    return StepResult::Error(e.into());
+                }
             }
         } else {
             resolved

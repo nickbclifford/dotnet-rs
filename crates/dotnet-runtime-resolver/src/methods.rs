@@ -2,12 +2,15 @@ use crate::{ResolverExecutionContext, ResolverService};
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
-    generics::{ConcreteType, GenericLookup},
+    generics::{ConcreteType, GenericLookup, member_to_method_type},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
 };
 use dotnetdll::prelude::*;
-use std::sync::Arc;
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
 impl<C, L> ResolverService<C, L>
 where
@@ -119,6 +122,162 @@ where
         Ok((method_desc, new_lookup))
     }
 
+    fn method_for_lookup(
+        &self,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+        allow_variance: bool,
+    ) -> MethodDescription {
+        let mut method_for_lookup = method.clone();
+        if allow_variance
+            && method_for_lookup.parent_generics.type_generics.len() == generics.type_generics.len()
+            && method_for_lookup.parent_generics.type_generics != generics.type_generics
+        {
+            method_for_lookup.parent_generics.type_generics = generics.type_generics.clone();
+        }
+        method_for_lookup.parent_generics.method_generics = generics.method_generics.clone();
+        method_for_lookup
+    }
+
+    fn find_override_implementation(
+        &self,
+        this_type: TypeDescription,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+        allow_variance: bool,
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
+        let def = this_type.definition();
+        if def.overrides.is_empty() {
+            return Ok(None);
+        }
+
+        let method_for_lookup = self.method_for_lookup(method, generics, allow_variance);
+
+        let cache_key = (this_type.clone(), generics.clone());
+        let overrides = if let Some(map) = self.caches.get_overrides_cached(&cache_key) {
+            map
+        } else {
+            let mut map = std::collections::HashMap::new();
+            for ovr in def.overrides.iter() {
+                let decl = self.loader.locate_method(
+                    this_type.resolution.clone(),
+                    ovr.declaration,
+                    generics,
+                    None,
+                )?;
+                let impl_m = self.loader.locate_method(
+                    this_type.resolution.clone(),
+                    ovr.implementation,
+                    generics,
+                    Some(this_type.clone().into()),
+                )?;
+                map.insert(decl, impl_m);
+            }
+            let arc_map = Arc::new(map);
+            self.caches.set_overrides_cached(cache_key, arc_map.clone());
+            arc_map
+        };
+
+        if let Some(impl_m) = overrides
+            .get(method)
+            .or_else(|| overrides.get(&method_for_lookup))
+        {
+            return Ok(Some(impl_m.clone()));
+        }
+
+        // Bridge declaration identity across facade/CoreLib duplicates where
+        // `MethodDescription` equality can miss due differing parent/resolution
+        // identities despite equivalent canonical type + signature.
+        if let Some((_, impl_m)) = overrides.iter().find(|(decl, _)| {
+            let decl_parent_name = decl.parent.type_name();
+            let method_parent_name = method.parent.type_name();
+            let canonical_decl = self.loader.canonical_type_name(&decl_parent_name);
+            let canonical_method = self.loader.canonical_type_name(&method_parent_name);
+            if canonical_decl != canonical_method || decl.method().name != method.method().name {
+                return false;
+            }
+
+            let comparer = self.loader.comparer();
+            if allow_variance {
+                comparer.signatures_compatible_with_variance(
+                    &method_for_lookup.method_resolution,
+                    method_for_lookup.signature(),
+                    Some(&method_for_lookup.parent_generics),
+                    &decl.method_resolution,
+                    decl.signature(),
+                    Some(&decl.parent_generics),
+                )
+            } else {
+                comparer.signatures_equal(
+                    &method_for_lookup.method_resolution,
+                    method_for_lookup.signature(),
+                    Some(&method_for_lookup.parent_generics),
+                    &decl.method_resolution,
+                    decl.signature(),
+                    Some(&decl.parent_generics),
+                )
+            }
+        }) {
+            return Ok(Some(impl_m.clone()));
+        }
+
+        Ok(None)
+    }
+
+    fn find_interface_override_for_receiver(
+        &self,
+        receiver_type: TypeDescription,
+        receiver_lookup: &GenericLookup,
+        base_method: &MethodDescription,
+        dispatch_generics: &GenericLookup,
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        for (_, interface_source) in &receiver_type.definition().implements {
+            let interface_type = receiver_lookup.make_concrete(
+                receiver_type.resolution.clone(),
+                member_to_method_type(interface_source),
+                self.loader(),
+            )?;
+            if seen.insert(interface_type.clone()) {
+                queue.push_back(interface_type);
+            }
+        }
+
+        while let Some(interface_type) = queue.pop_front() {
+            let interface_desc = self.loader.find_concrete_type(interface_type.clone())?;
+            let mut interface_lookup = interface_type.make_lookup();
+            interface_lookup.method_generics = dispatch_generics.method_generics.clone();
+
+            if let Some(interface_method) = self.find_override_implementation(
+                interface_desc.clone(),
+                base_method,
+                &interface_lookup,
+                true,
+            )? {
+                // Continue searching for derived-interface overrides; if none exist,
+                // the caller will fall back to the base interface body.
+                if interface_method != *base_method {
+                    return Ok(Some(interface_method));
+                }
+            }
+
+            for (_, inherited_source) in &interface_desc.definition().implements {
+                let inherited_interface = interface_lookup.make_concrete(
+                    interface_desc.resolution.clone(),
+                    member_to_method_type(inherited_source),
+                    self.loader(),
+                )?;
+                if seen.insert(inherited_interface.clone()) {
+                    queue.push_back(inherited_interface);
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn resolve_virtual_method<Ctx: ResolverExecutionContext>(
         &self,
         base_method: MethodDescription,
@@ -224,6 +383,24 @@ where
                     this_method.clone(),
                 );
                 return Ok(this_method);
+            }
+
+            if is_interface
+                && let Some(interface_method) = self.find_interface_override_for_receiver(
+                    parent.clone(),
+                    &ancestor_lookup,
+                    &base_method,
+                    generics,
+                )?
+            {
+                self.caches.record_vmt_key_clones(3);
+                self.caches.set_vmt_cached(
+                    base_method.clone(),
+                    this_type.clone(),
+                    generics.clone(),
+                    interface_method.clone(),
+                );
+                return Ok(interface_method);
             }
 
             if index + 1 < ancestors.len() {
