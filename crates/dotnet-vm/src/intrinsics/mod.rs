@@ -608,6 +608,69 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
     }
 }
 
+fn read_enum_bits(obj: &Object<'_>) -> Option<(TypeDescription, u128)> {
+    let enum_type = obj.description.clone();
+    let underlying = enum_type.is_enum()?;
+    let method_type: dotnetdll::prelude::MethodType = underlying.clone().into();
+    let dotnetdll::prelude::MethodType::Base(base) = method_type else {
+        return None;
+    };
+
+    let bits = match &*base {
+        BaseType::Int8 => u128::from(
+            obj.instance_storage
+                .field::<i8>(enum_type.clone(), "value__")?
+                .read() as u8,
+        ),
+        BaseType::UInt8 => u128::from(
+            obj.instance_storage
+                .field::<u8>(enum_type.clone(), "value__")?
+                .read(),
+        ),
+        BaseType::Int16 => u128::from(
+            obj.instance_storage
+                .field::<i16>(enum_type.clone(), "value__")?
+                .read() as u16,
+        ),
+        BaseType::UInt16 => u128::from(
+            obj.instance_storage
+                .field::<u16>(enum_type.clone(), "value__")?
+                .read(),
+        ),
+        BaseType::Int32 => u128::from(
+            obj.instance_storage
+                .field::<i32>(enum_type.clone(), "value__")?
+                .read() as u32,
+        ),
+        BaseType::UInt32 => u128::from(
+            obj.instance_storage
+                .field::<u32>(enum_type.clone(), "value__")?
+                .read(),
+        ),
+        BaseType::Int64 => u128::from(
+            obj.instance_storage
+                .field::<i64>(enum_type.clone(), "value__")?
+                .read() as u64,
+        ),
+        BaseType::UInt64 => u128::from(
+            obj.instance_storage
+                .field::<u64>(enum_type.clone(), "value__")?
+                .read(),
+        ),
+        BaseType::IntPtr => obj
+            .instance_storage
+            .field::<isize>(enum_type.clone(), "value__")?
+            .read() as usize as u128,
+        BaseType::UIntPtr => obj
+            .instance_storage
+            .field::<usize>(enum_type.clone(), "value__")?
+            .read() as u128,
+        _ => return None,
+    };
+
+    Some((enum_type, bits))
+}
+
 fn enum_object_from_stack<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
     value: StackValue<'gc>,
@@ -810,6 +873,48 @@ fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     };
 
     ctx.push_string(CLRString::from(formatted));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("bool System.Enum::HasFlag(System.Enum)")]
+fn enum_has_flag<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let flag = ctx.pop();
+    let this = ctx.pop();
+
+    let flag_obj = match enum_object_from_stack(ctx, flag) {
+        Ok(v) => v,
+        Err(step) => return step,
+    };
+    let this_obj = match enum_object_from_stack(ctx, this) {
+        Ok(v) => v,
+        Err(step) => return step,
+    };
+
+    let Some((flag_type, flag_bits)) = read_enum_bits(&flag_obj) else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Object must be an enum type.",
+        );
+    };
+    let Some((this_type, this_bits)) = read_enum_bits(&this_obj) else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Object must be an enum type.",
+        );
+    };
+
+    if this_type != flag_type {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The argument type must be the same as the enum type.",
+        );
+    }
+
+    ctx.push_i32(i32::from((this_bits & flag_bits) == flag_bits));
     StepResult::Continue
 }
 

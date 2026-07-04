@@ -222,6 +222,32 @@ pub fn intrinsic_gc_get_memory_info<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static T[] System.GC::AllocateUninitializedArray<T>(int, bool)")]
+pub fn intrinsic_gc_allocate_uninitialized_array<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let _pinned = ctx.pop_i32();
+    let length = ctx.pop_i32();
+
+    if length < 0 {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentOutOfRangeException",
+            "Specified argument was out of the range of valid values.",
+        );
+    }
+
+    let element_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
+    let vector = dotnet_vm_ops::vm_try!(ctx.new_vector(element_type, length as usize));
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector))));
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic(
     "static void System.Gen2GcCallback::Register(System.Func<object, bool>, object)"
 )]

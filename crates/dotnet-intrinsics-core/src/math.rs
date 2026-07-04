@@ -292,6 +292,103 @@ pub fn intrinsic_numeric_addition<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic(
+    "static M2 System.Numerics.IComparisonOperators<M0, M1, M2>::op_GreaterThan(M0, M1)"
+)]
+pub fn intrinsic_numeric_greater_than<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let rhs = ctx.pop();
+    let lhs = ctx.pop();
+
+    let Some(target_type) = generics.type_generics.first() else {
+        return StepResult::not_implemented(
+            "numeric greater-than intrinsic called without type generic".to_string(),
+        );
+    };
+
+    let result = match target_type.get() {
+        BaseType::Int8 | BaseType::Int16 | BaseType::Int32 => match (lhs, rhs) {
+            (StackValue::Int32(a), StackValue::Int32(b)) => a > b,
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported signed i32 operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::UInt8 | BaseType::UInt16 | BaseType::UInt32 => match (lhs, rhs) {
+            (StackValue::Int32(a), StackValue::Int32(b)) => (a as u32) > (b as u32),
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported unsigned i32 operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::Int64 => match (lhs, rhs) {
+            (StackValue::Int64(a), StackValue::Int64(b)) => a > b,
+            (StackValue::Int32(a), StackValue::Int32(b)) => a > b,
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported signed i64 operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::UInt64 => match (lhs, rhs) {
+            (StackValue::Int64(a), StackValue::Int64(b)) => (a as u64) > (b as u64),
+            (StackValue::Int32(a), StackValue::Int32(b)) => (a as u32) > (b as u32),
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported unsigned i64 operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::IntPtr => match (lhs, rhs) {
+            (StackValue::NativeInt(a), StackValue::NativeInt(b)) => a > b,
+            (StackValue::Int32(a), StackValue::Int32(b)) => a > b,
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported native int operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::UIntPtr => match (lhs, rhs) {
+            (StackValue::NativeInt(a), StackValue::NativeInt(b)) => (a as usize) > (b as usize),
+            (StackValue::Int32(a), StackValue::Int32(b)) => (a as u32) > (b as u32),
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported native uint operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        BaseType::Float32 | BaseType::Float64 => match (lhs, rhs) {
+            (StackValue::NativeFloat(a), StackValue::NativeFloat(b)) => a > b,
+            (a, b) => {
+                return StepResult::not_implemented(format!(
+                    "numeric greater-than intrinsic unsupported floating operands: {:?}, {:?}",
+                    a, b
+                ));
+            }
+        },
+        other => {
+            return StepResult::not_implemented(format!(
+                "numeric greater-than intrinsic unsupported target type: {:?}",
+                other
+            ));
+        }
+    };
+
+    ctx.push_i32(i32::from(result));
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static M0 System.Numerics.IIncrementOperators<M0>::op_Increment(M0)")]
 pub fn intrinsic_numeric_increment<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
@@ -464,6 +561,18 @@ pub fn intrinsic_math_min_int<'gc, T: TypedStackOps<'gc>>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static uint System.Math::Min(uint, uint)")]
+pub fn intrinsic_math_min_uint<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32() as u32;
+    let a = ctx.pop_i32() as u32;
+    ctx.push_i32(std::cmp::min(a, b) as i32);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static byte System.Math::Min(byte, byte)")]
 pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
@@ -485,6 +594,18 @@ pub fn intrinsic_math_max_int<'gc, T: TypedStackOps<'gc>>(
     let b = ctx.pop_i32();
     let a = ctx.pop_i32();
     ctx.push_i32(std::cmp::max(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static uint System.Math::Max(uint, uint)")]
+pub fn intrinsic_math_max_uint<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32() as u32;
+    let a = ctx.pop_i32() as u32;
+    ctx.push_i32(std::cmp::max(a, b) as i32);
     StepResult::Continue
 }
 

@@ -14,6 +14,7 @@ const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.
 const NOT_ARRAY_MSG: &str = "Object must be of type Array.";
 const INDEX_ARG_TYPE_MSG: &str = "Index must be Int32, Int64, or Int32[].";
 const INDEX_ARRAY_TYPE_MSG: &str = "Indices must be provided as an Int32 array.";
+const CLEAR_RANGE_MSG: &str = "Offset and length were out of bounds for the array or count is greater than the number of elements from index to the end of the source collection.";
 
 fn extract_first_index_from_indices_array<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
@@ -40,6 +41,107 @@ fn extract_first_index_from_indices_array<'gc, T: ExceptionOps<'gc>>(
     };
 
     Ok(i32::from_ne_bytes(bytes) as usize)
+}
+
+fn clear_array_range<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
+    ctx: &mut T,
+    array_arg: StackValue<'gc>,
+    index: i32,
+    length: i32,
+) -> StepResult {
+    if index < 0 || length < 0 {
+        return ctx.throw_by_name_with_message("System.ArgumentException", CLEAR_RANGE_MSG);
+    }
+
+    let array_obj = match expect_stack_object(&array_arg, "array object reference") {
+        Ok(obj) => obj,
+        Err(_) => ObjectRef(None),
+    };
+    let array_obj = match apply_object_policy(ctx, array_obj, ArgPolicy::ManagedNullNre) {
+        Ok(obj) => obj,
+        Err(step) => return step,
+    };
+    let Some(handle) = array_obj.0 else {
+        unreachable!("ManagedNullNre policy must reject null object references")
+    };
+
+    {
+        let heap = handle.borrow();
+        let HeapStorage::Vec(v) = &heap.storage else {
+            return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
+        };
+
+        let array_len = v.layout.length;
+        let index = index as usize;
+        let length = length as usize;
+        if index > array_len || length > array_len.saturating_sub(index) {
+            return ctx.throw_by_name_with_message("System.ArgumentException", CLEAR_RANGE_MSG);
+        }
+    }
+
+    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
+    let HeapStorage::Vec(v) = &mut heap.storage else {
+        return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
+    };
+
+    let index = index as usize;
+    let length = length as usize;
+    if length == 0 {
+        return StepResult::Continue;
+    }
+
+    let elem_size = v.layout.element_layout.size().as_usize();
+    let start = index * elem_size;
+    let end = (index + length) * elem_size;
+    v.get_mut()[start..end].fill(0);
+
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Array::Clear(System.Array)")]
+pub fn intrinsic_array_clear<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let array_arg = ctx.pop();
+    let length = {
+        let array_obj = match expect_stack_object(&array_arg, "array object reference") {
+            Ok(obj) => obj,
+            Err(_) => ObjectRef(None),
+        };
+        let array_obj = match apply_object_policy(ctx, array_obj, ArgPolicy::ManagedNullNre) {
+            Ok(obj) => obj,
+            Err(step) => return step,
+        };
+        let Some(handle) = array_obj.0 else {
+            unreachable!("ManagedNullNre policy must reject null object references")
+        };
+
+        let heap = handle.borrow();
+        let HeapStorage::Vec(v) = &heap.storage else {
+            return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
+        };
+        v.layout.length as i32
+    };
+
+    clear_array_range(ctx, array_arg, 0, length)
+}
+
+#[dotnet_intrinsic("static void System.Array::Clear(System.Array, int, int)")]
+pub fn intrinsic_array_clear_range<
+    'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let length = ctx.pop_i32();
+    let index = ctx.pop_i32();
+    let array_arg = ctx.pop();
+
+    clear_array_range(ctx, array_arg, index, length)
 }
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]

@@ -1,6 +1,7 @@
 use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_vm_data::StepResult;
 use std::time::Duration;
 
@@ -25,6 +26,26 @@ pub fn intrinsic_thread_sleep<'gc, T: ThreadingIntrinsicHost<'gc>>(
     }
     // ms < 0 (e.g. Timeout.Infinite = -1): no-op; managed callers are
     // responsible for not passing unbounded sleeps into the VM.
+    StepResult::Continue
+}
+
+/// System.Threading.Thread::get_CurrentThread()
+///
+/// The CoreLib implementation is `[Intrinsic]` and typically uses runtime-managed
+/// thread state. dotnet-rs currently runs managed execution on a single host thread,
+/// so returning a managed `System.Threading.Thread` instance is sufficient to
+/// unblock framework call sites that require a non-null current-thread object.
+#[dotnet_intrinsic("static System.Threading.Thread System.Threading.Thread::get_CurrentThread()")]
+pub fn intrinsic_thread_get_current_thread<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread_obj = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
+    ctx.push_obj(ObjectRef::new(
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        HeapStorage::Obj(Box::new(thread_obj)),
+    ));
     StepResult::Continue
 }
 
