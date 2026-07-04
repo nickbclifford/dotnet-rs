@@ -9,6 +9,7 @@ use crate::{
         },
     },
 };
+use dotnet_runtime_memory::ops::BaseMemoryOps;
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -302,8 +303,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let value = if desc.is_value_type(&self.current_context())? {
             StackValue::ValueType(instance)
         } else {
-            let in_heap = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
-            self.register_new_object(&in_heap);
+            let in_heap = self.alloc_obj_ref(gc, instance);
             StackValue::ObjectRef(in_heap)
         };
 

@@ -21,7 +21,7 @@ use dotnet_utils::{
 use dotnet_value::{
     CLRString, StackValue,
     layout::LayoutManager,
-    object::{CTSValue, ObjectRef, ValueType, Vector},
+    object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnet_vm_data::{MethodState, StepResult};
@@ -400,6 +400,26 @@ pub trait MemoryOps<'gc> {
     #[must_use]
     fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc>;
     fn register_new_object(&self, instance: &ObjectRef<'gc>);
+
+    fn alloc_obj_ref(
+        &self,
+        gc: dotnet_utils::gc::GCHandle<'gc>,
+        obj: Object<'gc>,
+    ) -> ObjectRef<'gc> {
+        let o = ObjectRef::new(gc, HeapStorage::Obj(Box::new(obj)));
+        self.register_new_object(&o);
+        o
+    }
+
+    fn alloc_vec_ref(
+        &self,
+        gc: dotnet_utils::gc::GCHandle<'gc>,
+        vec: Vector<'gc>,
+    ) -> ObjectRef<'gc> {
+        let o = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vec)));
+        self.register_new_object(&o);
+        o
+    }
 }
 
 pub trait ExceptionContext<'gc>:

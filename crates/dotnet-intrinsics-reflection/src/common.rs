@@ -1,12 +1,13 @@
 use crate::{ReflectionIntrinsicHost, RuntimeTypeContext};
 use dotnet_types::{
+    TypeDescription,
     comparer::decompose_type_source,
     error::{ExecutionError, TypeResolutionError},
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
 };
-use dotnet_value::object::{HeapStorage, ObjectRef};
+use dotnet_value::object::{Object, ObjectRef};
 use dotnetdll::{
     binary::signature::kinds::StandAloneCallingConvention,
     prelude::{BaseType, CallingConvention, MethodType, ParameterType},
@@ -39,34 +40,72 @@ pub fn pre_initialize_reflection<'gc>(ctx: &mut impl ReflectionIntrinsicHost<'gc
     }
 }
 
+/// Reads the opaque `index` field from a reflection wrapper object.
+///
+/// Reflection wrapper objects (RuntimeType, MethodInfo, FieldInfo, etc.)
+/// store a `usize` index into the VM's runtime registry under the field
+/// name `"index"`. This function centralizes that access.
+pub(crate) fn read_reflection_index(instance: &Object<'_>) -> Result<usize, ExecutionError> {
+    instance
+        .instance_storage
+        .field::<usize>(instance.description.clone(), "index")
+        .map(|f| f.read())
+        .ok_or_else(|| {
+            ExecutionError::InternalError(
+                format!(
+                    "reflection object {} missing required `index` field",
+                    instance.description.type_name()
+                )
+                .into(),
+            )
+        })
+}
+
+/// Writes the `index` field on a freshly allocated reflection wrapper object.
+pub(crate) fn write_reflection_index(
+    instance: &mut Object<'_>,
+    owner: TypeDescription,
+    index: usize,
+) {
+    instance
+        .instance_storage
+        .field::<usize>(owner, "index")
+        .expect("reflection object must have an `index` field")
+        .write(index);
+}
+
+fn alloc_reflection_obj<'gc>(
+    ctx: &mut impl ReflectionIntrinsicHost<'gc>,
+    corlib_type_name: &str,
+    index: usize,
+) -> ObjectRef<'gc> {
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let rt = ctx
+        .loader()
+        .corlib_type(corlib_type_name)
+        .unwrap_or_else(|_| panic!("{corlib_type_name} not found"));
+    let rt_obj = ctx
+        .new_object(rt.clone())
+        .expect("Failed to create reflection object");
+    let obj_ref = ctx.alloc_obj_ref(gc, rt_obj);
+
+    obj_ref.as_object_mut(gc, |instance| {
+        write_reflection_index(instance, rt, index);
+    });
+
+    obj_ref
+}
+
 pub fn get_runtime_type<'gc>(
     ctx: &mut impl ReflectionIntrinsicHost<'gc>,
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx.reflection_cached_runtime_type(&target) {
         return obj;
     }
 
     let index = ctx.reflection_runtime_type_index_get_or_insert(target.clone());
-
-    let rt = ctx
-        .loader()
-        .corlib_type("System.RuntimeType")
-        .expect("System.RuntimeType not found");
-    let rt_obj = ctx
-        .new_object(rt.clone())
-        .expect("Failed to create RuntimeType object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
-    ctx.register_new_object(&obj_ref);
-
-    obj_ref.as_object_mut(gc, |instance| {
-        instance
-            .instance_storage
-            .field::<usize>(rt, "index")
-            .unwrap()
-            .write(index);
-    });
+    let obj_ref = alloc_reflection_obj(ctx, "System.RuntimeType", index);
 
     ctx.reflection_cache_runtime_type(target, obj_ref);
     obj_ref
@@ -77,15 +116,15 @@ pub fn resolve_runtime_type<'gc>(
     obj: ObjectRef<'gc>,
 ) -> Result<RuntimeType, ExecutionError> {
     obj.try_as_object(|instance| {
-        let index_field = instance
-            .instance_storage
-            .field::<usize>(instance.description.clone(), "index")
-            .or_else(|| {
-                ctx.loader()
-                    .corlib_type("System.RuntimeType")
-                    .ok()
-                    .and_then(|owner| instance.instance_storage.field::<usize>(owner, "index"))
-            });
+        if let Ok(index) = read_reflection_index(instance) {
+            return Ok(ctx.reflection_runtime_type_by_index(index));
+        }
+
+        let index_field = ctx
+            .loader()
+            .corlib_type("System.RuntimeType")
+            .ok()
+            .and_then(|owner| instance.instance_storage.field::<usize>(owner, "index"));
 
         if let Some(index_field) = index_field {
             return Ok(ctx.reflection_runtime_type_by_index(index_field.read()));
@@ -119,28 +158,16 @@ pub fn resolve_runtime_method<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
 ) -> Result<(MethodDescription, GenericLookup), ExecutionError> {
-    obj.try_as_object(|instance| {
-        let index = instance
-            .instance_storage
-            .field::<usize>(instance.description.clone(), "index")
-            .unwrap()
-            .read();
-        ctx.reflection_runtime_method_by_index(index)
-    })
+    let index = obj.try_as_object(read_reflection_index)??;
+    Ok(ctx.reflection_runtime_method_by_index(index))
 }
 
 pub fn resolve_runtime_field<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
 ) -> Result<(FieldDescription, GenericLookup), ExecutionError> {
-    obj.try_as_object(|instance| {
-        let index = instance
-            .instance_storage
-            .field::<usize>(instance.description.clone(), "index")
-            .unwrap()
-            .read();
-        ctx.reflection_runtime_field_by_index(index)
-    })
+    let index = obj.try_as_object(read_reflection_index)??;
+    Ok(ctx.reflection_runtime_field_by_index(index))
 }
 
 pub fn make_runtime_type(
@@ -294,7 +321,6 @@ pub fn get_runtime_method_obj<'gc>(
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx.reflection_cached_runtime_method_obj(&method, &lookup) {
         return obj;
     }
@@ -308,23 +334,7 @@ pub fn get_runtime_method_obj<'gc>(
         "DotnetRs.MethodInfo"
     };
 
-    let rt = ctx
-        .loader()
-        .corlib_type(class_name)
-        .expect("reflection type not found");
-    let rt_obj = ctx
-        .new_object(rt.clone())
-        .expect("Failed to create reflection object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
-    ctx.register_new_object(&obj_ref);
-
-    obj_ref.as_object_mut(gc, |instance| {
-        instance
-            .instance_storage
-            .field::<usize>(rt, "index")
-            .unwrap()
-            .write(index);
-    });
+    let obj_ref = alloc_reflection_obj(ctx, class_name, index);
 
     ctx.reflection_cache_runtime_method_obj(method, lookup, obj_ref);
     obj_ref
@@ -335,30 +345,12 @@ pub fn get_runtime_field_obj<'gc>(
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx.reflection_cached_runtime_field_obj(&field, &lookup) {
         return obj;
     }
 
     let index = get_runtime_field_index(ctx, field.clone(), lookup.clone()) as usize;
-
-    let rt = ctx
-        .loader()
-        .corlib_type("DotnetRs.FieldInfo")
-        .expect("FieldInfo not found");
-    let rt_obj = ctx
-        .new_object(rt.clone())
-        .expect("Failed to create FieldInfo object");
-    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(rt_obj)));
-    ctx.register_new_object(&obj_ref);
-
-    obj_ref.as_object_mut(gc, |instance| {
-        instance
-            .instance_storage
-            .field::<usize>(rt, "index")
-            .unwrap()
-            .write(index);
-    });
+    let obj_ref = alloc_reflection_obj(ctx, "DotnetRs.FieldInfo", index);
 
     ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref);
     obj_ref

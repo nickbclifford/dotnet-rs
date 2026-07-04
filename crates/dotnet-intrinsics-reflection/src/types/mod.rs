@@ -281,7 +281,7 @@ pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'
         Err(e) => return StepResult::Error(e.into()),
     };
     vector.write_object_ref_elements_mut(&items);
-    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector))));
+    ctx.push_obj(ctx.alloc_vec_ref(gc, vector));
     StepResult::Continue
 }
 

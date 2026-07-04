@@ -313,8 +313,7 @@ impl Executor {
                                 arg_ref.write(chunk);
                             }
 
-                            let argv_ref = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(argv_vector)));
-                            ctx.register_new_object(&argv_ref);
+                            let argv_ref = ctx.alloc_vec_ref(gc_handle, argv_vector);
                             vec![StackValue::ObjectRef(argv_ref)]
                         }
                         #[cfg(feature = "fuzzing")]

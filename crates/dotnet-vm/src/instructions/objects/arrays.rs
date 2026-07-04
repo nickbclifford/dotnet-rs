@@ -13,7 +13,7 @@ use dotnet_utils::ByteOffset;
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, ObjectRef},
+    object::HeapStorage,
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::*;
@@ -371,11 +371,7 @@ pub fn newarr<
     );
 
     let v = dotnet_vm_ops::vm_try!(ctx.new_vector(elem_type, length));
-    let o = ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Vec(Box::new(v)),
-    );
-    ctx.register_new_object(&o);
+    let o = ctx.alloc_vec_ref(ctx.gc_with_token(&ctx.no_active_borrows_token()), v);
     ctx.push(StackValue::ObjectRef(o));
     StepResult::Continue
 }

@@ -1,11 +1,11 @@
 use crate::{IntrinsicStringHost, extend_from_utf16_ne_bytes};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
+    with_vector,
 };
 use dotnet_vm_ops::{
     StepResult,
@@ -101,44 +101,37 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     let arg = ctx.pop();
     let chars: Vec<u16> = match arg {
         StackValue::ObjectRef(ObjectRef(Some(handle))) => {
-            let len = {
-                let obj = handle.borrow();
-                match &obj.storage {
-                    HeapStorage::Vec(v) => v.layout.length,
-                    _ => 0,
-                }
-            };
+            let arg_obj = StackValue::ObjectRef(ObjectRef(Some(handle)));
+            if !arg_obj
+                .as_object_ref()
+                .try_as_heap_storage(|storage| matches!(storage, HeapStorage::Vec(_)))
+                .unwrap_or(false)
+            {
+                Vec::new()
+            } else {
+                let len = with_vector!(ctx, &arg_obj, |v| v.layout.length);
 
-            let mut result = Vec::with_capacity(len);
-            let mut offset = 0;
-            const CHUNK_SIZE: usize = 1024;
+                let mut result = Vec::with_capacity(len);
+                let mut offset = 0;
+                const CHUNK_SIZE: usize = 1024;
 
-            while offset < len {
-                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
-                {
-                    let _gc_scope = GcScopeGuard::enter(
-                        ctx.as_borrow_scope(),
-                        ctx.as_borrow_scope().gc_ready_token(),
-                    );
-                    let obj = handle.borrow();
-                    match &obj.storage {
-                        HeapStorage::Vec(v) => {
-                            let bytes = v.get();
-                            let start = offset * 2;
-                            let end = start + (chunk_len * 2);
-                            if let Some(chunk_bytes) = bytes.get(start..end) {
-                                crate::extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
-                            }
+                while offset < len {
+                    let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                    with_vector!(ctx, &arg_obj, |v| {
+                        let bytes = v.get();
+                        let start = offset * 2;
+                        let end = start + (chunk_len * 2);
+                        if let Some(chunk_bytes) = bytes.get(start..end) {
+                            crate::extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
                         }
-                        _ => break,
+                    });
+                    offset += chunk_len;
+                    if offset < len && ctx.check_gc_safe_point() {
+                        return StepResult::Yield;
                     }
                 }
-                offset += chunk_len;
-                if offset < len && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
+                result
             }
-            result
         }
         StackValue::ValueType(span) => {
             let len =

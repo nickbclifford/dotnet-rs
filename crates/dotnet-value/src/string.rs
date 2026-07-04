@@ -36,6 +36,34 @@ macro_rules! with_string {
 }
 
 #[macro_export]
+macro_rules! with_vector {
+    ($stack:expr, $value:expr, |$v:ident| $code:expr) => {{
+        let value = $value;
+        let obj = value.as_object_ref();
+        if let Some(handle) = obj.0 {
+            let _gc_scope = $crate::GcScopeGuard::enter(
+                $stack.as_borrow_scope(),
+                $stack.as_borrow_scope().gc_ready_token(),
+            );
+            let heap = handle.borrow();
+            if let $crate::object::HeapStorage::Vec(ref $v) = heap.storage {
+                $code
+            } else {
+                panic!(
+                    "invalid type on stack, expected vector, received {:?}",
+                    heap.storage
+                )
+            }
+        } else {
+            return $stack.throw_by_name_with_message(
+                "System.NullReferenceException",
+                "Object reference not set to an instance of an object.",
+            );
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! with_string_mut {
     ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
         let value = $value;

@@ -8,10 +8,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_value::{
-    StackValue,
-    object::{HeapStorage, ObjectRef},
-};
+use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::{
     StepResult,
     intrinsic_args::{ArgPolicy, pop_object_ref},
@@ -55,11 +52,7 @@ fn push_delegate_with_invocation_list<'gc, T: DelegateEqualsHost<'gc>>(
     let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, invocation_list.len()));
-    let array_obj = ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Vec(Box::new(array_v)),
-    );
-    ctx.register_new_object(&array_obj);
+    let array_obj = ctx.alloc_vec_ref(ctx.gc_with_token(&ctx.no_active_borrows_token()), array_v);
 
     array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
         v.write_object_ref_elements_mut(invocation_list);

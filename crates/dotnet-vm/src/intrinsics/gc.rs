@@ -244,7 +244,8 @@ pub fn intrinsic_gc_allocate_uninitialized_array<
     let element_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
     let vector = dotnet_vm_ops::vm_try!(ctx.new_vector(element_type, length as usize));
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector))));
+    let vector_ref = ctx.alloc_vec_ref(gc, vector);
+    ctx.push_obj(vector_ref);
     StepResult::Continue
 }
 

@@ -7,11 +7,7 @@ use crate::{
     },
 };
 use dotnet_runtime_memory::ops::BaseMemoryOps;
-use dotnet_value::{
-    StackValue,
-    object::{HeapStorage, ObjectRef},
-    string::CLRString,
-};
+use dotnet_value::{StackValue, object::ObjectRef, string::CLRString};
 use dotnet_vm_ops::{
     ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
 };
@@ -22,8 +18,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let gc = self.gc;
         let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
         let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
-        self.register_new_object(&obj_ref);
+        let obj_ref = self.alloc_obj_ref(gc, instance);
 
         let base_exception_type =
             dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));
@@ -57,8 +52,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let gc = self.gc;
         let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(name));
         let instance = dotnet_vm_ops::vm_try!(self.new_object(exception_type));
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
-        self.register_new_object(&obj_ref);
+        let obj_ref = self.alloc_obj_ref(gc, instance);
 
         let base_exception_type =
             dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));

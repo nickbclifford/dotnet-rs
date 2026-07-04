@@ -9,10 +9,7 @@ use dotnet_types::{
     members::MethodDescription,
     runtime::RuntimeType,
 };
-use dotnet_value::{
-    StackValue,
-    object::{HeapStorage, ObjectRef},
-};
+use dotnet_value::StackValue;
 use dotnet_vm_ops::StepResult;
 use dotnetdll::prelude::{MethodMemberIndex, ParameterType, resource::Implementation};
 
@@ -101,8 +98,7 @@ pub fn intrinsic_runtime_assembly_get_manifest_resource_stream<
     byte_array.get_mut().copy_from_slice(resource_bytes);
 
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let byte_array_obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(byte_array)));
-    ctx.register_new_object(&byte_array_obj);
+    let byte_array_obj = ctx.alloc_vec_ref(gc, byte_array);
 
     let memory_stream_type =
         dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.IO.MemoryStream"));
