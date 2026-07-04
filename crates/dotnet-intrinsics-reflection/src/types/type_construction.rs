@@ -329,6 +329,46 @@ pub fn handle_make_generic_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
+pub fn handle_make_by_ref_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let target = ctx.pop_obj();
+
+    if target.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.NullReferenceException",
+            "Object reference not set to an instance of an object.",
+        );
+    }
+
+    let target_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target));
+    let by_ref_rt = RuntimeType::ByRef(Box::new(target_rt));
+    let rt_obj = crate::common::get_runtime_type(ctx, by_ref_rt);
+    ctx.push_obj(rt_obj);
+    StepResult::Continue
+}
+
+pub fn handle_make_array_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let target = ctx.pop_obj();
+
+    if target.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.NullReferenceException",
+            "Object reference not set to an instance of an object.",
+        );
+    }
+
+    let target_rt = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target));
+    let array_rt = RuntimeType::Vector(Box::new(target_rt));
+    let rt_obj = crate::common::get_runtime_type(ctx, array_rt);
+    ctx.push_obj(rt_obj);
+    StepResult::Continue
+}
+
 pub fn handle_create_instance_default_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,

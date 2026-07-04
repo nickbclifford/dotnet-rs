@@ -86,38 +86,78 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let attribute_type = match method.signature().parameters.len() {
+    let (assembly_obj, attribute_filter, element_type) = match method.signature().parameters.len() {
         1 => {
             let _inherit = ctx.pop_i32();
-            let _assembly = ctx.pop_obj();
+            let assembly_obj = ctx.pop_obj();
             let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
-            RuntimeType::Type(object_type).to_concrete(ctx.loader().as_ref())
+            (
+                assembly_obj,
+                None,
+                RuntimeType::Type(object_type).to_concrete(ctx.loader().as_ref()),
+            )
         }
         _ => {
             let _inherit = ctx.pop_i32();
             let attribute_type_obj = ctx.pop_obj();
-            let _assembly = ctx.pop_obj();
+            let assembly_obj = ctx.pop_obj();
 
             if attribute_type_obj.0.is_some() {
                 let attribute_runtime_type = dotnet_vm_ops::vm_try!(
                     crate::common::resolve_runtime_type(ctx, attribute_type_obj)
                 );
-                attribute_runtime_type.to_concrete(ctx.loader().as_ref())
+                let attribute_filter = match &attribute_runtime_type {
+                    RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td.clone()),
+                    _ => None,
+                };
+
+                (
+                    assembly_obj,
+                    attribute_filter,
+                    attribute_runtime_type.to_concrete(ctx.loader().as_ref()),
+                )
             } else {
                 let attribute_type =
                     dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
-                RuntimeType::Type(attribute_type).to_concrete(ctx.loader().as_ref())
+                (
+                    assembly_obj,
+                    None,
+                    RuntimeType::Type(attribute_type).to_concrete(ctx.loader().as_ref()),
+                )
             }
         }
     };
 
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type, 0));
-    let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array)));
-    ctx.register_new_object(&obj);
-    ctx.push_obj(obj);
+    if method.parent.type_name() == "System.Attribute" && assembly_obj.0.is_some() {
+        let assembly_base =
+            dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.Assembly"));
+        let assembly_base_concrete =
+            RuntimeType::Type(assembly_base).to_concrete(ctx.loader().as_ref());
+        let argument_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(assembly_obj));
+        let argument_concrete = RuntimeType::Type(argument_type).to_concrete(ctx.loader().as_ref());
 
-    StepResult::Continue
+        if !ctx
+            .loader()
+            .comparer()
+            .is_assignable_to(&argument_concrete, &assembly_base_concrete)
+        {
+            return populate_reflection_array(ctx, Vec::new(), element_type);
+        }
+    }
+
+    let Some(resolution) = ctx.reflection_runtime_assembly_resolution(assembly_obj) else {
+        return ctx.throw_by_name_with_message(
+            "System.InvalidOperationException",
+            "RuntimeAssembly resolution is unavailable.",
+        );
+    };
+
+    let attrs = dotnet_vm_ops::vm_try!(collect_assembly_custom_attributes(
+        ctx,
+        resolution,
+        attribute_filter
+    ));
+    populate_reflection_array(ctx, attrs, element_type)
 }
 
 #[dotnet_intrinsic(
@@ -211,7 +251,8 @@ fn resolve_attribute_declaring_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
-fn write_constructor_arg_to_field<'gc>(
+fn write_constructor_arg_to_field<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
     instance: &dotnet_value::object::Object<'gc>,
     owner: &TypeDescription,
     field_name: &str,
@@ -264,6 +305,29 @@ fn write_constructor_arg_to_field<'gc>(
                 .field::<f64>(owner.clone(), field_name)
             {
                 field.write(*value);
+                true
+            } else {
+                false
+            }
+        }
+        (MemberType::Base(base), FixedArg::String(value))
+            if matches!(&**base, BaseType::String) =>
+        {
+            if let Some(field) = instance
+                .instance_storage
+                .field::<ObjectRef<'gc>>(owner.clone(), field_name)
+            {
+                let value = match value {
+                    Some(value) => {
+                        let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+                        let value_obj =
+                            ObjectRef::new(gc, HeapStorage::Str(value.to_string().into()));
+                        ctx.register_new_object(&value_obj);
+                        value_obj
+                    }
+                    None => ObjectRef(None),
+                };
+                field.write(value);
                 true
             } else {
                 false
@@ -429,6 +493,7 @@ fn materialize_custom_attribute<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .zip(instance_fields.iter())
         .all(|(arg, field)| {
             write_constructor_arg_to_field(
+                ctx,
                 &instance,
                 &attribute_type,
                 field.name.as_ref(),
@@ -529,6 +594,34 @@ pub(crate) fn collect_field_custom_attributes<'gc, T: ReflectionIntrinsicHost<'g
     Ok(attributes)
 }
 
+fn collect_assembly_custom_attributes<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    resolution: dotnet_types::resolution::ResolutionS,
+    attribute_filter: Option<TypeDescription>,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let Some(module_type_index) = resolution.definition().type_definition_index(0) else {
+        return Ok(Vec::new());
+    };
+
+    let owner_type = TypeDescription::new(resolution, module_type_index);
+    let mut attributes = Vec::new();
+    let assembly_attrs = owner_type
+        .resolution
+        .definition()
+        .assembly_attributes()
+        .unwrap_or_default();
+
+    for attribute in &assembly_attrs {
+        if let Some(attr_obj) =
+            materialize_custom_attribute(ctx, &owner_type, attribute, &attribute_filter)?
+        {
+            attributes.push(attr_obj);
+        }
+    }
+
+    Ok(attributes)
+}
+
 pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -621,8 +714,7 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut methods_objs = Vec::new();
-    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
-        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+    if let Some((td, lookup)) = member_lookup_target(ctx, &target_type) {
         for (idx, m) in td.definition().methods.iter().enumerate() {
             let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = !m.signature.instance;
@@ -674,33 +766,85 @@ fn get_runtime_method_metadata<'gc, T: ReflectionIntrinsicHost<'gc>>(
     crate::common::get_runtime_method_obj(ctx, desc, lookup.clone())
 }
 
+fn member_lookup_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    runtime_type: &RuntimeType,
+) -> Option<(TypeDescription, GenericLookup)> {
+    match runtime_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some((
+            td.clone(),
+            build_generic_lookup_from_runtime_type(ctx, runtime_type),
+        )),
+        _ => {
+            let concrete = runtime_type.to_concrete(ctx.loader().as_ref());
+            ctx.loader()
+                .find_concrete_type(concrete)
+                .ok()
+                .map(|td| (td, GenericLookup::default()))
+        }
+    }
+}
+
+fn method_parameter_runtime_types<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+) -> Vec<RuntimeType> {
+    method
+        .signature()
+        .parameters
+        .iter()
+        .map(|parameter| runtime_type_from_parameter(ctx, method, lookup, &parameter.1))
+        .collect()
+}
+
 pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
+    has_generic_parameter_count: bool,
 ) -> StepResult {
     let _modifiers = ctx.pop();
-    let _types = ctx.pop();
+    let types_obj = ctx.pop_obj();
     let _call_convention = ctx.pop();
     let _binder = ctx.pop();
     let flags = ctx.pop_i32();
+    let generic_parameter_count = if has_generic_parameter_count {
+        Some(ctx.pop_i32())
+    } else {
+        None
+    };
     let name_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
     let name = dotnet_vm_ops::vm_try!(string_from_heap_obj(name_obj));
+    let ignore_case = (flags & BINDING_FLAGS_IGNORE_CASE) != 0;
+    let expected_parameter_types = if types_obj.0.is_some() {
+        Some(dotnet_vm_ops::vm_try!(parse_runtime_type_array(
+            ctx, types_obj
+        )))
+    } else {
+        None
+    };
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
-    const BINDING_FLAGS_INSTANCE: i32 = 4;
-    const BINDING_FLAGS_STATIC: i32 = 8;
-    const BINDING_FLAGS_PUBLIC: i32 = 16;
-    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
-
     let mut found_method = None;
-    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
-        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+    if let Some((td, lookup)) = member_lookup_target(ctx, &target_type) {
         for (idx, m) in td.definition().methods.iter().enumerate() {
-            if m.name != name {
+            let name_matches = if ignore_case {
+                m.name.eq_ignore_ascii_case(&name)
+            } else {
+                m.name == name
+            };
+            if !name_matches {
                 continue;
             }
+
+            if generic_parameter_count
+                .is_some_and(|count| count < 0 || m.generic_parameters.len() != count as usize)
+            {
+                continue;
+            }
+
             let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = !m.signature.instance;
 
@@ -715,10 +859,29 @@ pub fn handle_get_method_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 (flags & BINDING_FLAGS_INSTANCE) != 0
             };
 
-            if match_public && match_static {
-                found_method = Some(get_runtime_method_metadata(ctx, td, &lookup, idx));
-                break;
+            if !match_public || !match_static {
+                continue;
             }
+
+            let desc = MethodDescription::new(
+                td.clone(),
+                lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(idx),
+            );
+            if let Some(expected) = expected_parameter_types.as_ref() {
+                let actual = method_parameter_runtime_types(ctx, &desc, &lookup);
+                if expected != &actual {
+                    continue;
+                }
+            }
+
+            found_method = Some(crate::common::get_runtime_method_obj(
+                ctx,
+                desc,
+                lookup.clone(),
+            ));
+            break;
         }
     }
 
@@ -784,18 +947,184 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-pub fn handle_get_members<
-    'gc,
-    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc> + ExceptionOps<'gc>,
->(
+fn member_name_matches(name_filter: Option<&str>, candidate: &str, ignore_case: bool) -> bool {
+    match name_filter {
+        Some(name) if ignore_case => candidate.eq_ignore_ascii_case(name),
+        Some(name) => candidate == name,
+        None => true,
+    }
+}
+
+fn member_matches_binding_flags(is_public: bool, is_static: bool, flags: i32) -> bool {
+    let match_public = if is_public {
+        (flags & BINDING_FLAGS_PUBLIC) != 0
+    } else {
+        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+    };
+    let match_static = if is_static {
+        (flags & BINDING_FLAGS_STATIC) != 0
+    } else {
+        (flags & BINDING_FLAGS_INSTANCE) != 0
+    };
+
+    match_public && match_static
+}
+
+fn collect_type_member_infos<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    target_type: &RuntimeType,
+    name_filter: Option<&str>,
+    member_types: i32,
+    flags: i32,
+) -> Result<Vec<ObjectRef<'gc>>, VmError> {
+    let ignore_case = (flags & BINDING_FLAGS_IGNORE_CASE) != 0;
+    let mut member_objs = Vec::new();
+
+    if let Some((td, lookup)) = member_lookup_target(ctx, target_type) {
+        if (member_types & MEMBER_TYPES_METHOD) != 0 {
+            for (idx, method) in td.definition().methods.iter().enumerate() {
+                if method.name == ".ctor" || method.name == ".cctor" {
+                    continue;
+                }
+
+                let is_public =
+                    method.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                let is_static = !method.signature.instance;
+                if member_name_matches(name_filter, &method.name, ignore_case)
+                    && member_matches_binding_flags(is_public, is_static, flags)
+                {
+                    let desc = MethodDescription::new(
+                        td.clone(),
+                        lookup.clone(),
+                        td.resolution.clone(),
+                        MethodMemberIndex::Method(idx),
+                    );
+                    member_objs.push(crate::common::get_runtime_method_obj(
+                        ctx,
+                        desc,
+                        lookup.clone(),
+                    ));
+                }
+            }
+        }
+
+        if (member_types & MEMBER_TYPES_CONSTRUCTOR) != 0 {
+            for (idx, method) in td.definition().methods.iter().enumerate() {
+                if method.name != ".ctor" {
+                    continue;
+                }
+
+                let is_public =
+                    method.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                let is_static = !method.signature.instance;
+                if member_name_matches(name_filter, &method.name, ignore_case)
+                    && member_matches_binding_flags(is_public, is_static, flags)
+                {
+                    let desc = MethodDescription::new(
+                        td.clone(),
+                        lookup.clone(),
+                        td.resolution.clone(),
+                        MethodMemberIndex::Method(idx),
+                    );
+                    member_objs.push(crate::common::get_runtime_method_obj(
+                        ctx,
+                        desc,
+                        lookup.clone(),
+                    ));
+                }
+            }
+        }
+
+        if (member_types & MEMBER_TYPES_FIELD) != 0 {
+            for (index, field) in td.definition().fields.iter().enumerate() {
+                let is_public =
+                    field.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                let is_static = field.static_member;
+                if member_name_matches(name_filter, &field.name, ignore_case)
+                    && member_matches_binding_flags(is_public, is_static, flags)
+                {
+                    let desc = dotnet_types::members::FieldDescription::new(
+                        td.clone(),
+                        td.resolution.clone(),
+                        index,
+                    );
+                    member_objs.push(crate::common::get_runtime_field_obj(
+                        ctx,
+                        desc,
+                        lookup.clone(),
+                    ));
+                }
+            }
+        }
+
+        if (member_types & MEMBER_TYPES_PROPERTY) != 0 {
+            let properties = collect_property_candidates(&td, &lookup);
+            for property in &properties {
+                if member_name_matches(name_filter, &property.name, ignore_case)
+                    && property_matches_binding_flags(property, flags)
+                {
+                    member_objs.push(create_runtime_property_obj(
+                        ctx,
+                        target_type,
+                        property,
+                        &lookup,
+                    )?);
+                }
+            }
+        }
+    }
+
+    Ok(member_objs)
+}
+
+pub fn handle_get_member<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+    has_member_types: bool,
+) -> StepResult {
+    let flags = ctx.pop_i32();
+    let member_types = if has_member_types {
+        ctx.pop_i32()
+    } else {
+        MEMBER_TYPES_ALL
+    };
+    let name_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let name = dotnet_vm_ops::vm_try!(string_from_heap_obj(name_obj));
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let member_objs = dotnet_vm_ops::vm_try!(collect_type_member_infos(
+        ctx,
+        &target_type,
+        Some(&name),
+        member_types,
+        flags,
+    ));
+
+    let member_info_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
+    populate_reflection_array(ctx, member_objs, ConcreteType::from(member_info_type))
+}
+
+pub fn handle_get_members<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _flags = ctx.pop_i32();
-    let _obj = ctx.pop_obj();
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+
+    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
+    let member_objs = dotnet_vm_ops::vm_try!(collect_type_member_infos(
+        ctx,
+        &target_type,
+        None,
+        MEMBER_TYPES_ALL,
+        flags,
+    ));
+
     let member_info_type =
         dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
-    populate_reflection_array(ctx, vec![], ConcreteType::from(member_info_type))
+    populate_reflection_array(ctx, member_objs, ConcreteType::from(member_info_type))
 }
 
 pub fn handle_get_nested_types<
@@ -949,6 +1278,12 @@ const BINDING_FLAGS_STATIC: i32 = 8;
 const BINDING_FLAGS_PUBLIC: i32 = 16;
 const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
+const MEMBER_TYPES_CONSTRUCTOR: i32 = 0x01;
+const MEMBER_TYPES_FIELD: i32 = 0x04;
+const MEMBER_TYPES_METHOD: i32 = 0x08;
+const MEMBER_TYPES_PROPERTY: i32 = 0x10;
+const MEMBER_TYPES_ALL: i32 = 0xBF;
+
 #[derive(Clone)]
 struct PropertyCandidate {
     name: String,
@@ -963,9 +1298,12 @@ fn runtime_type_from_parameter<'gc, T: ReflectionIntrinsicHost<'gc>>(
     parameter: &ParameterType<dotnetdll::prelude::MethodType>,
 ) -> RuntimeType {
     match parameter {
-        ParameterType::Value(t) | ParameterType::Ref(t) => {
+        ParameterType::Value(t) => {
             ctx.reflection_make_runtime_type_for_method(method.clone(), lookup, t)
         }
+        ParameterType::Ref(t) => RuntimeType::ByRef(Box::new(
+            ctx.reflection_make_runtime_type_for_method(method.clone(), lookup, t),
+        )),
         ParameterType::TypedReference => RuntimeType::TypedReference,
     }
 }

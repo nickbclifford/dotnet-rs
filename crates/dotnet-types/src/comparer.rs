@@ -141,6 +141,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn normalized_method_types_equal(
         &self,
         left_resolution: &ResolutionS,
@@ -785,6 +786,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return true;
         }
 
+        if self.is_system_enum(target) {
+            return self.is_subclass_of(source, target);
+        }
+
         if self.is_system_value_type(target) {
             return source.is_value_type(self.loader);
         }
@@ -800,16 +805,25 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         false
     }
 
+    fn is_system_enum(&self, ty: &ConcreteType) -> bool {
+        self.has_canonical_metadata_name(ty, "System.Enum")
+    }
+
     fn is_system_value_type(&self, ty: &ConcreteType) -> bool {
+        self.has_canonical_metadata_name(ty, "System.ValueType")
+    }
+
+    fn has_canonical_metadata_name(&self, ty: &ConcreteType, name: &str) -> bool {
         let BaseType::Type { source, .. } = ty.get() else {
             return false;
         };
         let (ut, _) = decompose_type_source(source);
-        let Ok(td) = self.loader.locate_type(ty.resolution(), ut) else {
+        let resolution = ty.resolution();
+        if resolution.is_null() {
             return false;
-        };
-        let td_name = td.type_name();
-        self.loader.canonical_type_name(&td_name) == "System.ValueType"
+        }
+        let ty_name = ut.type_name(resolution.definition());
+        self.loader.canonical_type_name(&ty_name) == name
     }
 
     #[allow(clippy::mutable_key_type)]

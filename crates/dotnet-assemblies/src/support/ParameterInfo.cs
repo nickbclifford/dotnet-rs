@@ -22,4 +22,14 @@ public class ParameterInfo : System.Reflection.ParameterInfo
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern MemberInfo GetMember();
     public override MemberInfo Member => GetMember();
+
+    public override object[] GetCustomAttributes(bool inherit) => System.Array.Empty<object>();
+
+    public override object[] GetCustomAttributes(Type attributeType, bool inherit) =>
+        System.Array.Empty<object>();
+
+    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+
+    public override bool IsDefined(Type attributeType, bool inherit) => false;
 }

@@ -1,11 +1,15 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete},
 };
-use dotnet_value::{CLRString, StackValue};
+use dotnet_value::{
+    CLRString, StackValue,
+    object::{CTSValue, HeapStorage, ObjectRef},
+};
 use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
@@ -234,13 +238,10 @@ fn numeric_constant_to_stack<'gc>(constant: &Constant) -> Option<StackValue<'gc>
     })
 }
 
-/// `FieldInfo.GetValue(obj)` — currently supports literal (const) fields, which is
-/// what enum-member reflection needs (e.g. Newtonsoft's
-/// `EnumUtils.InitializeValuesAndNames` reads each enum member via
-/// `field.GetValue(null)`). Unlike `GetRawConstantValue`, which returns the boxed
-/// underlying primitive, `GetValue` boxes the constant as the field's declared type,
-/// so an enum member yields a boxed value of the enum type. Reading non-literal
-/// (instance/static) fields is not yet implemented.
+/// `FieldInfo.GetValue(obj)` — supports literal constants and instance fields.
+/// Unlike `GetRawConstantValue`, which returns the boxed underlying primitive,
+/// `GetValue` boxes constants as the field's declared type, so an enum member
+/// yields a boxed value of the enum type.
 #[dotnet_intrinsic("object DotnetRs.FieldInfo::GetValue(object)")]
 pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -248,9 +249,9 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     // Argument layout: `this` (FieldInfo), then `obj`. Pop in reverse order.
-    let _obj = ctx.pop();
+    let obj = ctx.pop();
     let this = ctx.pop_obj();
-    let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
+    let (field, lookup) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
     let field_def = field.field();
 
     if !field_def.literal {
@@ -262,10 +263,36 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             ctx.push(StackValue::null());
             return StepResult::Continue;
         }
-        return ctx.throw_by_name_with_message(
-            "System.NotImplementedException",
-            "DotnetRs.FieldInfo.GetValue is only implemented for literal (const) fields",
+        let StackValue::ObjectRef(target_obj) = obj else {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "FieldInfo.GetValue requires an object instance for instance fields.",
+            );
+        };
+
+        let field_type: dotnetdll::prelude::MethodType = field_def.return_type.clone().into();
+        let concrete_field_type = dotnet_vm_ops::vm_try!(lookup.make_concrete(
+            field.resolution(),
+            field_type,
+            ctx.loader().as_ref(),
+        ));
+        let field_bytes = dotnet_vm_ops::vm_try!(read_instance_field_bytes(
+            target_obj,
+            field.parent.clone(),
+            field_def.name.as_ref(),
+        ));
+        let value = dotnet_vm_ops::vm_try!(
+            ctx.read_cts_value(&concrete_field_type, &field_bytes)
+                .map(|value| value.into_stack())
         );
+
+        if let StackValue::ObjectRef(obj) = value {
+            ctx.push_obj(obj);
+        } else {
+            let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&concrete_field_type, value));
+            ctx.push_obj(boxed);
+        }
+        return StepResult::Continue;
     }
 
     let Some(constant) = field_def.default.as_ref() else {
@@ -295,6 +322,186 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             StepResult::Continue
         }
     }
+}
+
+#[dotnet_intrinsic(
+    "void DotnetRs.FieldInfo::SetValue(object, object, System.Reflection.BindingFlags, System.Reflection.Binder, System.Globalization.CultureInfo)"
+)]
+pub fn intrinsic_field_info_set_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    // Argument layout: `this` (FieldInfo), then `obj`, `value`, `invokeAttr`, `binder`, `culture`.
+    // Pop in reverse order.
+    let _culture = ctx.pop();
+    let _binder = ctx.pop();
+    let _invoke_attr = ctx.pop_i32();
+    let value = ctx.pop();
+    let obj = ctx.pop();
+    let this = ctx.pop_obj();
+
+    let (field, lookup) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
+    let field_def = field.field();
+
+    if field_def.literal {
+        return ctx.throw_by_name_with_message(
+            "System.FieldAccessException",
+            "Cannot set a literal field.",
+        );
+    }
+
+    if field_def.static_member {
+        return ctx.throw_by_name_with_message(
+            "System.NotImplementedException",
+            "DotnetRs.FieldInfo.SetValue does not yet support static field writes.",
+        );
+    }
+
+    let StackValue::ObjectRef(target_obj) = obj else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "FieldInfo.SetValue requires an object instance for instance fields.",
+        );
+    };
+
+    if target_obj.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "FieldInfo.SetValue requires a non-null object instance for instance fields.",
+        );
+    }
+
+    let field_type: dotnetdll::prelude::MethodType = field_def.return_type.clone().into();
+    let concrete_field_type = dotnet_vm_ops::vm_try!(lookup.make_concrete(
+        field.resolution(),
+        field_type,
+        ctx.loader().as_ref(),
+    ));
+
+    let field_is_value_type = concrete_field_type.is_value_type(ctx.loader().as_ref());
+    let writes_default_zero =
+        field_is_value_type && matches!(value, StackValue::ObjectRef(ObjectRef(None)));
+
+    if writes_default_zero {
+        dotnet_vm_ops::vm_try!(write_instance_field_value(
+            target_obj,
+            field.parent.clone(),
+            field_def.name.as_ref(),
+            None,
+        ));
+        return StepResult::Continue;
+    }
+
+    let value = if field_is_value_type {
+        dotnet_vm_ops::vm_try!(coerce_field_set_value_argument(
+            ctx,
+            value,
+            &concrete_field_type,
+        ))
+    } else {
+        value
+    };
+
+    let cts_value = dotnet_vm_ops::vm_try!(ctx.new_cts_value(&concrete_field_type, value));
+    dotnet_vm_ops::vm_try!(write_instance_field_value(
+        target_obj,
+        field.parent.clone(),
+        field_def.name.as_ref(),
+        Some(&cts_value),
+    ));
+
+    StepResult::Continue
+}
+
+fn coerce_field_set_value_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    value: StackValue<'gc>,
+    field_type: &ConcreteType,
+) -> Result<StackValue<'gc>, dotnet_types::error::VmError> {
+    let StackValue::ObjectRef(value_obj) = value else {
+        return Ok(value);
+    };
+
+    let Some(_) = value_obj.0 else {
+        return Ok(value);
+    };
+
+    let boxed_value = value_obj.as_heap_storage(|storage| match storage {
+        HeapStorage::Boxed(obj) => Ok(obj
+            .instance_storage
+            .with_data(|data| ctx.read_cts_value(field_type, data))),
+        HeapStorage::Obj(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "boxed value type",
+            actual: "object".into(),
+        }),
+        HeapStorage::Vec(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "boxed value type",
+            actual: "vector".into(),
+        }),
+        HeapStorage::Str(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "boxed value type",
+            actual: "string".into(),
+        }),
+    });
+
+    match boxed_value {
+        Ok(Ok(v)) => Ok(v.into_stack()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn read_instance_field_bytes<'gc>(
+    target_obj: ObjectRef<'gc>,
+    field_parent: TypeDescription,
+    field_name: &str,
+) -> Result<Vec<u8>, dotnet_types::error::ExecutionError> {
+    target_obj.try_as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(instance) | HeapStorage::Boxed(instance) => Ok(instance
+            .instance_storage
+            .get_field_local(field_parent, field_name)
+            .to_vec()),
+        HeapStorage::Vec(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "object with fields",
+            actual: "Vector".into(),
+        }),
+        HeapStorage::Str(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "object with fields",
+            actual: "String".into(),
+        }),
+    })?
+}
+
+fn write_instance_field_value<'gc>(
+    target_obj: ObjectRef<'gc>,
+    field_parent: TypeDescription,
+    field_name: &str,
+    value: Option<&CTSValue<'gc>>,
+) -> Result<(), dotnet_types::error::ExecutionError> {
+    target_obj.try_as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(instance) | HeapStorage::Boxed(instance) => {
+            let mut field_data = instance
+                .instance_storage
+                .get_field_mut_local(field_parent, field_name);
+
+            if let Some(value) = value {
+                value.write(&mut field_data);
+            } else {
+                field_data.fill(0);
+            }
+
+            Ok(())
+        }
+        HeapStorage::Vec(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "object with fields",
+            actual: "Vector".into(),
+        }),
+        HeapStorage::Str(_) => Err(dotnet_types::error::ExecutionError::TypeMismatch {
+            expected: "object with fields",
+            actual: "String".into(),
+        }),
+    })?
 }
 
 #[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]

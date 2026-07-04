@@ -13,6 +13,7 @@ use dotnet_types::{
 };
 use dotnet_value::{
     StackValue,
+    layout::HasLayout,
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_ops::{
@@ -20,7 +21,7 @@ use dotnet_vm_ops::{
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
 use dotnetdll::{
-    prelude::{BaseType, Kind, MethodType, TypeSource},
+    prelude::{BaseType, Constant, Kind, MethodType, TypeSource},
     resolved::types::Accessibility as TypeAccessibility,
 };
 use std::collections::{HashSet, VecDeque};
@@ -357,6 +358,81 @@ pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'
     };
     let rt_obj = crate::common::get_runtime_type(ctx, underlying_rt);
     ctx.push_obj(rt_obj);
+    StepResult::Continue
+}
+
+fn enum_constant_to_stack<'gc>(constant: &Constant) -> Option<StackValue<'gc>> {
+    Some(match constant {
+        Constant::Boolean(v) => StackValue::Int32(i32::from(*v)),
+        Constant::Char(v) => StackValue::Int32(*v as i32),
+        Constant::Int8(v) => StackValue::Int32(*v as i32),
+        Constant::UInt8(v) => StackValue::Int32(*v as i32),
+        Constant::Int16(v) => StackValue::Int32(*v as i32),
+        Constant::UInt16(v) => StackValue::Int32(*v as i32),
+        Constant::Int32(v) => StackValue::Int32(*v),
+        Constant::UInt32(v) => StackValue::NativeInt(*v as isize),
+        Constant::Int64(v) => StackValue::Int64(*v),
+        Constant::UInt64(v) => StackValue::Int64(*v as i64),
+        Constant::Float32(v) => StackValue::NativeFloat((*v).into()),
+        Constant::Float64(v) => StackValue::NativeFloat(*v),
+        Constant::String(_) | Constant::Null => return None,
+    })
+}
+
+#[dotnet_intrinsic("System.Array System.Type::GetEnumValuesAsUnderlyingType()")]
+#[dotnet_intrinsic("System.Array System.RuntimeType::GetEnumValuesAsUnderlyingType()")]
+pub fn intrinsic_type_get_enum_values_as_underlying_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let o = ctx.pop_obj();
+    let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
+    let td = match &target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Type provided must be an Enum.",
+            );
+        }
+    };
+    let Some(member) = td.is_enum() else {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type provided must be an Enum.",
+        );
+    };
+
+    let method_type: MethodType = member.clone().into();
+    let lookup = ctx.reflection_empty_generics();
+    let underlying = dotnet_vm_ops::vm_try!(lookup.make_concrete(
+        td.resolution.clone(),
+        method_type,
+        ctx.loader().as_ref(),
+    ));
+    let values = td
+        .definition()
+        .fields
+        .iter()
+        .filter(|field| field.literal && field.static_member)
+        .filter_map(|field| field.default.as_ref())
+        .filter_map(enum_constant_to_stack)
+        .collect::<Vec<_>>();
+
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let mut vector = dotnet_vm_ops::vm_try!(ctx.new_vector(underlying.clone(), values.len()));
+    let element_size = vector.layout.element_layout.size().as_usize();
+    for (index, value) in values.into_iter().enumerate() {
+        let cts_value = dotnet_vm_ops::vm_try!(ctx.new_cts_value(&underlying, value));
+        let start = element_size * index;
+        let end = start + element_size;
+        cts_value.write(&mut vector.get_mut()[start..end]);
+    }
+
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector)));
+    ctx.register_new_object(&obj);
+    ctx.push_obj(obj);
     StepResult::Continue
 }
 

@@ -13,6 +13,12 @@ internal class RuntimeType : Type
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type MakeGenericType(params Type[] typeArguments);
 
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern Type MakeByRefType();
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern Type MakeArrayType();
+
     public override bool IsAssignableFrom(Type? c)
     {
         // https://learn.microsoft.com/en-us/dotnet/api/system.type.isassignablefrom?view=net-9.0#returns
@@ -131,6 +137,12 @@ internal class RuntimeType : Type
     public override extern MemberInfo[] GetMembers(BindingFlags bindingAttr);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern MemberInfo[] GetMember(string name, BindingFlags bindingAttr);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern MemberInfo[] GetMember(string name, MemberTypes type, BindingFlags bindingAttr);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern EventInfo? GetEvent(string name, BindingFlags bindingAttr);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
@@ -151,6 +163,17 @@ internal class RuntimeType : Type
     [MethodImpl(MethodImplOptions.InternalCall)]
     protected override extern System.Reflection.MethodInfo? GetMethodImpl(
         string name,
+        BindingFlags bindingAttr,
+        Binder? binder,
+        CallingConventions callConvention,
+        Type[]? types,
+        ParameterModifier[]? modifiers
+    );
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    protected override extern System.Reflection.MethodInfo? GetMethodImpl(
+        string name,
+        int genericParameterCount,
         BindingFlags bindingAttr,
         Binder? binder,
         CallingConventions callConvention,
@@ -223,6 +246,9 @@ internal class RuntimeType : Type
 
     [MethodImpl(MethodImplOptions.InternalCall)]    
     public override extern object[] GetCustomAttributes(Type attributeType, bool inherit);
+
+    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern bool IsDefined(Type attributeType, bool inherit);

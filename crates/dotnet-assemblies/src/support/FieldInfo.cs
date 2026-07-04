@@ -14,6 +14,9 @@ public class FieldInfo : System.Reflection.FieldInfo
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern object[] GetCustomAttributes(Type attributeType, bool inherit);
 
+    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern bool IsDefined(Type attributeType, bool inherit);
 

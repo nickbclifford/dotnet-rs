@@ -5,6 +5,7 @@ use dotnet_intrinsics_delegates::helpers::{
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     TypeDescription,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete},
@@ -67,6 +68,10 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type)")]
 #[dotnet_intrinsic("System.Delegate DotnetRs.MethodInfo::CreateDelegate(System.Type, object)")]
 #[dotnet_intrinsic("string DotnetRs.MethodInfo::ToString()")]
+#[dotnet_intrinsic("System.Reflection.MethodInfo DotnetRs.MethodInfo::GetBaseDefinition()")]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo DotnetRs.MethodInfo::GetGenericMethodDefinition()"
+)]
 #[dotnet_intrinsic(
     "object DotnetRs.MethodInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
 )]
@@ -109,6 +114,26 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             // Every dispatched method is fully resolved, so report no unresolved type params.
             let _obj = ctx.pop_obj();
             ctx.push_i32(0);
+            Some(StepResult::Continue)
+        }
+        ("GetIsGenericMethod" | "get_IsGenericMethod", 0) => {
+            let method_obj = ctx.pop_obj();
+            let (method, _) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            ctx.push_i32(if method.method().generic_parameters.is_empty() {
+                0
+            } else {
+                1
+            });
+            Some(StepResult::Continue)
+        }
+        ("GetIsGenericMethodDefinition" | "get_IsGenericMethodDefinition", 0) => {
+            let method_obj = ctx.pop_obj();
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let is_definition =
+                !method.method().generic_parameters.is_empty() && lookup.method_generics.is_empty();
+            ctx.push_i32(if is_definition { 1 } else { 0 });
             Some(StepResult::Continue)
         }
         ("IsDefined", 2) => {
@@ -245,6 +270,72 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             ctx.push_obj(array_ref);
+            Some(StepResult::Continue)
+        }
+        ("GetBaseDefinition", 0) => {
+            let method_obj = ctx.pop_obj();
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let (base_method, base_lookup) =
+                dotnet_vm_ops::vm_try!(resolve_base_method_definition(ctx, &method, &lookup));
+            let base_obj = crate::common::get_runtime_method_obj(ctx, base_method, base_lookup);
+            ctx.push_obj(base_obj);
+            Some(StepResult::Continue)
+        }
+        ("GetGenericArguments", 0) => {
+            let method_obj = ctx.pop_obj();
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+
+            let generic_arity = method.method().generic_parameters.len();
+            let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
+            if generic_arity == 0 {
+                return crate::types::populate_reflection_array(
+                    ctx,
+                    Vec::new(),
+                    ConcreteType::from(type_type),
+                );
+            }
+
+            let concrete_method_generics = lookup.method_generics.get(..generic_arity);
+            let generic_args = (0..generic_arity)
+                .map(|index| {
+                    let runtime_type = concrete_method_generics
+                        .and_then(|args| {
+                            runtime_type_from_concrete(ctx.loader().as_ref(), &args[index])
+                        })
+                        .unwrap_or_else(|| RuntimeType::MethodParameter {
+                            owner: method.clone(),
+                            index: index as u16,
+                        });
+                    crate::common::get_runtime_type(ctx, runtime_type)
+                })
+                .collect();
+
+            return crate::types::populate_reflection_array(
+                ctx,
+                generic_args,
+                ConcreteType::from(type_type),
+            );
+        }
+        ("GetGenericMethodDefinition", 0) => {
+            let method_obj = ctx.pop_obj();
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+
+            if method.method().generic_parameters.is_empty() {
+                return ctx.throw_by_name_with_message(
+                    "System.InvalidOperationException",
+                    "Method is not a generic method.",
+                );
+            }
+
+            let definition_lookup = GenericLookup {
+                type_generics: lookup.type_generics,
+                method_generics: Vec::new().into(),
+            };
+            let method_obj = crate::common::get_runtime_method_obj(ctx, method, definition_lookup);
+            ctx.push_obj(method_obj);
             Some(StepResult::Continue)
         }
         ("Invoke", 5) => {
@@ -538,6 +629,87 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
     StepResult::Continue
 }
 
+fn trim_method_lookup(lookup: &GenericLookup, method: &MethodDescription) -> GenericLookup {
+    let method_generic_arity = method.method().generic_parameters.len();
+    if lookup.method_generics.len() <= method_generic_arity {
+        return lookup.clone();
+    }
+
+    GenericLookup {
+        type_generics: lookup.type_generics.clone(),
+        method_generics: lookup.method_generics[..method_generic_arity].into(),
+    }
+}
+
+fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+) -> Result<(MethodDescription, GenericLookup), TypeResolutionError> {
+    let trimmed_lookup = trim_method_lookup(lookup, method);
+    if !method.method().virtual_member {
+        return Ok((method.clone(), trimmed_lookup));
+    }
+
+    if matches!(
+        method.method().vtable_layout,
+        dotnetdll::resolved::members::VtableLayout::NewSlot
+    ) {
+        return Ok((method.clone(), trimmed_lookup));
+    }
+
+    let mut signature_lookup = method.parent_generics.clone();
+    signature_lookup.method_generics = trimmed_lookup.method_generics.clone();
+
+    let ancestors: Vec<_> = ctx.loader().ancestors(method.parent.clone()).collect();
+    if ancestors.len() <= 1 {
+        return Ok((method.clone(), trimmed_lookup));
+    }
+
+    let mut base_method = method.clone();
+    let mut base_lookup = trimmed_lookup.clone();
+    let mut current_lookup = trimmed_lookup.clone();
+
+    for index in 0..(ancestors.len() - 1) {
+        let (current_type, extends_generics) = &ancestors[index];
+        let (parent_type, _) = &ancestors[index + 1];
+
+        let next_type_generics = extends_generics
+            .iter()
+            .map(|t| {
+                current_lookup.make_concrete(
+                    current_type.resolution.clone(),
+                    (*t).clone(),
+                    ctx.loader().as_ref(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let parent_lookup = GenericLookup {
+            type_generics: next_type_generics.into(),
+            method_generics: trimmed_lookup.method_generics.clone(),
+        };
+
+        if let Some(parent_method) = ctx.loader().find_method_in_type_internal(
+            parent_type.clone(),
+            &method.method().name,
+            method.signature(),
+            method.resolution(),
+            Some(&signature_lookup),
+            Some(&parent_lookup),
+            false,
+        ) && parent_method.method().virtual_member
+        {
+            base_method = parent_method;
+            base_lookup = parent_lookup.clone();
+        }
+
+        current_lookup = parent_lookup;
+    }
+
+    Ok((base_method, base_lookup))
+}
+
 fn method_attributes_flags(method: &MethodDescription) -> i32 {
     let method_def = method.method();
     let mut flags = method_def.accessibility.to_mask() as i32;
@@ -604,9 +776,15 @@ fn declaring_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: &MethodDescription,
     lookup: &GenericLookup,
 ) -> RuntimeType {
+    let parent_runtime_type = || {
+        let concrete = ConcreteType::from(method.parent.clone());
+        runtime_type_from_concrete(ctx.loader().as_ref(), &concrete)
+            .unwrap_or_else(|| RuntimeType::Type(method.parent.clone()))
+    };
+
     let parent_arity = method.parent.definition().generic_parameters.len();
     if parent_arity == 0 {
-        return RuntimeType::Type(method.parent.clone());
+        return parent_runtime_type();
     }
 
     let type_generics = if lookup.type_generics.len() >= parent_arity {
@@ -614,7 +792,7 @@ fn declaring_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     } else if method.parent_generics.type_generics.len() >= parent_arity {
         &method.parent_generics.type_generics[..parent_arity]
     } else {
-        return RuntimeType::Type(method.parent.clone());
+        return parent_runtime_type();
     };
 
     let Some(args) = type_generics
@@ -622,7 +800,7 @@ fn declaring_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
         .map(|t| runtime_type_from_concrete(ctx.loader().as_ref(), t))
         .collect::<Option<Vec<_>>>()
     else {
-        return RuntimeType::Type(method.parent.clone());
+        return parent_runtime_type();
     };
 
     RuntimeType::Generic(method.parent.clone(), args)

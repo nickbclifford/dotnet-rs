@@ -90,6 +90,9 @@ public class PropertyInfo : System.Reflection.PropertyInfo
     public override object[] GetCustomAttributes(Type attributeType, bool inherit) =>
         System.Array.Empty<object>();
 
+    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+
     public override bool IsDefined(Type attributeType, bool inherit) => false;
 
     public override object? GetValue(

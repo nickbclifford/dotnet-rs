@@ -74,6 +74,8 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("System.Type[] System.Type::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeTypeHandle System.Type::get_TypeHandle()")]
 #[dotnet_intrinsic("System.Type System.Type::MakeGenericType(System.Type[])")]
+#[dotnet_intrinsic("System.Type System.Type::MakeByRefType()")]
+#[dotnet_intrinsic("System.Type System.Type::MakeArrayType()")]
 #[dotnet_intrinsic("string System.RuntimeType::get_Name()")]
 #[dotnet_intrinsic("string System.RuntimeType::GetName()")]
 #[dotnet_intrinsic("string System.RuntimeType::get_Namespace()")]
@@ -91,11 +93,39 @@ pub fn intrinsic_type_get_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 #[dotnet_intrinsic("System.Type[] System.RuntimeType::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeTypeHandle System.RuntimeType::get_TypeHandle()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::MakeGenericType(System.Type[])")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::MakeByRefType()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::MakeArrayType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::MakeByRefType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::MakeArrayType()")]
 #[dotnet_intrinsic(
     "System.Reflection.MethodInfo[] System.RuntimeType::GetMethods(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] System.Type::GetMember(string, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] System.RuntimeType::GetMember(string, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] DotnetRs.RuntimeType::GetMember(string, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] System.Type::GetMember(string, System.Reflection.MemberTypes, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] System.RuntimeType::GetMember(string, System.Reflection.MemberTypes, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MemberInfo[] DotnetRs.RuntimeType::GetMember(string, System.Reflection.MemberTypes, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
     "System.Reflection.MethodInfo System.RuntimeType::GetMethodImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo System.Type::GetMethodImpl(string, int, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo System.RuntimeType::GetMethodImpl(string, int, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
 )]
 #[dotnet_intrinsic(
     "System.Reflection.ConstructorInfo[] System.RuntimeType::GetConstructors(System.Reflection.BindingFlags)"
@@ -152,10 +182,13 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         ("GetAssembly" | "get_Assembly", 0) => handle_get_assembly(ctx, generics),
         ("GetNamespace" | "get_Namespace", 0) => handle_get_namespace(ctx, generics),
         ("GetMethods", 1) => handle_get_methods(ctx, generics),
-        ("GetMethodImpl", 6) => handle_get_method_impl(ctx, generics),
+        ("GetMethodImpl", 6) => handle_get_method_impl(ctx, generics, false),
+        ("GetMethodImpl", 7) => handle_get_method_impl(ctx, generics, true),
         ("GetConstructors", 1) => handle_get_constructors(ctx, generics),
         ("GetConstructorImpl", 5) => handle_get_constructor_impl(ctx, generics),
         ("GetMembers", 1) => handle_get_members(ctx, generics),
+        ("GetMember", 2) => handle_get_member(ctx, generics, false),
+        ("GetMember", 3) => handle_get_member(ctx, generics, true),
         ("GetNestedTypes", 1) => handle_get_nested_types(ctx, generics),
         ("InvokeMember", 8) => handle_invoke_member(ctx, generics),
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
@@ -175,6 +208,8 @@ pub fn runtime_type_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         ("GetTypeHandle" | "get_TypeHandle", 0) => handle_get_type_handle(ctx, generics),
         ("MakeGenericType", 1) => handle_make_generic_type(ctx, generics),
+        ("MakeByRefType", 0) => handle_make_by_ref_type(ctx, generics),
+        ("MakeArrayType", 0) => handle_make_array_type(ctx, generics),
         ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, generics),
         ("GetFields", 1) => handle_get_fields(ctx, generics),
         ("GetField", 2) => handle_get_field(ctx, generics),
@@ -429,6 +464,72 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
 
     let mt_ptr = dotnet_vm_ops::vm_try!(object_type).definition() as *const _;
     ctx.push_isize(mt_ptr as isize);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static object System.Runtime.CompilerServices.RuntimeHelpers::GetUninitializedObject(System.Type)"
+)]
+pub fn intrinsic_runtime_helpers_get_uninitialized_object<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let target_type_obj = ctx.pop_obj();
+    if target_type_obj.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentNullException",
+            "Value cannot be null. (Parameter 'type')",
+        );
+    }
+
+    let runtime_type = match crate::common::resolve_runtime_type(ctx, target_type_obj) {
+        Ok(runtime_type) => runtime_type,
+        Err(_) => {
+            return ctx.throw_by_name_with_message(
+                "System.Runtime.Serialization.SerializationException",
+                "Serialization_InvalidType",
+            );
+        }
+    };
+
+    if matches!(
+        runtime_type,
+        RuntimeType::Void
+            | RuntimeType::TypedReference
+            | RuntimeType::String
+            | RuntimeType::Vector(_)
+            | RuntimeType::Array(_, _)
+            | RuntimeType::Pointer(_)
+            | RuntimeType::ByRef(_)
+            | RuntimeType::ValuePointer(_, _)
+            | RuntimeType::FunctionPointer(_)
+            | RuntimeType::TypeParameter { .. }
+            | RuntimeType::MethodParameter { .. }
+    ) {
+        return ctx.throw_by_name_with_message(
+            "System.Runtime.Serialization.SerializationException",
+            "Serialization_InvalidType",
+        );
+    }
+
+    let concrete = runtime_type.to_concrete(ctx.loader().as_ref());
+    let target_td = match ctx.loader().find_concrete_type(concrete.clone()) {
+        Ok(td) => td,
+        Err(_) => {
+            return ctx.throw_by_name_with_message(
+                "System.Runtime.Serialization.SerializationException",
+                "Serialization_InvalidType",
+            );
+        }
+    };
+
+    let lookup = concrete.make_lookup();
+    let instance = dotnet_vm_ops::vm_try!(ctx.new_object_with_lookup(target_td, &lookup));
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let result = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
+    ctx.register_new_object(&result);
+    ctx.push_obj(result);
     StepResult::Continue
 }
 
