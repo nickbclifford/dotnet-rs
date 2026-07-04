@@ -278,3 +278,56 @@ This means the branch cleared the immediately prior missing-string-intrinsic blo
 EF model nullability convention processing. The next refactor should start from
 `System.Reflection.MemberInfo.GetCustomAttributesData()`/`NullabilityInfoContext` support rather
 than continuing the old generic-lookup triage.
+
+## EF epic handoff after supervised/ef-core-2 finalization (2026-07-04)
+
+The `supervised/ef-core-2` branch advanced the host-mode EF probe past the
+`GetCustomAttributesData`/`NullabilityInfoContext` wall and through a long
+sequence of runtime, reflection, dispatch, string, array, and expression
+interpreter blockers. Rung 3 is still **FAIL** and should not be marked
+complete.
+
+Current branch-local progress reached checklist step 2.31. The standard EF
+probe still reports the outer EF query-translation failure, while the
+diagnostic repro that exposes the inner materialization path now advances to:
+
+```text
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at Microsoft.EntityFrameworkCore.ChangeTracking.Internal.IdentityMap`1.TryGetEntry(...)
+   at System.Linq.Expressions.Interpreter.ByRefMethodInfoCallInstruction.Run(...)
+```
+
+This means the branch cleared the immediately prior
+`RuntimeHelpers.GetUninitializedObject(System.Type)` / `Serialization_InvalidType`
+blocker and now reaches EF identity-map lookup during interpreted query
+execution. The next EF refactor should start from this `IdentityMap<T>.TryGetEntry`
+`NullReferenceException`, while preserving the standard rung-3 done condition:
+stock `dotnet` and host-mode `dotnet-rs` must both print `Hello` and exit `42`.
+
+Final verification commands:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --no-default-features -- -D warnings
+CARGO_BUILD_JOBS=1 bash check.sh
+cargo build -p dotnet-cli --bin dotnet-rs --no-default-features
+dotnet build tests/ef-probe/EfApp.csproj -c Debug
+dotnet tests/ef-probe/bin/Debug/net10.0/EfApp.dll
+./target/debug/dotnet-rs tests/ef-probe/bin/Debug/net10.0/EfApp.dll
+./target/debug/dotnet-rs /tmp/ef-debug-probe/bin/Debug/net10.0/ef-debug-probe.dll
+```
+
+Observed results:
+
+- `cargo fmt --all -- --check`: PASS.
+- `cargo clippy --all-targets --no-default-features -- -D warnings`: PASS.
+- `CARGO_BUILD_JOBS=1 bash check.sh`: PASS
+  (`384/384`, `448/448`, and `466/466` test legs passed).
+- `cargo build -p dotnet-cli --bin dotnet-rs --no-default-features`: PASS.
+- `dotnet build tests/ef-probe/EfApp.csproj -c Debug`: PASS.
+- Stock `dotnet tests/ef-probe/bin/Debug/net10.0/EfApp.dll`: prints `Hello`, exits `42`.
+- Host-mode `dotnet-rs tests/ef-probe/bin/Debug/net10.0/EfApp.dll`: exits `1` with the outer
+  `CoreStrings.TranslationFailed` query error for `DbSet<Blog>().First()`.
+- Diagnostic host-mode `/tmp/ef-debug-probe`: exits `1`; the direct `Execute` path reaches
+  `IdentityMap<T>.TryGetEntry(...)` `NullReferenceException`, then the normal `query.First()`
+  path still reports the outer translation error.

@@ -62,7 +62,6 @@ The CI pipeline (`.github/workflows/ci.yml`) runs several "legs" to ensure cover
 In addition to feature flags, some components use environment variables for extra tracing:
 
 - `DOTNET_TRACE_GC_PTR_READ=1`: Enables tracing of every GC pointer read (very verbose).
-- `DOTNET_TRACE_CULTUREDATA_WRITES=1`: Enables tracing of culture-specific data initialization.
 - `DOTNET_RS_TRACE=info`: Configures the global tracing level (uses `env_filter` syntax).
 - `DOTNET_RS_TRACE_FORMAT=json`: Changes tracing output format to JSON.
 
