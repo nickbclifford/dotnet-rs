@@ -841,8 +841,17 @@ impl<'gc> ObjectRef<'gc> {
             HeapStorage::Vec(v) => f(&mut v.storage),
             HeapStorage::Obj(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Boxed(o) => o.instance_storage.with_data_mut(f),
-            HeapStorage::Str(_) => {
-                panic!("Strings are immutable and cannot be accessed via with_data_mut")
+            HeapStorage::Str(s) => {
+                // SAFETY: `CLRString` stores UTF-16 `u16` code units. Casting to
+                // `*mut u8` is valid (`u8` alignment <= `u16` alignment), and
+                // `s.len() * 2` is the correct byte-length view.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        s.as_mut_slice().as_mut_ptr() as *mut u8,
+                        s.len() * 2,
+                    )
+                };
+                f(bytes)
             }
         }
     }

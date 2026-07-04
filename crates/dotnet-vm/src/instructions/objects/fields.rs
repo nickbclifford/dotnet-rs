@@ -23,16 +23,9 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
-    stack_value::stack_value_kind,
 };
 use dotnetdll::prelude::*;
-use std::{
-    ptr::{self, NonNull},
-    sync::LazyLock,
-};
-
-static TRACE_CULTUREDATA_WRITES: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok());
+use std::ptr::{self, NonNull};
 
 fn canonical_static_lookup(field: &FieldDescription, lookup: &GenericLookup) -> GenericLookup {
     let type_arity = field.parent.definition().generic_parameters.len();
@@ -201,25 +194,11 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         .get_field(field.parent.clone(), name.as_ref())
         .unwrap();
 
-    let offset = base_offset + field_layout.position;
-
-    if *TRACE_CULTUREDATA_WRITES && field.parent.type_name() == "System.Globalization.CultureData" {
-        let frame = ctx.current_frame();
-        let method = &frame.state.info_handle.source;
-        let ip = frame.state.ip;
-        let value_kind = stack_value_kind(&value);
-
-        eprintln!(
-            "[GCDBG] stfld CultureData: method={}.{} ip={} field={} offset={} layout_tag={} value_kind={}",
-            method.parent.type_name(),
-            method.method().name,
-            ip,
-            name,
-            offset.as_usize(),
-            field_layout.layout.type_tag(),
-            value_kind
-        );
-    }
+    let offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
+        base_offset
+    } else {
+        base_offset + field_layout.position
+    };
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap if an owner is provided.
     // It also performs bounds checking and write barriers.

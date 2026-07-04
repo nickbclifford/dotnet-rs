@@ -453,7 +453,15 @@ impl SharedGlobalState {
             #[cfg(feature = "multithreading")]
             reflection_registry: SharedReflectionRegistry::new(),
             resolution_shared_cache: OnceLock::new(),
-            app_context_switches: DashMap::new(),
+            app_context_switches: {
+                let switches = DashMap::new();
+                switches.insert("System.Globalization.Invariant".to_string(), true);
+                switches.insert(
+                    "System.Globalization.PredefinedCulturesOnly".to_string(),
+                    true,
+                );
+                switches
+            },
         };
 
         state

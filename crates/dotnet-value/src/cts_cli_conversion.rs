@@ -180,7 +180,7 @@ impl CliToCts {
             CtsScalarKind::Int16 => Int16(Self::convert_num(data)?),
             CtsScalarKind::UInt16 => UInt16(Self::convert_num(data)?),
             CtsScalarKind::Int32 => Int32(Self::convert_num(data)?),
-            CtsScalarKind::UInt32 => UInt32(Self::convert_num(data)?),
+            CtsScalarKind::UInt32 => UInt32(Self::convert_u32(data)?),
             CtsScalarKind::Int64 => Int64(Self::convert_i64(data)?),
             CtsScalarKind::UInt64 => UInt64(Self::reinterpret_i64_as_u64(data)?),
             CtsScalarKind::NativeInt => NativeInt(Self::convert_num(data)?),
@@ -210,6 +210,22 @@ impl CliToCts {
             StackValue::NativeFloat(v) => Ok(ValueType::Float64(v)),
             other => Err(TypeResolutionError::InvalidLayout(
                 format!("invalid stack value {:?} for conversion into f64", other).into(),
+            )),
+        }
+    }
+
+    pub fn convert_u32(data: StackValue<'_>) -> Result<u32, TypeResolutionError> {
+        let data = data.coerce_enum_to_underlying();
+        match data {
+            StackValue::Int32(i) => Ok(i as u32),
+            StackValue::NativeInt(i) => Ok((i as usize) as u32),
+            StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().expose_provenance() as u32),
+            StackValue::ManagedPtr(p) => {
+                let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
+                Ok(ptr.expose_provenance() as u32)
+            }
+            other => Err(TypeResolutionError::InvalidLayout(
+                format!("invalid stack value {:?} for conversion into u32", other).into(),
             )),
         }
     }

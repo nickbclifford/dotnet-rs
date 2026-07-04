@@ -224,9 +224,9 @@ impl<'gc> EvaluationStack<'gc> {
                 let layout = obj.instance_storage.layout().clone();
                 obj.instance_storage.with_data_mut(|data| {
                     layout.visit_managed_ptrs(ByteOffset(0), &mut |offset: ByteOffset| {
-                        if offset.as_usize() + 16 <= data.len() {
+                        if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
                             let offset_val = offset.as_usize();
-                            let slice = &mut data[offset_val..offset_val + 16];
+                            let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
                             if let PointerOrigin::Stack(idx) = info.origin {
                                 let slot_ptr = resolve_slot_ptr(idx);
@@ -235,12 +235,16 @@ impl<'gc> EvaluationStack<'gc> {
                                         slot_ptr.as_ptr().add(info.offset.as_usize()),
                                     )
                                 };
+                                let ptr_size = ObjectRef::SIZE;
                                 let word0: usize = 1
                                     | ((idx.as_usize() & 0x3FFFFFFF) << 3)
                                     | (info.offset.as_usize() << 33);
-                                let word1 = new_ptr.as_ptr() as usize;
-                                slice[0..8].copy_from_slice(&word0.to_ne_bytes());
-                                slice[8..16].copy_from_slice(&word1.to_ne_bytes());
+                                let word1 = new_ptr.as_ptr().expose_provenance();
+                                let word2 = word0 ^ word1;
+                                slice[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+                                slice[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+                                slice[ptr_size * 2..ptr_size * 3]
+                                    .copy_from_slice(&word2.to_ne_bytes());
                             }
                         }
                     });

@@ -8,16 +8,12 @@ use dotnet_types::{
 use dotnet_utils::{ArenaId, ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
-    layout::{HasLayout, LayoutManager, Scalar},
+    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
-    stack_value::stack_value_kind,
     storage::FieldStorage,
 };
-use std::{
-    ptr,
-    sync::{Arc, LazyLock},
-};
+use std::{ptr, sync::Arc};
 
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
@@ -26,9 +22,6 @@ use std::time::Instant;
 use dotnet_value::pointer::PointerOrigin;
 
 use crate::write_barrier::*;
-
-static TRACE_CULTUREDATA_WRITES: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok());
 
 /// Checks whether a pointer `ptr` into a buffer `[base, base+len)` can safely
 /// access `size` bytes.  Returns `Err(BoundsCheck)` when the access would
@@ -58,6 +51,12 @@ fn check_bounds(
         }
     }
     Ok(())
+}
+
+fn field_layout_contains_heap_refs(layout: &FieldLayoutManager) -> bool {
+    layout.has_ref_fields
+        || !layout.gc_desc.bitmap.is_empty()
+        || !layout.gc_desc.unaligned_offsets.is_empty()
 }
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
@@ -663,62 +662,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
         let dest_layout = self.get_layout_from_owner(owner);
 
-        if *TRACE_CULTUREDATA_WRITES {
-            let write_start = offset.as_usize();
-            let write_end = write_start + layout.size().as_usize();
-            let target_start = 288usize;
-            let target_end = target_start + ObjectRef::SIZE;
-
-            if write_start < target_end && write_end > target_start {
-                owner.as_heap_storage(|storage| {
-                    if let HeapStorage::Obj(o) = storage
-                        && o.description.type_name() == "System.Globalization.CultureData"
-                    {
-                        let value_kind = stack_value_kind(&value);
-
-                        eprintln!(
-                            "[GCDBG] CultureData write overlap: offset={} size={} layout_tag={} value_kind={}",
-                            write_start,
-                            layout.size().as_usize(),
-                            layout.type_tag(),
-                            value_kind
-                        );
-
-                        match &value {
-                            StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                                eprintln!(
-                                    "[GCDBG] CultureData write ObjectRef raw_ptr=0x{:016X}",
-                                    gc_arena::Gc::as_ptr(*h).expose_provenance()
-                                );
-                            }
-                            StackValue::ObjectRef(ObjectRef(None)) => {
-                                eprintln!("[GCDBG] CultureData write ObjectRef raw_ptr=NULL");
-                            }
-                            StackValue::UnmanagedPtr(p) => {
-                                eprintln!(
-                                    "[GCDBG] CultureData write UnmanagedPtr raw_ptr=0x{:016X}",
-                                    p.0.as_ptr().expose_provenance()
-                                );
-                            }
-                            StackValue::ValueType(v) => {
-                                eprintln!(
-                                    "[GCDBG] CultureData write ValueType type={} size={}",
-                                    v.description.type_name(),
-                                    v.instance_storage.layout().size().as_usize()
-                                );
-                            }
-                            _ => {}
-                        }
-
-                        eprintln!(
-                            "[GCDBG] CultureData write backtrace:\n{}",
-                            std::backtrace::Backtrace::force_capture()
-                        );
-                    }
-                });
-            }
-        }
-
         self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
     }
 
@@ -1003,7 +946,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 StackValue::ManagedPtr(m) if m.owner().is_some_and(|r| r.0.is_some())
             ),
             LayoutManager::Field(flm) => {
-                flm.has_ref_fields && matches!(value, StackValue::ValueType(_))
+                field_layout_contains_heap_refs(flm) && matches!(value, StackValue::ValueType(_))
             }
             _ => false,
         };
@@ -1296,9 +1239,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WB_LOCAL_BUF, WriteBarrierPanicFlushGuard, check_bounds};
+    use super::{
+        WB_LOCAL_BUF, WriteBarrierPanicFlushGuard, check_bounds, field_layout_contains_heap_refs,
+    };
     use dotnet_types::error::{CompareExchangeError, MemoryAccessError};
     use dotnet_utils::ArenaId;
+    use dotnet_value::layout::{FieldLayoutManager, GcDesc};
 
     /// `check_bounds` is the gate used by `compare_exchange_atomic` to detect
     /// out-of-bounds accesses.  These tests confirm it produces the correct
@@ -1348,6 +1294,34 @@ mod tests {
                 len: 8,
             })
         );
+    }
+
+    #[test]
+    fn field_layout_with_object_ref_gc_desc_requires_heap_ref_barrier() {
+        let mut gc_desc = GcDesc::default();
+        gc_desc.set_offset(0);
+        let layout = FieldLayoutManager {
+            fields: Default::default(),
+            total_size: 8,
+            alignment: 8,
+            gc_desc,
+            has_ref_fields: false,
+        };
+
+        assert!(field_layout_contains_heap_refs(&layout));
+    }
+
+    #[test]
+    fn field_layout_without_gc_desc_or_managed_ptrs_needs_no_heap_ref_barrier() {
+        let layout = FieldLayoutManager {
+            fields: Default::default(),
+            total_size: 4,
+            alignment: 4,
+            gc_desc: GcDesc::default(),
+            has_ref_fields: false,
+        };
+
+        assert!(!field_layout_contains_heap_refs(&layout));
     }
 
     /// Verify that `CompareExchangeError` variants carry the expected payloads,

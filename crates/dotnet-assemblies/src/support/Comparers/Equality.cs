@@ -47,7 +47,7 @@ public class Equality
         {
             if (x != null)
             {
-                return y != null && x.Equals(y);
+                return y != null && x.Equals((object?)y);
             }
             return y == null;
         }

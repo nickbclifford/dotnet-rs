@@ -475,10 +475,6 @@ impl GenericLookup {
                     }
 
                     let length = self.type_generics.len();
-                    eprintln!(
-                        "[GENERIC-OOB] make_concrete caller={:?} requested=TypeGeneric({}) lookup={:?}",
-                        res, i, self
-                    );
                     Err(TypeResolutionError::GenericIndexOutOfBounds { index: i, length })
                 }
             }
@@ -510,10 +506,6 @@ impl GenericLookup {
                     }
 
                     let length = self.method_generics.len();
-                    eprintln!(
-                        "[GENERIC-OOB] make_concrete caller={:?} requested=MethodGeneric({}) lookup={:?}",
-                        res, i, self
-                    );
                     Err(TypeResolutionError::GenericIndexOutOfBounds { index: i, length })
                 }
             }
