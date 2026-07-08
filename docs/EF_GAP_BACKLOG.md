@@ -331,3 +331,67 @@ Observed results:
 - Diagnostic host-mode `/tmp/ef-debug-probe`: exits `1`; the direct `Execute` path reaches
   `IdentityMap<T>.TryGetEntry(...)` `NullReferenceException`, then the normal `query.First()`
   path still reports the outer translation error.
+
+## EF epic handoff after supervised/ef-core-3 finalization (2026-07-08)
+
+The `supervised/ef-core-3` branch cleared both blockers named in the ef-core-2
+handoff above: the inner `IdentityMap<T>.TryGetEntry` `NullReferenceException`
+(materialization path) and the outer `DbSet<Blog>().First()`
+`CoreStrings.TranslationFailed` query-translation failure. **Rung 3 (EF Core
+InMemory) now PASSES its done condition:** stock `dotnet` and host-mode
+`dotnet-rs` both print `Hello` and exit `42` for the real probe
+`tests/ef-probe/EfApp.dll`.
+
+Two root-cause fixes landed:
+
+1. **By-ref value-type marshaling in `MethodInfo.Invoke`.**
+   `unbox_param_to_stack_value` (`crates/dotnet-intrinsics-reflection/src/methods.rs`)
+   now splits `ParameterType::Ref(t)` from `ParameterType::Value(t)`. For a
+   value-type by-ref param it hands the callee a `ManagedPtr` into the boxed
+   argument's interior (owner-pinned; a null/`out` arg gets a zero-initialized
+   backing box that is written back into the `object[]`); for a reference-type
+   by-ref param it hands a `ManagedPtr` into the `object[]` element slot. This
+   fixed the `IdentityMap<T>.TryGetEntry(..., ref bool hasNullKey)` NRE at IP 44
+   reached via `ByRefMethodInfoCallInstruction.Run → MethodBase.Invoke`.
+
+2. **Method identity for definition-token lookups.**
+   `AssemblyLoader::locate_method` (`crates/dotnet-assemblies/src/resolution.rs`)
+   now keeps `parent_generics.method_generics` empty for `UserMethod::Definition`
+   resolution. Method generic arguments belong to call-site lookup identity, not
+   declaring-type identity; embedding them polluted `MethodDescription` identity
+   and made EF's `GetGenericMethodDefinition() == QueryableMethods.FirstWithoutPredicate`
+   comparison fail, throwing `TranslationFailed` in
+   `NavigationExpandingExpressionVisitor.VisitMethodCall`.
+
+Regression pins added under `crates/dotnet-cli/tests/fixtures/reflection/`:
+`invoke_byref_42.cs`, `invoke_byref_writethrough_42.cs`, and
+`reflection_queryable_first_method_identity_42.cs`.
+
+Final verification commands:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --no-default-features -- -D warnings
+CARGO_BUILD_JOBS=1 bash check.sh
+cargo build -p dotnet-cli --bin dotnet-rs --no-default-features
+dotnet build tests/ef-probe/EfApp.csproj -c Debug
+dotnet tests/ef-probe/bin/Debug/net10.0/EfApp.dll
+./target/debug/dotnet-rs tests/ef-probe/bin/Debug/net10.0/EfApp.dll
+```
+
+Observed results:
+
+- `cargo fmt --all -- --check`: PASS.
+- `cargo clippy --all-targets --no-default-features -- -D warnings`: PASS.
+- `CARGO_BUILD_JOBS=1 bash check.sh`: PASS (per Phase-5 gate; the finalizer added
+  only a test-only `#[rustfmt::skip]` directive afterward, no functional change).
+- `cargo build -p dotnet-cli --bin dotnet-rs --no-default-features`: PASS.
+- `dotnet build tests/ef-probe/EfApp.csproj -c Debug`: PASS.
+- Stock `dotnet tests/ef-probe/bin/Debug/net10.0/EfApp.dll`: prints `Hello`, exits `42`.
+- Host-mode `dotnet-rs tests/ef-probe/bin/Debug/net10.0/EfApp.dll`: prints `Hello`, exits `42`.
+
+**Scope reality:** the done condition covers the minimal InMemory probe
+(`DbContext` + one `Blog` + `SaveChanges` + `First()`). It does not claim broad
+EF query / relationship / migration / SQLite coverage — that remains the Option B
+epic in `docs/USERLAND_TESTING_ROADMAP.md` §5, which adds filesystem + native
+P/Invoke on top of what this rung validated.

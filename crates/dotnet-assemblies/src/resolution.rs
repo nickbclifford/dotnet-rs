@@ -596,7 +596,10 @@ impl AssemblyLoader {
                             .collect::<Vec<_>>()
                             .into()
                     },
-                    method_generics: generic_inst.method_generics.clone(),
+                    // Method generic arguments belong to call-site lookup, not declaring-type
+                    // identity. Keep parent lookup method-generics empty so definition-token and
+                    // member-ref paths resolve to the same method identity.
+                    method_generics: Vec::new().into(),
                 };
 
                 Ok(MethodDescription::new(

@@ -10,7 +10,7 @@ use dotnet_types::{
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete},
 };
-use dotnet_utils::gc::GCHandle;
+use dotnet_utils::{ByteOffset, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -804,14 +804,25 @@ fn declaring_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
     RuntimeType::Generic(method.parent.clone(), args)
 }
 
+#[derive(Clone, Copy)]
+struct InvokeByRefSlot<'gc> {
+    owner: ObjectRef<'gc>,
+    offset: ByteOffset,
+}
+
+struct UnboxedInvokeArg<'gc> {
+    stack_value: StackValue<'gc>,
+    replacement_box: Option<ObjectRef<'gc>>,
+}
+
 fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     arg: ObjectRef<'gc>,
     method: &MethodDescription,
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
-    _param_index: usize,
-) -> Result<StackValue<'gc>, StepResult> {
+    byref_slot: Option<InvokeByRefSlot<'gc>>,
+) -> Result<UnboxedInvokeArg<'gc>, StepResult> {
     match param_type {
         ParameterType::TypedReference => {
             if arg.0.is_none() {
@@ -837,11 +848,14 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             };
 
             match val {
-                Ok(v) => Ok(v.into_stack()),
+                Ok(v) => Ok(UnboxedInvokeArg {
+                    stack_value: v.into_stack(),
+                    replacement_box: None,
+                }),
                 Err(e) => Err(StepResult::Error(e.into())),
             }
         }
-        ParameterType::Value(t) | ParameterType::Ref(t) => {
+        ParameterType::Value(t) => {
             let concrete_param_type =
                 match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
                     Ok(v) => v,
@@ -859,7 +873,10 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             if is_value_type {
                 if arg.0.is_none() {
-                    Ok(StackValue::null())
+                    Ok(UnboxedInvokeArg {
+                        stack_value: StackValue::null(),
+                        replacement_box: None,
+                    })
                 } else {
                     let val = match arg.as_heap_storage(|s| {
                         if let HeapStorage::Boxed(o) = s {
@@ -876,12 +893,107 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     };
 
                     match val {
-                        Ok(v) => Ok(v.into_stack()),
+                        Ok(v) => Ok(UnboxedInvokeArg {
+                            stack_value: v.into_stack(),
+                            replacement_box: None,
+                        }),
                         Err(e) => Err(StepResult::Error(e.into())),
                     }
                 }
             } else {
-                Ok(StackValue::ObjectRef(arg))
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::ObjectRef(arg),
+                    replacement_box: None,
+                })
+            }
+        }
+        ParameterType::Ref(t) => {
+            let concrete_param_type =
+                match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => return Err(StepResult::Error(e.into())),
+                };
+            let td = ctx
+                .loader()
+                .find_concrete_type(concrete_param_type.clone())
+                .expect("Parameter type must exist for MethodInfo.Invoke");
+
+            let is_value_type = match ctx.reflection_is_value_type_with_lookup(td.clone(), lookup) {
+                Ok(v) => v,
+                Err(e) => return Err(StepResult::Error(e.into())),
+            };
+
+            if is_value_type {
+                let (arg_obj, replacement_box) = if arg.0.is_some() {
+                    (arg, None)
+                } else {
+                    let boxed_lookup = concrete_param_type.make_lookup();
+                    let boxed =
+                        match ctx.reflection_new_object_with_lookup(td.clone(), &boxed_lookup) {
+                            Ok(v) => v,
+                            Err(e) => return Err(StepResult::Error(e.into())),
+                        };
+                    let token = ctx.no_active_borrows_token();
+                    let gc = ctx.gc_with_token(&token);
+                    let obj = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(boxed)));
+                    ctx.register_new_object(&obj);
+                    (obj, Some(obj))
+                };
+
+                let data_ptr = match arg_obj.as_heap_storage(|s| {
+                    if let HeapStorage::Boxed(o) = s {
+                        Ok(o.instance_storage
+                            .with_data(|data| data.as_ptr() as *mut u8))
+                    } else {
+                        Err(format!("{s:?}"))
+                    }
+                }) {
+                    Ok(v) => v,
+                    Err(actual) => {
+                        return Err(type_mismatch("boxed value", actual));
+                    }
+                };
+
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::managed_ptr_with_owner(
+                        data_ptr,
+                        td,
+                        Some(arg_obj),
+                        false,
+                        None,
+                    ),
+                    replacement_box,
+                })
+            } else {
+                let slot = byref_slot.expect(
+                    "MethodInfo.Invoke by-ref reference args require object[] slot backing",
+                );
+                let element_ptr = slot.owner.as_heap_storage(|s| match s {
+                    HeapStorage::Vec(v) => {
+                        Ok(v.get().as_ptr().wrapping_add(slot.offset.as_usize()) as *mut u8)
+                    }
+                    other => Err(format!("{other:?}")),
+                });
+
+                let data_ptr = match element_ptr {
+                    Ok(ptr) => ptr,
+                    Err(actual) => {
+                        return Err(type_mismatch("object[]", actual));
+                    }
+                };
+
+                // Reference-type by-ref parameters need writable slot backing so assignments like
+                // `ref SomeClass x; x = newObj;` update the original object[] argument array.
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::managed_ptr_with_owner(
+                        data_ptr,
+                        td,
+                        Some(slot.owner),
+                        false,
+                        Some(slot.offset),
+                    ),
+                    replacement_box: None,
+                })
             }
         }
     }
@@ -907,14 +1019,42 @@ fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
         };
 
+        let mut replacement_boxes = Vec::new();
         let mut elements = vector.object_ref_elements(gc);
+        let element_size = vector.layout.element_layout.size();
         for i in 0..vector.layout.length {
             let arg_obj = elements
                 .next()
                 .expect("invoke parameters storage must match vector length");
             let param_type = &method.signature().parameters[i].1;
-            let arg = unbox_param_to_stack_value(ctx, arg_obj, method, param_type, lookup, i)?;
-            args.push(arg);
+            let byref_slot = InvokeByRefSlot {
+                owner: parameters_obj,
+                offset: element_size * i,
+            };
+            let arg = unbox_param_to_stack_value(
+                ctx,
+                arg_obj,
+                method,
+                param_type,
+                lookup,
+                Some(byref_slot),
+            )?;
+
+            if let Some(owner) = arg.replacement_box {
+                replacement_boxes.push((i, owner));
+            }
+
+            args.push(arg.stack_value);
+        }
+
+        if !replacement_boxes.is_empty() {
+            parameters_obj.as_vector_mut(*gc, |vector| {
+                let mut elements = vector.object_ref_elements(gc).collect::<Vec<_>>();
+                for (index, owner) in replacement_boxes {
+                    elements[index] = owner;
+                }
+                vector.write_object_ref_elements_mut(&elements);
+            });
         }
     }
 
