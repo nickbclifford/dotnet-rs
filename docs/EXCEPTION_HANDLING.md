@@ -7,7 +7,7 @@ This document describes the structured exception handling (SEH) system in `dotne
 Exception handling is split across three crates:
 
 - **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/lib.rs`, re-exporting `crates/dotnet-vm-data/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`.
-- **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`, ~584 lines): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
+- **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
 - **`dotnet-vm`** (`crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/exception_ops_impl.rs`): Runtime integration points that drive `ExceptionState` transitions and invoke `dotnet-exceptions`.
 
 The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
@@ -54,7 +54,7 @@ flowchart LR
 
 ### Key Types
 
-- **`HandlerAddress`**: Cursor into the handler search space — tracks frame index and handler index.
+- **`HandlerAddress`**: Cursor into the handler search space — tracks `frame_index`, `section_index` (index into the frame's `exceptions`/`ProtectedSection` list), and `handler_index`.
 - **`UnwindTarget`**: Where unwinding should stop — either a `Handler(HandlerAddress)` or an `Instruction(usize)` (for `leave` targets).
 - **`ProtectedSection`**: A try region with its associated handlers, parsed from metadata.
 - **`Handler`**: A single handler block with offset, length, and `HandlerKind`.

@@ -10,7 +10,7 @@ The following table describes the available validation features and which crates
 |---|---|---|
 | `multithreading` | Enables thread-safe atomics, mutexes, and multi-threaded GC. (Default) | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-resolver`, `dotnet-runtime-memory`, `dotnet-pinvoke`, `dotnet-tracer`, `dotnet-utils`, `dotnet-value` |
 | `memory-validation` | Enables extra checks for GC-managed pointers and arena boundaries. | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-memory`, `dotnet-utils`, `dotnet-value` |
-| `metadata-validation` | Validates .NET metadata (tables, blobs, signatures) during assembly load. | `dotnet-cli`, `dotnet-vm`, `dotnet-assemblies` |
+| `metadata-validation` | Validates ECMA-335 §II.22 metadata table/name constraints (non-empty module/assembly/typedef/field/method names, direct self-inheritance) during assembly load. | `dotnet-cli`, `dotnet-vm`, `dotnet-assemblies` |
 | `generic-constraint-validation` | Enforces generic type constraints during type resolution and JIT. | `dotnet-cli`, `dotnet-vm`, `dotnet-runtime-resolver`, `dotnet-intrinsics-reflection`, `dotnet-types` |
 | `validation-all` | Meta-feature enabling all the above validation features. | `dotnet-cli`, `dotnet-vm` |
 | `fuzzing` | Enables `Arbitrary` implementations and fuzzing-specific instrumentation. | `dotnet-cli`, `dotnet-vm`, `dotnet-pinvoke`, `dotnet-utils`, `dotnet-value`, `dotnet-types` |
@@ -45,17 +45,23 @@ cargo test -p dotnet-cli --features generic-constraint-validation
 
 ## CI Leg Mapping
 
-The CI pipeline (`.github/workflows/ci.yml`) runs several "legs" to ensure coverage across different feature combinations.
+The CI pipeline (`.github/workflows/ci.yml`) does not hardcode named legs. Instead, a single
+`Test Suite` job (and a parallel `Clippy Check` job) runs over a dynamic matrix resolved at
+runtime from `cargo run -p xtask -- matrix test-features --format json`. The matrix is the
+`SHARED_FEATURE_MATRIX` constant in `xtask/src/main.rs` — that constant is the source of truth,
+so consult it directly to avoid drift. As of this writing it contains the following legs (each run
+with `cargo test --no-default-features [--features <combo>]`):
 
-| CI Job Name | Feature Combination | Purpose |
-|---|---|---|
-| `No features` | `(none)` | Verifies basic single-threaded operation without any instrumentation. |
-| `Multithreading` | `multithreading` | Core concurrency testing (Default). |
-| `Generic constraint validation` | `generic-constraint-validation` | Verifies type system correctness and constraint enforcement. |
-| `Memory validation` | `memory-validation` | Targeted testing of GC safety and memory layout. |
-| `Metadata validation` | `metadata-validation` | Stress tests the assembly loader and metadata validator. |
-| `Multithreading + Memory validation` | `multithreading,memory-validation` | High-stress concurrency and memory safety checks. |
-| `Full validation` | `multithreading,validation-all` | Comprehensive validation of all components. |
+- `(none)`
+- `multithreading`
+- `simd`
+- `multithreading,simd`
+- `generic-constraint-validation`
+- `memory-validation`
+- `metadata-validation`
+- `multithreading,memory-validation`
+- `multithreading,validation-all`
+- `fuzzing`
 
 ## Debugging Environment Variables
 

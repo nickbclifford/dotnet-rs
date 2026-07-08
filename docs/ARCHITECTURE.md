@@ -114,7 +114,7 @@ The VM supports multi-threading (feature-gated via `multithreading`). For detail
 ## Exception Handling
 
 `dotnet-rs` implements the ECMA-335 structured exception handling (SEH) model using a two-pass approach.
-- **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Unwinding` → `ExecutingHandler`).
+- **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Filtering` → `Unwinding` → `ExecutingHandler`).
 - **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
 - **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
 - **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception/stack data model lives in `dotnet-vm-data` (re-exported by `dotnet-vm-ops`).
@@ -153,14 +153,16 @@ Foundational traits that instruction handlers and intrinsics can target without 
 - `VesBaseOps`, `VesInternals`, `ExceptionContext`, `PInvokeContext`
 
 ### Extended Traits (`dotnet-vm/src/stack/ops.rs`)
-VM-specific extensions that add resolver, shared state, and reflection capabilities:
-- `StackOps` (extends `BaseStackOps` with frame access and slot operations)
-- `ResolutionOps` (extends `BaseResolutionOps` with `ResolutionContext`)
-- `ReflectionOps` (extends `BaseReflectionOps` + `IntrinsicDispatchOps` + `ReflectionLookupOps`)
-- `LoaderOps` (extends `BaseLoaderOps` with `VmResolverService` and `SharedGlobalState`)
+VM-specific extensions (all `Vm`-prefixed) that add resolver, shared state, and reflection capabilities on top of the base traits:
+- `VmStackOps` (extends `StackOps` with frame access and slot operations)
+- `VmRawMemoryOps` (extends `RawMemoryOps` with address resolution and `localloc`)
+- `VmResolutionOps` (extends `ResolutionOps` with `ResolutionContext`)
+- `VmReflectionOps` (extends `ReflectionOps` + `IntrinsicDispatchOps` + `ReflectionLookupOps`)
+- `VmLoaderOps` (extends `LoaderOps` with `VmResolverService` and `SharedGlobalState`)
+- `VmStaticsOps` (extends `StaticsOps` with `StaticStorageManager` access)
 - `VmCallOps` (VM-local frame construction and method dispatch)
-- `StaticsOps` (extends `BaseStaticsOps` with `StaticStorageManager` access)
-- `VesOps`: The unified trait combining `ExceptionContext + PInvokeContext + StaticsOps + ThreadOps + VmCallOps`. Primary generic bound for instruction handlers.
+- `VmExceptionContext` / `VmPInvokeContext` (VM-side extensions of `ExceptionContext` / `PInvokeContext`)
+- `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus the `dotnet-intrinsics-*` host traits. Primary generic bound for instruction handlers.
 
 ### Usage Pattern
 ```rust

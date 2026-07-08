@@ -9,7 +9,7 @@ The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`) scans source files at
 1. **Instruction dispatch** — generates a monomorphic `match`-based dispatcher for CIL instructions
 2. **Intrinsic PHF lookup table** — maps string keys to native handler IDs and generates ID-based dispatchers
 
-Both tables are generated into `$OUT_DIR/` and included via `include!()` in the compiled crate.
+These are emitted as three generated files (`instruction_dispatch.rs`, `intrinsics_dispatch.rs`, `intrinsics_phf.rs`) into `$OUT_DIR/` and included via `include!()` in the compiled crate.
 
 ## Instruction Table Generation
 
@@ -19,11 +19,10 @@ Instruction handlers are annotated in `src/instructions/**/*.rs`:
 
 ```rust
 #[dotnet_instruction(Add)]
-pub fn handle_add<'gc, T: VesOps<'gc>>(
-    ctx: &mut T,
-    _instr: &Instruction,
-) -> StepResult { ... }
+pub fn add<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult { ... }
 ```
+
+(Handlers take `ctx` and any operands bound by the `#[dotnet_instruction(...)]` mapping; most take only `ctx`.)
 
 ### Build Process
 
@@ -32,20 +31,29 @@ pub fn handle_add<'gc, T: VesOps<'gc>>(
 3. Extracts the opcode variant name and the module path of the handler function
 4. `generate_instruction_table` creates `instruction_dispatch.rs` containing the `dispatch_monomorphic` function.
 
-### Runtime Usage (`dispatch/registry.rs`)
+### Runtime Usage
+
+`dispatch/registry.rs` is just the include site for the generated file:
 
 ```rust
 include!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
+```
 
-pub fn dispatch<'gc, T: VesOps<'gc>>(
-    ctx: &mut T,
-    instr: &Instruction,
-) -> StepResult {
-    dispatch_monomorphic(ctx, instr)
+`InstructionRegistry::dispatch` in `dispatch/mod.rs` is the actual entry point. It selects between the two generated dispatchers based on a feature flag:
+
+```rust
+impl InstructionRegistry {
+    #[inline(always)]
+    pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
+        #[cfg(feature = "instruction-dispatch-jump-table")]
+        { return registry::dispatch_jump_table(ctx, instr); }
+        #[cfg(not(feature = "instruction-dispatch-jump-table"))]
+        registry::dispatch_monomorphic(ctx, instr)
+    }
 }
 ```
 
-`InstructionRegistry::dispatch` in `dispatch/mod.rs` calls this function to execute each instruction. The monomorphic dispatcher uses a `match` on the `Instruction` enum, allowing the Rust compiler to inline and optimize instruction handlers effectively.
+The monomorphic dispatcher uses a `match` on the `Instruction` enum, allowing the Rust compiler to inline and optimize instruction handlers effectively; the jump-table variant dispatches through an opcode-indexed function-pointer table.
 
 ## Intrinsic PHF Table Generation
 
@@ -151,10 +159,10 @@ Current status: these hooks are available for local/experimental extension, but 
 The build script and the proc macros both depend on `dotnet-macros-core` for signature parsing. This ensures the key format is consistent between compile-time table generation and runtime lookups.
 
 ### Build Script ↔ `dotnetdll`
-The instruction table generation depends on `dotnetdll::prelude::Instruction::VARIANT_COUNT` to size the array, tying the dispatch table to the exact set of CIL opcodes the metadata parser knows about.
+The instruction table generation emits a `match`-based `dispatch_monomorphic` over the `Instruction` enum plus an opcode-indexed jump table, resolving each opcode index via `dotnetdll::prelude::Instruction::opcode_from_name`. There is no fixed-size array keyed by a variant count.
 
-### Hash-Based Deduplication
-The build script uses `DefaultHasher` to deduplicate handler registrations — if two files somehow register the same opcode, the build detects this.
+### Deduplication
+The build script deduplicates handler registrations via `assert_unique_instruction_variants`, which groups entries by variant name in a `BTreeMap` and panics if any name is registered more than once. (`DefaultHasher`, via `hash_value_u64`, is used only to derive per-signature name suffixes for intrinsic variants/filters, not for duplicate detection.)
 
 ### Missing Handler Error Behavior
 
@@ -176,7 +184,7 @@ These tell Cargo to skip re-running `build.rs` unless files within those directo
 
 ## Generated Table Code Examples
 
-The build process emits two main files into the `OUT_DIR`.
+The build process emits three files into the `OUT_DIR`.
 
 **1. `instruction_dispatch.rs`**
 ```rust

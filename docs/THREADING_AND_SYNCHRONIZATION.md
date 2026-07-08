@@ -6,10 +6,10 @@ This document describes the threading model, feature-gated implementations, moni
 
 Threading is feature-gated with **two parallel implementations** that share a common trait interface:
 
-| Feature          | Threading Module                  | Sync Module                            | Behavior                                                |
-|------------------|-----------------------------------|----------------------------------------|---------------------------------------------------------|
-| (none)           | `threading/stub.rs` (~72 lines)   | `sync/single_threaded.rs` (~151 lines) | No-op thread ops, no locking                            |
-| `multithreading` | `threading/basic.rs` (~576 lines) | `sync/threaded.rs` (~320 lines)        | Real OS threads, monitor locks, and STW GC coordination |
+| Feature          | Threading Module         | Sync Module                   | Behavior                                                |
+|------------------|--------------------------|-------------------------------|---------------------------------------------------------|
+| (none)           | `threading/stub.rs`      | `sync/single_threaded.rs`     | No-op thread ops, no locking                            |
+| `multithreading` | `threading/basic.rs`     | `sync/threaded.rs`            | Real OS threads, monitor locks, and STW GC coordination |
 
 ## Thread Lifecycle (`threading/`)
 
@@ -26,17 +26,17 @@ Common interface implemented by both `basic::ThreadManager` and `stub::ThreadMan
 - `execute_gc_command`: Dispatches a specific `GCCommand` (MarkAll, Sweep, etc.) to the local arena.
 - `request_stop_the_world` / `request_stop_the_world_traced`: Initiates a STW pause, waiting until all threads are suspended. Returns a `Guard` that releases threads upon drop.
 
-### Thread State Machine (`basic.rs`)
+### Thread State Machine (`ThreadState` in `threading/mod.rs`)
 
 ```
 Running → AtSafePoint → (GC runs) → Running
-Running → Suspended → Running
 Running → Exited
 ```
 
+The `ThreadState` enum (`threading/mod.rs`) has exactly three states:
+
 - **`Running`**: Normal execution
 - **`AtSafePoint`**: Thread has paused for GC, waiting for resume signal
-- **`Suspended`**: Thread is explicitly suspended (e.g., `Thread.Sleep`)
 - **`Exited`**: Thread has completed
 
 ### `ManagedThread` (`basic.rs`)
@@ -79,7 +79,7 @@ sequenceDiagram
 ```
 
 1. **Initiation**: The acquiring thread calls `request_stop_the_world`, which acquires the main thread lock and sets `gc_stop_requested = true`. It records a `start_time` (`Instant::now()`).
-2. **Synchronization**: It loops over all registered threads, waiting on a condition variable until every thread's state transitions to `AtSafePoint` (or is already `Suspended`/`Exited`).
+2. **Synchronization**: It loops over all registered threads, waiting on a condition variable until every thread's state transitions to `AtSafePoint` (or is already `Exited`).
 3. **Execution**: Returns a `StopTheWorldGuard`. The coordinator now has exclusive access to the heap and issues commands via `execute_gc_command_for_current_thread`.
 4. **Resumption**: When the `StopTheWorldGuard` is dropped, `gc_stop_requested` is cleared, and `resume_threads()` is called, which broadcasts a condition variable to wake all threads stuck in `safe_point`. The guard's `elapsed_micros()` provides the total pause timing.
 
@@ -96,17 +96,16 @@ sequenceDiagram
 Safe points are checked at:
 - **Loop back-edges**: The `br` / `brtrue` / `brfalse` instructions targeting earlier offsets
 - **Method calls**: Before pushing a new frame
-- **Explicit checks**: `CallStack::check_gc_safe_point` in `dispatch/mod.rs`
+- **Explicit checks**: two `check_gc_safe_point` methods exist. `CallStack::check_gc_safe_point` (`dispatch/mod.rs`) is a bare `is_gc_stop_requested()` load. The scope-counter-aware variant is `VesContext`'s `RawMemoryOps::check_gc_safe_point` (`stack/raw_memory_ops_impl/mod.rs`), used by intrinsics/handlers.
 
 ### Safe Point ↔ GcScopeGuard Interaction
-When a `GcScopeGuard` is active (GC scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
+When a `GcScopeGuard` is active (the `active_borrows` scope counter > 0), `VesContext`'s `RawMemoryOps::check_gc_safe_point` returns `false` early without blocking. (The plain `CallStack::check_gc_safe_point` does *not* consult the counter — it only loads `is_gc_stop_requested()`.) This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
 
 The path to thread suspension:
-1. `check_gc_safe_point()` evaluates `ThreadManager::is_gc_stop_requested()`.
-   - If a `GcScopeGuard` is active (GC scope counter > 0), it returns `false` to prevent deadlocks (since the thread cannot safely park while holding GC locks).
+1. `VesContext::check_gc_safe_point()` first checks the `active_borrows` scope counter; if it is > 0 it returns `false` to prevent deadlocks (the thread cannot safely park while holding GC borrows). Otherwise it evaluates `ThreadManager::is_gc_stop_requested()`.
 2. If `true`, the loop or instruction handler exits early (often returning `StepResult::Continue` without advancing IP, or completing a chunk of work).
 3. The main execution loop in `crates/dotnet-vm/src/executor.rs` catches this, drops any transient locks, and explicitly calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
-4. In `basic.rs`, `safe_point()` sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
+4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false or the thread-local `IS_PERFORMING_GC` flag is set; otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.
 6. Once the STW guard is dropped, the condition variable is pulsed, the state resets to `Running`, and execution resumes.
 
@@ -129,9 +128,9 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
   - `exit`: Release the lock (decrements recursion count; unlocks if 0).
   - `wait` / `pulse` / `pulse_all`: Condition variable operations (Monitor.Wait/Pulse).
 
-### Threaded Implementation (`sync/threaded.rs`, ~320 lines)
+### Threaded Implementation (`sync/threaded.rs`)
 
-- **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<usize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` for index generation.
+- **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<NonZeroUsize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` (starting at 1) for index generation.
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
 - **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`) and `recursion_count` to support re-entrant locking by the same thread.
 - Objects are identified by their sync block index, stored in the object's header/layout.
@@ -139,7 +138,7 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 
 #### `get_or_create_sync_block` two-step contract
 
-`SyncBlockManager::get_or_create_sync_block` now takes `current_index: Option<usize>` and returns
+`SyncBlockManager::get_or_create_sync_block` now takes `current_index: Option<NonZeroUsize>` and returns
 `(new_index, Arc<SyncBlock>)`.
 
 - The manager does all map/index allocation work internally while `SyncBlockManager::blocks` is
@@ -163,7 +162,7 @@ Current multithreaded call path:
 |----------|---------|-------------|
 | `DOTNET_SAFE_POINT_YIELD_MS` | `10` | The interval (in milliseconds) at which a thread waiting for a monitor lock will wake up to check for a GC safe point request. Lower values reduce GC pause latency but increase CPU overhead during lock contention. |
 
-### Single-Threaded Implementation (`sync/single_threaded.rs`, ~151 lines)
+### Single-Threaded Implementation (`sync/single_threaded.rs`)
 
 - Tracks lock ownership for correctness checking but never actually blocks
 - Detects re-entrant locks and recursive lock errors
@@ -263,7 +262,7 @@ Cross-arena discovery uses lease-guarded generation stamps:
 - `MANAGED_THREAD_ID`: A thread-local `Cell<Option<ArenaId>>` in `dotnet_utils::sync`. Cached via `get_current_thread_id()` to avoid repeatedly querying the ThreadManager for identity.
 
 ### Architecture Routing (`SharedGlobalState`)
-`ThreadManagerOps` is instantiated once and wrapped in an `Arc`. It is distributed throughout the VM by being embedded inside `SharedGlobalState`. Every `VesContext` has a reference to `SharedGlobalState`, granting all CIL instructions and BCL intrinsics access to threading and synchronization primitives.
+The concrete `ThreadManager` (implementing `ThreadManagerOps`) is instantiated once and held as `Arc<ThreadManager>`. It is distributed throughout the VM by being embedded inside `SharedGlobalState` (the `thread_manager` field). Every `VesContext` has a reference to `SharedGlobalState`, granting all CIL instructions and BCL intrinsics access to threading and synchronization primitives.
 
 ### Utility Locks (`dotnet_utils::sync`)
 The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` to abstract locking:
@@ -279,7 +278,7 @@ Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **do
 
 - **Rationale**: `Thread.Abort` is inherently unsafe as it injects a `ThreadAbortException` at arbitrary execution points (asynchronous exceptions per ECMA-335 §I.12.4.2.3). This can interrupt static constructors, leave shared state in an inconsistent manner, or fail to release unmanaged resources.
 - **Compliance**: While ECMA-335 §I.12.4.2.3 describes the mechanism for asynchronous exceptions, it does not mandate that a CLI implementation must provide a public `Thread.Abort` API.
-- **Behavior**: Any attempt to call `Thread.Abort` via BCL will result in a `PlatformNotSupportedException`, consistent with modern .NET runtimes.
+- **Behavior**: `Thread.Abort` is unimplemented in the VM. No `Abort` intrinsic or `PlatformNotSupportedException` guard currently exists in the codebase; the intended/planned behavior is to throw `PlatformNotSupportedException`, consistent with modern .NET runtimes.
 
 ### Thread.Interrupt
 

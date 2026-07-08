@@ -52,21 +52,21 @@ A delegate is an object that wraps a method reference (and optionally a target o
 
 ### Delegate Object Layout
 
-Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are accessed via `instance_storage.get_field_local` (see `crates/dotnet-intrinsics-delegates/src/`):
+Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are accessed through the typed `DelegateView` / `DelegateViewMut` helpers, which read/write via `instance_storage.field::<T>(type, "name")` (see `crates/dotnet-intrinsics-delegates/src/helpers.rs`):
 - `_target` (ObjectRef): The `this` reference for instance methods. For static methods, this is typically null.
-- `_method` (RuntimeMethodHandle/usize): A method index encoded as an `isize` (8 bytes). This index points to a `MethodDescription` cached in the runtime's global lookup.
-- `_invocationList` (ObjectRef): For multicast delegates, an array of individual delegate objects.
+- `_method` (usize): A method index. This index points to a `MethodDescription` cached in the runtime's global lookup.
+- `targets` (ObjectRef, on `System.MulticastDelegate`): For multicast delegates, an array of individual delegate objects.
 
 The runtime accesses these directly by name when performing delegate invocation or intrinsic operations like `Delegate.Target` and `Delegate.Method`.
 
 ### Special Dispatch Path: `try_delegate_dispatch`
 
-Before normal method resolution, the call instruction checks if the target is a delegate invoke:
-- `is_delegate_type` checks if the type inherits from `System.Delegate`
-- `try_delegate_dispatch` intercepts `Invoke` calls on delegate types
-- Returns `Some(StepResult)` if handled, `None` to fall through to normal dispatch
+`try_delegate_dispatch` runs *inside* the resolved-method dispatcher (`dispatch_resolved_method`), not as a pre-call intercept. It only engages for body-less methods on delegate types:
+- It bails out immediately unless `method.body()` is `None` and `is_delegate_type` reports the parent inherits from `System.Delegate`.
+- For `Invoke` it dispatches the delegate (single or multicast); `.ctor` returns `None` and is handled by the support-library stub; `BeginInvoke`/`EndInvoke` throw `System.NotSupportedException`.
+- Returns `Some(StepResult)` if handled, `None` to fall through to normal dispatch.
 
-### `invoke_delegate` (~106 lines)
+### `invoke_delegate`
 
 Single delegate invocation:
 1. Pop the delegate object from the stack
@@ -103,7 +103,7 @@ pub struct MulticastState<'gc> {
 | `delegate_get_target`     | Returns the target object                 |
 | `delegate_get_method`     | Returns the method info                   |
 | `delegate_get_hash_code`  | Hash for delegate identity                |
-| `delegate_dynamic_invoke` | Late-bound invocation                     |
+| `delegate_dynamic_invoke` | Late-bound invocation (NotSupported stub: throws `System.NotSupportedException`) |
 
 ## Virtual Dispatch
 
@@ -134,7 +134,7 @@ When a resolved method call is about to be dispatched, both VM-context and `Exec
 4. If none of those apply, push a managed call frame for normal IL execution
 
 ### Special Cases
-- `Object.ToString` and `Object.GetType` have hardcoded intrinsic handling in `intrinsics/mod.rs`
+- `Object.ToString` and `Object.GetType` are registered as intrinsics in `intrinsics/mod.rs` (via `#[dotnet_intrinsic]`)
 - Some intrinsics have metadata that affects dispatch behavior (e.g., `filter_name`)
 
 ## Non-Obvious Connections

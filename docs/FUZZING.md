@@ -57,7 +57,7 @@ The primary fuzz target. It accepts a structured `FuzzProgram` (via `Arbitrary`)
 **Key types** (defined in `crates/dotnet-vm/src/fuzzing.rs`):
 
 - **`FuzzProgram`**: Top-level input — a list of `FuzzInstruction`s plus `num_locals` (0–10) and `num_args` (1–10).
-- **`FuzzInstruction`**: An enum of ~70 CIL instruction variants covering:
+- **`FuzzInstruction`**: An enum of CIL instruction variants covering:
   - Stack operations (`Dup`, `Pop`, `Ldnull`, `LdcI4`, `LdcI8`, `LdcR4`, `LdcR8`)
   - Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `And`, `Or`, `Xor`, `Shl`, `Shr`, `Neg`, `Not`)
   - Indirect memory (`LdindI1`–`LdindI`, `StindI1`–`StindI`, `Cpblk`, `Initblk`, `Localloc`)
@@ -231,7 +231,11 @@ To reproduce a crash:
 cargo +nightly fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
 ```
 
-These artifact directories are git-tracked so that known crashes serve as regression inputs.
+Both fuzz crates' `.gitignore` files ignore `corpus/` and `artifacts/`, so crashes and corpus
+inputs are local-only and are not committed. The structured seed corpus is regenerated on demand
+via `corpus-tools` (as the `fuzz.yml` CI job does before each executor run). To keep a crash as a
+persistent regression input, add it to a Miri-compatible unit test in
+`crates/dotnet-vm/src/fuzzing.rs` (see "Miri-Compatible Unit Tests" below).
 
 ## Miri-Compatible Unit Tests
 

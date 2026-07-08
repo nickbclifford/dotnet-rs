@@ -21,14 +21,16 @@ Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuz
 
 Jobs:
 
-1. `format`: `cargo fmt --all -- --check`
-2. `clippy`: feature matrix resolved from `xtask`
+1. `doc-lint` (Documentation Drift Check): runs `scripts/check_doc_drift.sh` (doc-to-code drift detector) and a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+2. `format`: `cargo fmt --all -- --check`
+3. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
+4. `clippy`: feature matrix resolved from `xtask`
    - source of truth: `cargo run --quiet -p xtask -- matrix clippy-features --format json`
    - CI sets `DOTNET_SKIP_BUILD=1` for this job as an explicit analysis-only guardrail
-3. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
-4. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
-5. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`)
-6. `hang-probe integration tests`: run only on the `multithreading` test leg
+5. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
+6. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
+7. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`)
+8. `hang-probe integration tests`: run only on the `multithreading` test leg
 
 Hang probes use tighter timeouts and run these filters individually:
 
@@ -197,6 +199,17 @@ Run locally with:
 bash scripts/check_build_script_regressions.sh
 ```
 
+### Documentation Drift Check
+
+The `doc-lint` job runs the doc-to-code drift detector and the broken intra-doc-link check.
+Run locally with:
+
+```bash
+bash scripts/check_doc_drift.sh
+DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+  cargo doc --no-deps --no-default-features
+```
+
 ## `miri.yml` — Non-Blocking UB Checks
 
 The workflow runs per crate (`fail-fast: false`):
@@ -225,48 +238,60 @@ cargo +nightly miri test -p dotnet-vm --no-default-features -- --test-threads=1 
 
 ## `valgrind.yml` — Non-Blocking Leak/Uninit Checks
 
-The workflow builds `dotnet-cli` integration tests with:
-
-```bash
---no-default-features --features multithreading
-```
-
-It then runs a curated subset of integration tests under Valgrind.
+The workflow builds `dotnet-cli` integration tests across two legs — first `--no-default-features`,
+then `--no-default-features --features multithreading` — and runs a curated subset of integration
+tests under Valgrind on each leg.
 
 Local commands:
 
 ```bash
 sudo apt-get install -y valgrind libc6-dbg
 
+# --- No-features leg ---
+cargo test -p dotnet-cli --test integration_tests \
+  --no-run --no-default-features
+
+BINARY=$(ls -t target/debug/deps/integration_tests-* | grep -v '\.d$' | head -1)
+echo "Binary: $BINARY"
+
+for TEST in \
+  integration_tests_impl::fixtures::hello_world \
+  integration_tests_impl::fixtures::memory_nullable_boxing_42; do
+  timeout 600s valgrind \
+    --suppressions=valgrind.supp \
+    --error-exitcode=1 \
+    --leak-check=full \
+    --show-leak-kinds=all \
+    -s \
+    "$BINARY" \
+    --test-threads=1 \
+    --nocapture \
+    --exact \
+    "$TEST"
+done
+
+# --- Multithreading leg ---
 cargo test -p dotnet-cli --test integration_tests \
   --no-run --no-default-features --features multithreading
 
-BINARY=$(ls target/debug/deps/integration_tests-* | grep -v '\.d$' | head -1)
+BINARY=$(ls -t target/debug/deps/integration_tests-* | grep -v '\.d$' | head -1)
 echo "Binary: $BINARY"
 
-timeout 600s valgrind \
-  --suppressions=valgrind.supp \
-  --error-exitcode=1 \
-  --leak-check=full \
-  --show-leak-kinds=all \
-  -s \
-  "$BINARY" \
-  --test-threads=1 \
-  --nocapture \
-  --exact \
-  integration_tests_impl::fixtures::hello_world
-
-timeout 600s valgrind \
-  --suppressions=valgrind.supp \
-  --error-exitcode=1 \
-  --leak-check=full \
-  --show-leak-kinds=all \
-  -s \
-  "$BINARY" \
-  --test-threads=1 \
-  --nocapture \
-  --exact \
-  integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42
+for TEST in \
+  integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_42 \
+  integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42; do
+  timeout 600s valgrind \
+    --suppressions=valgrind.supp \
+    --error-exitcode=1 \
+    --leak-check=full \
+    --show-leak-kinds=all \
+    -s \
+    "$BINARY" \
+    --test-threads=1 \
+    --nocapture \
+    --exact \
+    "$TEST"
+done
 ```
 
 ## `valgrind.supp` Suppression Policy
@@ -284,10 +309,12 @@ Never suppress leaks that originate in `dotnet-rs` crates.
 
 ## Valgrind Subset in CI
 
-| Test                                                                              |
-|-----------------------------------------------------------------------------------|
-| `integration_tests_impl::fixtures::hello_world`                                   |
-| `integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42` |
+| Build leg                              | Test                                                                              |
+|----------------------------------------|-----------------------------------------------------------------------------------|
+| no features                            | `integration_tests_impl::fixtures::hello_world`                                   |
+| no features                            | `integration_tests_impl::fixtures::memory_nullable_boxing_42`                     |
+| `multithreading`                       | `integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_42`        |
+| `multithreading`                       | `integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42` |
 
 ## See Also
 

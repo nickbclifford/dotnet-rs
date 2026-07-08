@@ -11,7 +11,7 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 - **`dotnet-vm/src/context.rs`**: `ResolutionContext` for scoped resolution with generic parameters
 - **`dotnet-vm/src/resolution.rs`**: Resolution traits and helpers
 - **`dotnet-vm/src/layout.rs`**: `VmLayoutFactory` compatibility wrapper delegating to resolver-owned layout code
-- **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager` (~497 lines)
+- **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager`
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
 
@@ -50,16 +50,16 @@ Fields resolve to `FieldDescription` with computed byte offsets within their con
 
 ### Layout Computation (`dotnet-runtime-resolver/src/layout.rs`)
 
-`VmLayoutFactory` computes the physical memory layout of objects and value types:
-- **Field offsets**: `create_field_layout()` computes offsets respecting alignment requirements of the host architecture. It recursively resolves field types and computes their sub-layouts.
+The resolver-owned `LayoutFactory` computes the physical memory layout of objects and value types (the VM reaches it through the `VmLayoutFactory` facade):
+- **Field offsets**: `LayoutFactory::create_field_layout()` computes offsets respecting alignment requirements of the host architecture. It recursively resolves field types and computes their sub-layouts.
 - **Total object size**: Sums field sizes + padding.
-- **`GcDesc` generation**: `populate_gc_desc()` creates a descriptor bitmap used by the Stop-The-World (STW) GC to identify which fields contain managed references (`ObjectRef`). It merges the GC descriptors of nested fields into the parent's descriptor based on their computed offsets.
+- **`GcDesc` generation**: `LayoutFactory::populate_gc_desc()` creates a descriptor bitmap used by the Stop-The-World (STW) GC to identify which fields contain managed references (`ObjectRef`). It merges the GC descriptors of nested fields into the parent's descriptor based on their computed offsets.
 
-This is a recursive algorithm: computing a struct's layout requires `VmLayoutFactory::collect_fields()` to recursively compute the layouts of all its field types. Layouts are cached in `GlobalCaches::layout_cache` and `instance_field_layout_cache`.
+This is a recursive algorithm: computing a struct's layout requires `LayoutFactory::collect_fields()` to recursively compute the layouts of all its field types. Layouts are cached in `GlobalCaches::layout_cache` and `instance_field_layout_cache`.
 
 ## Caching Architecture (`state.rs` → `GlobalCaches`)
 
-`GlobalCaches` holds several thread-safe caches wrapped in `Arc` and utilizing `DashMap` for concurrent access:
+`GlobalCaches` holds several thread-safe caches. Most use `DashMap` for concurrent access; the intrinsic-method, intrinsic-field, value-type, and finalizer caches instead use `RwLock<HashMap<...>>`:
 
 | Cache                       | Key                                                   | Value                                    | Purpose                                                      |
 |-----------------------------|-------------------------------------------------------|------------------------------------------|--------------------------------------------------------------|
@@ -71,9 +71,11 @@ This is a recursive algorithm: computing a struct's layout requires `VmLayoutFac
 | Virtual dispatch cache      | `(MethodDescription, TypeDescription, GenericLookup)` | `MethodDescription`                      | Resolved virtual target                                      |
 | Type hierarchy cache        | `(ConcreteType, ConcreteType)`                        | `bool`                                   | Cached result of `is_a` relationship                         |
 | Method info cache           | `(MethodDescription, GenericLookup)`                  | `Arc<MethodInfo<'static>>`               | Full resolved method info (instructions, exceptions, locals) |
-| Overrides cache             | `(TypeDescription, GenericLookup)`                    | `Arc<HashMap<usize, MethodDescription>>` | Resolved interface/virtual overrides for a type              |
+| Overrides cache             | `(TypeDescription, GenericLookup)`                    | `Arc<HashMap<MethodDescription, MethodDescription>>` | Resolved interface/virtual overrides for a type          |
+| Value type cache            | `TypeDescription`                                     | `bool`                                   | Is this type a value type?                                   |
+| Finalizer cache             | `TypeDescription`                                     | `bool`                                   | Does this type have a finalizer?                             |
 
-**No eviction**: Caches grow monotonically, bounded by the number of unique types/methods instantiated in loaded assemblies.
+**Eviction**: By default caches grow monotonically, bounded by the number of unique types/methods instantiated in loaded assemblies. Optional per-cache capacity limits (`DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, `DOTNET_CACHE_LIMIT_HIERARCHY`) enable bounded eviction when set.
 
 ### Striped Locking and Concurrent Access
 
@@ -121,9 +123,9 @@ ECMA-335 requires that each generic type definition generates a **finite instant
 `StaticStorageManager` manages static field storage and class constructor (`.cctor`) execution:
 
 - **Sharded storage**: Uses an array of `RwLock<HashMap>` shards indexed by the hash of `(TypeDescription, GenericLookup)`.
-- **Init states**: Stored in an `AtomicU8`. States include `INIT_STATE_UNINITIALIZED`, `INIT_STATE_EXECUTING`, `INIT_STATE_INITIALIZED`, and `INIT_STATE_FAILED`.
-- **Initialization Protocol**: `init()` checks the state. If uninitialized, it atomically transitions to `EXECUTING` and returns `StaticInitResult::Execute(cctor_method)`. The calling thread is now responsible for running the `.cctor`. Once done, it calls `mark_initialized()`.
-- **Cross-thread coordination**: If another thread calls `init()` while the state is `EXECUTING`, it returns `StaticInitResult::Waiting`. The thread then calls `wait_for_init()`, which uses a `Condvar` and `Mutex` to block until the initializing thread finishes and broadcasts a notification.
+- **Init states**: Stored in an `AtomicU8`. States include `INIT_STATE_UNINITIALIZED`, `INIT_STATE_INITIALIZING`, `INIT_STATE_INITIALIZED`, and `INIT_STATE_FAILED`.
+- **Initialization Protocol**: `init()` checks the state and returns a `StaticInitResult` — one of `Execute(cctor_method)`, `Initialized`, `Recursive`, `Failed`, or `Waiting`. If uninitialized, it atomically transitions to `INITIALIZING` and returns `StaticInitResult::Execute(cctor_method)`. The calling thread is now responsible for running the `.cctor`. Once done, it calls `mark_initialized()`.
+- **Cross-thread coordination**: If another thread calls `init()` while the state is `INITIALIZING`, it returns `StaticInitResult::Waiting`. The thread then calls `wait_for_init()`, which uses a `Condvar` and `Mutex` to block until the initializing thread finishes and broadcasts a notification.
 
 ### Non-Obvious: `.cctor` and GC Interaction
 While waiting for another thread's `.cctor` to complete, the waiting thread must remain responsive to GC safe point requests. `wait_for_init` integrates with the GC coordinator for this.
