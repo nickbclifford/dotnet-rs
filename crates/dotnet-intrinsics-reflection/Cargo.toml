@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dotnet-assemblies = { workspace = true }
 dotnet-macros = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-intrinsics-delegates = { workspace = true, default-features = false }

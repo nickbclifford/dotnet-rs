@@ -1,9 +1,5 @@
 use dotnet_build_tools::collect_files_with_extension;
-use std::{
-    borrow::Cow,
-    env,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct SourceScanRoot {
@@ -12,19 +8,14 @@ pub struct SourceScanRoot {
 }
 
 pub fn instruction_source_roots() -> Vec<SourceScanRoot> {
-    let mut roots = vec![SourceScanRoot {
+    vec![SourceScanRoot {
         directory: PathBuf::from("src/instructions"),
         module_prefix: "crate::instructions".to_string(),
-    }];
-    roots.extend(parse_extra_roots(
-        "DOTNET_VM_EXTRA_INSTRUCTION_SOURCES",
-        "crate::instructions",
-    ));
-    roots
+    }]
 }
 
 pub fn intrinsic_source_roots() -> Vec<SourceScanRoot> {
-    let mut roots = vec![
+    vec![
         SourceScanRoot {
             directory: PathBuf::from("src/intrinsics"),
             module_prefix: "crate::intrinsics".to_string(),
@@ -54,19 +45,10 @@ pub fn intrinsic_source_roots() -> Vec<SourceScanRoot> {
             module_prefix: "dotnet_intrinsics_reflection".to_string(),
         },
         SourceScanRoot {
-            directory: PathBuf::from("../dotnet-intrinsics-simd/src"),
-            module_prefix: "dotnet_intrinsics_simd".to_string(),
-        },
-        SourceScanRoot {
             directory: PathBuf::from("../dotnet-intrinsics-unsafe/src"),
             module_prefix: "dotnet_intrinsics_unsafe".to_string(),
         },
-    ];
-    roots.extend(parse_extra_roots(
-        "DOTNET_VM_EXTRA_INTRINSIC_SOURCES",
-        "crate::intrinsics",
-    ));
-    roots
+    ]
 }
 
 pub fn scan_rs_files(root: &SourceScanRoot, mut process_file: impl FnMut(&Path)) -> usize {
@@ -124,51 +106,9 @@ pub fn emit_rerun_directives(
     instruction_roots: &[SourceScanRoot],
     intrinsic_roots: &[SourceScanRoot],
 ) {
-    println!("cargo:rerun-if-changed=src/instructions");
-    println!("cargo:rerun-if-changed=src/intrinsics");
-    println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INSTRUCTION_SOURCES");
-    println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INTRINSIC_SOURCES");
     for root in instruction_roots.iter().chain(intrinsic_roots) {
         println!("cargo:rerun-if-changed={}", root.directory.display());
     }
-}
-
-fn parse_extra_roots(env_var: &str, default_prefix: &str) -> Vec<SourceScanRoot> {
-    // Format: `<directory>[=<module_prefix>]` entries delimited by `;`.
-    // Extraction assumption: module_prefix must be a path visible from this crate
-    // (typically a re-export like `crate::intrinsics`/`crate::instructions`).
-    let raw = match env::var(env_var) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-
-    raw.split(';')
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-
-            let (dir, prefix): (&str, Cow<'_, str>) = match trimmed.split_once('=') {
-                Some((directory, module_prefix)) => (
-                    directory.trim(),
-                    Cow::Owned(module_prefix.trim().to_string()),
-                ),
-                None => (trimmed, Cow::Borrowed(default_prefix)),
-            };
-
-            if dir.is_empty() || prefix.trim().is_empty() {
-                panic!(
-                    "{env_var} contains an invalid entry `{trimmed}`; expected `<dir>` or `<dir>=<module_prefix>`"
-                );
-            }
-
-            Some(SourceScanRoot {
-                directory: PathBuf::from(dir),
-                module_prefix: prefix.into_owned(),
-            })
-        })
-        .collect()
 }
 
 fn format_roots_for_error(roots: &[SourceScanRoot]) -> String {

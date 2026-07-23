@@ -311,4 +311,4 @@ Skip the PGO-use test build step:
 
 - `scripts/bench_pgo.sh` expects toolchain-matched `llvm-profdata` from `llvm-tools-preview`.
 - The script stores generated/merged artifacts under the selected `--target-dir` and rewrites stale profile files for repeatable runs.
-- Keep this PGO path optional; baseline phase comparisons still use standard `bench-thin`/`bench-fat` commands.
+- Keep this PGO path optional; ordinary timing comparisons still use standard `bench-thin`/`bench-fat` commands.

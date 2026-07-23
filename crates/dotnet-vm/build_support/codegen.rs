@@ -1,13 +1,9 @@
 use crate::build_support::parser::{InstructionEntry, IntrinsicEntry};
-use dotnetdll::prelude::Instruction;
 use std::{collections::HashMap, ffi::OsStr, fs, path::Path};
 
 pub fn generate_instruction_table(out_dir: &OsStr, entries: &[InstructionEntry]) {
     let dest_path = Path::new(out_dir).join("instruction_dispatch.rs");
     let mut table_code = String::new();
-    let mut jump_table_entries = Vec::new();
-
-    // New monomorphic dispatcher
     table_code.push_str("pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
     table_code.push_str("    ctx: &mut T,\n");
     table_code.push_str("    instr: &Instruction,\n");
@@ -33,64 +29,10 @@ pub fn generate_instruction_table(out_dir: &OsStr, entries: &[InstructionEntry])
             .mapping
             .to_match_arm_path(&handler_path, &extra_arg_info);
         table_code.push_str(&format!("        {},\n", arm));
-
-        let wrapper_name = format!(
-            "dispatch_opcode_{}",
-            to_snake_case_ident(&entry.variant_name)
-        );
-        let opcode = Instruction::opcode_from_name(&entry.variant_name).unwrap_or_else(|| {
-            panic!(
-                "Could not resolve opcode index for instruction variant `{}`",
-                entry.variant_name
-            )
-        });
-        jump_table_entries.push((opcode, wrapper_name, arm.to_string()));
     }
 
     table_code.push_str("        _ => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr).into())))\n");
     table_code.push_str("    }\n");
-    table_code.push_str("}\n");
-
-    jump_table_entries.sort_by_key(|(opcode, _, _)| *opcode);
-
-    table_code.push('\n');
-    table_code
-        .push_str("type DispatchFn<'gc, T> = fn(&mut T, &Instruction) -> crate::StepResult;\n\n");
-    table_code.push_str("#[inline(always)]\n");
-    table_code.push_str("fn dispatch_unimplemented<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
-    table_code.push_str("    _ctx: &mut T,\n");
-    table_code.push_str("    instr: &Instruction,\n");
-    table_code.push_str(") -> crate::StepResult {\n");
-    table_code.push_str("    crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"{:?}\", instr).into())))\n");
-    table_code.push_str("}\n\n");
-
-    for (_, wrapper_name, arm) in &jump_table_entries {
-        table_code.push_str("#[inline(always)]\n");
-        table_code.push_str(&format!(
-            "fn {}<'gc, T: crate::stack::ops::VesOps<'gc>>(\n",
-            wrapper_name
-        ));
-        table_code.push_str("    ctx: &mut T,\n");
-        table_code.push_str("    instr: &Instruction,\n");
-        table_code.push_str(") -> crate::StepResult {\n");
-        table_code.push_str("    match instr {\n");
-        table_code.push_str(&format!("        {},\n", arm));
-        table_code.push_str("        _ => dispatch_unimplemented(ctx, instr),\n");
-        table_code.push_str("    }\n");
-        table_code.push_str("}\n\n");
-    }
-
-    table_code.push_str("pub fn dispatch_jump_table<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
-    table_code.push_str("    ctx: &mut T,\n");
-    table_code.push_str("    instr: &Instruction,\n");
-    table_code.push_str(") -> crate::StepResult {\n");
-    table_code.push_str("    let handler: DispatchFn<'gc, T> = match instr.opcode() {\n");
-    for (opcode, wrapper_name, _) in &jump_table_entries {
-        table_code.push_str(&format!("        {} => {}::<T>,\n", opcode, wrapper_name));
-    }
-    table_code.push_str("        _ => dispatch_unimplemented::<T>,\n");
-    table_code.push_str("    };\n");
-    table_code.push_str("    handler(ctx, instr)\n");
     table_code.push_str("}\n");
 
     fs::write(dest_path, table_code).unwrap();
@@ -271,21 +213,6 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
     table_code.push_str(";\n");
 
     fs::write(phf_path, table_code).unwrap();
-}
-
-fn to_snake_case_ident(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 8);
-    for (index, character) in input.chars().enumerate() {
-        if character.is_ascii_uppercase() {
-            if index != 0 {
-                out.push('_');
-            }
-            out.push(character.to_ascii_lowercase());
-        } else {
-            out.push(character);
-        }
-    }
-    out
 }
 
 fn intrinsic_static_key_segment(is_static: bool) -> &'static str {

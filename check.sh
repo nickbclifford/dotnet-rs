@@ -84,7 +84,6 @@ if [ "$FULL_MODE" -eq 1 ]; then
     cargo nextest run --features bench-instrumentation
     cargo nextest run --features heap-diagnostics
     cargo nextest run -p dotnet-vm --features deadlock-diagnostics
-    cargo nextest run -p dotnet-vm --features instruction-dispatch-jump-table
 fi
 
 echo "All checks passed!"

@@ -242,10 +242,10 @@ pub trait VesOps<'gc>:
     + VmStaticsOps<'gc>
     + ThreadOps
     + VmCallOps<'gc>
+    + VmSimdIntrinsicHost<'gc>
     + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
     + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>
     + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
-    + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>
     + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
     + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
     + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>

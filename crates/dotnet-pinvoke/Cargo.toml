@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 dashmap = { workspace = true }
-dotnet-assemblies = { workspace = true }
 dotnet-tracer = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
@@ -15,7 +14,6 @@ dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 libffi = "5.0.0"
 libloading = "0.9.0"
-tracing = { workspace = true }
 
 [features]
 default = ["multithreading"]

@@ -7,7 +7,6 @@ edition = "2024"
 default = ["multithreading"]
 generic-constraint-validation = ["dotnet-vm/generic-constraint-validation"]
 multithreading = [
-    "dep:parking_lot",
     "dotnet-vm/multithreading",
 ]
 simd = ["dotnet-vm/simd"]
@@ -29,11 +28,8 @@ deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
 clap = { version = "4.5", features = ["derive"] }
 dotnet-assemblies = { workspace = true }
 dotnet-types = { workspace = true }
-dotnet-utils = { workspace = true, default-features = false }
-dotnet-value = { workspace = true, default-features = false }
 dotnet-vm = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
-parking_lot = { workspace = true, optional = true }
 rayon = { workspace = true }
 
 [dev-dependencies]

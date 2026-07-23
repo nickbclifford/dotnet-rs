@@ -27,11 +27,6 @@ pub struct InstructionRegistry;
 impl InstructionRegistry {
     #[inline(always)]
     pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
-        #[cfg(feature = "instruction-dispatch-jump-table")]
-        {
-            return registry::dispatch_jump_table(ctx, instr);
-        }
-        #[cfg(not(feature = "instruction-dispatch-jump-table"))]
         registry::dispatch_monomorphic(ctx, instr)
     }
 }

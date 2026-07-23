@@ -385,7 +385,6 @@ dependencies = [
  "dotnet-types",
  "dotnet-vm",
  "dotnetdll",
- "parking_lot",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -407,7 +406,6 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm",
  "dotnetdll",
- "parking_lot",
  "rayon",
 ]
 
@@ -415,15 +413,11 @@ dependencies = [
 name = "dotnet-exceptions"
 version = "0.1.0"
 dependencies = [
- "dotnet-assemblies",
- "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
  "dotnet-vm-ops",
  "dotnetdll",
- "gc-arena",
- "tracing",
 ]
 
 [[package]]
@@ -453,24 +447,11 @@ dependencies = [
 name = "dotnet-intrinsics-reflection"
 version = "0.1.0"
 dependencies = [
- "dotnet-assemblies",
  "dotnet-intrinsics-delegates",
  "dotnet-macros",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
- "dotnet-vm-data",
- "dotnet-vm-ops",
- "dotnetdll",
-]
-
-[[package]]
-name = "dotnet-intrinsics-simd"
-version = "0.1.0"
-dependencies = [
- "dotnet-macros",
- "dotnet-simd",
- "dotnet-types",
  "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
@@ -516,7 +497,6 @@ dependencies = [
  "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
- "gc-arena",
 ]
 
 [[package]]
@@ -564,7 +544,6 @@ name = "dotnet-pinvoke"
 version = "0.1.0"
 dependencies = [
  "dashmap",
- "dotnet-assemblies",
  "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
@@ -574,7 +553,6 @@ dependencies = [
  "gc-arena",
  "libffi",
  "libloading",
- "tracing",
 ]
 
 [[package]]
@@ -665,7 +643,6 @@ name = "dotnet-vm"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
- "crossbeam-channel",
  "dashmap",
  "dotnet-assemblies",
  "dotnet-build-tools",
@@ -673,7 +650,6 @@ dependencies = [
  "dotnet-intrinsics-core",
  "dotnet-intrinsics-delegates",
  "dotnet-intrinsics-reflection",
- "dotnet-intrinsics-simd",
  "dotnet-intrinsics-span",
  "dotnet-intrinsics-string",
  "dotnet-intrinsics-threading",
@@ -692,18 +668,14 @@ dependencies = [
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
- "hashbrown 0.17.1",
  "lru",
  "parking_lot",
  "phf",
  "phf_codegen",
  "proc-macro2",
  "quote",
- "serde",
  "syn 2.0.117",
- "thiserror",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

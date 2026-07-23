@@ -7,7 +7,6 @@ edition = "2024"
 default = ["multithreading"]
 generic-constraint-validation = ["dotnet-vm/generic-constraint-validation"]
 multithreading = [
-    "dep:parking_lot",
     "dotnet-vm/multithreading",
 ]
 simd = ["dotnet-vm/simd"]
@@ -26,15 +25,12 @@ bench-instrumentation = ["dotnet-vm/bench-instrumentation"]
 heap-diagnostics = ["dotnet-vm/heap-diagnostics"]
 # Enables lock-order/deadlock diagnostics for benchmark stress/debug sessions.
 deadlock-diagnostics = ["multithreading", "dotnet-vm/deadlock-diagnostics"]
-# Bench-only switch for vm jump-table dispatch variant.
-instruction-dispatch-jump-table = ["dotnet-vm/instruction-dispatch-jump-table"]
 
 [dependencies]
 dotnet-assemblies = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-vm = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
-parking_lot = { workspace = true, optional = true }
 serde_json = "1.0"
 
 [dev-dependencies]

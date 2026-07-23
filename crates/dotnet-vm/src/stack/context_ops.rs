@@ -89,12 +89,12 @@ impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
 impl<'a, 'gc> SimdCapabilityOps for VesContext<'a, 'gc> {
     #[inline]
     fn simd_vector128_is_hardware_accelerated(&self) -> bool {
-        dotnet_intrinsics_simd::vector128_is_hardware_accelerated()
+        dotnet_intrinsics_core::simd::vector128_is_hardware_accelerated()
     }
 
     #[inline]
     fn simd_vector256_is_hardware_accelerated(&self) -> bool {
-        dotnet_intrinsics_simd::vector256_is_hardware_accelerated()
+        dotnet_intrinsics_core::simd::vector256_is_hardware_accelerated()
     }
 }
 

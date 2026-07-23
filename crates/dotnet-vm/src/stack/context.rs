@@ -482,7 +482,6 @@ mod host_adapter_trait_tests {
                 + vm_ops::SpanIntrinsicHost<'gc>
                 + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
                 + vm_ops::SimdIntrinsicHost<'gc>
-                + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>
                 + vm_ops::UnsafeIntrinsicHost<'gc>
                 + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
                 + vm_ops::ThreadingIntrinsicHost<'gc>
@@ -519,12 +518,9 @@ mod host_adapter_trait_tests {
                 dotnet_intrinsics_span::equality::intrinsic_memory_extensions_sequence_equal::<T>;
         }
 
-        fn assert_simd_handler<
-            'gc,
-            T: vm_ops::SimdIntrinsicHost<'gc> + dotnet_intrinsics_simd::SimdIntrinsicHost<'gc>,
-        >() {
+        fn assert_simd_handler<'gc, T: vm_ops::SimdIntrinsicHost<'gc>>() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
-                dotnet_intrinsics_simd::handlers::intrinsic_vector128_is_hardware_accelerated::<T>;
+                dotnet_intrinsics_core::simd::intrinsic_vector128_is_hardware_accelerated::<T>;
         }
 
         fn assert_unsafe_handler<

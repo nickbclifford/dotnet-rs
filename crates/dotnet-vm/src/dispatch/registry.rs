@@ -46,26 +46,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn jump_table_dispatch_is_generated() {
-        let dispatch = normalize_ws(DISPATCH_SOURCE);
-
-        assert!(
-            dispatch.contains("pubfndispatch_jump_table<'gc,T:crate::stack::ops::VesOps<'gc>>("),
-            "expected generated source to include dispatch_jump_table function"
-        );
-        assert!(
-            dispatch.contains("matchinstr.opcode()"),
-            "expected jump-table dispatch to switch on opcode index"
-        );
-        assert!(
-            dispatch.contains("fndispatch_opcode_add<'gc,T:crate::stack::ops::VesOps<'gc>>("),
-            "expected jump-table wrapper for Add to be generated"
-        );
-        assert!(
-            dispatch.contains("dispatch_opcode_add::<T>"),
-            "expected jump-table to reference Add wrapper function"
-        );
-    }
 }

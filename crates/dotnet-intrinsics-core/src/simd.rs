@@ -1,11 +1,25 @@
-use crate::SimdIntrinsicHost;
+//! Conservative `System.Runtime.Intrinsics` capability handlers.
+//!
+//! Hardware acceleration remains disabled until the VM implements the broader
+//! `Vector128`/`Vector256` intrinsic surface.
+
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::{StepResult, ops::SimdIntrinsicHost};
 use dotnetdll::prelude::BaseType;
+
+#[inline]
+pub fn vector128_is_hardware_accelerated() -> bool {
+    false
+}
+
+#[inline]
+pub fn vector256_is_hardware_accelerated() -> bool {
+    false
+}
 
 #[inline]
 fn vector_element_type_is_supported(ty: &ConcreteType) -> bool {
@@ -60,4 +74,20 @@ pub fn intrinsic_vector_is_supported<'gc, T: SimdIntrinsicHost<'gc>>(
         .is_some_and(vector_element_type_is_supported);
     ctx.push_i32(i32::from(supported));
     StepResult::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{vector128_is_hardware_accelerated, vector256_is_hardware_accelerated};
+
+    #[test]
+    fn hardware_acceleration_is_disabled_until_full_intrinsics_support_lands() {
+        assert!(!vector128_is_hardware_accelerated());
+        assert!(!vector256_is_hardware_accelerated());
+    }
+
+    #[test]
+    fn vector256_probe_implies_vector128_probe() {
+        assert!(!vector256_is_hardware_accelerated() || vector128_is_hardware_accelerated());
+    }
 }

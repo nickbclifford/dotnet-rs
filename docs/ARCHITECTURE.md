@@ -20,14 +20,13 @@ The project is divided into several crates, each with a focused responsibility:
 - **dotnet-pinvoke**: P/Invoke marshalling extracted from `dotnet-vm`. Uses `libffi` and `libloading` for native interop. Depends on `dotnet-vm-ops` for base traits.
 - **dotnet-runtime-resolver**: Type/method/field resolution services and layout factory implementation, consumed from `dotnet-vm` via adapters.
 - **dotnet-runtime-memory**: Runtime memory access/heap services and validation helpers, consumed from `dotnet-vm` via adapters.
-- **dotnet-intrinsics-core**: Core intrinsic handlers (`math`, `array_ops`).
+- **dotnet-intrinsics-core**: Core intrinsic handlers (`math`, `array_ops`) and conservative `System.Runtime.Intrinsics` capability probes.
 - **dotnet-intrinsics-delegates**: Delegate intrinsic handlers and delegate invoke host seams.
 - **dotnet-intrinsics-span**: Span/ReadOnlySpan intrinsic handlers and span host seams.
 - **dotnet-intrinsics-string**: String intrinsic handlers and string-span host seams.
 - **dotnet-intrinsics-threading**: Monitor/interlocked/threading intrinsic handlers and host seams.
 - **dotnet-intrinsics-reflection**: Reflection intrinsic handlers and reflection host seams.
 - **dotnet-intrinsics-unsafe**: Unsafe/marshalling intrinsic handlers and host seams.
-- **dotnet-intrinsics-simd**: SIMD intrinsic handlers and capability probes for `System.Runtime.Intrinsics`.
 - **dotnet-simd**: Shared SIMD byte-operation helpers with scalar fallback, used by intrinsic crates.
 - **dotnet-metrics**: Standalone crate for `RuntimeMetrics` with per-cache hit/miss tracking (`CacheKind`, `CacheEvent`, `CacheStats`, `CacheStat`), serializable via `serde`.
 - **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides guarded emit/span helpers, structured logging via the `tracing` crate with configurable levels (`DOTNET_RS_TRACE` env), optional JSON output (`DOTNET_RS_TRACE_FORMAT=json`), and an async flusher thread via `crossbeam-channel`.
@@ -59,7 +58,6 @@ dotnet-cli
       ├── dotnet-intrinsics-threading
       ├── dotnet-intrinsics-reflection
       ├── dotnet-intrinsics-unsafe
-      ├── dotnet-intrinsics-simd
       ├── dotnet-assemblies
       ├── dotnet-value
       ├── dotnet-types

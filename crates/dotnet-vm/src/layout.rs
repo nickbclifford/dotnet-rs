@@ -135,7 +135,7 @@ mod tests {
         let mut nested = dotnet_value::layout::GcDesc::default();
         nested.set_offset(3);
         let nested_layout = LayoutManager::Field(dotnet_value::layout::FieldLayoutManager {
-            fields: hashbrown::HashMap::new(),
+            fields: Default::default(),
             total_size: 16,
             alignment: 1,
             gc_desc: nested,

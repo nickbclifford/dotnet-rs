@@ -26,7 +26,7 @@ pub fn add<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult { ... }
 
 ### Build Process
 
-1. `process_instruction_file` walks all configured instruction roots. By default this is `src/instructions/`, plus optional extra roots from `DOTNET_VM_EXTRA_INSTRUCTION_SOURCES`.
+1. `process_instruction_file` walks the `src/instructions/` source tree.
 2. Parses each file with `syn` looking for functions with `#[dotnet_instruction(...)]`
 3. Extracts the opcode variant name and the module path of the handler function
 4. `generate_instruction_table` creates `instruction_dispatch.rs` containing the `dispatch_monomorphic` function.
@@ -39,21 +39,18 @@ pub fn add<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult { ... }
 include!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
 ```
 
-`InstructionRegistry::dispatch` in `dispatch/mod.rs` is the actual entry point. It selects between the two generated dispatchers based on a feature flag:
+`InstructionRegistry::dispatch` in `dispatch/mod.rs` is the actual entry point:
 
 ```rust
 impl InstructionRegistry {
     #[inline(always)]
     pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
-        #[cfg(feature = "instruction-dispatch-jump-table")]
-        { return registry::dispatch_jump_table(ctx, instr); }
-        #[cfg(not(feature = "instruction-dispatch-jump-table"))]
         registry::dispatch_monomorphic(ctx, instr)
     }
 }
 ```
 
-The monomorphic dispatcher uses a `match` on the `Instruction` enum, allowing the Rust compiler to inline and optimize instruction handlers effectively; the jump-table variant dispatches through an opcode-indexed function-pointer table.
+The generated dispatcher uses a `match` on the `Instruction` enum, allowing the Rust compiler to inline and optimize instruction handlers effectively.
 
 ## Intrinsic PHF Table Generation
 
@@ -78,9 +75,7 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
    - `../dotnet-intrinsics-string/src`
    - `../dotnet-intrinsics-threading/src`
    - `../dotnet-intrinsics-reflection/src`
-   - `../dotnet-intrinsics-simd/src`
    - `../dotnet-intrinsics-unsafe/src`
-   - Optional extras from `DOTNET_VM_EXTRA_INTRINSIC_SOURCES`
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
 3. Extracts: type name, member name, arity, is_static, handler path
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
@@ -131,35 +126,11 @@ When searching, `IntrinsicRegistry` formats the appropriate key string into a st
 
 ## Non-Obvious Connections
 
-### External Source Root Env Vars (Untested Extension Points)
-
-`build_support/scanner.rs` supports external source roots through:
-
-- `DOTNET_VM_EXTRA_INSTRUCTION_SOURCES`
-- `DOTNET_VM_EXTRA_INTRINSIC_SOURCES`
-
-Both env vars use the same parser:
-
-- Entries are separated by `;`
-- Each entry is either `<directory>` or `<directory>=<module_prefix>`
-- If `=<module_prefix>` is omitted, the default prefix is:
-  - `crate::instructions` for instruction extras
-  - `crate::intrinsics` for intrinsic extras
-
-Example:
-
-```bash
-DOTNET_VM_EXTRA_INSTRUCTION_SOURCES="../my-opcodes/src=my_opcode_crate;../more-instr"
-DOTNET_VM_EXTRA_INTRINSIC_SOURCES="../my-intrinsics/src=my_intrinsic_crate"
-```
-
-Current status: these hooks are available for local/experimental extension, but they are not covered by a dedicated CI regression test in this repository today.
-
 ### Build Script ↔ Proc Macros Share Code
 The build script and the proc macros both depend on `dotnet-macros-core` for signature parsing. This ensures the key format is consistent between compile-time table generation and runtime lookups.
 
 ### Build Script ↔ `dotnetdll`
-The instruction table generation emits a `match`-based `dispatch_monomorphic` over the `Instruction` enum plus an opcode-indexed jump table, resolving each opcode index via `dotnetdll::prelude::Instruction::opcode_from_name`. There is no fixed-size array keyed by a variant count.
+The instruction table generation emits a `match`-based `dispatch_monomorphic` over the `Instruction` enum.
 
 ### Deduplication
 The build script deduplicates handler registrations via `assert_unique_instruction_variants`, which groups entries by variant name in a `BTreeMap` and panics if any name is registered more than once. (`DefaultHasher`, via `hash_value_u64`, is used only to derive per-signature name suffixes for intrinsic variants/filters, not for duplicate detection.)
@@ -172,13 +143,11 @@ Similarly, for methods explicitly marked as `internal_call` in their IL metadata
 
 ### Incremental Compilation (`cargo:rerun-if-changed`)
 
-The build script emits stable and dynamic directives:
+The build script emits one directive for each fixed instruction and intrinsic source root:
 ```rust
 println!("cargo:rerun-if-changed=src/instructions");
 println!("cargo:rerun-if-changed=src/intrinsics");
-println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INSTRUCTION_SOURCES");
-println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INTRINSIC_SOURCES");
-// and one cargo:rerun-if-changed=<root> per configured source root
+// and one cargo:rerun-if-changed=<root> per extracted intrinsic crate
 ```
 These tell Cargo to skip re-running `build.rs` unless files within those directories are modified. Because parsing hundreds of source files with `syn` is computationally expensive, this ensures fast incremental builds when working on core VM components (like the GC or type system) outside the instruction and intrinsic directories.
 
@@ -266,4 +235,3 @@ The fixture build contract is env-driven:
 
 When `DOTNET_USE_PREBUILT_FIXTURES=1` is active, prebuilt validation takes precedence and
 `build.rs` does not run dotnet restore/build.
-

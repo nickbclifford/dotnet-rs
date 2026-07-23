@@ -11,7 +11,6 @@ dotnet-value = { workspace = true, default-features = false }
 dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
-gc-arena = { workspace = true }
 
 [features]
 default = []

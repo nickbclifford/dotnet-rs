@@ -33,7 +33,7 @@ cargo build -p dotnet-cli --bin dotnet-rs
 
 ## Workspace layout
 
-This repository is a Rust workspace with 27 crates under `crates/` plus the `xtask/` automation crate.
+This repository is a Rust workspace with 26 crates under `crates/` plus the `xtask/` automation crate.
 
 - `crates/` — runtime, VM, intrinsic, tooling, and CLI crates
 - `docs/` — architecture and subsystem design documentation
@@ -55,6 +55,7 @@ Start with:
 - [`docs/GC_AND_MEMORY_SAFETY.md`](docs/GC_AND_MEMORY_SAFETY.md)
 - [`docs/EXCEPTION_HANDLING.md`](docs/EXCEPTION_HANDLING.md)
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
+- [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 
 See the `docs/` directory for additional deep dives.
 

@@ -45,75 +45,11 @@ macro_rules! vm_trace {
     }
 }
 
-// Specialized tracing macros for better performance and readability
-#[macro_export]
-macro_rules! vm_trace_instruction {
-    ($src:expr, $ip:expr, $instr:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.instruction($ip, $instr);
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_method_entry {
-    ($src:expr, $name:expr, $sig:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.method_entry($name, $sig);
-        });
-    };
-}
-
 #[macro_export]
 macro_rules! vm_trace_intrinsic {
     ($src:expr, $op:expr, $details:expr) => {
         let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
             trace.intrinsic($op, $details);
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_interop {
-    ($src:expr, $op:expr, $($arg:tt)*) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.interop($op, &format!($($arg)*));
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_method_exit {
-    ($src:expr, $name:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.method_exit($name);
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_stack {
-    ($src:expr, $op:expr, $val:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.stack_op($op, &format!("{:?}", $val));
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_gc {
-    ($src:expr, $event:expr, $details:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.gc_event($event, $details);
-        });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_gc_allocation {
-    ($src:expr, $type_name:expr, $size:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.gc_allocation($type_name, $size);
         });
     };
 }
@@ -142,43 +78,6 @@ macro_rules! vm_trace_branch {
         let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
             trace.branch($type, $target, $taken);
         });
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_field {
-    ($src:expr, $op:expr, $field:expr, $val:expr) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.field_access($op, $field, &format!("{:?}", $val));
-        });
-    };
-}
-
-// Comprehensive state snapshot macros
-#[macro_export]
-macro_rules! vm_trace_full_state {
-    ($src:expr) => {
-        if $src.tracer_enabled() {
-            $src.trace_full_state();
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_stack_snapshot {
-    ($src:expr) => {
-        if $src.tracer_enabled() {
-            $src.trace_dump_stack();
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! vm_trace_heap_snapshot {
-    ($src:expr) => {
-        if $src.tracer_enabled() {
-            $src.trace_dump_heap();
-        }
     };
 }
 
