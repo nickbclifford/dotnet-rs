@@ -47,6 +47,8 @@ pub mod statics;
 pub mod sync;
 #[cfg(test)]
 mod tail_calls_tests;
+#[cfg(test)]
+mod test_utils;
 pub mod threading;
 
 pub use dotnet_metrics::RuntimeMetricsSnapshot;

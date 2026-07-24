@@ -10,6 +10,8 @@ pub mod host;
 pub mod loader;
 pub mod resolution;
 pub mod support;
+#[cfg(all(test, not(miri)))]
+mod test_fixtures;
 pub mod validation;
 #[cfg(test)]
 mod validation_tests;

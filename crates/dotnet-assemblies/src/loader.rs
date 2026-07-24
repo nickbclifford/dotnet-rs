@@ -560,9 +560,11 @@ impl AssemblyLoader {
 mod tests {
     use super::AssemblyLoader;
     #[cfg(not(miri))]
+    use crate::test_fixtures::fixture_probe_dir;
+    #[cfg(not(miri))]
     use std::{
         fs,
-        path::{Path, PathBuf},
+        path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -573,31 +575,6 @@ mod tests {
             .expect("clock drift")
             .as_nanos();
         std::env::temp_dir().join(format!("dotnet_rs_loader_{label}_{nanos}"))
-    }
-
-    #[cfg(not(miri))]
-    fn fixture_probe_dir() -> PathBuf {
-        if let Some(base) = std::env::var_os("DOTNET_FIXTURES_BASE") {
-            let path = PathBuf::from(base).join("basic").join("basic_42");
-            if path.exists() {
-                return path;
-            }
-        }
-
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        if let Some(repo_root) = manifest_dir.parent().and_then(Path::parent) {
-            let path = repo_root
-                .join("target")
-                .join("debug")
-                .join("dotnet-fixtures")
-                .join("basic")
-                .join("basic_42");
-            if path.exists() {
-                return path;
-            }
-        }
-
-        PathBuf::from("/tmp/fixture-probe")
     }
 
     #[test]

@@ -2,24 +2,21 @@
 mod tests {
     use crate::{
         StepResult,
-        dispatch::ExecutionEngine,
         stack::ops::VmCallOps,
-        stack::{CallStack, GCArena},
-        state::{ArenaLocalState, SharedGlobalState},
+        state::SharedGlobalState,
         sync::Arc,
+        test_utils::{new_test_arena, parameterless_i32_signature, should_break_after_step},
     };
     use dotnet_assemblies::AssemblyLoader;
     use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
     use dotnet_utils::gc::GCHandle;
     use dotnet_value::StackValue;
     use dotnetdll::{
-        binary::signature::kinds::CallingConvention,
         prelude::*,
         resolved::{
             self as resolved_mod,
             members::{Field, Method},
-            signature::ReturnType,
-            types::{BaseType, MethodType, TypeDefinition},
+            types::{BaseType, TypeDefinition},
         },
     };
 
@@ -50,10 +47,7 @@ mod tests {
     }
 
     fn run_i32_entrypoint(shared: Arc<SharedGlobalState>, entrypoint: MethodDescription) -> i32 {
-        let mut arena = GCArena::new(|_| {
-            let local = ArenaLocalState::new(shared.statics.clone());
-            ExecutionEngine::new(CallStack::new(shared.clone(), local))
-        });
+        let mut arena = new_test_arena(&shared);
 
         #[cfg(feature = "memory-validation")]
         let thread_id = dotnet_utils::sync::get_current_thread_id();
@@ -101,13 +95,8 @@ mod tests {
                 res
             });
 
-            match step_res {
-                StepResult::Return => break,
-                StepResult::Error(e) => panic!("Execution error: {e}"),
-                StepResult::MethodThrew(exc) => {
-                    panic!("Unexpected managed exception: {exc}")
-                }
-                _ => {}
+            if should_break_after_step(step_res) {
+                break;
             }
         }
 
@@ -166,19 +155,7 @@ mod tests {
             new_static_field("U16", MemberType::Base(Box::new(BaseType::UInt16))),
         ));
 
-        let sig = MethodSignature {
-            instance: false,
-            explicit_this: false,
-            calling_convention: CallingConvention::Default,
-            parameters: vec![],
-            return_type: ReturnType(
-                vec![],
-                Some(ParameterType::Value(MethodType::Base(Box::new(
-                    BaseType::Int32,
-                )))),
-            ),
-            varargs: None,
-        };
+        let sig = parameterless_i32_signature();
 
         let body = make_test_method!(
             max_stack: 4,
@@ -271,19 +248,7 @@ mod tests {
             new_static_field("Obj", MemberType::Base(Box::new(BaseType::Object))),
         ));
 
-        let sig = MethodSignature {
-            instance: false,
-            explicit_this: false,
-            calling_convention: CallingConvention::Default,
-            parameters: vec![],
-            return_type: ReturnType(
-                vec![],
-                Some(ParameterType::Value(MethodType::Base(Box::new(
-                    BaseType::Int32,
-                )))),
-            ),
-            varargs: None,
-        };
+        let sig = parameterless_i32_signature();
 
         let body = make_test_method!(
             max_stack: 2,

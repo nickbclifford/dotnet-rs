@@ -405,6 +405,20 @@ mod tests {
         RuntimeMetrics::new()
     }
 
+    fn spawn_lock_holder(
+        block: &StdArc<SyncBlock>,
+    ) -> (mpsc::Receiver<()>, thread::JoinHandle<()>) {
+        let block = StdArc::clone(block);
+        let (tx, rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+            let _ = tx.send(()); // signal: lock is held
+            thread::sleep(Duration::from_millis(20));
+            block.exit(THREAD_A);
+        });
+        (rx, handle)
+    }
+
     // ===== enter_with_timeout tests =====
 
     #[test]
@@ -454,15 +468,7 @@ mod tests {
     fn enter_with_timeout_succeeds_after_lock_released_by_other_thread() {
         // THREAD_A holds the lock briefly, then releases; THREAD_B acquires successfully
         let block = StdArc::new(SyncBlock::new());
-        let block_a = StdArc::clone(&block);
-        let (tx, rx) = mpsc::channel::<()>();
-
-        let handle = thread::spawn(move || {
-            block_a.enter_with_timeout(THREAD_A, 5000, &make_metrics());
-            let _ = tx.send(()); // signal: lock is held
-            thread::sleep(Duration::from_millis(20));
-            block_a.exit(THREAD_A);
-        });
+        let (rx, handle) = spawn_lock_holder(&block);
 
         rx.recv().unwrap(); // wait until thread A holds the lock
 
@@ -531,15 +537,7 @@ mod tests {
     fn enter_with_timeout_safe_succeeds_after_lock_released_by_other_thread() {
         // THREAD_A holds lock briefly, releases; THREAD_B acquires → Success
         let block = StdArc::new(SyncBlock::new());
-        let block_a = StdArc::clone(&block);
-        let (tx, rx) = mpsc::channel::<()>();
-
-        let handle = thread::spawn(move || {
-            block_a.enter_with_timeout(THREAD_A, 5000, &make_metrics());
-            let _ = tx.send(());
-            thread::sleep(Duration::from_millis(20));
-            block_a.exit(THREAD_A);
-        });
+        let (rx, handle) = spawn_lock_holder(&block);
 
         rx.recv().unwrap();
 

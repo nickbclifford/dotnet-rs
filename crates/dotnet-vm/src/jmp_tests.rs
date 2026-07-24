@@ -2,11 +2,10 @@
 mod tests {
     use crate::{
         StepResult,
-        dispatch::ExecutionEngine,
         stack::ops::VmCallOps,
-        stack::{CallStack, GCArena},
-        state::{ArenaLocalState, SharedGlobalState},
+        state::SharedGlobalState,
         sync::Arc,
+        test_utils::{new_test_arena, should_break_after_step},
     };
     use dotnet_assemblies::AssemblyLoader;
     use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
@@ -37,13 +36,9 @@ mod tests {
         }
         MOCK_LOADER.with(|l| l.clone())
     }
-    #[test]
-    fn test_jmp_instruction() {
-        let loader = get_mock_loader();
-        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
-        let (mut res, _, type_idx) =
-            make_test_assembly!("JmpTest.dll", "JmpTestAssembly", "JmpType");
-        let sig = MethodSignature {
+
+    fn i32_to_i32_signature() -> MethodSignature<CallingConvention, MethodType> {
+        MethodSignature {
             instance: false,
             explicit_this: false,
             calling_convention: CallingConvention::Default,
@@ -58,7 +53,63 @@ mod tests {
                 )))),
             ),
             varargs: None,
-        };
+        }
+    }
+
+    fn run_jmp_until_error(
+        shared: &Arc<SharedGlobalState>,
+        entrypoint: MethodDescription,
+    ) -> StepResult {
+        let mut arena = new_test_arena(shared);
+        #[cfg(feature = "memory-validation")]
+        let thread_id = dotnet_utils::sync::get_current_thread_id();
+        arena.mutate_root(|gc, engine| {
+            let gc_handle = GCHandle::new(
+                gc,
+                #[cfg(feature = "multithreading")]
+                unsafe {
+                    engine.stack.arena_inner_gc()
+                },
+                #[cfg(feature = "memory-validation")]
+                thread_id,
+            );
+            let info = shared
+                .caches
+                .get_method_info(entrypoint, &Default::default(), shared.clone())
+                .expect("Failed to resolve entrypoint");
+            engine
+                .ves_context(gc_handle)
+                .entrypoint_frame(info, Default::default(), vec![])
+                .unwrap();
+        });
+        let mut step_res = StepResult::Continue;
+        for _ in 0..10 {
+            step_res = arena.mutate_root(|gc, engine| {
+                let gc_handle = GCHandle::new(
+                    gc,
+                    #[cfg(feature = "multithreading")]
+                    unsafe {
+                        engine.stack.arena_inner_gc()
+                    },
+                    #[cfg(feature = "memory-validation")]
+                    thread_id,
+                );
+                engine.step(gc_handle)
+            });
+            if matches!(step_res, StepResult::Error(_)) {
+                break;
+            }
+        }
+        step_res
+    }
+
+    #[test]
+    fn test_jmp_instruction() {
+        let loader = get_mock_loader();
+        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+        let (mut res, _, type_idx) =
+            make_test_assembly!("JmpTest.dll", "JmpTestAssembly", "JmpType");
+        let sig = i32_to_i32_signature();
         let target_body = make_test_method!(
             max_stack: 2,
             instructions: vec![
@@ -108,10 +159,7 @@ mod tests {
             res_s,
             MethodMemberIndex::Method(method_index),
         );
-        let mut arena = GCArena::new(|_| {
-            let local = ArenaLocalState::new(shared.statics.clone());
-            ExecutionEngine::new(CallStack::new(shared.clone(), local))
-        });
+        let mut arena = new_test_arena(&shared);
         #[cfg(feature = "memory-validation")]
         let thread_id = dotnet_utils::sync::get_current_thread_id();
         arena.mutate_root(|gc, engine| {
@@ -160,13 +208,8 @@ mod tests {
                 }
                 res
             });
-            match step_res {
-                StepResult::Return => break,
-                StepResult::Error(e) => panic!("Execution error: {e}"),
-                StepResult::MethodThrew(exc) => {
-                    panic!("Unexpected managed exception: {exc}")
-                }
-                _ => {}
+            if should_break_after_step(step_res) {
+                break;
             }
         }
         assert_eq!(final_int, Some(52));
@@ -230,49 +273,7 @@ mod tests {
             res_s,
             MethodMemberIndex::Method(method_index),
         );
-        let mut arena = GCArena::new(|_| {
-            let local = ArenaLocalState::new(shared.statics.clone());
-            ExecutionEngine::new(CallStack::new(shared.clone(), local))
-        });
-        #[cfg(feature = "memory-validation")]
-        let thread_id = dotnet_utils::sync::get_current_thread_id();
-        arena.mutate_root(|gc, engine| {
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                unsafe {
-                    engine.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
-            let info = shared
-                .caches
-                .get_method_info(entrypoint, &Default::default(), shared.clone())
-                .expect("Failed to resolve entrypoint");
-            engine
-                .ves_context(gc_handle)
-                .entrypoint_frame(info, Default::default(), vec![])
-                .unwrap();
-        });
-        let mut step_res = StepResult::Continue;
-        for _ in 0..10 {
-            step_res = arena.mutate_root(|gc, engine| {
-                let gc_handle = GCHandle::new(
-                    gc,
-                    #[cfg(feature = "multithreading")]
-                    unsafe {
-                        engine.stack.arena_inner_gc()
-                    },
-                    #[cfg(feature = "memory-validation")]
-                    thread_id,
-                );
-                engine.step(gc_handle)
-            });
-            if matches!(step_res, StepResult::Error(_)) {
-                break;
-            }
-        }
+        let step_res = run_jmp_until_error(&shared, entrypoint);
         match step_res {
             StepResult::Error(crate::error::VmError::Execution(
                 crate::error::ExecutionError::Aborted(msg),
@@ -348,49 +349,7 @@ mod tests {
             res_s,
             MethodMemberIndex::Method(method_index),
         );
-        let mut arena = GCArena::new(|_| {
-            let local = ArenaLocalState::new(shared.statics.clone());
-            ExecutionEngine::new(CallStack::new(shared.clone(), local))
-        });
-        #[cfg(feature = "memory-validation")]
-        let thread_id = dotnet_utils::sync::get_current_thread_id();
-        arena.mutate_root(|gc, engine| {
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                unsafe {
-                    engine.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
-            let info = shared
-                .caches
-                .get_method_info(entrypoint, &Default::default(), shared.clone())
-                .expect("Failed to resolve entrypoint");
-            engine
-                .ves_context(gc_handle)
-                .entrypoint_frame(info, Default::default(), vec![])
-                .unwrap();
-        });
-        let mut step_res = StepResult::Continue;
-        for _ in 0..10 {
-            step_res = arena.mutate_root(|gc, engine| {
-                let gc_handle = GCHandle::new(
-                    gc,
-                    #[cfg(feature = "multithreading")]
-                    unsafe {
-                        engine.stack.arena_inner_gc()
-                    },
-                    #[cfg(feature = "memory-validation")]
-                    thread_id,
-                );
-                engine.step(gc_handle)
-            });
-            if matches!(step_res, StepResult::Error(_)) {
-                break;
-            }
-        }
+        let step_res = run_jmp_until_error(&shared, entrypoint);
         match step_res {
             StepResult::Error(crate::error::VmError::Execution(
                 crate::error::ExecutionError::Aborted(msg),
@@ -417,22 +376,7 @@ mod tests {
             return_type: ReturnType(vec![], None),
             varargs: None,
         };
-        let sig_int = MethodSignature {
-            instance: false,
-            explicit_this: false,
-            calling_convention: CallingConvention::Default,
-            parameters: vec![Parameter(
-                vec![],
-                ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
-            )],
-            return_type: ReturnType(
-                vec![],
-                Some(ParameterType::Value(MethodType::Base(Box::new(
-                    BaseType::Int32,
-                )))),
-            ),
-            varargs: None,
-        };
+        let sig_int = i32_to_i32_signature();
         let target_idx = res.push_method(
             type_idx,
             Method::new(
@@ -471,49 +415,7 @@ mod tests {
             res_s,
             MethodMemberIndex::Method(method_index),
         );
-        let mut arena = GCArena::new(|_| {
-            let local = ArenaLocalState::new(shared.statics.clone());
-            ExecutionEngine::new(CallStack::new(shared.clone(), local))
-        });
-        #[cfg(feature = "memory-validation")]
-        let thread_id = dotnet_utils::sync::get_current_thread_id();
-        arena.mutate_root(|gc, engine| {
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                unsafe {
-                    engine.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
-            let info = shared
-                .caches
-                .get_method_info(entrypoint, &Default::default(), shared.clone())
-                .expect("Failed to resolve entrypoint");
-            engine
-                .ves_context(gc_handle)
-                .entrypoint_frame(info, Default::default(), vec![])
-                .unwrap();
-        });
-        let mut step_res = StepResult::Continue;
-        for _ in 0..10 {
-            step_res = arena.mutate_root(|gc, engine| {
-                let gc_handle = GCHandle::new(
-                    gc,
-                    #[cfg(feature = "multithreading")]
-                    unsafe {
-                        engine.stack.arena_inner_gc()
-                    },
-                    #[cfg(feature = "memory-validation")]
-                    thread_id,
-                );
-                engine.step(gc_handle)
-            });
-            if matches!(step_res, StepResult::Error(_)) {
-                break;
-            }
-        }
+        let step_res = run_jmp_until_error(&shared, entrypoint);
         match step_res {
             StepResult::Error(crate::error::VmError::Execution(
                 crate::error::ExecutionError::Aborted(msg),

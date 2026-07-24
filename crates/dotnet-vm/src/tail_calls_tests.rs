@@ -1,9 +1,6 @@
 use crate::{
-    StepResult,
-    dispatch::ExecutionEngine,
-    stack::{CallStack, GCArena, ops::VmCallOps},
-    state::{ArenaLocalState, SharedGlobalState},
-    sync::Arc,
+    StepResult, stack::ops::VmCallOps, state::SharedGlobalState, sync::Arc,
+    test_utils::new_test_arena,
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
@@ -165,10 +162,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     );
 
     // Run by directly stepping the execution engine so we can observe frame depth.
-    let mut arena = GCArena::new(|_| {
-        let local = ArenaLocalState::new(shared.statics.clone());
-        ExecutionEngine::new(CallStack::new(shared.clone(), local))
-    });
+    let mut arena = new_test_arena(&shared);
 
     #[cfg(feature = "memory-validation")]
     let thread_id = dotnet_utils::sync::get_current_thread_id();
