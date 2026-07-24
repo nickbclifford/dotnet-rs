@@ -1,0 +1,229 @@
+<root>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/fields.rs" line="28" start="836" end="1185" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/fields.rs" line="73" start="2635" end="2984" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/methods.rs" line="143" start="7805" end="8264" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/methods.rs" line="497" start="22410" end="22869" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_members.rs" line="651" start="22384" end="22753" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_members.rs" line="681" start="23437" end="23806" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/fields.rs" line="224" start="8637" end="9456" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="365" start="12925" end="13744" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/methods.rs" line="859" start="34853" end="35100" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/methods.rs" line="911" start="36953" end="37200" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/mod.rs" line="366" start="17355" end="17997" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_construction.rs" line="122" start="4242" end="4841" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_members.rs" line="993" start="33821" end="34456" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_members.rs" line="1020" start="34917" end="35552" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="96" start="2987" end="3373" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="114" start="3696" end="3933" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="289" start="10172" end="10446" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="854" start="29890" end="30164" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="329" start="11637" end="11928" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-reflection/src/types/type_queries.rs" line="391" start="14228" end="14519" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" line="358" start="12735" end="12954" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-span/src/conversions.rs" line="514" start="18516" end="18735" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="24" start="773" end="1032" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="36" start="1219" end="1478" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="137" start="4795" end="5080" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="190" start="6664" end="6949" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="149" start="5230" end="6061" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/constructors.rs" line="202" start="7099" end="7930" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs" line="111" start="3460" end="3749" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-intrinsics-string/src/operations.rs" line="119" start="3766" end="4055" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-metrics/src/lib.rs" line="1455" start="55271" end="56387" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-tracer/src/lib.rs" line="638" start="23508" end="24624" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="724" start="26070" end="26284" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="765" start="28059" end="28273" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="879" start="33544" end="33770" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="898" start="34628" end="34842" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="742" start="26840" end="27035" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="804" start="30074" end="30269" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-pinvoke/src/call.rs" line="842" start="31694" end="31905" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/factory.rs" line="345" start="13016" end="13301" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/factory.rs" line="357" start="13451" end="13736" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/factory.rs" line="419" start="16399" end="16713" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/factory.rs" line="447" start="18003" end="18359" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="132" start="4562" end="4883" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="504" start="19583" end="19904" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="157" start="5547" end="6434" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="513" start="20117" end="21092" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="191" start="6865" end="8241" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="554" start="21830" end="23334" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="237" start="8704" end="9117" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-runtime-resolver/src/methods.rs" line="266" start="9965" end="10432" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-simd/src/aarch64.rs" line="53" start="1746" end="2052" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-simd/src/x86.rs" line="76" start="2397" end="2703" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/conversion_regression_tests.rs" line="53" start="2071" end="2259" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="171" start="7386" end="7574" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="330" start="13541" end="13729" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="111" start="4190" end="4378" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="233" start="8753" end="8941" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="351" start="13101" end="13289" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="474" start="17659" end="17847" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/tail_calls_tests.rs" line="168" start="5858" end="6034" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/conversion_regression_tests.rs" line="104" start="4036" end="4341" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="217" start="9269" end="9574" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="376" start="15424" end="15729" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="163" start="6309" end="6614" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/conversion_regression_tests.rs" line="169" start="6306" end="6730" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/conversion_regression_tests.rs" line="274" start="9958" end="10382" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="112" start="5188" end="5612" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="239" start="10207" end="10631" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="177" start="7698" end="8428" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="336" start="13853" end="14583" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/tail_calls_tests.rs" line="176" start="6148" end="6807" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="197" start="8471" end="9584" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="356" start="14626" end="15739" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="209" start="8955" end="9220" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/fault_tests.rs" line="368" start="15110" end="15375" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="155" start="5995" end="6260" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/calls.rs" line="26" start="730" end="1014" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="528" start="17323" end="17623" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="873" start="29468" end="29781" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/calls.rs" line="26" start="739" end="1014" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="528" start="17332" end="17623" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="866" start="29043" end="29350" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="873" start="29474" end="29781" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/boxing.rs" line="32" start="886" end="1741" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="41" start="1352" end="2207" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/boxing.rs" line="60" start="1745" end="2539" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="69" start="2211" end="3005" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/boxing.rs" line="90" start="2541" end="2812" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="99" start="3007" end="3278" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="123" start="3870" end="4182" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="172" start="5669" end="5981" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="134" start="4300" end="4621" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/instructions/objects/casting.rs" line="183" start="6099" end="6420" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="292" start="10670" end="10842" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="415" start="14093" end="14265" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="686" start="23047" end="23268" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="699" start="23570" end="23801" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="756" start="25254" end="25471" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/intrinsics/mod.rs" line="761" start="25555" end="25782" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="46" start="2026" end="2581" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="420" start="15720" end="16279" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="239" start="9065" end="9760" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="357" start="13413" end="14108" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="480" start="17971" end="18666" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="259" start="9818" end="10390" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="377" start="14166" end="14738" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/jmp_tests.rs" line="500" start="18724" end="19296" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/macros.rs" line="2" start="36" end="302" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/macros.rs" line="31" start="889" end="1099" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="658" start="21888" end="22119" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="970" start="33215" end="33446" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/call_ops_impl.rs" line="1122" start="38856" end="39087" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/context.rs" line="281" start="10560" end="10768" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/context.rs" line="376" start="14493" end="14701" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="84" start="2883" end="3223" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="131" start="5075" end="5415" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="172" start="6920" end="7260" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="217" start="8989" end="9305" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="256" start="10589" end="11130" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="294" start="12323" end="12799" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="328" start="13674" end="14234" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs" line="364" start="15325" end="15798" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/reflection_ops_impl.rs" line="81" start="2256" end="2412" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/stack/reflection_ops_impl.rs" line="358" start="11232" end="11422" />
+</duplicate>
+<duplicate cost="1" hash="0">
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/sync/threaded.rs" line="460" start="14125" end="14393" />
+  <fragment file="file://$PROJECT_DIR$/crates/dotnet-vm/src/sync/threaded.rs" line="537" start="17381" end="17625" />
+</duplicate>
+</root>
