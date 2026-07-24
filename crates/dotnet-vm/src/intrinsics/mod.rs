@@ -164,6 +164,10 @@ use super::{StepResult, context::ResolutionContext};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
+fn method_arity(method: &MethodDescription) -> usize {
+    method.signature().parameters.len() + usize::from(method.signature().instance)
+}
+
 #[cold]
 #[inline(never)]
 fn unsupported_intrinsic_step_result(method: &MethodDescription) -> StepResult {
@@ -289,11 +293,7 @@ impl IntrinsicRegistry {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
         let is_static = !method.signature().instance;
-        let arity = if method.signature().instance {
-            method.signature().parameters.len() + 1
-        } else {
-            method.signature().parameters.len()
-        };
+        let arity = method_arity(method);
         let raw_type_name = method.parent.type_name();
         let canonical_name = loader.canonical_type_name(&raw_type_name);
         let normalized_name = canonical_name.replace('/', "+");
@@ -412,11 +412,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
 
     #[cfg(feature = "bench-instrumentation")]
     {
-        let arity = if method.signature().instance {
-            method.signature().parameters.len() + 1
-        } else {
-            method.signature().parameters.len()
-        };
+        let arity = method_arity(&method);
         let signature = format!(
             "{}::{}#{}",
             method.parent.type_name(),
@@ -671,6 +667,20 @@ fn read_enum_bits(obj: &Object<'_>) -> Option<(TypeDescription, u128)> {
     Some((enum_type, bits))
 }
 
+fn object_from_heap_storage<'gc>(storage: &HeapStorage<'gc>) -> Option<Object<'gc>> {
+    match storage {
+        HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some((**obj).clone()),
+        HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
+    }
+}
+
+fn type_from_heap_storage(storage: &HeapStorage<'_>) -> Option<TypeDescription> {
+    match storage {
+        HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some(obj.description.clone()),
+        HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
+    }
+}
+
 fn enum_object_from_stack<'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
     value: StackValue<'gc>,
@@ -683,10 +693,7 @@ fn enum_object_from_stack<'gc, T: ExceptionOps<'gc>>(
                 );
             }
 
-            obj_ref.as_heap_storage(|storage| match storage {
-                HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some((**obj).clone()),
-                HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
-            })
+            obj_ref.as_heap_storage(object_from_heap_storage)
         }
         StackValue::ManagedPtr(ptr) => {
             if ptr.is_null() {
@@ -695,12 +702,8 @@ fn enum_object_from_stack<'gc, T: ExceptionOps<'gc>>(
                 );
             }
 
-            ptr.owner().and_then(|owner| {
-                owner.as_heap_storage(|storage| match storage {
-                    HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some((**obj).clone()),
-                    HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
-                })
-            })
+            ptr.owner()
+                .and_then(|owner| owner.as_heap_storage(object_from_heap_storage))
         }
         StackValue::ValueType(vt) => Some(vt),
         _ => None,
@@ -753,16 +756,10 @@ fn scalar_enum_value_from_stack<'gc>(value: StackValue<'gc>) -> Option<(i128, bo
 fn enum_type_from_stack_value<'gc>(value: &StackValue<'gc>) -> Option<TypeDescription> {
     match value {
         StackValue::ValueType(vt) => Some(vt.description.clone()),
-        StackValue::ObjectRef(obj_ref) => obj_ref.as_heap_storage(|storage| match storage {
-            HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some(obj.description.clone()),
-            HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
-        }),
-        StackValue::ManagedPtr(ptr) => ptr.owner().and_then(|owner| {
-            owner.as_heap_storage(|storage| match storage {
-                HeapStorage::Boxed(obj) | HeapStorage::Obj(obj) => Some(obj.description.clone()),
-                HeapStorage::Str(_) | HeapStorage::Vec(_) => None,
-            })
-        }),
+        StackValue::ObjectRef(obj_ref) => obj_ref.as_heap_storage(type_from_heap_storage),
+        StackValue::ManagedPtr(ptr) => ptr
+            .owner()
+            .and_then(|owner| owner.as_heap_storage(type_from_heap_storage)),
         _ => None,
     }
 }

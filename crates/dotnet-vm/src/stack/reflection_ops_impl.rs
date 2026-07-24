@@ -355,12 +355,7 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         #[cfg(not(feature = "multithreading"))]
         {
             let mut list = self.reflection().types_list_write();
-            if let Some(existing) = list.iter().position(|t| t == &target) {
-                existing
-            } else {
-                list.push(target);
-                list.len() - 1
-            }
+            local_reflection_index_get_or_insert(&mut list, target)
         }
     }
 

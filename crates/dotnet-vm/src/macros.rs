@@ -1,13 +1,3 @@
-#[macro_export]
-macro_rules! vm_msg {
-    // Default to Debug level - format string with args
-    ($src:expr, $($format:tt)*) => {
-        let _ = $src.tracer().enabled_emit($src.indent(), |trace| {
-            trace.msg(dotnet_tracer::TraceLevel::Debug, format_args!($($format)*));
-        });
-    }
-}
-
 // Level-specific message macros for convenience
 #[macro_export]
 macro_rules! vm_error {
@@ -34,6 +24,14 @@ macro_rules! vm_debug {
             trace.msg(dotnet_tracer::TraceLevel::Debug, format_args!($($format)*));
         });
     }
+}
+
+/// Legacy alias for [`vm_debug!`].
+#[macro_export]
+macro_rules! vm_msg {
+    ($src:expr, $($format:tt)*) => {
+        $crate::vm_debug!($src, $($format)*)
+    };
 }
 
 #[macro_export]

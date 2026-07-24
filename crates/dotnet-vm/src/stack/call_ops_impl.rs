@@ -7,6 +7,7 @@ use crate::{
             EvalStackOps, ExceptionOps, LoaderOps, StaticsOps, TypedStackOps, VmCallOps,
             VmLoaderOps, VmResolutionOps,
         },
+        receiver_object_generics,
     },
 };
 use dotnet_runtime_memory::ops::BaseMemoryOps;
@@ -525,11 +526,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         // Enrich type generics from the receiver object's instantiated generics, mirroring
         // the merge step done for callvirt in merge_receiver_lookup_for_virtual_dispatch.
         let receiver_lookup = if receiver.0.is_some() {
-            receiver.as_heap_storage(|storage| match storage {
-                HeapStorage::Obj(instance) => instance.generics.clone(),
-                HeapStorage::Boxed(instance) => instance.generics.clone(),
-                HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
-            })
+            receiver_object_generics(*receiver)
         } else {
             GenericLookup::default()
         };
@@ -566,6 +563,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         method: &MethodInfo<'static>,
     ) -> Option<crate::error::VmError> {
         managed_frame_abort(self, method)
+    }
+
+    fn method_info_for_dispatch(
+        &self,
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Result<MethodInfo<'static>, crate::error::VmError> {
+        self.shared
+            .caches
+            .get_method_info(method, lookup, self.shared.clone())
+            .map_err(Into::into)
     }
 
     pub(crate) fn dispatch_resolved_method(
@@ -655,14 +663,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return no_body_in_executing_method_step_result(&method);
         }
 
-        let info = match self
-            .shared
-            .caches
-            .get_method_info(method, &lookup, self.shared.clone())
-        {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
-        };
+        let info = dotnet_vm_ops::vm_try!(self.method_info_for_dispatch(method, &lookup));
         if let Some(err) = self.managed_frame_abort_error(&info) {
             return StepResult::Error(err);
         }
@@ -863,18 +864,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let receiver_lookup = match this_value {
             StackValue::ObjectRef(ObjectRef(Some(obj))) => {
-                ObjectRef(Some(obj)).as_heap_storage(|storage| match storage {
-                    HeapStorage::Obj(instance) => instance.generics.clone(),
-                    HeapStorage::Boxed(instance) => instance.generics.clone(),
-                    HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
-                })
+                receiver_object_generics(ObjectRef(Some(obj)))
             }
             StackValue::ManagedPtr(ptr) => match ptr.origin().owner() {
-                Some(owner) => owner.as_heap_storage(|storage| match storage {
-                    HeapStorage::Obj(instance) => instance.generics.clone(),
-                    HeapStorage::Boxed(instance) => instance.generics.clone(),
-                    HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
-                }),
+                Some(owner) => receiver_object_generics(owner),
                 None => GenericLookup::default(),
             },
             _ => GenericLookup::default(),
@@ -967,14 +960,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return self.dispatch_method(method, lookup);
         }
 
-        let info = match self
-            .shared
-            .caches
-            .get_method_info(method, &lookup, self.shared.clone())
-        {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
-        };
+        let info = dotnet_vm_ops::vm_try!(self.method_info_for_dispatch(method, &lookup));
 
         let arg_count = info.signature.instance as usize + info.signature.parameters.len();
         if !self.should_honor_tail_call(arg_count) {
@@ -1119,14 +1105,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         *self.call_args_buffer = args;
 
         // Push new frame
-        let info = match self
-            .shared
-            .caches
-            .get_method_info(method, &lookup, self.shared.clone())
-        {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
-        };
+        let info = dotnet_vm_ops::vm_try!(self.method_info_for_dispatch(method, &lookup));
 
         if let Some(err) = self.managed_frame_abort_error(&info) {
             return StepResult::Error(err);

@@ -69,8 +69,12 @@ use crate::{
     sync::{Arc, Ordering},
 };
 use dotnet_tracer::Tracer;
+use dotnet_types::generics::GenericLookup;
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{StackValue, object::HeapStorage};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+};
 use gc_arena::{Arena, Collect, Gc, Mutation, Rootable, collect::Trace, metrics::Metrics};
 use std::cell::Cell;
 
@@ -94,6 +98,14 @@ pub use ops::{
     VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext,
     VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
 };
+
+pub(crate) fn receiver_object_generics(receiver: ObjectRef<'_>) -> GenericLookup {
+    receiver.as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(instance) => instance.generics.clone(),
+        HeapStorage::Boxed(instance) => instance.generics.clone(),
+        HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
+    })
+}
 
 pub struct CallStack<'gc> {
     pub execution: ThreadContext<'gc>,

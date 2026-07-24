@@ -248,6 +248,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         StepResult::Continue
     }
 
+    fn clear_evaluation_stack_from(&mut self, start: crate::StackSlotIndex) {
+        for i in start.as_usize()..self.evaluation_stack.top_of_stack().as_usize() {
+            self.evaluation_stack
+                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+        }
+        self.evaluation_stack.truncate(start);
+    }
+
     pub fn return_frame(&mut self) -> StepResult {
         // VM invariant: `return_frame` is only reached while executing a method body, so the
         // dispatch loop must have an active frame. An empty stack here indicates a bug in frame
@@ -278,11 +286,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             None
         };
 
-        for i in frame.base.arguments.as_usize()..self.evaluation_stack.top_of_stack().as_usize() {
-            self.evaluation_stack
-                .set_slot(crate::StackSlotIndex(i), StackValue::null());
-        }
-        self.evaluation_stack.truncate(frame.base.arguments);
+        self.clear_evaluation_stack_from(frame.base.arguments);
 
         if let Some(return_value) = return_value {
             // Note: self.push() calls on_push() which increments stack_height,
@@ -373,11 +377,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);
         }
-        for i in frame.base.arguments.as_usize()..self.evaluation_stack.top_of_stack().as_usize() {
-            self.evaluation_stack
-                .set_slot(crate::StackSlotIndex(i), StackValue::null());
-        }
-        self.evaluation_stack.truncate(frame.base.arguments);
+        self.clear_evaluation_stack_from(frame.base.arguments);
         self.frame_stack.recycle_frame(frame);
     }
 

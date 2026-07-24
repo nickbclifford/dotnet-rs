@@ -3,14 +3,13 @@ use crate::{
     instructions::NULL_REF_MSG,
     layout::type_layout,
     resolution::TypeResolutionExt,
-    stack::ops::{VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
+    stack::{
+        ops::{VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
+        receiver_object_generics,
+    },
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup};
-use dotnet_value::{
-    StackValue,
-    object::{HeapStorage, ObjectRef},
-    pointer::PointerOrigin,
-};
+use dotnet_value::{StackValue, object::ObjectRef, pointer::PointerOrigin};
 
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
@@ -23,11 +22,7 @@ fn merge_receiver_type_generics_into_lookup(
     let mut merged = lookup.clone();
 
     if receiver.0.is_some() {
-        let receiver_lookup = receiver.as_heap_storage(|storage| match storage {
-            HeapStorage::Obj(instance) => instance.generics.clone(),
-            HeapStorage::Boxed(instance) => instance.generics.clone(),
-            HeapStorage::Vec(_) | HeapStorage::Str(_) => GenericLookup::default(),
-        });
+        let receiver_lookup = receiver_object_generics(receiver);
 
         if !receiver_lookup.type_generics.is_empty() {
             merged.type_generics = receiver_lookup.type_generics;
