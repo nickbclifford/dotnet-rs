@@ -7,15 +7,93 @@ use crate::{
     },
     threading::ThreadManagerOps,
 };
-use dotnet_runtime_memory::{HeapWriteTarget, MemoryOwner};
+use dotnet_runtime_memory::{HeapWriteTarget, MemoryOwner, RawMemoryAccess};
 use dotnet_types::TypeDescription;
-use dotnet_utils::{BorrowScopeOps, GcScopeGuard};
+use dotnet_utils::{BorrowScopeOps, GcScopeGuard, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     pointer::PointerOrigin,
 };
 use std::ptr::NonNull;
+
+/// # Safety
+///
+/// `layout` must describe `value`, and the caller must keep the inline storage's
+/// GC borrow scope active for the duration of the write.
+unsafe fn write_to_inline_storage<'gc>(
+    memory: &mut RawMemoryAccess<'_, 'gc>,
+    gc: GCHandle<'gc>,
+    data: &mut [u8],
+    offset: ByteOffset,
+    value: StackValue<'gc>,
+    layout: &LayoutManager,
+) -> Result<(), MemoryAccessError> {
+    if offset.as_usize() + layout.size().as_usize() > data.len() {
+        return Err(MemoryAccessError::BoundsCheck {
+            offset: offset.as_usize(),
+            size: layout.size().as_usize(),
+            len: data.len(),
+        });
+    }
+    let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
+    unsafe { memory.write_to_unmanaged(gc, ptr, value, layout) }
+}
+
+/// # Safety
+///
+/// The bytes selected by `layout` must be initialized for that layout, and the
+/// caller must keep the inline storage's GC borrow scope active for the read.
+unsafe fn read_from_inline_storage<'gc>(
+    memory: &RawMemoryAccess<'_, 'gc>,
+    gc: GCHandle<'gc>,
+    data: &[u8],
+    offset: ByteOffset,
+    layout: &LayoutManager,
+    type_desc: Option<TypeDescription>,
+) -> Result<StackValue<'gc>, MemoryAccessError> {
+    if offset.as_usize() + layout.size().as_usize() > data.len() {
+        return Err(MemoryAccessError::BoundsCheck {
+            offset: offset.as_usize(),
+            size: layout.size().as_usize(),
+            len: data.len(),
+        });
+    }
+    let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
+    unsafe { memory.read_value_internal(gc, ptr, None, layout, type_desc) }
+}
+
+fn bounds_checked_slice_copy(
+    dest: &mut [u8],
+    src: &[u8],
+    offset: ByteOffset,
+) -> Result<(), MemoryAccessError> {
+    if offset.as_usize() + src.len() > dest.len() {
+        return Err(MemoryAccessError::BoundsCheck {
+            offset: offset.as_usize(),
+            size: src.len(),
+            len: dest.len(),
+        });
+    }
+    dest[offset.as_usize()..offset.as_usize() + src.len()].copy_from_slice(src);
+    Ok(())
+}
+
+fn bounds_checked_slice_read(
+    src: &[u8],
+    dest: &mut [u8],
+    offset: ByteOffset,
+) -> Result<(), MemoryAccessError> {
+    if offset.as_usize() + dest.len() > src.len() {
+        return Err(MemoryAccessError::BoundsCheck {
+            offset: offset.as_usize(),
+            size: dest.len(),
+            len: src.len(),
+        });
+    }
+    dest.copy_from_slice(&src[offset.as_usize()..offset.as_usize() + dest.len()]);
+    Ok(())
+}
 
 impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
     fn enter_gc_scope(&self) {
@@ -81,16 +159,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     .statics()
                     .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data_mut(|data| {
-                    if offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err(MemoryAccessError::BoundsCheck {
-                            offset: offset.as_usize(),
-                            size: layout.size().as_usize(),
-                            len: data.len(),
-                        });
+                    let mut memory = RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        write_to_inline_storage(&mut memory, self.gc, data, offset, value, layout)
                     }
-                    let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                    let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
             PointerOrigin::Heap(owner) => {
@@ -128,16 +200,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Transient(obj) => {
                 obj.instance_storage.with_data_mut(|data: &mut [u8]| {
-                    if offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err(MemoryAccessError::BoundsCheck {
-                            offset: offset.as_usize(),
-                            size: layout.size().as_usize(),
-                            len: data.len(),
-                        });
+                    let mut memory = RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        write_to_inline_storage(&mut memory, self.gc, data, offset, value, layout)
                     }
-                    let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                    let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
         }
@@ -169,16 +235,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     .statics()
                     .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data(|data| {
-                    if offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err(MemoryAccessError::BoundsCheck {
-                            offset: offset.as_usize(),
-                            size: layout.size().as_usize(),
-                            len: data.len(),
-                        });
+                    let memory = RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        read_from_inline_storage(&memory, self.gc, data, offset, layout, type_desc)
                     }
-                    let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                    let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
                 })
             }
             PointerOrigin::Heap(owner) => {
@@ -214,16 +274,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data: &[u8]| {
-                if offset.as_usize() + layout.size().as_usize() > data.len() {
-                    return Err(MemoryAccessError::BoundsCheck {
-                        offset: offset.as_usize(),
-                        size: layout.size().as_usize(),
-                        len: data.len(),
-                    });
+                let memory = RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    read_from_inline_storage(&memory, self.gc, data, offset, layout, type_desc)
                 }
-                let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
             }),
         }
     }
@@ -253,18 +307,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self
                     .statics()
                     .get(metadata.type_desc.clone(), &metadata.generics);
-                storage.storage.with_data_mut(|obj_data| {
-                    if offset.as_usize() + data.len() > obj_data.len() {
-                        return Err(MemoryAccessError::BoundsCheck {
-                            offset: offset.as_usize(),
-                            size: data.len(),
-                            len: obj_data.len(),
-                        });
-                    }
-                    obj_data[offset.as_usize()..offset.as_usize() + data.len()]
-                        .copy_from_slice(data);
-                    Ok(())
-                })
+                storage
+                    .storage
+                    .with_data_mut(|obj_data| bounds_checked_slice_copy(obj_data, data, offset))
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -291,17 +336,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => obj.instance_storage.with_data_mut(|obj_data| {
-                if offset.as_usize() + data.len() > obj_data.len() {
-                    return Err(MemoryAccessError::BoundsCheck {
-                        offset: offset.as_usize(),
-                        size: data.len(),
-                        len: obj_data.len(),
-                    });
-                }
-                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
-                Ok(())
-            }),
+            PointerOrigin::Transient(obj) => obj
+                .instance_storage
+                .with_data_mut(|obj_data| bounds_checked_slice_copy(obj_data, data, offset)),
         }
     }
 
@@ -325,19 +362,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self
                     .statics()
                     .get(metadata.type_desc.clone(), &metadata.generics);
-                storage.storage.with_data(|obj_data| {
-                    if offset.as_usize() + dest.len() > obj_data.len() {
-                        return Err(MemoryAccessError::BoundsCheck {
-                            offset: offset.as_usize(),
-                            size: dest.len(),
-                            len: obj_data.len(),
-                        });
-                    }
-                    dest.copy_from_slice(
-                        &obj_data[offset.as_usize()..offset.as_usize() + dest.len()],
-                    );
-                    Ok(())
-                })
+                storage
+                    .storage
+                    .with_data(|obj_data| bounds_checked_slice_read(obj_data, dest, offset))
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -361,17 +388,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|obj_data| {
-                if offset.as_usize() + dest.len() > obj_data.len() {
-                    return Err(MemoryAccessError::BoundsCheck {
-                        offset: offset.as_usize(),
-                        size: dest.len(),
-                        len: obj_data.len(),
-                    });
-                }
-                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
-                Ok(())
-            }),
+            PointerOrigin::Transient(obj) => obj
+                .instance_storage
+                .with_data(|obj_data| bounds_checked_slice_read(obj_data, dest, offset)),
         }
     }
 

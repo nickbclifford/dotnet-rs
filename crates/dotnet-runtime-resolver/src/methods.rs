@@ -224,6 +224,25 @@ where
         Ok(None)
     }
 
+    fn enqueue_interface_type(
+        &self,
+        interface_source: &TypeSource<MemberType>,
+        resolution: ResolutionS,
+        lookup: &GenericLookup,
+        seen: &mut HashSet<ConcreteType>,
+        queue: &mut VecDeque<ConcreteType>,
+    ) -> Result<(), TypeResolutionError> {
+        let interface_type = lookup.make_concrete(
+            resolution,
+            member_to_method_type(interface_source),
+            self.loader(),
+        )?;
+        if seen.insert(interface_type.clone()) {
+            queue.push_back(interface_type);
+        }
+        Ok(())
+    }
+
     fn find_interface_override_for_receiver(
         &self,
         receiver_type: TypeDescription,
@@ -235,14 +254,13 @@ where
         let mut seen = HashSet::new();
 
         for (_, interface_source) in &receiver_type.definition().implements {
-            let interface_type = receiver_lookup.make_concrete(
+            self.enqueue_interface_type(
+                interface_source,
                 receiver_type.resolution.clone(),
-                member_to_method_type(interface_source),
-                self.loader(),
+                receiver_lookup,
+                &mut seen,
+                &mut queue,
             )?;
-            if seen.insert(interface_type.clone()) {
-                queue.push_back(interface_type);
-            }
         }
 
         while let Some(interface_type) = queue.pop_front() {
@@ -264,14 +282,13 @@ where
             }
 
             for (_, inherited_source) in &interface_desc.definition().implements {
-                let inherited_interface = interface_lookup.make_concrete(
+                self.enqueue_interface_type(
+                    inherited_source,
                     interface_desc.resolution.clone(),
-                    member_to_method_type(inherited_source),
-                    self.loader(),
+                    &interface_lookup,
+                    &mut seen,
+                    &mut queue,
                 )?;
-                if seen.insert(inherited_interface.clone()) {
-                    queue.push_back(inherited_interface);
-                }
             }
         }
 
@@ -492,105 +509,25 @@ where
         generics: &GenericLookup,
         allow_variance: bool,
     ) -> Result<Option<MethodDescription>, TypeResolutionError> {
-        let def = this_type.definition();
-
         // Interface dispatch can arrive with a declaration-side generic instantiation that
         // differs from the concrete receiver's instantiation (e.g. metadata-side
         // ICollection<MemberInfo>::CopyTo against a runtime List<PropertyInfo> receiver).
         // Keep using declaration generics by default, but when arity matches and receiver
         // generics are more concrete, rebind signature-side lookup to the receiver to avoid
         // false MethodNotFound on valid implementations.
-        let mut method_for_lookup = method.clone();
-        if allow_variance
-            && method_for_lookup.parent_generics.type_generics.len() == generics.type_generics.len()
-            && method_for_lookup.parent_generics.type_generics != generics.type_generics
+        let method_for_lookup = self.method_for_lookup(&method, generics, allow_variance);
+
+        if let Some(impl_m) =
+            self.find_override_implementation(this_type.clone(), &method, generics, allow_variance)?
         {
-            method_for_lookup.parent_generics.type_generics = generics.type_generics.clone();
-        }
-        method_for_lookup.parent_generics.method_generics = generics.method_generics.clone();
-        if !def.overrides.is_empty() {
-            let cache_key = (this_type.clone(), generics.clone());
-            let overrides = if let Some(map) = self.caches.get_overrides_cached(&cache_key) {
-                map
-            } else {
-                let mut map = std::collections::HashMap::new();
-                for ovr in def.overrides.iter() {
-                    let decl = self.loader.locate_method(
-                        this_type.resolution.clone(),
-                        ovr.declaration,
-                        generics,
-                        None,
-                    )?;
-                    let impl_m = self.loader.locate_method(
-                        this_type.resolution.clone(),
-                        ovr.implementation,
-                        generics,
-                        Some(this_type.clone().into()),
-                    )?;
-                    map.insert(decl, impl_m);
-                }
-                let arc_map = Arc::new(map);
-                self.caches.set_overrides_cached(cache_key, arc_map.clone());
-                arc_map
-            };
-
-            if let Some(impl_m) = overrides
-                .get(&method)
-                .or_else(|| overrides.get(&method_for_lookup))
-            {
-                self.caches.record_vmt_key_clones(3);
-                self.caches.set_vmt_cached(
-                    method.clone(),
-                    this_type.clone(),
-                    generics.clone(),
-                    impl_m.clone(),
-                );
-                return Ok(Some(impl_m.clone()));
-            }
-
-            // Bridge declaration identity across facade/CoreLib duplicates where
-            // `MethodDescription` equality can miss due differing parent/resolution
-            // identities despite equivalent canonical type + signature.
-            if let Some((_, impl_m)) = overrides.iter().find(|(decl, _)| {
-                let decl_parent_name = decl.parent.type_name();
-                let method_parent_name = method.parent.type_name();
-                let canonical_decl = self.loader.canonical_type_name(&decl_parent_name);
-                let canonical_method = self.loader.canonical_type_name(&method_parent_name);
-                if canonical_decl != canonical_method || decl.method().name != method.method().name
-                {
-                    return false;
-                }
-
-                let comparer = self.loader.comparer();
-                if allow_variance {
-                    comparer.signatures_compatible_with_variance(
-                        &method_for_lookup.method_resolution,
-                        method_for_lookup.signature(),
-                        Some(&method_for_lookup.parent_generics),
-                        &decl.method_resolution,
-                        decl.signature(),
-                        Some(&decl.parent_generics),
-                    )
-                } else {
-                    comparer.signatures_equal(
-                        &method_for_lookup.method_resolution,
-                        method_for_lookup.signature(),
-                        Some(&method_for_lookup.parent_generics),
-                        &decl.method_resolution,
-                        decl.signature(),
-                        Some(&decl.parent_generics),
-                    )
-                }
-            }) {
-                self.caches.record_vmt_key_clones(3);
-                self.caches.set_vmt_cached(
-                    method.clone(),
-                    this_type.clone(),
-                    generics.clone(),
-                    impl_m.clone(),
-                );
-                return Ok(Some(impl_m.clone()));
-            }
+            self.caches.record_vmt_key_clones(3);
+            self.caches.set_vmt_cached(
+                method.clone(),
+                this_type.clone(),
+                generics.clone(),
+                impl_m.clone(),
+            );
+            return Ok(Some(impl_m));
         }
 
         // Signature-side generics must follow the base declaration's declaring type

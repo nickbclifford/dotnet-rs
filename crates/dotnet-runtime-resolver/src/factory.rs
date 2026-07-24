@@ -19,6 +19,15 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::{ptr::NonNull, sync::Arc};
 
+fn copy_overlapping_field_storage(src: &FieldStorage, dst: &FieldStorage) {
+    src.with_data(|src| {
+        dst.with_data_mut(|dst| {
+            let copy_len = src.len().min(dst.len());
+            dst[..copy_len].copy_from_slice(&src[..copy_len]);
+        });
+    });
+}
+
 impl<C, L> ResolverService<C, L>
 where
     C: crate::ResolverCacheAdapter,
@@ -341,16 +350,8 @@ where
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)
-            | BaseType::Array(_, _) => {
-                if let StackValue::ObjectRef(o) = data {
-                    Ok(CTSValue::Ref(o))
-                } else {
-                    Err(TypeResolutionError::InvalidLayout(
-                        format!("expected ObjectRef, got {:?}", data).into(),
-                    ))
-                }
-            }
-            BaseType::Type {
+            | BaseType::Array(_, _)
+            | BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
             } => {
@@ -416,12 +417,7 @@ where
                             expected_layout.clone(),
                             vec![0; expected_layout.size().as_usize()],
                         );
-                        o.instance_storage.with_data(|src| {
-                            replacement.with_data_mut(|dst| {
-                                let copy_len = src.len().min(dst.len());
-                                dst[..copy_len].copy_from_slice(&src[..copy_len]);
-                            });
-                        });
+                        copy_overlapping_field_storage(&o.instance_storage, &replacement);
                         o.description = td.clone();
                         o.generics = new_lookup.clone();
                         o.instance_storage = replacement;
@@ -444,12 +440,7 @@ where
                                     resolution,
                                     &new_lookup,
                                 )?;
-                                obj.instance_storage.with_data(|src| {
-                                    replacement.with_data_mut(|dst| {
-                                        let copy_len = src.len().min(dst.len());
-                                        dst[..copy_len].copy_from_slice(&src[..copy_len]);
-                                    });
-                                });
+                                copy_overlapping_field_storage(&obj.instance_storage, &replacement);
                                 instance.instance_storage = replacement;
                             }
                             _ => {

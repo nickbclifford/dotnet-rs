@@ -1,3 +1,4 @@
+use super::helpers::{heap_runtime_concrete_type, vector_matches_generic_array_interfaces};
 use crate::{
     StepResult,
     stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps},
@@ -9,7 +10,7 @@ use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::TypeComparer, generics::ConcreteType};
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, Object, ObjectRef},
+    object::{HeapStorage, ObjectRef},
 };
 use dotnetdll::prelude::*;
 
@@ -31,77 +32,40 @@ fn vector_matches_array_type(
     }
 }
 
-fn vector_matches_generic_array_interfaces(
-    loader: &impl dotnet_types::TypeResolver,
-    element: &ConcreteType,
-    target: &ConcreteType,
-) -> bool {
-    let comparer = TypeComparer::new(loader);
+fn check_object_assignability<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps>(
+    ctx: &mut T,
+    target_obj: ObjectRef<'gc>,
+    param0: &MethodType,
+) -> Result<bool, StepResult> {
+    let target_ct = ctx
+        .make_concrete(param0)
+        .map_err(|e| StepResult::Error(e.into()))?;
+    let array_type_match = target_obj
+        .try_as_heap_storage(|storage| match storage {
+            HeapStorage::Vec(v) => {
+                vector_matches_array_type(ctx.loader().as_ref(), &v.element, &target_ct)
+            }
+            _ => false,
+        })
+        .map_err(|e| StepResult::Error(e.into()))?;
 
-    [
-        "System.Collections.Generic.IEnumerable`1",
-        "System.Collections.Generic.ICollection`1",
-        "System.Collections.Generic.IList`1",
-        "System.Collections.Generic.IReadOnlyCollection`1",
-        "System.Collections.Generic.IReadOnlyList`1",
-    ]
-    .iter()
-    .any(|interface_name| {
-        let Ok(interface_td) = loader.corlib_type(interface_name) else {
-            return false;
-        };
-
-        let interface_ct = ConcreteType::new(
-            interface_td.resolution.clone(),
-            BaseType::Type {
-                source: TypeSource::Generic {
-                    base: UserType::Definition(interface_td.index),
-                    parameters: vec![element.clone()],
-                },
-                value_kind: None,
-            },
-        );
-
-        comparer.is_assignable_to(&interface_ct, target)
-    })
-}
-
-fn object_runtime_concrete_type(object: &Object<'_>) -> ConcreteType {
-    let type_arity = object.description.definition().generic_parameters.len();
-    if type_arity == 0 {
-        return object.description.clone().into();
+    if array_type_match {
+        return Ok(true);
     }
 
-    let type_args: Vec<_> = object
-        .generics
-        .type_generics
-        .iter()
-        .take(type_arity)
-        .cloned()
-        .collect();
+    let source_ct = if let Some(source_ct) = target_obj
+        .try_as_heap_storage(heap_runtime_concrete_type)
+        .map_err(|e| StepResult::Error(e.into()))?
+    {
+        source_ct
+    } else {
+        ctx.get_heap_description(target_obj)
+            .map_err(|e| StepResult::Error(e.into()))?
+            .into()
+    };
 
-    if type_args.len() != type_arity {
-        return object.description.clone().into();
-    }
-
-    ConcreteType::new(
-        object.description.resolution.clone(),
-        BaseType::Type {
-            source: TypeSource::Generic {
-                base: UserType::Definition(object.description.index),
-                parameters: type_args,
-            },
-            value_kind: None,
-        },
-    )
-}
-
-fn heap_runtime_concrete_type(storage: &HeapStorage<'_>) -> Option<ConcreteType> {
-    match storage {
-        HeapStorage::Obj(o) => Some(object_runtime_concrete_type(o)),
-        HeapStorage::Boxed(o) => Some(object_runtime_concrete_type(o)),
-        _ => None,
-    }
+    ctx.is_a(source_ct, target_ct)
+        .map_err(|e| StepResult::Error(e.into()))
 }
 
 #[dotnet_instruction(CastClass { param0 })]
@@ -119,32 +83,15 @@ pub fn castclass<
     };
 
     if let ObjectRef(Some(_)) = target_obj {
-        let target_ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
-        let array_type_match =
-            dotnet_vm_ops::vm_try!(target_obj.try_as_heap_storage(|storage| match storage {
-                HeapStorage::Vec(v) => {
-                    vector_matches_array_type(ctx.loader().as_ref(), &v.element, &target_ct)
-                }
-                _ => false,
-            },));
+        let assignable = match check_object_assignability(ctx, target_obj, param0) {
+            Ok(assignable) => assignable,
+            Err(result) => return result,
+        };
 
-        if array_type_match {
+        if assignable {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
-            let source_ct = if let Some(source_ct) = dotnet_vm_ops::vm_try!(
-                target_obj.try_as_heap_storage(|storage| heap_runtime_concrete_type(storage),)
-            ) {
-                source_ct
-            } else {
-                dotnet_vm_ops::vm_try!(ctx.get_heap_description(target_obj)).into()
-            };
-
-            if dotnet_vm_ops::vm_try!(ctx.is_a(source_ct, target_ct)) {
-                ctx.push(StackValue::ObjectRef(target_obj));
-            } else {
-                return ctx
-                    .throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
-            }
+            return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
         }
     } else {
         // castclass returns null for null (III.4.3)
@@ -168,31 +115,15 @@ pub fn isinst<
     };
 
     if let ObjectRef(Some(_)) = target_obj {
-        let target_ct = dotnet_vm_ops::vm_try!(ctx.make_concrete(param0));
-        let array_type_match =
-            dotnet_vm_ops::vm_try!(target_obj.try_as_heap_storage(|storage| match storage {
-                HeapStorage::Vec(v) => {
-                    vector_matches_array_type(ctx.loader().as_ref(), &v.element, &target_ct)
-                }
-                _ => false,
-            },));
+        let assignable = match check_object_assignability(ctx, target_obj, param0) {
+            Ok(assignable) => assignable,
+            Err(result) => return result,
+        };
 
-        if array_type_match {
+        if assignable {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
-            let source_ct = if let Some(source_ct) = dotnet_vm_ops::vm_try!(
-                target_obj.try_as_heap_storage(|storage| heap_runtime_concrete_type(storage),)
-            ) {
-                source_ct
-            } else {
-                dotnet_vm_ops::vm_try!(ctx.get_heap_description(target_obj)).into()
-            };
-
-            if dotnet_vm_ops::vm_try!(ctx.is_a(source_ct, target_ct)) {
-                ctx.push(StackValue::ObjectRef(target_obj));
-            } else {
-                ctx.push(StackValue::ObjectRef(ObjectRef(None)));
-            }
+            ctx.push(StackValue::ObjectRef(ObjectRef(None)));
         }
     } else {
         // isinst returns null for null inputs (III.4.6)

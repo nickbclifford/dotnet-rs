@@ -212,6 +212,36 @@ fn checked_narrow_integer(
     Ok(bytes)
 }
 
+/// Pushes pointer-valued argument storage and records its libffi argument pointer.
+///
+/// # Safety
+///
+/// `ptr` must remain valid for any access the native callee may perform for the duration of the
+/// FFI call. Any guard or pin that provides this validity must outlive the call.
+unsafe fn push_ptr_arg(
+    temp_buffers: &mut Vec<TempBuffer>,
+    arg_buffer_map: &mut [Option<usize>],
+    arg_ptrs: &mut [*mut c_void],
+    i: usize,
+    ptr: *mut u8,
+) -> Result<(), StepResult> {
+    temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
+    let idx = temp_buffers.len() - 1;
+    arg_buffer_map[i] = Some(idx);
+    arg_ptrs[i] = temp_buffers[idx]
+        .as_ptr()
+        .map_err(|e| StepResult::Error(e.into()))? as *const *mut u8
+        as *mut *mut u8 as *mut c_void;
+    Ok(())
+}
+
+fn set_bytes_arg_ptr(temp_buffer: &TempBuffer) -> Result<*mut c_void, StepResult> {
+    temp_buffer
+        .as_bytes()
+        .map(|buf| buf.as_ptr() as *mut c_void)
+        .map_err(|e| StepResult::Error(e.into()))
+}
+
 fn marshal_integer_arg<'gc>(
     value: IntegerArgValue,
     p_type: &ParameterType<MethodType>,
@@ -240,10 +270,7 @@ fn marshal_integer_arg<'gc>(
         temp_buffers.push(TempBuffer::Bytes(bytes));
         let buf_idx = temp_buffers.len() - 1;
         arg_buffer_map[i] = Some(buf_idx);
-        arg_ptrs[i] = temp_buffers[buf_idx]
-            .as_bytes()
-            .map_err(|e| StepResult::Error(e.into()))?
-            .as_ptr() as *mut c_void;
+        arg_ptrs[i] = set_bytes_arg_ptr(&temp_buffers[buf_idx])?;
         return Ok(());
     }
 
@@ -718,13 +745,19 @@ fn external_call_impl<'gc>(
                 };
             }
             StackValue::UnmanagedPtr(val) => {
-                temp_buffers.push(TempBuffer::Ptr(Box::new(val.0.as_ptr())));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
-                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+                // SAFETY: The unmanaged pointer's validity contract is carried by StackValue;
+                // this helper only keeps the pointer-valued argument storage alive for the call.
+                if let Err(e) = unsafe {
+                    push_ptr_arg(
+                        &mut temp_buffers,
+                        &mut arg_buffer_map,
+                        &mut arg_ptrs,
+                        i,
+                        val.0.as_ptr(),
+                    )
+                } {
+                    return e;
+                }
             }
             StackValue::ValueType(o) => {
                 let mut data = o.with_data(|d: &[u8]| d.to_vec());
@@ -739,9 +772,9 @@ fn external_call_impl<'gc>(
                 }
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match temp_buffers[idx].as_bytes() {
-                    Ok(buf) => buf.as_ptr() as *mut c_void,
-                    Err(e) => return StepResult::Error(e.into()),
+                arg_ptrs[i] = match set_bytes_arg_ptr(&temp_buffers[idx]) {
+                    Ok(ptr) => ptr,
+                    Err(e) => return e,
                 };
             }
             StackValue::ObjectRef(obj) => {
@@ -759,13 +792,19 @@ fn external_call_impl<'gc>(
                 } else {
                     std::ptr::null_mut()
                 };
-                temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
-                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+                // SAFETY: Non-null object storage is pinned and its guard remains in
+                // `local_guards`; null is a valid pointer argument value.
+                if let Err(e) = unsafe {
+                    push_ptr_arg(
+                        &mut temp_buffers,
+                        &mut arg_buffer_map,
+                        &mut arg_ptrs,
+                        i,
+                        ptr,
+                    )
+                } {
+                    return e;
+                }
             }
             StackValue::TypedRef(p, t) => {
                 if let Some(owner) = p.owner() {
@@ -801,9 +840,9 @@ fn external_call_impl<'gc>(
                 temp_buffers.push(TempBuffer::Bytes(bytes.to_vec()));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match temp_buffers[idx].as_bytes() {
-                    Ok(buf) => buf.as_ptr() as *mut c_void,
-                    Err(e) => return StepResult::Error(e.into()),
+                arg_ptrs[i] = match set_bytes_arg_ptr(&temp_buffers[idx]) {
+                    Ok(ptr) => ptr,
+                    Err(e) => return e,
                 };
             }
             StackValue::ManagedPtr(p) => {
@@ -839,9 +878,9 @@ fn external_call_impl<'gc>(
                         buf_len,
                     ));
 
-                    arg_ptrs[i] = match temp_buffers[buf_idx].as_bytes() {
-                        Ok(buf) => buf.as_ptr() as *mut c_void,
-                        Err(e) => return StepResult::Error(e.into()),
+                    arg_ptrs[i] = match set_bytes_arg_ptr(&temp_buffers[buf_idx]) {
+                        Ok(ptr) => ptr,
+                        Err(e) => return e,
                     };
                 } else {
                     if let Some(owner) = p.owner() {
@@ -873,13 +912,19 @@ fn external_call_impl<'gc>(
                         }
                     };
 
-                    temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
-                    let idx = temp_buffers.len() - 1;
-                    arg_buffer_map[i] = Some(idx);
-                    arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
-                        Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
-                        Err(e) => return StepResult::Error(e.into()),
-                    };
+                    // SAFETY: Heap storage is pinned and its guard remains in `local_guards`;
+                    // non-heap ManagedPtr origins retain their backing storage through the call.
+                    if let Err(e) = unsafe {
+                        push_ptr_arg(
+                            &mut temp_buffers,
+                            &mut arg_buffer_map,
+                            &mut arg_ptrs,
+                            i,
+                            ptr,
+                        )
+                    } {
+                        return e;
+                    }
                 }
             }
             #[cfg(feature = "multithreading")]
@@ -892,13 +937,13 @@ fn external_call_impl<'gc>(
                 // pointer is used by libffi.
                 let p = unsafe { guard.storage.raw_data_ptr() };
                 cross_arena_guards.push(guard);
-                temp_buffers.push(TempBuffer::Ptr(Box::new(p)));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match temp_buffers[idx].as_ptr() {
-                    Ok(v) => v as *const *mut u8 as *mut *mut u8 as *mut c_void,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+                // SAFETY: `cross_arena_guards` retains the borrow that keeps this object storage
+                // alive and immobile through the FFI call.
+                if let Err(e) = unsafe {
+                    push_ptr_arg(&mut temp_buffers, &mut arg_buffer_map, &mut arg_ptrs, i, p)
+                } {
+                    return e;
+                }
             }
         }
     }

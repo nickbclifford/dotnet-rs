@@ -24,6 +24,7 @@ pub mod arrays;
 pub mod boxing;
 pub mod casting;
 pub mod fields;
+mod helpers;
 pub mod typed_references;
 
 pub(crate) fn get_ptr_info<'gc, T: ExceptionOps<'gc>>(

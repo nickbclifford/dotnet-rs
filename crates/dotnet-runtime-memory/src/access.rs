@@ -15,7 +15,7 @@ use dotnet_value::{
 };
 use std::{ptr, sync::Arc};
 
-#[cfg(feature = "bench-instrumentation")]
+#[cfg(all(feature = "bench-instrumentation", feature = "multithreading"))]
 use std::time::Instant;
 
 #[cfg(feature = "multithreading")]
