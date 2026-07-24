@@ -3,7 +3,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
     with_vector,
 };
@@ -19,28 +19,19 @@ fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemor
     use dotnetdll::prelude::*;
 
     let params_count = method.signature().parameters.len();
-    let len_res = if params_count == 1 {
-        let param = &method.signature().parameters[0].1;
-        match param {
-            ParameterType::Value(MethodType::Base(b))
-                if matches!(b.as_ref(), BaseType::IntPtr | BaseType::UIntPtr) =>
-            {
-                ctx.pop_isize()
-            }
-            _ => ctx.pop_i32() as isize,
-        }
-    } else {
+    if params_count != 1 {
         // Overload with length as first param, MethodTable* as second param
         let _p_mt = ctx.pop();
-        let param = &method.signature().parameters[0].1;
-        match param {
-            ParameterType::Value(MethodType::Base(b))
-                if matches!(b.as_ref(), BaseType::IntPtr | BaseType::UIntPtr) =>
-            {
-                ctx.pop_isize()
-            }
-            _ => ctx.pop_i32() as isize,
+    }
+
+    let param = &method.signature().parameters[0].1;
+    let len_res = match param {
+        ParameterType::Value(MethodType::Base(b))
+            if matches!(b.as_ref(), BaseType::IntPtr | BaseType::UIntPtr) =>
+        {
+            ctx.pop_isize()
         }
+        _ => ctx.pop_i32() as isize,
     };
 
     if len_res < 0 {
@@ -66,6 +57,40 @@ fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemor
     }
 
     Ok(len)
+}
+
+fn readonly_span_to_vec<'gc, T: IntrinsicStringHost<'gc>>(
+    ctx: &mut T,
+    span: Object<'gc>,
+) -> Result<Vec<u16>, StepResult> {
+    let len = ctx
+        .string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+            slice.len() / 2
+        })
+        .map_err(|e| StepResult::Error(e.into()))?;
+
+    let mut result = Vec::with_capacity(len);
+    let mut offset = 0usize;
+    const CHUNK_SIZE: usize = 1024;
+
+    while offset < len {
+        let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+        ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
+            let start = offset * 2;
+            let end = start + (chunk_len * 2);
+            if let Some(chunk_bytes) = slice.get(start..end) {
+                extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
+            }
+        })
+        .map_err(|e| StepResult::Error(e.into()))?;
+
+        offset += chunk_len;
+        if offset < len && ctx.check_gc_safe_point() {
+            return Err(StepResult::Yield);
+        }
+    }
+
+    Ok(result)
 }
 
 /// System.String::FastAllocateString(int)
@@ -133,42 +158,10 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
                 result
             }
         }
-        StackValue::ValueType(span) => {
-            let len =
-                match ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                    slice.len() / 2
-                }) {
-                    Ok(len) => len,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-
-            let mut result = Vec::with_capacity(len);
-            let mut offset = 0usize;
-            const CHUNK_SIZE: usize = 1024;
-
-            while offset < len {
-                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
-                let copy_res =
-                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                        let start = offset * 2;
-                        let end = start + (chunk_len * 2);
-                        if let Some(chunk_bytes) = slice.get(start..end) {
-                            extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
-                        }
-                    });
-
-                if let Err(e) = copy_res {
-                    return StepResult::Error(e.into());
-                }
-
-                offset += chunk_len;
-                if offset < len && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
-            }
-
-            result
-        }
+        StackValue::ValueType(span) => match readonly_span_to_vec(ctx, span) {
+            Ok(chars) => chars,
+            Err(step) => return step,
+        },
         _ => Vec::new(), // null or invalid
     };
 
@@ -186,42 +179,10 @@ pub fn intrinsic_string_ctor_readonly_span_char<'gc, T: IntrinsicStringHost<'gc>
 ) -> StepResult {
     let arg = ctx.pop();
     let chars: Vec<u16> = match arg {
-        StackValue::ValueType(span) => {
-            let len =
-                match ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                    slice.len() / 2
-                }) {
-                    Ok(len) => len,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
-
-            let mut result = Vec::with_capacity(len);
-            let mut offset = 0usize;
-            const CHUNK_SIZE: usize = 1024;
-
-            while offset < len {
-                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
-                let copy_res =
-                    ctx.string_with_span_data(span.clone(), TypeDescription::NULL, 2, |slice| {
-                        let start = offset * 2;
-                        let end = start + (chunk_len * 2);
-                        if let Some(chunk_bytes) = slice.get(start..end) {
-                            extend_from_utf16_ne_bytes(&mut result, chunk_bytes);
-                        }
-                    });
-
-                if let Err(e) = copy_res {
-                    return StepResult::Error(e.into());
-                }
-
-                offset += chunk_len;
-                if offset < len && ctx.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
-            }
-
-            result
-        }
+        StackValue::ValueType(span) => match readonly_span_to_vec(ctx, span) {
+            Ok(chars) => chars,
+            Err(step) => return step,
+        },
         StackValue::ObjectRef(ObjectRef(None)) => Vec::new(),
         other => {
             return StepResult::type_error("System.ReadOnlySpan<char>", format!("{:?}", other));

@@ -25,16 +25,10 @@ pub fn intrinsic_field_info_is_defined<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let _inherit = ctx.pop_i32();
     let attribute_type_obj = ctx.pop_obj();
     let this = ctx.pop_obj();
-    let attribute_filter = if attribute_type_obj.0.is_some() {
-        let filter_rt =
-            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
-        match filter_rt {
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let attribute_filter = dotnet_vm_ops::vm_try!(crate::common::resolve_attribute_filter(
+        ctx,
+        attribute_type_obj
+    ));
     let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
     let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_field_custom_attributes(
         ctx,
@@ -70,16 +64,10 @@ pub fn intrinsic_field_info_get_custom_attributes_typed<'gc, T: ReflectionIntrin
     let _inherit = ctx.pop_i32();
     let attribute_type_obj = ctx.pop_obj();
     let this = ctx.pop_obj();
-    let attribute_filter = if attribute_type_obj.0.is_some() {
-        let filter_rt =
-            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
-        match filter_rt {
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let attribute_filter = dotnet_vm_ops::vm_try!(crate::common::resolve_attribute_filter(
+        ctx,
+        attribute_type_obj
+    ));
     let (field, _) = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_field(ctx, this));
     let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_field_custom_attributes(
         ctx,
@@ -217,27 +205,6 @@ pub fn intrinsic_field_info_get_raw_constant_value<'gc, T: ReflectionIntrinsicHo
     }
 }
 
-/// Convert a metadata constant's numeric/bool/char payload to its evaluation-stack
-/// representation. Returns `None` for `String`/`Null`, which are materialized
-/// directly by the caller rather than boxed.
-fn numeric_constant_to_stack<'gc>(constant: &Constant) -> Option<StackValue<'gc>> {
-    Some(match constant {
-        Constant::Boolean(v) => StackValue::Int32(i32::from(*v)),
-        Constant::Char(v) => StackValue::Int32(*v as i32),
-        Constant::Int8(v) => StackValue::Int32(*v as i32),
-        Constant::UInt8(v) => StackValue::Int32(*v as i32),
-        Constant::Int16(v) => StackValue::Int32(*v as i32),
-        Constant::UInt16(v) => StackValue::Int32(*v as i32),
-        Constant::Int32(v) => StackValue::Int32(*v),
-        Constant::UInt32(v) => StackValue::NativeInt(*v as isize),
-        Constant::Int64(v) => StackValue::Int64(*v),
-        Constant::UInt64(v) => StackValue::Int64(*v as i64),
-        Constant::Float32(v) => StackValue::NativeFloat((*v).into()),
-        Constant::Float64(v) => StackValue::NativeFloat(*v),
-        Constant::String(_) | Constant::Null => return None,
-    })
-}
-
 /// `FieldInfo.GetValue(obj)` — supports literal constants and instance fields.
 /// Unlike `GetRawConstantValue`, which returns the boxed underlying primitive,
 /// `GetValue` boxes constants as the field's declared type, so an enum member
@@ -312,7 +279,7 @@ pub fn intrinsic_field_info_get_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             StepResult::Continue
         }
         _ => {
-            let value = numeric_constant_to_stack(constant)
+            let value = crate::common::constant_to_stack_value(constant)
                 .expect("non-string/null constant must produce a stack value");
             // Box as the field's declared type (the enum type for enum members).
             let field_type: dotnetdll::prelude::MethodType = field_def.return_type.clone().into();

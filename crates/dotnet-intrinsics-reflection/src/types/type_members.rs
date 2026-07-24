@@ -648,16 +648,10 @@ pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let attribute_type_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let attribute_filter = if attribute_type_obj.0.is_some() {
-        let filter_runtime_type =
-            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
-        match filter_runtime_type {
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let attribute_filter = dotnet_vm_ops::vm_try!(crate::common::resolve_attribute_filter(
+        ctx,
+        attribute_type_obj
+    ));
 
     let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
@@ -678,16 +672,10 @@ pub fn handle_is_defined<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let attribute_type_obj = ctx.pop_obj();
     let obj = ctx.pop_obj();
 
-    let attribute_filter = if attribute_type_obj.0.is_some() {
-        let filter_runtime_type =
-            dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, attribute_type_obj));
-        match filter_runtime_type {
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let attribute_filter = dotnet_vm_ops::vm_try!(crate::common::resolve_attribute_filter(
+        ctx,
+        attribute_type_obj
+    ));
 
     let target_runtime_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     let custom_attributes = dotnet_vm_ops::vm_try!(collect_type_custom_attributes(
@@ -970,6 +958,47 @@ fn member_matches_binding_flags(is_public: bool, is_static: bool, flags: i32) ->
     match_public && match_static
 }
 
+fn push_method_members_if_match<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+    name_filter: Option<&str>,
+    flags: i32,
+    require_ctor: bool,
+    member_objs: &mut Vec<ObjectRef<'gc>>,
+) {
+    let ignore_case = (flags & BINDING_FLAGS_IGNORE_CASE) != 0;
+
+    for (idx, method) in td.definition().methods.iter().enumerate() {
+        let matches_member_type = if require_ctor {
+            method.name == ".ctor"
+        } else {
+            method.name != ".ctor" && method.name != ".cctor"
+        };
+        if !matches_member_type {
+            continue;
+        }
+
+        let is_public = method.accessibility == MemberAccessibility::Access(Accessibility::Public);
+        let is_static = !method.signature.instance;
+        if member_name_matches(name_filter, &method.name, ignore_case)
+            && member_matches_binding_flags(is_public, is_static, flags)
+        {
+            let desc = MethodDescription::new(
+                td.clone(),
+                lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(idx),
+            );
+            member_objs.push(crate::common::get_runtime_method_obj(
+                ctx,
+                desc,
+                lookup.clone(),
+            ));
+        }
+    }
+}
+
 fn collect_type_member_infos<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     target_type: &RuntimeType,
@@ -982,57 +1011,27 @@ fn collect_type_member_infos<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     if let Some((td, lookup)) = member_lookup_target(ctx, target_type) {
         if (member_types & MEMBER_TYPES_METHOD) != 0 {
-            for (idx, method) in td.definition().methods.iter().enumerate() {
-                if method.name == ".ctor" || method.name == ".cctor" {
-                    continue;
-                }
-
-                let is_public =
-                    method.accessibility == MemberAccessibility::Access(Accessibility::Public);
-                let is_static = !method.signature.instance;
-                if member_name_matches(name_filter, &method.name, ignore_case)
-                    && member_matches_binding_flags(is_public, is_static, flags)
-                {
-                    let desc = MethodDescription::new(
-                        td.clone(),
-                        lookup.clone(),
-                        td.resolution.clone(),
-                        MethodMemberIndex::Method(idx),
-                    );
-                    member_objs.push(crate::common::get_runtime_method_obj(
-                        ctx,
-                        desc,
-                        lookup.clone(),
-                    ));
-                }
-            }
+            push_method_members_if_match(
+                ctx,
+                &td,
+                &lookup,
+                name_filter,
+                flags,
+                false,
+                &mut member_objs,
+            );
         }
 
         if (member_types & MEMBER_TYPES_CONSTRUCTOR) != 0 {
-            for (idx, method) in td.definition().methods.iter().enumerate() {
-                if method.name != ".ctor" {
-                    continue;
-                }
-
-                let is_public =
-                    method.accessibility == MemberAccessibility::Access(Accessibility::Public);
-                let is_static = !method.signature.instance;
-                if member_name_matches(name_filter, &method.name, ignore_case)
-                    && member_matches_binding_flags(is_public, is_static, flags)
-                {
-                    let desc = MethodDescription::new(
-                        td.clone(),
-                        lookup.clone(),
-                        td.resolution.clone(),
-                        MethodMemberIndex::Method(idx),
-                    );
-                    member_objs.push(crate::common::get_runtime_method_obj(
-                        ctx,
-                        desc,
-                        lookup.clone(),
-                    ));
-                }
-            }
+            push_method_members_if_match(
+                ctx,
+                &td,
+                &lookup,
+                name_filter,
+                flags,
+                true,
+                &mut member_objs,
+            );
         }
 
         if (member_types & MEMBER_TYPES_FIELD) != 0 {

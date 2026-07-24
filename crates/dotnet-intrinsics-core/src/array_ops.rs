@@ -43,6 +43,25 @@ fn extract_first_index_from_indices_array<'gc, T: ExceptionOps<'gc>>(
     Ok(i32::from_ne_bytes(bytes) as usize)
 }
 
+fn resolve_array_index<'gc, T: ExceptionOps<'gc>>(
+    ctx: &mut T,
+    index_arg: StackValue<'gc>,
+) -> Result<usize, StepResult> {
+    match index_arg {
+        StackValue::Int32(i) => Ok(i as usize),
+        StackValue::Int64(i) => Ok(i as usize),
+        StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
+            let heap = indices_handle.borrow();
+            let HeapStorage::Vec(v) = &heap.storage else {
+                return Err(ctx
+                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG));
+            };
+            extract_first_index_from_indices_array(ctx, v)
+        }
+        _ => Err(ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG)),
+    }
+}
+
 fn clear_array_range<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     array_arg: StackValue<'gc>,
@@ -277,21 +296,9 @@ pub fn intrinsic_array_get_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         unreachable!("ManagedNullNre policy must reject null object references")
     };
 
-    let index = match arg {
-        StackValue::Int32(i) => i as usize,
-        StackValue::Int64(i) => i as usize,
-        StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
-            let heap = indices_handle.borrow();
-            let HeapStorage::Vec(v) = &heap.storage else {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            };
-            match extract_first_index_from_indices_array(ctx, v) {
-                Ok(index) => index,
-                Err(step) => return step,
-            }
-        }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
+    let index = match resolve_array_index(ctx, arg) {
+        Ok(index) => index,
+        Err(step) => return step,
     };
 
     let heap = handle.borrow();
@@ -338,21 +345,9 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
         unreachable!("ManagedNullNre policy must reject null object references")
     };
 
-    let index = match index_arg {
-        StackValue::Int32(i) => i as usize,
-        StackValue::Int64(i) => i as usize,
-        StackValue::ObjectRef(ObjectRef(Some(indices_handle))) => {
-            let heap = indices_handle.borrow();
-            let HeapStorage::Vec(v) = &heap.storage else {
-                return ctx
-                    .throw_by_name_with_message("System.ArgumentException", INDEX_ARRAY_TYPE_MSG);
-            };
-            match extract_first_index_from_indices_array(ctx, v) {
-                Ok(index) => index,
-                Err(step) => return step,
-            }
-        }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", INDEX_ARG_TYPE_MSG),
+    let index = match resolve_array_index(ctx, index_arg) {
+        Ok(index) => index,
+        Err(step) => return step,
     };
 
     {

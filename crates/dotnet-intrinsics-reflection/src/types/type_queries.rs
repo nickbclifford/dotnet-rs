@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeResolver,
+    TypeDescription, TypeResolver,
     generics::{ConcreteType, GenericLookup, member_to_method_type},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete, runtime_type_from_method_type},
@@ -21,7 +21,7 @@ use dotnet_vm_ops::{
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
 use dotnetdll::{
-    prelude::{BaseType, Constant, Kind, MethodType, TypeSource},
+    prelude::{BaseType, Kind, MemberType, MethodType, TypeSource},
     resolved::types::Accessibility as TypeAccessibility,
 };
 use std::collections::{HashSet, VecDeque};
@@ -39,6 +39,29 @@ fn resolve_base_runtime_type(
         &method_type,
         curr_lookup,
     )
+}
+
+fn enqueue_runtime_type<T: LoaderOps>(
+    ctx: &mut T,
+    queue: &mut VecDeque<(TypeDescription, GenericLookup)>,
+    runtime_type: &RuntimeType,
+) {
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = runtime_type {
+        let lookup = build_generic_lookup_from_runtime_type(ctx, runtime_type);
+        queue.push_back((td.clone(), lookup));
+    }
+}
+
+fn is_generic_type_definition(runtime_type: &RuntimeType) -> bool {
+    match runtime_type {
+        RuntimeType::Generic(_, args) => {
+            !args.is_empty()
+                && args
+                    .iter()
+                    .all(|arg| matches!(arg, RuntimeType::TypeParameter { .. }))
+        }
+        _ => false,
+    }
 }
 
 enum InterfaceTraversalControl {
@@ -93,13 +116,7 @@ where
                 match on_interface(ctx, &resolved_interface) {
                     InterfaceTraversalControl::Continue => {}
                     InterfaceTraversalControl::QueueResolvedInterface => {
-                        if let RuntimeType::Type(itf_td) | RuntimeType::Generic(itf_td, _) =
-                            &resolved_interface
-                        {
-                            let itf_lookup =
-                                build_generic_lookup_from_runtime_type(ctx, &resolved_interface);
-                            queue.push_back((itf_td.clone(), itf_lookup));
-                        }
+                        enqueue_runtime_type(ctx, &mut queue, &resolved_interface);
                     }
                     InterfaceTraversalControl::Stop => return Some(resolved_interface),
                 }
@@ -111,10 +128,7 @@ where
         else {
             continue;
         };
-        if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = &base_rt {
-            let base_lookup = build_generic_lookup_from_runtime_type(ctx, &base_rt);
-            queue.push_back((base_td.clone(), base_lookup));
-        }
+        enqueue_runtime_type(ctx, &mut queue, &base_rt);
     }
 
     None
@@ -286,15 +300,7 @@ pub fn intrinsic_type_get_is_generic_type_definition<'gc, T: ReflectionIntrinsic
 ) -> StepResult {
     let o = ctx.pop_obj();
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
-    let is_def = match target_type {
-        RuntimeType::Generic(_, ref args) => {
-            !args.is_empty()
-                && args
-                    .iter()
-                    .all(|a| matches!(a, RuntimeType::TypeParameter { .. }))
-        }
-        _ => false,
-    };
+    let is_def = is_generic_type_definition(&target_type);
     ctx.push_i32(if is_def { 1 } else { 0 });
     StepResult::Continue
 }
@@ -317,6 +323,28 @@ pub fn intrinsic_type_get_is_enum<'gc, T: ReflectionIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
+fn resolve_enum_td<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    target: &RuntimeType,
+) -> Result<(TypeDescription, MemberType), StepResult> {
+    let td = match target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
+        _ => {
+            return Err(ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Type provided must be an Enum.",
+            ));
+        }
+    };
+    let Some(member) = td.is_enum().cloned() else {
+        return Err(ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type provided must be an Enum.",
+        ));
+    };
+    Ok((td, member))
+}
+
 #[dotnet_intrinsic("System.Type System.Type::GetEnumUnderlyingType()")]
 #[dotnet_intrinsic("System.Type System.RuntimeType::GetEnumUnderlyingType()")]
 pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -326,24 +354,13 @@ pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'
 ) -> StepResult {
     let o = ctx.pop_obj();
     let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
-    let td = match &target {
-        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
-        _ => {
-            return ctx.throw_by_name_with_message(
-                "System.ArgumentException",
-                "Type provided must be an Enum.",
-            );
-        }
-    };
-    let Some(member) = td.is_enum() else {
-        return ctx.throw_by_name_with_message(
-            "System.ArgumentException",
-            "Type provided must be an Enum.",
-        );
+    let (td, member) = match resolve_enum_td(ctx, &target) {
+        Ok(enum_info) => enum_info,
+        Err(result) => return result,
     };
     // The enum's underlying type (e.g. `Int32`) is a non-generic primitive, so an
     // empty generic lookup is sufficient to resolve it.
-    let method_type: dotnetdll::prelude::MethodType = member.clone().into();
+    let method_type: dotnetdll::prelude::MethodType = member.into();
     let lookup = ctx.reflection_empty_generics();
     let Some(underlying_rt) = runtime_type_from_method_type(
         ctx.loader().as_ref(),
@@ -361,24 +378,6 @@ pub fn intrinsic_type_get_enum_underlying_type<'gc, T: ReflectionIntrinsicHost<'
     StepResult::Continue
 }
 
-fn enum_constant_to_stack<'gc>(constant: &Constant) -> Option<StackValue<'gc>> {
-    Some(match constant {
-        Constant::Boolean(v) => StackValue::Int32(i32::from(*v)),
-        Constant::Char(v) => StackValue::Int32(*v as i32),
-        Constant::Int8(v) => StackValue::Int32(*v as i32),
-        Constant::UInt8(v) => StackValue::Int32(*v as i32),
-        Constant::Int16(v) => StackValue::Int32(*v as i32),
-        Constant::UInt16(v) => StackValue::Int32(*v as i32),
-        Constant::Int32(v) => StackValue::Int32(*v),
-        Constant::UInt32(v) => StackValue::NativeInt(*v as isize),
-        Constant::Int64(v) => StackValue::Int64(*v),
-        Constant::UInt64(v) => StackValue::Int64(*v as i64),
-        Constant::Float32(v) => StackValue::NativeFloat((*v).into()),
-        Constant::Float64(v) => StackValue::NativeFloat(*v),
-        Constant::String(_) | Constant::Null => return None,
-    })
-}
-
 #[dotnet_intrinsic("System.Array System.Type::GetEnumValuesAsUnderlyingType()")]
 #[dotnet_intrinsic("System.Array System.RuntimeType::GetEnumValuesAsUnderlyingType()")]
 pub fn intrinsic_type_get_enum_values_as_underlying_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -388,23 +387,12 @@ pub fn intrinsic_type_get_enum_values_as_underlying_type<'gc, T: ReflectionIntri
 ) -> StepResult {
     let o = ctx.pop_obj();
     let target = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, o));
-    let td = match &target {
-        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.clone(),
-        _ => {
-            return ctx.throw_by_name_with_message(
-                "System.ArgumentException",
-                "Type provided must be an Enum.",
-            );
-        }
-    };
-    let Some(member) = td.is_enum() else {
-        return ctx.throw_by_name_with_message(
-            "System.ArgumentException",
-            "Type provided must be an Enum.",
-        );
+    let (td, member) = match resolve_enum_td(ctx, &target) {
+        Ok(enum_info) => enum_info,
+        Err(result) => return result,
     };
 
-    let method_type: MethodType = member.clone().into();
+    let method_type: MethodType = member.into();
     let lookup = ctx.reflection_empty_generics();
     let underlying = dotnet_vm_ops::vm_try!(lookup.make_concrete(
         td.resolution.clone(),
@@ -417,7 +405,7 @@ pub fn intrinsic_type_get_enum_values_as_underlying_type<'gc, T: ReflectionIntri
         .iter()
         .filter(|field| field.literal && field.static_member)
         .filter_map(|field| field.default.as_ref())
-        .filter_map(enum_constant_to_stack)
+        .filter_map(crate::common::constant_to_stack_value)
         .collect::<Vec<_>>();
 
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
@@ -851,15 +839,7 @@ pub fn handle_get_is_generic_type_definition<'gc, T: ReflectionIntrinsicHost<'gc
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
     // A generic type definition is a Generic with all open (TypeParameter) type args.
     // Non-generic types are never generic type definitions.
-    let is_def = match target_type {
-        RuntimeType::Generic(_, ref args) => {
-            !args.is_empty()
-                && args
-                    .iter()
-                    .all(|a| matches!(a, RuntimeType::TypeParameter { .. }))
-        }
-        _ => false,
-    };
+    let is_def = is_generic_type_definition(&target_type);
     ctx.push_i32(if is_def { 1 } else { 0 });
     StepResult::Continue
 }

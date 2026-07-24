@@ -63,6 +63,15 @@ fn extend_from_string_chunk<'gc, T: RawMemoryOps<'gc>>(
     }
 }
 
+fn heap_string_len(handle: ObjectHandle<'_>) -> (usize, bool) {
+    let heap = handle.borrow();
+    if let HeapStorage::Str(s) = &heap.storage {
+        (s.len(), true)
+    } else {
+        (0, false)
+    }
+}
+
 fn string_comparison_ignore_case(comparison: StackValue<'_>) -> bool {
     matches!(
         comparison.coerce_enum_to_underlying(),
@@ -108,22 +117,8 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
             if Gc::as_ptr(a_handle) == Gc::as_ptr(b_handle) {
                 true
             } else {
-                let (a_len, a_is_str) = {
-                    let a_heap = a_handle.borrow();
-                    if let HeapStorage::Str(s) = &a_heap.storage {
-                        (s.len(), true)
-                    } else {
-                        (0, false)
-                    }
-                };
-                let (b_len, b_is_str) = {
-                    let b_heap = b_handle.borrow();
-                    if let HeapStorage::Str(s) = &b_heap.storage {
-                        (s.len(), true)
-                    } else {
-                        (0, false)
-                    }
-                };
+                let (a_len, a_is_str) = heap_string_len(a_handle);
+                let (b_len, b_is_str) = heap_string_len(b_handle);
 
                 if !a_is_str || !b_is_str || a_len != b_len {
                     false

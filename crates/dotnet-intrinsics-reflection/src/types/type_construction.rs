@@ -119,25 +119,7 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             new_lookup.type_generics = parameters.clone().into();
         }
 
-        if let Some(desc) = target_td
-            .definition()
-            .methods
-            .iter()
-            .enumerate()
-            .find_map(|(i, m)| {
-                if m.name != ".ctor" {
-                    return None;
-                }
-                let d = MethodDescription::new(
-                    target_td.clone(),
-                    new_lookup.clone(),
-                    target_td.resolution.clone(),
-                    MethodMemberIndex::Method(i),
-                );
-                let sig = d.signature();
-                (sig.instance && sig.parameters.is_empty()).then_some(d)
-            })
-        {
+        if let Some(desc) = crate::common::find_parameterless_ctor(&target_td, &new_lookup) {
             let info = dotnet_vm_ops::vm_try!(ctx.reflection_method_info(desc, &new_lookup));
             dotnet_vm_ops::vm_try!(ctx.reflection_constructor_frame(instance, info, new_lookup));
             return StepResult::FramePushed;

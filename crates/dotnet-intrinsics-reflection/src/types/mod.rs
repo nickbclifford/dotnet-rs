@@ -16,7 +16,7 @@ use dotnet_vm_ops::{
     StepResult,
     ops::{LoaderOps, MemoryOps, TypedStackOps},
 };
-use dotnetdll::prelude::{BaseType, MemberType, MethodMemberIndex};
+use dotnetdll::prelude::{BaseType, MemberType};
 
 pub mod type_construction;
 pub mod type_members;
@@ -363,24 +363,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             } else {
                 ctx.reflection_empty_generics()
             };
-            let ctor_desc = td
-                .definition()
-                .methods
-                .iter()
-                .enumerate()
-                .find_map(|(i, m)| {
-                    if m.name != ".ctor" {
-                        return None;
-                    }
-                    let d = MethodDescription::new(
-                        td.clone(),
-                        lookup.clone(),
-                        td.resolution.clone(),
-                        MethodMemberIndex::Method(i),
-                    );
-                    let sig = d.signature();
-                    (sig.instance && sig.parameters.is_empty()).then_some(d)
-                });
+            let ctor_desc = crate::common::find_parameterless_ctor(&td, &lookup);
 
             let Some(ctor_desc) = ctor_desc else {
                 let message = format!(

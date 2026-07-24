@@ -2,16 +2,66 @@ use crate::{ReflectionIntrinsicHost, RuntimeTypeContext};
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
-    error::{ExecutionError, TypeResolutionError},
+    error::{ExecutionError, TypeResolutionError, VmError},
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
 };
-use dotnet_value::object::{Object, ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::{Object, ObjectRef},
+};
 use dotnetdll::{
     binary::signature::kinds::StandAloneCallingConvention,
-    prelude::{BaseType, CallingConvention, MethodType, ParameterType},
+    prelude::{
+        BaseType, CallingConvention, Constant, MethodMemberIndex, MethodType, ParameterType,
+    },
 };
+
+pub(crate) fn find_parameterless_ctor(
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+) -> Option<MethodDescription> {
+    td.definition()
+        .methods
+        .iter()
+        .enumerate()
+        .find_map(|(i, method)| {
+            if method.name != ".ctor" {
+                return None;
+            }
+
+            let description = MethodDescription::new(
+                td.clone(),
+                lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(i),
+            );
+            let signature = description.signature();
+            (signature.instance && signature.parameters.is_empty()).then_some(description)
+        })
+}
+
+/// Convert a metadata constant's numeric/bool/char payload to its evaluation-stack
+/// representation. Returns `None` for `String`/`Null`, which callers materialize
+/// separately when appropriate.
+pub(crate) fn constant_to_stack_value<'gc>(constant: &Constant) -> Option<StackValue<'gc>> {
+    Some(match constant {
+        Constant::Boolean(v) => StackValue::Int32(i32::from(*v)),
+        Constant::Char(v) => StackValue::Int32(*v as i32),
+        Constant::Int8(v) => StackValue::Int32(*v as i32),
+        Constant::UInt8(v) => StackValue::Int32(*v as i32),
+        Constant::Int16(v) => StackValue::Int32(*v as i32),
+        Constant::UInt16(v) => StackValue::Int32(*v as i32),
+        Constant::Int32(v) => StackValue::Int32(*v),
+        Constant::UInt32(v) => StackValue::NativeInt(*v as isize),
+        Constant::Int64(v) => StackValue::Int64(*v),
+        Constant::UInt64(v) => StackValue::Int64(*v as i64),
+        Constant::Float32(v) => StackValue::NativeFloat((*v).into()),
+        Constant::Float64(v) => StackValue::NativeFloat(*v),
+        Constant::String(_) | Constant::Null => return None,
+    })
+}
 
 pub fn pre_initialize_reflection<'gc>(ctx: &mut impl ReflectionIntrinsicHost<'gc>) {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
@@ -152,6 +202,20 @@ pub fn resolve_runtime_type<'gc>(
             .into(),
         ))
     })?
+}
+
+pub fn resolve_attribute_filter<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    type_obj: ObjectRef<'gc>,
+) -> Result<Option<TypeDescription>, VmError> {
+    if type_obj.0.is_none() {
+        return Ok(None);
+    }
+
+    Ok(match resolve_runtime_type(ctx, type_obj)? {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => Some(td),
+        _ => None,
+    })
 }
 
 pub fn resolve_runtime_method<'gc>(

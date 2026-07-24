@@ -16,6 +16,15 @@ use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::NonNull;
 
+fn parse_static_array_size(name: &str) -> Result<usize, ExecutionError> {
+    let prefix = "__StaticArrayInitTypeSize=";
+    let size_str = &name[prefix.len()..];
+    let size_end = size_str.find('_').unwrap_or(size_str.len());
+    size_str[..size_end].parse::<usize>().map_err(|e| {
+        ExecutionError::InternalError(format!("Failed to parse array size: {e}").into())
+    })
+}
+
 fn pop_nonneg_usize<'gc, T: SpanIntrinsicHost<'gc>>(ctx: &mut T) -> Result<usize, StepResult> {
     match ctx.pop() {
         StackValue::Int32(i) => {
@@ -352,13 +361,8 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         .name
         .starts_with("__StaticArrayInitTypeSize=")
     {
-        let prefix = "__StaticArrayInitTypeSize=";
-        let size_str = &field_desc.definition().name[prefix.len()..];
-        let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size =
-            dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-                ExecutionError::InternalError(format!("Failed to parse array size: {}", e).into())
-            }));
+            dotnet_vm_ops::vm_try!(parse_static_array_size(&field_desc.definition().name));
         let data_slice = &initial_data[..array_size];
 
         let span_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
@@ -508,13 +512,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     };
 
     if field.name.starts_with("__StaticArrayInitTypeSize=") {
-        let prefix = "__StaticArrayInitTypeSize=";
-        let size_str = &field.name[prefix.len()..];
-        let size_end = size_str.find('_').unwrap_or(size_str.len());
-        let array_size =
-            dotnet_vm_ops::vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-                ExecutionError::InternalError(format!("Failed to parse array size: {}", e).into())
-            }));
+        let array_size = dotnet_vm_ops::vm_try!(parse_static_array_size(&field.name));
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         dotnet_vm_ops::vm_try!(

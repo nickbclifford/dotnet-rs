@@ -100,17 +100,18 @@ pub(super) struct DelegateView<'a, 'gc, T: LoaderOps> {
     delegate_type: TypeDescription,
 }
 
+fn delegate_type<T: LoaderOps>(ctx: &T) -> TypeDescription {
+    ctx.loader()
+        .corlib_type("System.Delegate")
+        .expect("System.Delegate must exist")
+}
+
 impl<'a, 'gc, T: LoaderOps> DelegateView<'a, 'gc, T> {
     pub(super) fn new(ctx: &'a T, obj: ObjectRef<'gc>) -> Self {
-        let delegate_type = ctx
-            .loader()
-            .corlib_type("System.Delegate")
-            .expect("System.Delegate must exist");
-
         Self {
             ctx,
             obj,
-            delegate_type,
+            delegate_type: delegate_type(ctx),
         }
     }
 
@@ -199,15 +200,10 @@ pub(super) struct DelegateViewMut<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> {
 
 impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
     pub(super) fn new(ctx: &'a T, obj: ObjectRef<'gc>) -> Self {
-        let delegate_type = ctx
-            .loader()
-            .corlib_type("System.Delegate")
-            .expect("System.Delegate must exist");
-
         Self {
             ctx,
             obj,
-            delegate_type,
+            delegate_type: delegate_type(ctx),
         }
     }
 
