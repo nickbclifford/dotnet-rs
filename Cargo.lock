@@ -416,6 +416,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
 ]
@@ -427,6 +428,7 @@ dependencies = [
  "dotnet-macros",
  "dotnet-types",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
 ]
@@ -548,6 +550,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
@@ -703,7 +706,6 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnetdll",
- "gc-arena",
 ]
 
 [[package]]

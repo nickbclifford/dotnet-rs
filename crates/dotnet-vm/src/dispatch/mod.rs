@@ -204,9 +204,9 @@ impl<'gc> ExecutionEngine<'gc> {
         // dispatch path free of continuation polling.
         if matches!(
             &self.stack.execution.continuation,
-            dotnet_vm_ops::VmContinuation::RetryInstruction
+            dotnet_vm_data::VmContinuation::RetryInstruction
         ) {
-            self.stack.execution.continuation = dotnet_vm_ops::VmContinuation::None;
+            self.stack.execution.continuation = dotnet_vm_data::VmContinuation::None;
         }
 
         loop {

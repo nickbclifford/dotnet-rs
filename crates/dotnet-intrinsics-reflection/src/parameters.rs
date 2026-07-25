@@ -5,10 +5,8 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_value::object::ObjectRef;
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{LoaderOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{LoaderOps, TypedStackOps};
 use dotnetdll::resolved::signature::ParameterType;
 
 #[dotnet_intrinsic("string DotnetRs.ParameterInfo::GetName()")]

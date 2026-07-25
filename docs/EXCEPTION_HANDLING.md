@@ -4,10 +4,11 @@ This document describes the structured exception handling (SEH) system in `dotne
 
 ## Overview
 
-Exception handling is split across three crates:
+Exception handling is split across four crates:
 
-- **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/lib.rs`, re-exporting `crates/dotnet-vm-data/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`.
-- **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
+- **`dotnet-vm-data`** (`crates/dotnet-vm-data/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`.
+- **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/ops.rs`): Base operation and context traits used by the exception engine.
+- **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and on `dotnet-vm-data` for exception data.
 - **`dotnet-vm`** (`crates/dotnet-vm/src/dispatch/mod.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/exception_ops_impl.rs`): Runtime integration points that drive `ExceptionState` transitions and invoke `dotnet-exceptions`.
 
 The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
@@ -76,7 +77,7 @@ flowchart LR
 
 ### Integration with Call Stack
 - `ProtectedSection` data is parsed by `dotnet_exceptions::parse` during method-info construction in `crates/dotnet-vm/src/lib.rs` (`build_method_info`) and stored on each frame in `MethodInfo::exceptions`.
-- `StackFrame`, `FrameStack`, and `BasePointer` are defined in `dotnet-vm-data/src/stack.rs` and re-exported by `dotnet-vm-ops`.
+- `StackFrame`, `FrameStack`, and `BasePointer` are defined in `dotnet-vm-data/src/stack.rs` and imported from `dotnet-vm-data` directly.
 - Frame unwinding during exception handling must properly clean up the evaluation stack — `BasePointer` tracks where each frame's stack values begin.
 - `VesContext::unwind_frame` (`crates/dotnet-vm/src/stack/context.rs`) is called during unwind to pop frames, clear stack slots, and wrap `.cctor` failures as `TypeInitializationException`.
 

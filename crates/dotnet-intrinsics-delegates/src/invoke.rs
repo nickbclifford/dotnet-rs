@@ -8,8 +8,8 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_vm_data::{MulticastState, StepResult};
 use dotnet_vm_ops::{
-    MulticastState, StepResult,
     intrinsic_args::{ArgPolicy, expect_stack_object_with_policy},
     ops::{DelegateIntrinsicHost, ExceptionOps},
     prepared_call::PreparedCall,

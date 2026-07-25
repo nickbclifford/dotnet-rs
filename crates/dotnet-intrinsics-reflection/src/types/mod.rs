@@ -12,10 +12,8 @@ use dotnet_value::{
     layout::{LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{LoaderOps, MemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::{BaseType, MemberType};
 
 pub mod type_construction;

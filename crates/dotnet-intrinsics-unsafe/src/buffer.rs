@@ -8,10 +8,8 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     object::HeapStorage,
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps};
 
 const MEM_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
 

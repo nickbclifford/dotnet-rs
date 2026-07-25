@@ -9,8 +9,8 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::{
-    StepResult,
     intrinsic_args::{ArgPolicy, pop_object_ref},
     ops::{
         EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps,

@@ -11,10 +11,8 @@ use dotnet_value::{
     object::{HeapStorage, Object, ObjectHandle, ObjectRef},
     string::CLRString,
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 const SPAN_COPY_CHUNK_SIZE: usize = 1024;

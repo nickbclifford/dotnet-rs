@@ -1,7 +1,7 @@
 use crate::{
     ExceptionOps, StepResult,
     instructions::NULL_REF_MSG,
-    layout::{VmLayoutFactory, type_layout},
+    layout::{create_array_layout, type_layout},
     resolution::ValueResolution,
     stack::ops::{EvalStackOps, ResolutionOps, TypedStackOps, VesOps, VmResolutionOps},
 };
@@ -125,7 +125,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 let res_ctx = ctx.current_context();
                 let elem_type = dotnet_vm_ops::vm_try!(res_ctx.normalize_type(element.clone()));
 
-                let layout = dotnet_vm_ops::vm_try!(VmLayoutFactory::create_array_layout(
+                let layout = dotnet_vm_ops::vm_try!(create_array_layout(
                     elem_type.clone(),
                     total_len,
                     &res_ctx

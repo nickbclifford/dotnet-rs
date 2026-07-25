@@ -6,9 +6,9 @@ use dotnet_types::{
 };
 use dotnet_utils::ByteOffset;
 use dotnet_value::{object::HeapStorage, string::CLRString, with_string};
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{ExceptionOps, LoaderOps, RawMemoryOps, StringIntrinsicHost, TypedStackOps},
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{
+    ExceptionOps, LoaderOps, RawMemoryOps, StringIntrinsicHost, TypedStackOps,
 };
 use std::sync::Arc;
 

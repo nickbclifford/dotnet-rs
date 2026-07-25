@@ -10,7 +10,7 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_value::StackValue;
-use dotnet_vm_ops::StepResult;
+use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::{MethodMemberIndex, ParameterType, resource::Implementation};
 
 fn find_memory_stream_byte_array_ctor<'gc, T: ReflectionIntrinsicHost<'gc>>(

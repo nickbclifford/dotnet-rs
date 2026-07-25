@@ -42,7 +42,7 @@ pub(crate) fn should_break_after_step(step_result: StepResult) -> bool {
 
 pub(crate) fn new_test_arena(shared: &Arc<SharedGlobalState>) -> GCArena {
     GCArena::new(|_| {
-        let local = ArenaLocalState::new(shared.statics.clone());
+        let local = ArenaLocalState::new();
         ExecutionEngine::new(CallStack::new(shared.clone(), local))
     })
 }

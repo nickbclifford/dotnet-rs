@@ -21,7 +21,7 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
 
-pub use dotnet_vm_ops::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
+pub use dotnet_vm_data::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
 
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
@@ -34,7 +34,7 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) thread_id: &'a std::cell::Cell<dotnet_utils::ArenaId>,
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
-    pub(crate) continuation: &'a mut dotnet_vm_ops::VmContinuation<'gc>,
+    pub(crate) continuation: &'a mut dotnet_vm_data::VmContinuation<'gc>,
     pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
 }
 
@@ -73,7 +73,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     #[inline]
-    pub(crate) fn trace_method_exit_for_frame(&self, frame: &dotnet_vm_ops::StackFrame<'gc>) {
+    pub(crate) fn trace_method_exit_for_frame(&self, frame: &dotnet_vm_data::StackFrame<'gc>) {
         let _ = self.tracer().enabled_emit(self.frame_stack.len(), |trace| {
             let method_name = format!("{:?}", frame.state.info_handle.source);
             trace.method_exit(&method_name);
@@ -93,7 +93,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     #[inline]
     fn cctor_type_desc_and_lookup(
-        frame: &dotnet_vm_ops::StackFrame<'gc>,
+        frame: &dotnet_vm_data::StackFrame<'gc>,
     ) -> (TypeDescription, GenericLookup) {
         let type_desc = frame.state.info_handle.source.parent.clone();
         // Reuse the existing Arc<[ConcreteType]> directly — no Vec allocation.
@@ -457,7 +457,7 @@ pub struct ThreadContext<'gc> {
     pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
-    pub continuation: dotnet_vm_ops::VmContinuation<'gc>,
+    pub continuation: dotnet_vm_data::VmContinuation<'gc>,
     pub call_args_buffer: Vec<StackValue<'gc>>,
 }
 

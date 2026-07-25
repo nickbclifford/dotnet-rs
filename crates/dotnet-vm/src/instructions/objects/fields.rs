@@ -4,7 +4,7 @@ use crate::{
         NULL_REF_MSG,
         objects::{get_ptr_context, get_ptr_info},
     },
-    layout::VmLayoutFactory,
+    layout::instance_field_layout_cached,
     resolution::ValueResolution,
     stack::ops::VesOps,
     sync::Ordering as AtomicOrdering,
@@ -124,11 +124,8 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         }
     }
 
-    let layout = dotnet_vm_ops::vm_try!(VmLayoutFactory::instance_field_layout_cached(
-        field.parent.clone(),
-        &res_ctx,
-        Some(&ctx.shared().metrics),
-    ));
+    let layout =
+        dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
         .unwrap();
@@ -185,11 +182,8 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         AtomicOrdering::Release
     };
 
-    let layout = dotnet_vm_ops::vm_try!(VmLayoutFactory::instance_field_layout_cached(
-        field.parent.clone(),
-        &res_ctx,
-        Some(&ctx.shared().metrics),
-    ));
+    let layout =
+        dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
         .unwrap();
@@ -402,11 +396,8 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         .for_type_with_generics(field.parent.clone(), &lookup);
     let name = &field.field().name;
 
-    let layout = dotnet_vm_ops::vm_try!(VmLayoutFactory::instance_field_layout_cached(
-        field.parent.clone(),
-        &res_ctx,
-        Some(&ctx.shared().metrics),
-    ));
+    let layout =
+        dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
         .unwrap();

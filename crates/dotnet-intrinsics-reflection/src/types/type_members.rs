@@ -16,10 +16,8 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::{
     Accessibility, AlwaysFailsResolver, BaseType, FixedArg, IntegralParam, MemberAccessibility,
     MemberType, MethodMemberIndex, MethodReferenceParent, ParameterType, TypeSource, UserMethod,

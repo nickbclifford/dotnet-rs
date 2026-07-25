@@ -8,10 +8,11 @@
 //!   [`StepResult::Error`] with `ExecutionError::TypeMismatch`.
 
 use crate::{
-    NULL_REF_MSG, StepResult,
+    NULL_REF_MSG,
     ops::{EvalStackOps, ExceptionOps, TypedStackOps},
 };
 use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_vm_data::StepResult;
 
 /// Policy for handling `ObjectRef(None)` values while extracting intrinsic args.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

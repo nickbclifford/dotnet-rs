@@ -1,52 +1,39 @@
 use crate::{context::ResolutionContext, sync::Arc};
-use dotnet_metrics::RuntimeMetrics;
 use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
 use dotnet_value::layout::{ArrayLayoutManager, FieldLayoutManager, LayoutManager};
 
 #[cfg(test)]
 use dotnet_value::layout::GcDesc;
 
-pub struct VmLayoutFactory;
+pub(crate) fn instance_field_layout_cached(
+    td: TypeDescription,
+    context: &ResolutionContext,
+) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
+    context
+        .resolver()
+        .instance_field_layout_cached_with_lookup(td, context.generics)
+}
 
-impl VmLayoutFactory {
-    pub fn instance_fields(
-        td: TypeDescription,
-        context: &ResolutionContext,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        context.resolver().instance_fields(td, context)
-    }
+pub(crate) fn static_fields(
+    td: TypeDescription,
+    context: &ResolutionContext,
+) -> Result<FieldLayoutManager, TypeResolutionError> {
+    context.resolver().static_fields(td, context)
+}
 
-    pub fn instance_field_layout_cached(
-        td: TypeDescription,
-        context: &ResolutionContext,
-        _metrics: Option<&RuntimeMetrics>,
-    ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        context
-            .resolver()
-            .instance_field_layout_cached_with_lookup(td, context.generics)
-    }
+pub(crate) fn create_array_layout(
+    element: ConcreteType,
+    length: usize,
+    context: &ResolutionContext,
+) -> Result<ArrayLayoutManager, TypeResolutionError> {
+    context
+        .resolver()
+        .create_array_layout(element, length, context)
+}
 
-    pub fn static_fields(
-        td: TypeDescription,
-        context: &ResolutionContext,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        context.resolver().static_fields(td, context)
-    }
-
-    pub fn create_array_layout(
-        element: ConcreteType,
-        length: usize,
-        context: &ResolutionContext,
-    ) -> Result<ArrayLayoutManager, TypeResolutionError> {
-        context
-            .resolver()
-            .create_array_layout(element, length, context)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
-        dotnet_runtime_resolver::LayoutFactory::populate_gc_desc(layout, base_offset, desc)
-    }
+#[cfg(test)]
+pub(crate) fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
+    dotnet_runtime_resolver::LayoutFactory::populate_gc_desc(layout, base_offset, desc)
 }
 
 pub fn type_layout(
@@ -58,7 +45,7 @@ pub fn type_layout(
 
 #[cfg(test)]
 mod tests {
-    use super::VmLayoutFactory;
+    use super::{instance_field_layout_cached, populate_gc_desc};
     use crate::{context::ResolutionContext, state::SharedGlobalState};
     use dotnet_assemblies::{AssemblyLoader, find_dotnet_app_path};
     use dotnet_types::generics::{ConcreteType, GenericLookup};
@@ -93,9 +80,7 @@ mod tests {
         );
         let typed_ctx = ctx.for_type_with_generics(nullable_td.clone(), &lookup);
 
-        let layout =
-            VmLayoutFactory::instance_field_layout_cached(nullable_td.clone(), &typed_ctx, None)
-                .unwrap();
+        let layout = instance_field_layout_cached(nullable_td.clone(), &typed_ctx).unwrap();
 
         assert_eq!(layout.total_size, 8, "Nullable<int> should be 8 bytes");
         assert!(
@@ -124,7 +109,7 @@ mod tests {
     #[test]
     fn gc_desc_tracks_unaligned_reference_offsets_without_word_rounding() {
         let mut desc = dotnet_value::layout::GcDesc::default();
-        VmLayoutFactory::populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
+        populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
 
         assert!(
             desc.bitmap.iter().all(|word| *word == 0),
@@ -143,7 +128,7 @@ mod tests {
         });
 
         let mut outer = dotnet_value::layout::GcDesc::default();
-        VmLayoutFactory::populate_gc_desc(&nested_layout, 5, &mut outer);
+        populate_gc_desc(&nested_layout, 5, &mut outer);
         assert!(outer.unaligned_offsets.is_empty());
 
         let mut set_slots = Vec::new();

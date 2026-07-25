@@ -10,10 +10,8 @@ use dotnet_value::{
     CLRString, StackValue,
     object::{CTSValue, HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{LoaderOps, MemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::Constant;
 
 #[dotnet_intrinsic("bool DotnetRs.FieldInfo::IsDefined(System.Type, bool)")]

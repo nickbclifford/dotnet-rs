@@ -682,29 +682,32 @@ unsafe impl<'gc> Collect<'gc> for ReflectionLocalState<'gc> {
 /// GC-managed state local to a single thread's arena.
 pub struct ArenaLocalState<'gc> {
     pub heap: HeapManager<'gc>,
-    pub statics: Arc<StaticStorageManager>,
     pub reflection: ReflectionLocalState<'gc>,
     pub active_borrows: Cell<usize>,
 }
 
 // SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
-// This includes the `heap`, the global `statics`, and the nested `reflection` cache state.
+// This includes the `heap` and the nested `reflection` cache state.
 unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.heap.trace(cc);
-        self.statics.trace(cc);
         self.reflection.trace(cc);
     }
 }
 
 impl<'gc> ArenaLocalState<'gc> {
-    pub fn new(statics: Arc<StaticStorageManager>) -> Self {
+    pub fn new() -> Self {
         Self {
             heap: HeapManager::new(),
-            statics,
             reflection: ReflectionLocalState::new(),
             active_borrows: Cell::new(0),
         }
+    }
+}
+
+impl<'gc> Default for ArenaLocalState<'gc> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

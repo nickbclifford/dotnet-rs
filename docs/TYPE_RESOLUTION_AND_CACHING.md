@@ -10,7 +10,7 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 - **`dotnet-vm/src/resolver/mod.rs`**: `VmResolverService` VM-owned adapter wrapper around resolver-owned resolution logic
 - **`dotnet-vm/src/context.rs`**: `ResolutionContext` for scoped resolution with generic parameters
 - **`dotnet-vm/src/resolution.rs`**: Resolution traits and helpers
-- **`dotnet-vm/src/layout.rs`**: `VmLayoutFactory` compatibility wrapper delegating to resolver-owned layout code
+- **`dotnet-vm/src/layout.rs`**: free layout functions delegating to resolver-owned layout code
 - **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager`
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
@@ -50,7 +50,7 @@ Fields resolve to `FieldDescription` with computed byte offsets within their con
 
 ### Layout Computation (`dotnet-runtime-resolver/src/layout.rs`)
 
-The resolver-owned `LayoutFactory` computes the physical memory layout of objects and value types (the VM reaches it through the `VmLayoutFactory` facade):
+The resolver-owned `LayoutFactory` computes the physical memory layout of objects and value types (the VM reaches it through free functions such as `instance_field_layout_cached` in `dotnet-vm/src/layout.rs`):
 - **Field offsets**: `LayoutFactory::create_field_layout()` computes offsets respecting alignment requirements of the host architecture. It recursively resolves field types and computes their sub-layouts.
 - **Total object size**: Sums field sizes + padding.
 - **`GcDesc` generation**: `LayoutFactory::populate_gc_desc()` creates a descriptor bitmap used by the Stop-The-World (STW) GC to identify which fields contain managed references (`ObjectRef`). It merges the GC descriptors of nested fields into the parent's descriptor based on their computed offsets.
@@ -144,7 +144,7 @@ Layout computation produces `GcDesc` which the GC uses during tracing to know wh
 ### Layout Ownership
 Layout representation and layout computation are split:
 - `dotnet-value/src/layout.rs`: runtime layout data model (`LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager`)
-- `dotnet-runtime-resolver/src/layout.rs`: resolver-owned layout algorithms used by `VmLayoutFactory`
-- `dotnet-vm/src/layout.rs`: `VmLayoutFactory` compatibility surface that delegates to resolver-owned layout code
+- `dotnet-runtime-resolver/src/layout.rs`: resolver-owned layout algorithms used by the VM's layout functions
+- `dotnet-vm/src/layout.rs`: free-function delegation surface over resolver-owned layout code
 
 This split keeps layout algorithms reusable outside `dotnet-vm` while preserving existing VM call sites.

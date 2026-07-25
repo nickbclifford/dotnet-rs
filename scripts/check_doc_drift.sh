@@ -88,7 +88,7 @@ CHECKS=(
   "TYPE_RESOLUTION_AND_CACHING.md|ResolutionContext|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|GenericLookup|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|StaticStorageManager|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|VmLayoutFactory|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|instance_field_layout_cached|*.rs"
 
   # --- ARCHITECTURE.md ---
   "ARCHITECTURE.md|dotnet-vm|*.toml"

@@ -7,10 +7,8 @@ use dotnet_value::{
     string::CLRString,
     with_vector,
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{ExceptionOps, RawMemoryOps, TypedStackOps};
 
 fn parse_string_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,

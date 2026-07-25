@@ -30,9 +30,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     pub fn yield_and_retry(&mut self) -> StepResult {
         if matches!(
             &*self.continuation,
-            dotnet_vm_ops::VmContinuation::None | dotnet_vm_ops::VmContinuation::RetryInstruction
+            dotnet_vm_data::VmContinuation::None | dotnet_vm_data::VmContinuation::RetryInstruction
         ) {
-            *self.continuation = dotnet_vm_ops::VmContinuation::RetryInstruction;
+            *self.continuation = dotnet_vm_data::VmContinuation::RetryInstruction;
         }
         self.back_up_ip();
         StepResult::Yield
@@ -53,11 +53,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     /// Push a handler unwind state into `VmContinuation::HandlerUnwinds`.
     #[inline]
-    pub fn push_handler_unwind(&mut self, state: dotnet_vm_ops::UnwindState<'gc>) {
+    pub fn push_handler_unwind(&mut self, state: dotnet_vm_data::UnwindState<'gc>) {
         match self.continuation {
-            dotnet_vm_ops::VmContinuation::HandlerUnwinds(unwinds) => unwinds.push(state),
+            dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) => unwinds.push(state),
             _ => {
-                *self.continuation = dotnet_vm_ops::VmContinuation::HandlerUnwinds(vec![state]);
+                *self.continuation = dotnet_vm_data::VmContinuation::HandlerUnwinds(vec![state]);
             }
         }
     }
@@ -65,12 +65,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     /// Pop a handler unwind state from `VmContinuation::HandlerUnwinds`.
     /// Returns `None` if no pending unwinds.
     #[inline]
-    pub fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_ops::UnwindState<'gc>> {
+    pub fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>> {
         match self.continuation {
-            dotnet_vm_ops::VmContinuation::HandlerUnwinds(unwinds) => {
+            dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) => {
                 let state = unwinds.pop();
                 if unwinds.is_empty() {
-                    *self.continuation = dotnet_vm_ops::VmContinuation::None;
+                    *self.continuation = dotnet_vm_data::VmContinuation::None;
                 }
                 state
             }
@@ -694,12 +694,12 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn exception_mode(&self) -> &dotnet_vm_ops::ExceptionState<'gc> {
+    fn exception_mode(&self) -> &dotnet_vm_data::ExceptionState<'gc> {
         self.exception_mode
     }
 
     #[inline]
-    fn exception_mode_mut(&mut self) -> &mut dotnet_vm_ops::ExceptionState<'gc> {
+    fn exception_mode_mut(&mut self) -> &mut dotnet_vm_data::ExceptionState<'gc> {
         self.exception_mode
     }
 
@@ -738,22 +738,22 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn evaluation_stack_mut(&mut self) -> &mut dotnet_vm_ops::EvaluationStack<'gc> {
+    fn evaluation_stack_mut(&mut self) -> &mut dotnet_vm_data::EvaluationStack<'gc> {
         self.evaluation_stack
     }
 
     #[inline]
-    fn frame_stack(&self) -> &dotnet_vm_ops::FrameStack<'gc> {
+    fn frame_stack(&self) -> &dotnet_vm_data::FrameStack<'gc> {
         self.frame_stack
     }
 
     #[inline]
-    fn frame_stack_mut(&mut self) -> &mut dotnet_vm_ops::FrameStack<'gc> {
+    fn frame_stack_mut(&mut self) -> &mut dotnet_vm_data::FrameStack<'gc> {
         self.frame_stack
     }
 
     #[inline]
-    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_ops::UnwindState<'gc>> {
+    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>> {
         VesContext::pop_handler_unwind(self)
     }
 }
@@ -799,9 +799,9 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
         let _gc = self.gc;
         loop {
             let res = match self.exception_mode {
-                dotnet_vm_ops::ExceptionState::None
-                | dotnet_vm_ops::ExceptionState::ExecutingHandler(_)
-                | dotnet_vm_ops::ExceptionState::Filtering(_) => {
+                dotnet_vm_data::ExceptionState::None
+                | dotnet_vm_data::ExceptionState::ExecutingHandler(_)
+                | dotnet_vm_data::ExceptionState::Filtering(_) => {
                     let mut last_res = StepResult::Continue;
                     for _ in 0..128 {
                         let ip = self.state().ip;

@@ -8,10 +8,8 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{LoaderOps, MemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::BaseType;
 use std::sync::Arc;
 

@@ -5,10 +5,8 @@
 use crate::{BEGIN_END_NOT_SUPPORTED_MSG, DelegateInvokeHost, invoke::invoke_delegate};
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::object::ObjectRef;
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps};
 
 /// Check if a type is a delegate type (inherits from System.Delegate or
 /// System.MulticastDelegate).

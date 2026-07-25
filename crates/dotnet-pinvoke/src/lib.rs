@@ -2,7 +2,7 @@
 //!
 //! This crate resolves unmanaged libraries/symbols, marshals stack values into
 //! native ABI arguments, invokes functions through `libffi`, and translates
-//! outcomes back into VM-visible [`dotnet_vm_ops::StepResult`] values.
+//! outcomes back into VM-visible [`dotnet_vm_data::StepResult`] values.
 //!
 //! Key public entry points:
 //! - [`external_call`]: metadata-driven P/Invoke invocation path used by the VM.

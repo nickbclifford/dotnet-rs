@@ -8,7 +8,8 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_vm_ops::{StepResult, ops::SimdIntrinsicHost};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::SimdIntrinsicHost;
 use dotnetdll::prelude::BaseType;
 
 #[inline]

@@ -9,10 +9,8 @@ use dotnet_value::{
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps};
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::{self, NonNull};
 

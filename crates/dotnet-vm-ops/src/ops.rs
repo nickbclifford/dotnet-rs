@@ -487,8 +487,8 @@ pub trait VesInternals<'gc> {
     fn state(&self) -> &MethodState;
     fn state_mut(&mut self) -> &mut MethodState;
 
-    fn exception_mode(&self) -> &crate::ExceptionState<'gc>;
-    fn exception_mode_mut(&mut self) -> &mut crate::ExceptionState<'gc>;
+    fn exception_mode(&self) -> &dotnet_vm_data::ExceptionState<'gc>;
+    fn exception_mode_mut(&mut self) -> &mut dotnet_vm_data::ExceptionState<'gc>;
 
     fn original_ip(&self) -> usize;
     fn original_ip_mut(&mut self) -> &mut usize;
@@ -501,10 +501,10 @@ pub trait VesInternals<'gc> {
 
     fn unwind_frame(&mut self);
 
-    fn evaluation_stack_mut(&mut self) -> &mut crate::EvaluationStack<'gc>;
-    fn frame_stack(&self) -> &crate::FrameStack<'gc>;
-    fn frame_stack_mut(&mut self) -> &mut crate::FrameStack<'gc>;
-    fn pop_handler_unwind(&mut self) -> Option<crate::UnwindState<'gc>>;
+    fn evaluation_stack_mut(&mut self) -> &mut dotnet_vm_data::EvaluationStack<'gc>;
+    fn frame_stack(&self) -> &dotnet_vm_data::FrameStack<'gc>;
+    fn frame_stack_mut(&mut self) -> &mut dotnet_vm_data::FrameStack<'gc>;
+    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>>;
 }
 
 pub trait StaticsOps<'gc> {

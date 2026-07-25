@@ -7,8 +7,8 @@
 //! [`ExceptionHandlingSystem`] drives these transitions via [`ExceptionHandlingSystem::handle_exception`],
 //! with internal phase entry points in `begin_throwing`, `search_for_handler`, and `unwind`.
 //!
-//! This crate also parses and executes exception metadata using core VES types from
-//! `dotnet-vm-ops`, including [`ExceptionState`], [`ProtectedSection`], and [`Handler`].
+//! This crate also parses and executes exception metadata using core VES data types from
+//! `dotnet-vm-data`, including [`ExceptionState`], [`ProtectedSection`], and [`Handler`].
 //! See `docs/EXCEPTION_HANDLING.md` for a full design walkthrough.
 
 use dotnet_types::{
@@ -22,11 +22,12 @@ use dotnet_value::{
     object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
 };
-use dotnet_vm_ops::{
-    ExceptionState, FilterState, Handler, HandlerAddress, HandlerKind, ManagedException,
-    ProtectedSection, SearchState, StepResult, UnwindState, UnwindTarget,
-    ops::{ExceptionContext, ResolutionOps},
+use dotnet_vm_data::{
+    ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection, SearchState,
+    StepResult, UnwindState, UnwindTarget,
+    exceptions::{Handler, HandlerKind},
 };
+use dotnet_vm_ops::ops::{ExceptionContext, ResolutionOps};
 use dotnetdll::prelude::*;
 use std::{cmp::Reverse, collections::HashMap, ops::Range};
 

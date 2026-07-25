@@ -1,4 +1,5 @@
-use dotnet_vm_ops::{StepResult, ops::RawMemoryOps};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::RawMemoryOps;
 use std::ptr;
 
 const MEM_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks

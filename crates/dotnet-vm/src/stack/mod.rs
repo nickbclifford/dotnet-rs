@@ -90,7 +90,7 @@ mod resolution_ops_impl;
 mod stack_ops_impl;
 
 pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
-pub use dotnet_vm_ops::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
+pub use dotnet_vm_data::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
 pub use ops::{
     ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps, LoaderOps,
     LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps, ReflectionOps,
@@ -191,7 +191,7 @@ impl<'gc> CallStack<'gc> {
                 current_intrinsic: None,
                 original_ip: 0,
                 original_stack_height: dotnet_utils::StackSlotIndex(0),
-                continuation: dotnet_vm_ops::VmContinuation::None,
+                continuation: dotnet_vm_data::VmContinuation::None,
                 call_args_buffer: Vec::new(),
             },
             shared,

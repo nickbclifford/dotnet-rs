@@ -18,10 +18,8 @@ use dotnet_value::{
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{PInvokeContext, ResolutionOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{PInvokeContext, ResolutionOps};
 use dotnetdll::prelude::*;
 use gc_arena::Gc;
 use libffi::middle::*;

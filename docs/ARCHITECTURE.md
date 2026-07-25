@@ -14,10 +14,10 @@ The project is divided into several crates, each with a focused responsibility:
 
 - **dotnet-cli**: The entry point. It provides the command-line interface, test harness, and integration tests.
 - **dotnet-vm**: The core VM crate. It owns the execution engine, instruction handlers/dispatch generation, GC coordinator, threading/sync runtime, and VM-local intrinsic infrastructure.
-- **dotnet-vm-ops**: Foundational VES operation traits (`EvalStackOps`, `TypedStackOps`, `ExceptionOps`, `RawMemoryOps`, etc.). It is trait-focused and re-exports runtime data from `dotnet-vm-data` for compatibility.
-- **dotnet-vm-data**: Shared runtime data model (`StepResult`, `MethodInfo`, method/frame state, stack and exception data structures).
-- **dotnet-exceptions**: Exception handling logic extracted from `dotnet-vm`. Contains the `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
-- **dotnet-pinvoke**: P/Invoke marshalling extracted from `dotnet-vm`. Uses `libffi` and `libloading` for native interop. Depends on `dotnet-vm-ops` for base traits.
+- **dotnet-vm-ops**: Foundational VES operation traits (`EvalStackOps`, `TypedStackOps`, `ExceptionOps`, `RawMemoryOps`, etc.). Runtime data types used by those traits are imported directly from `dotnet-vm-data`.
+- **dotnet-vm-data**: Shared runtime data model (`StepResult`, `MethodInfo`, `VmContinuation<'gc>`, method/frame state, stack and exception data structures).
+- **dotnet-exceptions**: Exception handling logic extracted from `dotnet-vm`. Contains the `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and on `dotnet-vm-data` for runtime data types.
+- **dotnet-pinvoke**: P/Invoke marshalling extracted from `dotnet-vm`. Uses `libffi` and `libloading` for native interop. Depends on `dotnet-vm-ops` for base traits and on `dotnet-vm-data` for runtime data types.
 - **dotnet-runtime-resolver**: Type/method/field resolution services and layout factory implementation, consumed from `dotnet-vm` via adapters.
 - **dotnet-runtime-memory**: Runtime memory access/heap services and validation helpers, consumed from `dotnet-vm` via adapters.
 - **dotnet-intrinsics-core**: Core intrinsic handlers (`math`, `array_ops`) and conservative `System.Runtime.Intrinsics` capability probes.
@@ -87,7 +87,7 @@ dotnet-benchmarks
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
     - Tail calls (`tail.`) are supported in a guarded manner: when the prefix is present and the call is in a valid tail position (immediately followed by `ret`, eval stack otherwise empty, not inside an exception region, etc.), the VM replaces the current frame before dispatching the callee; otherwise it falls back to a normal call.
-    - Intrinsic calls are intercepted and handled by native Rust code split across `dotnet-intrinsics-*` crates, with VM-local metadata/registry code in `crates/dotnet-vm/src/intrinsics/`. Similar to instructions, intrinsics use a monomorphic ID-based dispatch system.
+    - Intrinsic calls are intercepted and handled by native Rust code split across `dotnet-intrinsics-*` crates and VM-local handler modules, with registry/metadata code in `crates/dotnet-vm/src/intrinsics/`. Similar to instructions, intrinsics use a monomorphic ID-based dispatch system.
     
     (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
 
@@ -115,7 +115,7 @@ The VM supports multi-threading (feature-gated via `multithreading`). For detail
 - **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Filtering` → `Unwinding` → `ExecutingHandler`).
 - **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
 - **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
-- **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception/stack data model lives in `dotnet-vm-data` (re-exported by `dotnet-vm-ops`).
+- **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception/stack data model lives in `dotnet-vm-data` and is imported from there directly.
 
 See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state machine and unwinding process.
 
@@ -124,8 +124,8 @@ See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state ma
 For more details on caching and resolution pipelines, see [Type Resolution and Caching](TYPE_RESOLUTION_AND_CACHING.md).
 
 - **Type Resolution**: Types are resolved lazily. `ResolutionContext` manages the scope of resolution, including generic parameters.
-- **Layout Calculation**: `VmLayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
-- **VM Ownership Boundary**: `dotnet-vm` uses `VmResolverService` and `VmLayoutFactory` wrappers as VM-owned facades over resolver-owned resolution/layout engines.
+- **Layout Calculation**: The resolver-owned `LayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
+- **VM Ownership Boundary**: `dotnet-vm` uses `VmResolverService` as its VM-owned resolution facade; the free functions in `dotnet-vm/src/layout.rs` delegate layout requests to the resolver-owned layout engine.
 - **Generics**: Generic types and methods are instantiated on-demand, with metadata specialized for the specific type arguments.
 
 ### Descriptor Ownership Model

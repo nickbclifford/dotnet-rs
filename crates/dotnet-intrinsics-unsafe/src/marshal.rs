@@ -8,10 +8,8 @@ use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager},
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{EvalStackOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{EvalStackOps, TypedStackOps};
 use std::sync::Arc;
 
 pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {

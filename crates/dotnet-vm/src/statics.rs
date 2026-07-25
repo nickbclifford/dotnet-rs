@@ -1,5 +1,5 @@
 use crate::{
-    context::ResolutionContext, gc::coordinator::GCCoordinator, layout::VmLayoutFactory,
+    context::ResolutionContext, gc::coordinator::GCCoordinator, layout::static_fields,
     threading::ThreadManagerOps,
 };
 use dotnet_metrics::{CacheEvent, CacheKind, RuntimeMetrics};
@@ -264,10 +264,7 @@ impl StaticStorageManager {
         if let Some(m) = metrics {
             m.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Miss);
         }
-        let result = Arc::new(VmLayoutFactory::static_fields(
-            description.clone(),
-            context,
-        )?);
+        let result = Arc::new(static_fields(description.clone(), context)?);
         context
             .caches()
             .static_field_layout_cache

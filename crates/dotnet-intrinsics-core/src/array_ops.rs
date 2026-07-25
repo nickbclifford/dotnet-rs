@@ -5,8 +5,8 @@ use dotnet_value::{
     layout::HasLayout,
     object::{HeapStorage, ObjectRef, Vector},
 };
+use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::{
-    StepResult,
     intrinsic_args::{ArgPolicy, apply_object_policy, expect_stack_object, pop_object_ref},
     ops::{EvalStackOps, ExceptionOps, MemoryOps, TypedStackOps},
 };

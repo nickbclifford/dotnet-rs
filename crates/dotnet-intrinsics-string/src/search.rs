@@ -11,10 +11,8 @@ use dotnet_value::{
     string::CLRString,
     with_string,
 };
-use dotnet_vm_ops::{
-    StepResult,
-    ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
-};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::{ExceptionOps, RawMemoryOps, TypedStackOps};
 
 /// System.String::IndexOf(char)
 /// System.String::IndexOf(char, int)

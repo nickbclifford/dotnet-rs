@@ -57,7 +57,7 @@ The generated dispatcher uses a `match` on the `Instruction` enum, allowing the 
 ### Source: `#[dotnet_intrinsic("Signature")]` and `#[dotnet_intrinsic_field("Signature")]`
 
 Intrinsic implementations are annotated in VM-local and extracted intrinsic crates:
-- `src/intrinsics/**/*.rs` (`dotnet-vm` local intrinsic registry/metadata helpers)
+- `src/intrinsics/**/*.rs` (`dotnet-vm` local handlers and registry/metadata helpers)
 - `../dotnet-intrinsics-*/src/**/*.rs` (handler crates)
 
 ```rust

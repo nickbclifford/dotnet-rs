@@ -78,7 +78,7 @@ Single delegate invocation:
 
 Multicast delegates (created by `Delegate.Combine`) contain multiple targets that must be invoked sequentially. This is complex because each target is a full method call that goes through the normal dispatch loop.
 
-**`MulticastState` struct** (in `crates/dotnet-vm-data/src/stack.rs`, re-exported by `dotnet-vm-ops` and `dotnet-vm`):
+**`MulticastState` struct** (in `crates/dotnet-vm-data/src/stack.rs`; canonical path: `dotnet_vm_data::MulticastState`):
 ```rust
 pub struct MulticastState<'gc> {
     pub targets: ObjectHandle<'gc>, // Array of delegate objects
@@ -134,7 +134,7 @@ When a resolved method call is about to be dispatched, both VM-context and `Exec
 4. If none of those apply, push a managed call frame for normal IL execution
 
 ### Special Cases
-- `Object.ToString` and `Object.GetType` are registered as intrinsics in `intrinsics/mod.rs` (via `#[dotnet_intrinsic]`)
+- `Object.ToString` and `Object.GetType` are registered as intrinsics in `intrinsics/object_ops.rs` (via `#[dotnet_intrinsic]`)
 - Some intrinsics have metadata that affects dispatch behavior (e.g., `filter_name`)
 
 ## Non-Obvious Connections
