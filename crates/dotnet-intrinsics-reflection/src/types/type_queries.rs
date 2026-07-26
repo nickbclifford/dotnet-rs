@@ -156,7 +156,7 @@ pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
     let target = handle
         .instance_storage
         .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .unwrap()
+        .expect("System.RuntimeTypeHandle must declare a _value field")
         .read();
     ctx.push_obj(target);
     StepResult::Continue
@@ -174,7 +174,7 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, T: TypedStackOps<'gc>>(
     let target = handle
         .instance_storage
         .field::<usize>(handle.description, "_value")
-        .unwrap()
+        .expect("System.RuntimeTypeHandle must declare a _value field")
         .read();
     ctx.push_isize(target as isize);
     StepResult::Continue
@@ -504,7 +504,7 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
     instance
         .instance_storage
         .field::<ObjectRef<'gc>>(rth, "_value")
-        .unwrap()
+        .expect("System.RuntimeTypeHandle must declare a _value field")
         .write(obj);
 
     ctx.push_value_type(instance);

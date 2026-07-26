@@ -420,7 +420,7 @@ impl StaticStorageManager {
             return Ok(StaticInitResult::Initialized);
         }
 
-        let cctor = cctor.unwrap();
+        let cctor = cctor.expect("checked is_none() above and returned early");
 
         let init_lock = storage.init_mutex.lock();
         match storage.init_state.load(Ordering::Acquire) {

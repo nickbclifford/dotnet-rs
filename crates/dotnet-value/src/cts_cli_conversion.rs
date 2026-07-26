@@ -80,22 +80,41 @@ impl CtsScalarKind {
         }
     }
 
+    const STORAGE_SIZE_MSG: &str =
+        "caller supplies exactly self.storage_size() bytes for this scalar kind";
+
     fn read_storage_value<'gc>(self, data: &[u8]) -> ValueType<'gc> {
         match self {
             Self::Boolean => ValueType::Bool(data[0] != 0),
-            Self::Char => ValueType::Char(u16::from_ne_bytes(data.try_into().unwrap())),
+            Self::Char => ValueType::Char(u16::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
             Self::Int8 => ValueType::Int8(data[0] as i8),
             Self::UInt8 => ValueType::UInt8(data[0]),
-            Self::Int16 => ValueType::Int16(i16::from_ne_bytes(data.try_into().unwrap())),
-            Self::UInt16 => ValueType::UInt16(u16::from_ne_bytes(data.try_into().unwrap())),
-            Self::Int32 => ValueType::Int32(i32::from_ne_bytes(data.try_into().unwrap())),
-            Self::UInt32 => ValueType::UInt32(u32::from_ne_bytes(data.try_into().unwrap())),
-            Self::Int64 => ValueType::Int64(i64::from_ne_bytes(data.try_into().unwrap())),
-            Self::UInt64 => ValueType::UInt64(u64::from_ne_bytes(data.try_into().unwrap())),
-            Self::NativeInt => ValueType::NativeInt(isize::from_ne_bytes(data.try_into().unwrap())),
-            Self::NativeUInt => {
-                ValueType::NativeUInt(usize::from_ne_bytes(data.try_into().unwrap()))
-            }
+            Self::Int16 => ValueType::Int16(i16::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::UInt16 => ValueType::UInt16(u16::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::Int32 => ValueType::Int32(i32::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::UInt32 => ValueType::UInt32(u32::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::Int64 => ValueType::Int64(i64::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::UInt64 => ValueType::UInt64(u64::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::NativeInt => ValueType::NativeInt(isize::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
+            Self::NativeUInt => ValueType::NativeUInt(usize::from_ne_bytes(
+                data.try_into().expect(Self::STORAGE_SIZE_MSG),
+            )),
         }
     }
 }

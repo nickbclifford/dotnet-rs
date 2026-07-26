@@ -508,10 +508,12 @@ where
                 data,
             ))),
             BaseType::Float32 => Ok(CTSValue::Value(Float32(f32::from_ne_bytes(
-                data.try_into().unwrap(),
+                data.try_into()
+                    .expect("caller slices data to this scalar's layout-computed width"),
             )))),
             BaseType::Float64 => Ok(CTSValue::Value(Float64(f64::from_ne_bytes(
-                data.try_into().unwrap(),
+                data.try_into()
+                    .expect("caller slices data to this scalar's layout-computed width"),
             )))),
             BaseType::IntPtr => Ok(CTSValue::Value(CliToCts::read_scalar_storage(
                 CtsScalarKind::NativeInt,
@@ -592,8 +594,12 @@ where
                     );
                     let mut buf = ManagedPtr::serialization_buffer();
                     buf.copy_from_slice(&data[..ManagedPtr::SIZE]);
-                    let addr_bytes = buf[0..ObjectRef::SIZE].try_into().unwrap();
-                    let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().unwrap();
+                    let addr_bytes = buf[0..ObjectRef::SIZE]
+                        .try_into()
+                        .expect("slice bound is ObjectRef::SIZE by construction");
+                    let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().expect(
+                        "slice bound is ManagedPtr::SIZE - ObjectRef::SIZE by construction",
+                    );
                     let addr = usize::from_ne_bytes(addr_bytes);
                     let type_ptr = std::ptr::with_exposed_provenance::<TypeDescription>(
                         usize::from_ne_bytes(type_bytes),

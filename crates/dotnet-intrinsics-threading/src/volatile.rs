@@ -62,7 +62,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     1,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             ctx.push_i32(val as i32);
         }
@@ -78,7 +80,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     2,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             ctx.push_i32(val as i32);
         }
@@ -94,7 +98,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     4,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             if matches!(target_type.get(), BaseType::Float32) {
                 ctx.push_f64(f32::from_bits(val as u32) as f64);
@@ -114,7 +120,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     8,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             if matches!(target_type.get(), BaseType::Float64) {
                 ctx.push_f64(f64::from_bits(val));
@@ -135,7 +143,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     size,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             ctx.push_isize(val as isize);
         }
@@ -152,7 +162,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     ObjectRef::SIZE,
                     Ordering::Acquire,
                 )
-                .unwrap()
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                )
             };
             // SAFETY: `val` was read atomically from an object-reference slot and `gc`
             // brands the reconstructed handle to the current arena lifetime.
@@ -191,7 +203,7 @@ fn store_int_volatile<'gc, T: ThreadingIntrinsicHost<'gc>>(
             width,
             Ordering::Release,
         )
-        .unwrap();
+        .expect("the by-ref pointer and size are dispatch-selected to match the target type");
     }
 
     StepResult::Continue
@@ -265,7 +277,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     4,
                     Ordering::Release,
                 )
-                .unwrap();
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                );
             }
         }
         VolatileAtomicTypeDispatch::Word64 => {
@@ -290,7 +304,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     8,
                     Ordering::Release,
                 )
-                .unwrap();
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                );
             }
         }
         VolatileAtomicTypeDispatch::PointerSized => {
@@ -315,7 +331,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     size,
                     Ordering::Release,
                 )
-                .unwrap();
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                );
             }
         }
         VolatileAtomicTypeDispatch::ObjectRef => {
@@ -346,7 +364,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     size,
                     Ordering::Release,
                 )
-                .unwrap();
+                .expect(
+                    "the by-ref pointer and size are dispatch-selected to match the target type",
+                );
             }
         }
     }

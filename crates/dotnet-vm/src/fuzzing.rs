@@ -35,8 +35,13 @@ fn get_loader() -> Arc<AssemblyLoader> {
                 base
             };
 
-            let mut entries: Vec<_> = std::fs::read_dir(base)
-                .unwrap()
+            let mut entries: Vec<_> = std::fs::read_dir(&base)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "could not read .NET shared framework directory {}: {e}",
+                        base.display()
+                    )
+                })
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
                 .collect();
@@ -47,8 +52,12 @@ fn get_loader() -> Arc<AssemblyLoader> {
                 .expect("no versions found in .NET shared path")
                 .path();
 
-            let loader = AssemblyLoader::new(path.to_str().unwrap().to_string())
-                .expect("Failed to create AssemblyLoader");
+            let loader = AssemblyLoader::new(
+                path.to_str()
+                    .expect("shared framework version directory names are ASCII")
+                    .to_string(),
+            )
+            .expect("Failed to create AssemblyLoader");
             Arc::new(loader)
         };
     }
@@ -771,7 +780,7 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
         .methods
         .iter()
         .position(|m| std::ptr::eq(m, method_def))
-        .unwrap();
+        .expect("method_def was retrieved from this same definition's methods list");
 
     let entrypoint = MethodDescription::new(
         td,

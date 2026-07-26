@@ -109,7 +109,10 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
 
                             // Check if obj is indeed a boxed T.
                             let obj_type = res_ctx
-                                .get_heap_description(obj.0.unwrap())
+                                .get_heap_description(
+                                    obj.0
+                                        .expect("obj.0.is_none() checked and returned early above"),
+                                )
                                 .map_err(|_| ())?;
                             let obj_ct = res_ctx.normalize_type(obj_type.into()).map_err(|_| ())?;
 
@@ -336,7 +339,9 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         );
         ctx.register_new_object(&boxed_nullable);
 
-        let h = boxed_nullable.0.unwrap();
+        let h = boxed_nullable
+            .0
+            .expect("boxed_nullable was just constructed via ObjectRef::new above");
         let ptr = unsafe { h.borrow().storage.raw_data_ptr() };
         let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct));
         ctx.push(StackValue::ManagedPtr(
@@ -353,7 +358,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     }
 
     // Normal unbox
-    let h = obj.0.unwrap(); // is_none case handled above
+    let h = obj.0.expect("is_none case handled above");
     let inner = h.borrow();
     let ptr = match &inner.storage {
         HeapStorage::Boxed(_) | HeapStorage::Obj(_) => unsafe { inner.storage.raw_data_ptr() },

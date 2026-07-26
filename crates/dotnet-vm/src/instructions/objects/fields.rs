@@ -128,7 +128,7 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
-        .unwrap();
+        .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
 
     let offset = base_offset + field_layout.position;
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(t));
@@ -186,7 +186,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
-        .unwrap();
+        .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
 
     let offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
         base_offset
@@ -293,7 +293,7 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
     let layout = storage.layout();
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
-        .unwrap();
+        .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
     let mut val_bytes = vec![0u8; field_layout.layout.size().as_usize()];
     dotnet_vm_ops::vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
 
@@ -400,7 +400,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         dotnet_vm_ops::vm_try!(instance_field_layout_cached(field.parent.clone(), &res_ctx));
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
-        .unwrap();
+        .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
 
     let field_offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
         base_offset
@@ -481,7 +481,7 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     let layout = storage.layout();
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
-        .unwrap();
+        .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
     let field_ptr = unsafe { base_ptr.add(field_layout.position.as_usize()) };
 
     let t = dotnet_vm_ops::vm_try!(res_ctx.get_field_type(field.clone()));

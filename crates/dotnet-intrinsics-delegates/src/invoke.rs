@@ -41,7 +41,11 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     {
         let targets_len = targets_ref.as_vector(|v| v.layout.length);
         if targets_len > 1 {
-            Some(targets_ref.0.unwrap())
+            Some(
+                targets_ref
+                    .0
+                    .expect("get_multicast_targets_ref returned a non-null object reference"),
+            )
         } else {
             // If len == 1, check if it's not 'this'
             let first_target = targets_ref.as_vector(|v| {
@@ -51,7 +55,11 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
                     .expect("multicast targets vector must contain first element")
             });
             if first_target != delegate_ref {
-                Some(targets_ref.0.unwrap())
+                Some(
+                    targets_ref
+                        .0
+                        .expect("get_multicast_targets_ref returned a non-null object reference"),
+                )
             } else {
                 None
             }

@@ -351,10 +351,26 @@ impl Atomic {
         let size = value.len();
         if Self::is_atomic_field_access_supported(ptr as *const u8, size) {
             let val = match size {
-                1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
-                2 => u16::from_ne_bytes(value.try_into().unwrap()) as u64,
-                4 => u32::from_ne_bytes(value.try_into().unwrap()) as u64,
-                8 => u64::from_ne_bytes(value.try_into().unwrap()),
+                1 => u8::from_ne_bytes(
+                    value
+                        .try_into()
+                        .expect("size == 1 guarantees value is 1 byte"),
+                ) as u64,
+                2 => u16::from_ne_bytes(
+                    value
+                        .try_into()
+                        .expect("size == 2 guarantees value is 2 bytes"),
+                ) as u64,
+                4 => u32::from_ne_bytes(
+                    value
+                        .try_into()
+                        .expect("size == 4 guarantees value is 4 bytes"),
+                ) as u64,
+                8 => u64::from_ne_bytes(
+                    value
+                        .try_into()
+                        .expect("size == 8 guarantees value is 8 bytes"),
+                ),
                 _ => unreachable!(),
             };
             unsafe { StandardAtomicAccess::store_atomic(ptr, size, val, ordering) };

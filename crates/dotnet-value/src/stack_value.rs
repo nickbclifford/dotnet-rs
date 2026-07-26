@@ -499,7 +499,7 @@ impl<'gc> StackValue<'gc> {
                 // This is used by ldloca/ldarga to get a byref to the value type.
                 let ptr =
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
-                NonNull::new(ptr).unwrap()
+                NonNull::new(ptr).expect("slice::as_ptr is never null, even for empty slices")
             }
             #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),

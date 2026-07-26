@@ -414,7 +414,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
     // `intrinsic_call` is entered from paths that already classify/cached the method as
     // intrinsic, so this branch should almost always be taken.
     if vm_likely!(metadata.is_some()) {
-        let metadata = metadata.unwrap();
+        let metadata = metadata.expect("metadata.is_some() checked above");
         ctx.set_current_intrinsic(Some(method.clone()));
         let res = dispatch_method_intrinsic(metadata.handler, ctx, method, generics);
         ctx.set_current_intrinsic(None);

@@ -65,12 +65,12 @@ pub(crate) fn resolve_runtime_parameter<'gc>(
         let method_index = instance
             .instance_storage
             .field::<usize>(instance.description.clone(), "method_index")
-            .unwrap()
+            .expect("DotnetRs.ParameterInfo must declare a method_index field")
             .read();
         let position = instance
             .instance_storage
             .field::<i32>(instance.description.clone(), "position")
-            .unwrap()
+            .expect("DotnetRs.ParameterInfo must declare a position field")
             .read();
         let (m_desc, lookup) = ctx.reflection_runtime_method_by_index(method_index);
         (m_desc, lookup, position as usize)

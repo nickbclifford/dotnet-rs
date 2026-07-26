@@ -100,7 +100,7 @@ pub fn localloc<'gc, T: StackOps<'gc> + VmRawMemoryOps<'gc> + ExceptionOps<'gc>>
     }
 
     ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(
-        ptr::NonNull::new(ptr).unwrap(),
+        ptr::NonNull::new(ptr).expect("null checked above"),
     )));
     StepResult::Continue
 }

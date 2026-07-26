@@ -239,7 +239,9 @@ impl<'gc> HeapManager<'gc> {
         if !to_finalize.is_empty() {
             let mut pending = self.pending_finalization.borrow_mut();
             for obj in to_finalize {
-                let ptr = obj.0.unwrap();
+                let ptr = obj
+                    .0
+                    .expect("finalization queue only ever holds non-null object references");
                 pending.push(obj);
                 if resurrected.insert(Gc::as_ptr(ptr) as usize) {
                     // Trace resurrection event

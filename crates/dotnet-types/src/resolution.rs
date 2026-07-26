@@ -209,7 +209,11 @@ impl Debug for ResolutionS {
             Some(_) => write!(
                 f,
                 "ResolutionS({} @ {:#?})",
-                self.definition().assembly.as_ref().unwrap().name,
+                self.definition()
+                    .assembly
+                    .as_ref()
+                    .expect("loaded resolutions carry an assembly manifest")
+                    .name,
                 self.as_raw()
             ),
         }

@@ -1545,27 +1545,27 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(property_info_type.clone(), "name")
-            .unwrap()
+            .expect("DotnetRs.PropertyInfo must declare a name field")
             .write(name_obj);
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(property_info_type.clone(), "getter")
-            .unwrap()
+            .expect("DotnetRs.PropertyInfo must declare a getter field")
             .write(getter_obj);
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(property_info_type.clone(), "setter")
-            .unwrap()
+            .expect("DotnetRs.PropertyInfo must declare a setter field")
             .write(setter_obj);
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(property_info_type.clone(), "declaringType")
-            .unwrap()
+            .expect("DotnetRs.PropertyInfo must declare a declaringType field")
             .write(declaring_type_obj);
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(property_info_type.clone(), "propertyType")
-            .unwrap()
+            .expect("DotnetRs.PropertyInfo must declare a propertyType field")
             .write(property_type_obj);
     });
 

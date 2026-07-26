@@ -34,7 +34,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
     let target_obj = handle
         .instance_storage
         .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .unwrap()
+        .expect("System.RuntimeTypeHandle must declare a _value field")
         .read();
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
     let target_ct = target_type.to_concrete(ctx.loader().as_ref());

@@ -286,11 +286,11 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     );
     span.instance_storage
         .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .unwrap()
+        .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
         .write(managed);
     span.instance_storage
         .field::<i32>(span.description.clone(), "_length")
-        .unwrap()
+        .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
         .write(len as i32);
 
     ctx.push_value_type(span);
@@ -336,7 +336,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         let obj_ref = field_handle
             .instance_storage
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
-            .unwrap()
+            .expect("System.RuntimeFieldHandle must declare a _value field")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
@@ -404,14 +404,14 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
         span_instance
             .instance_storage
             .field::<ManagedPtr<'gc>>(span_instance.description.clone(), "_reference")
-            .unwrap()
+            .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
             .write(managed);
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         span_instance
             .instance_storage
             .field::<i32>(span_instance.description.clone(), "_length")
-            .unwrap()
+            .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
             .write(element_count);
 
         ctx.push_value_type(span_instance);
@@ -465,7 +465,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         let obj_ref = field_handle
             .instance_storage
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
-            .unwrap()
+            .expect("System.RuntimeFieldHandle must declare a _value field")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
@@ -497,7 +497,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
         let obj_ref = type_handle
             .instance_storage
             .field::<ObjectRef<'gc>>(type_handle.description, "_value")
-            .unwrap()
+            .expect("System.RuntimeTypeHandle must declare a _value field")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_type(obj_ref))
     };

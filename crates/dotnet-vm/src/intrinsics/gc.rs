@@ -144,7 +144,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, T: TypedStackOps<'gc> + MemoryO
                 .borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()))
                 .storage
                 .as_obj_mut()
-                .unwrap()
+                .expect("is_obj checked above")
                 .finalizer_suppressed = false;
 
             // Add back to finalization queue if not already present

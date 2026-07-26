@@ -180,7 +180,9 @@ impl CLRString {
     }
 
     pub fn as_string(&self) -> String {
-        String::from_utf16(self.deref()).unwrap()
+        // Managed strings are not guaranteed valid UTF-16 (e.g. unpaired surrogates from
+        // raw paths or untrusted input), so lossily replace rather than panic the VM.
+        String::from_utf16_lossy(self.deref())
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u16] {

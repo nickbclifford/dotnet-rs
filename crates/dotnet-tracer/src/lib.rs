@@ -713,6 +713,8 @@ fn init_tracing() {
     // unless RUST_LOG is present (Registry handles EnvFilter which checks RUST_LOG).
     // But we are constructing EnvFilter manually.
 
+    const DIRECTIVE_MSG: &str = "directive is a hardcoded target name paired with tracing::Level's Display output, always well-formed";
+
     let legacy_level = env::var("DOTNET_RS_TRACE_LEVEL").ok();
     let filter = if let Some(lvl) = legacy_level {
         let target_level = match lvl.to_lowercase().as_str() {
@@ -726,25 +728,74 @@ fn init_tracing() {
         // Only enable the specified level for dotnet_vm targets, not all crates (like dotnetdll)
         // Also enable specific trace targets used by the tracer (instruction, method, etc.)
         EnvFilter::default()
-            .add_directive(format!("dotnet_vm={}", target_level).parse().unwrap())
-            .add_directive(format!("dotnet_cli={}", target_level).parse().unwrap())
+            .add_directive(
+                format!("dotnet_vm={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("dotnet_cli={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
             .add_directive(
                 format!("dotnet_assemblies={}", target_level)
                     .parse()
-                    .unwrap(),
+                    .expect(DIRECTIVE_MSG),
             )
-            .add_directive(format!("instruction={}", target_level).parse().unwrap())
-            .add_directive(format!("method={}", target_level).parse().unwrap())
-            .add_directive(format!("stack={}", target_level).parse().unwrap())
-            .add_directive(format!("field={}", target_level).parse().unwrap())
-            .add_directive(format!("branch={}", target_level).parse().unwrap())
-            .add_directive(format!("type={}", target_level).parse().unwrap())
-            .add_directive(format!("intrinsic={}", target_level).parse().unwrap())
-            .add_directive(format!("interop={}", target_level).parse().unwrap())
-            .add_directive(format!("gc={}", target_level).parse().unwrap())
-            .add_directive(format!("thread={}", target_level).parse().unwrap())
-            .add_directive(format!("exception={}", target_level).parse().unwrap())
-            .add_directive("dotnetdll=warn".parse().unwrap()) // Suppress verbose dotnetdll logs
+            .add_directive(
+                format!("instruction={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("method={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("stack={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("field={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("branch={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("type={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("intrinsic={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("interop={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(format!("gc={}", target_level).parse().expect(DIRECTIVE_MSG))
+            .add_directive(
+                format!("thread={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            .add_directive(
+                format!("exception={}", target_level)
+                    .parse()
+                    .expect(DIRECTIVE_MSG),
+            )
+            // Suppress verbose dotnetdll logs
+            .add_directive("dotnetdll=warn".parse().expect(DIRECTIVE_MSG))
     } else {
         EnvFilter::from_default_env()
     };

@@ -25,7 +25,8 @@ const MAKE_LOOKUP_CACHE_CAPACITY: usize = 512;
 thread_local! {
     static MAKE_LOOKUP_CACHE: RefCell<LruCache<ConcreteType, Arc<[ConcreteType]>>> =
         RefCell::new(LruCache::new(
-            NonZeroUsize::new(MAKE_LOOKUP_CACHE_CAPACITY).unwrap(),
+            NonZeroUsize::new(MAKE_LOOKUP_CACHE_CAPACITY)
+                .expect("MAKE_LOOKUP_CACHE_CAPACITY is a nonzero constant"),
         ));
 }
 

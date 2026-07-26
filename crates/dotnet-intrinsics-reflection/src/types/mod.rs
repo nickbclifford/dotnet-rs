@@ -306,7 +306,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 StackValue::ValueType(rth_handle) => rth_handle
                     .instance_storage
                     .field::<ObjectRef<'gc>>(rth_handle.description, "_value")
-                    .unwrap()
+                    .expect("System.RuntimeTypeHandle must declare a _value field")
                     .read(),
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => {

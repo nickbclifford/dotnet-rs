@@ -226,7 +226,7 @@ impl AssemblyLoader {
             let type_index = resolution
                 .definition()
                 .type_definition_index(index)
-                .unwrap();
+                .expect("index came from type_definition_index lookup on this same definition");
             return Some(TypeDescription::new(resolution, type_index));
         }
 
@@ -242,7 +242,7 @@ impl AssemblyLoader {
             let type_index = resolution
                 .definition()
                 .type_definition_index(index)
-                .unwrap();
+                .expect("index came from type_definition_index lookup on this same definition");
             return Some(TypeDescription::new(resolution, type_index));
         }
 

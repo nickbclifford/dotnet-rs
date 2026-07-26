@@ -165,7 +165,10 @@ impl NativeLibraries {
             t.trace_interop(0, "RESOLVE", &format!("Successfully loaded '{}'", name));
         }
         self.libraries.entry(name.to_string()).or_insert(lib);
-        Ok(self.libraries.get(name).unwrap())
+        Ok(self
+            .libraries
+            .get(name)
+            .expect("library was just inserted into this map above"))
     }
 
     pub fn get_function(

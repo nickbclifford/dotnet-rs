@@ -880,7 +880,9 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
             let ctx = self.current_context();
 
             if self.tracer_enabled() {
-                let ptr = instance.0.unwrap();
+                let ptr = instance
+                    .0
+                    .expect("finalization queue only ever holds non-null object references");
                 let obj_type = match &ptr.borrow().storage {
                     HeapStorage::Obj(o) => o.description.clone(),
                     _ => unreachable!(),

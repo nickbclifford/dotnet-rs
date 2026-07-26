@@ -207,7 +207,7 @@ unsafe impl Sync for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Sync 
 
 impl ObjectPtr {
     pub(crate) fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self {
-        ObjectPtr(NonNull::new(Gc::as_ptr(handle) as *mut _).unwrap())
+        ObjectPtr(NonNull::new(Gc::as_ptr(handle) as *mut _).expect("Gc::as_ptr is never null"))
     }
 
     /// # Safety

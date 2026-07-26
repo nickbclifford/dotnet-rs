@@ -168,7 +168,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 .methods
                 .iter()
                 .position(|m| m.name == ".ctor")
-                .unwrap();
+                .expect("System.Delegate/System.MulticastDelegate always declare a .ctor");
             method = MethodDescription::new(
                 base.clone(),
                 crate::GenericLookup::default(),

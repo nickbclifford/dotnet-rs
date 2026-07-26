@@ -181,7 +181,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             instance
                 .instance_storage
                 .field::<ObjectRef<'gc>>(rmh, "_value")
-                .unwrap()
+                .expect("System.RuntimeMethodHandle must declare a _value field")
                 .write(obj);
 
             ctx.push(StackValue::ValueType(instance));
@@ -228,12 +228,12 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     instance
                         .instance_storage
                         .field::<usize>(pi_type_inner.clone(), "method_index")
-                        .unwrap()
+                        .expect("DotnetRs.ParameterInfo must declare a method_index field")
                         .write(method_index);
                     instance
                         .instance_storage
                         .field::<i32>(pi_type_inner, "position")
-                        .unwrap()
+                        .expect("DotnetRs.ParameterInfo must declare a position field")
                         .write(i as i32);
                 });
                 pi_objs.push(pi_ref);
@@ -603,7 +603,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
     let method_obj = handle
         .instance_storage
         .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .unwrap()
+        .expect("System.RuntimeMethodHandle must declare a _value field")
         .read();
     let (method, lookup) =
         dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));

@@ -321,7 +321,10 @@ impl<'gc> ExecutionEngine<'gc> {
     fn handle_multicast_step(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let targets_len = {
             let frame = self.stack.current_frame();
-            let state = frame.multicast_state.as_ref().unwrap();
+            let state = frame
+                .multicast_state
+                .as_ref()
+                .expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()");
             ObjectRef(Some(state.targets)).as_vector(|v| v.layout.length)
         };
 
@@ -333,7 +336,11 @@ impl<'gc> ExecutionEngine<'gc> {
             let invoke_method = frame.state.info_handle.source.clone();
             let has_return_value = invoke_method.signature().return_type.1.is_some();
 
-            let next_index = frame.multicast_state.as_ref().unwrap().next_index;
+            let next_index = frame
+                .multicast_state
+                .as_ref()
+                .expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()")
+                .next_index;
             if next_index < targets_len && has_return_value {
                 let _ = ctx.pop();
             }
@@ -341,7 +348,7 @@ impl<'gc> ExecutionEngine<'gc> {
 
         let (target_delegate, args, _next_index) = {
             let frame = ctx.frame_stack.current_frame_mut();
-            let state = frame.multicast_state.as_mut().unwrap();
+            let state = frame.multicast_state.as_mut().expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()");
             let index = state.next_index;
             if index < targets_len {
                 let target = ObjectRef(Some(state.targets)).as_vector(|v| {

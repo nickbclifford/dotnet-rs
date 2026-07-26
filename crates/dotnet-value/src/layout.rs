@@ -56,9 +56,12 @@ impl LayoutManager {
             Self::Scalar(Scalar::ManagedPtr) => visitor(offset),
             Self::Field(flm) => {
                 for field in flm.fields.values() {
-                    field
-                        .layout
-                        .visit_managed_ptrs(offset.checked_add(field.position).unwrap(), visitor);
+                    field.layout.visit_managed_ptrs(
+                        offset.checked_add(field.position).expect(
+                            "field offsets stay within usize range for any real object layout",
+                        ),
+                        visitor,
+                    );
                 }
             }
             Self::Array(alm) => {
@@ -66,8 +69,12 @@ impl LayoutManager {
                 for i in 0..alm.length {
                     alm.element_layout.visit_managed_ptrs(
                         offset
-                            .checked_add(elem_size.checked_mul(i).unwrap())
-                            .unwrap(),
+                            .checked_add(elem_size.checked_mul(i).expect(
+                                "array byte size stays within usize range for any real array",
+                            ))
+                            .expect(
+                                "array element offsets stay within usize range for any real array",
+                            ),
                         visitor,
                     );
                 }
@@ -334,7 +341,11 @@ impl GcDesc {
                 if *TRACE_GC_PTR_READ {
                     let raw_bytes = &storage[offset..offset + ptr_size.min(storage.len() - offset)];
                     let raw_value = if raw_bytes.len() >= 8 {
-                        u64::from_ne_bytes(raw_bytes[..8].try_into().unwrap())
+                        u64::from_ne_bytes(
+                            raw_bytes[..8]
+                                .try_into()
+                                .expect("raw_bytes.len() >= 8 checked above"),
+                        )
                     } else {
                         0
                     };
@@ -582,7 +593,10 @@ impl<'gc> FieldType for ObjectRef<'gc> {
 impl<'gc> FieldType for ManagedPtr<'gc> {
     const SCALAR: Scalar = Scalar::ManagedPtr;
     fn read_from(bytes: &[u8]) -> Self {
-        let info = unsafe { ManagedPtr::read_unchecked(bytes).unwrap() };
+        let info = unsafe {
+            ManagedPtr::read_unchecked(bytes)
+                .expect("bytes were written by ManagedPtr::write_to for this same field")
+        };
         ManagedPtr::from_info_full(info, dotnet_types::TypeDescription::NULL, false)
     }
     fn write_to(&self, bytes: &mut [u8]) {
