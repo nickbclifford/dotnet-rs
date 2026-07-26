@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription, TypeResolver,
+    TypeDescription, TypeResolver, WellKnown,
     generics::{ConcreteType, GenericLookup, member_to_method_type},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete, runtime_type_from_method_type},
@@ -499,7 +499,7 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
     instance
         .instance_storage
@@ -626,7 +626,7 @@ pub fn handle_get_interfaces<'gc, T: ReflectionIntrinsicHost<'gc>>(
         InterfaceTraversalControl::Continue
     });
 
-    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Type));
     populate_reflection_array(ctx, interfaces, type_type.into())
 }
 
@@ -905,7 +905,7 @@ pub fn handle_get_generic_arguments<'gc, T: ReflectionIntrinsicHost<'gc>>(
         return StepResult::Yield;
     }
 
-    let type_type_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type_td = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Type));
     let type_type = ConcreteType::from(type_type_td);
     let mut vector = dotnet_vm_ops::vm_try!(ctx.new_vector(type_type, args.len()));
     for (i, (arg, chunk)) in args
@@ -931,7 +931,7 @@ pub fn handle_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + MemoryOps
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 

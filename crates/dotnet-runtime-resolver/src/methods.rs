@@ -1,6 +1,6 @@
 use crate::{ResolverExecutionContext, ResolverService};
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup, member_to_method_type},
     members::{FieldDescription, MethodDescription},
@@ -489,7 +489,7 @@ where
             method_generics: vec![].into(),
         };
 
-        let helper_type = self.loader.corlib_type("DotnetRs.SZArrayHelper`1")?;
+        let helper_type = self.loader.corlib_wkt(WellKnown::SupportSZArrayHelper1)?;
 
         Ok(self.loader.find_method_in_type_internal(
             helper_type,

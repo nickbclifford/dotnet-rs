@@ -12,7 +12,7 @@
 //! See `docs/EXCEPTION_HANDLING.md` for a full design walkthrough.
 
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::{TypeResolutionError, VmError},
     members::MethodDescription,
 };
@@ -108,7 +108,7 @@ pub fn extract_managed_exception<'gc>(
 
     let exception_type = ctx
         .loader()
-        .corlib_type("System.Exception")
+        .corlib_wkt(WellKnown::Exception)
         .expect("Failed to resolve System.Exception type");
 
     exception.as_object(|obj| {
@@ -220,7 +220,7 @@ impl ExceptionHandlingSystem {
         }
 
         // Capture and store stack trace
-        let exception_type = match ctx.loader().corlib_type("System.Exception") {
+        let exception_type = match ctx.loader().corlib_wkt(WellKnown::Exception) {
             Ok(t) => t,
             Err(e) => return StepResult::Error(e.into()),
         };

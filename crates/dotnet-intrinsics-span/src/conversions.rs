@@ -1,6 +1,7 @@
 use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    WellKnown,
     error::ExecutionError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -365,7 +366,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             dotnet_vm_ops::vm_try!(parse_static_array_size(&field_desc.definition().name));
         let data_slice = &initial_data[..array_size];
 
-        let span_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
+        let span_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReadOnlySpan1));
         let span_instance = dotnet_vm_ops::vm_try!(
             ctx.span_new_object_with_type_generics(span_type.clone(), vec![element_type.clone()])
         );

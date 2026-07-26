@@ -1,6 +1,6 @@
 use crate::ResolverService;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     comparer::decompose_type_source,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
@@ -108,8 +108,8 @@ where
             return Ok(cached);
         }
 
-        let enum_type = self.loader.corlib_type("System.Enum")?;
-        let value_type = self.loader.corlib_type("System.ValueType")?;
+        let enum_type = self.loader.corlib_wkt(WellKnown::Enum)?;
+        let value_type = self.loader.corlib_wkt(WellKnown::ValueType)?;
 
         for (a, _) in self.loader.ancestors(td.clone()) {
             if a == enum_type || a == value_type {
@@ -204,8 +204,8 @@ where
         use dotnet_value::object::HeapStorage::*;
         match &inner.storage {
             Obj(o) => Ok(o.description.clone()),
-            Vec(_) => self.loader.corlib_type("System.Array"),
-            Str(_) => self.loader.corlib_type("System.String"),
+            Vec(_) => self.loader.corlib_wkt(WellKnown::Array),
+            Str(_) => self.loader.corlib_wkt(WellKnown::String),
             Boxed(o) => Ok(o.description.clone()),
         }
     }
@@ -216,22 +216,22 @@ where
     ) -> Result<TypeDescription, TypeResolutionError> {
         let asms = self.loader();
         match vt {
-            ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
-            ValueType::Char(_) => asms.corlib_type("System.Char"),
-            ValueType::Int8(_) => asms.corlib_type("System.SByte"),
-            ValueType::UInt8(_) => asms.corlib_type("System.Byte"),
-            ValueType::Int16(_) => asms.corlib_type("System.Int16"),
-            ValueType::UInt16(_) => asms.corlib_type("System.UInt16"),
-            ValueType::Int32(_) => asms.corlib_type("System.Int32"),
-            ValueType::UInt32(_) => asms.corlib_type("System.UInt32"),
-            ValueType::Int64(_) => asms.corlib_type("System.Int64"),
-            ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
-            ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
-            ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::Float32(_) => asms.corlib_type("System.Single"),
-            ValueType::Float64(_) => asms.corlib_type("System.Double"),
-            ValueType::TypedRef(_, _) => asms.corlib_type("System.TypedReference"),
+            ValueType::Bool(_) => asms.corlib_wkt(WellKnown::Boolean),
+            ValueType::Char(_) => asms.corlib_wkt(WellKnown::Char),
+            ValueType::Int8(_) => asms.corlib_wkt(WellKnown::SByte),
+            ValueType::UInt8(_) => asms.corlib_wkt(WellKnown::Byte),
+            ValueType::Int16(_) => asms.corlib_wkt(WellKnown::Int16),
+            ValueType::UInt16(_) => asms.corlib_wkt(WellKnown::UInt16),
+            ValueType::Int32(_) => asms.corlib_wkt(WellKnown::Int32),
+            ValueType::UInt32(_) => asms.corlib_wkt(WellKnown::UInt32),
+            ValueType::Int64(_) => asms.corlib_wkt(WellKnown::Int64),
+            ValueType::UInt64(_) => asms.corlib_wkt(WellKnown::UInt64),
+            ValueType::NativeInt(_) => asms.corlib_wkt(WellKnown::IntPtr),
+            ValueType::NativeUInt(_) => asms.corlib_wkt(WellKnown::UIntPtr),
+            ValueType::Pointer(_) => asms.corlib_wkt(WellKnown::IntPtr),
+            ValueType::Float32(_) => asms.corlib_wkt(WellKnown::Single),
+            ValueType::Float64(_) => asms.corlib_wkt(WellKnown::Double),
+            ValueType::TypedRef(_, _) => asms.corlib_wkt(WellKnown::TypedReference),
             ValueType::Struct(s) => Ok(s.description.clone()),
         }
     }
@@ -242,17 +242,17 @@ where
     ) -> Result<TypeDescription, TypeResolutionError> {
         use dotnet_value::object::ObjectRef;
         match val {
-            StackValue::Int32(_) => self.loader.corlib_type("System.Int32"),
-            StackValue::Int64(_) => self.loader.corlib_type("System.Int64"),
+            StackValue::Int32(_) => self.loader.corlib_wkt(WellKnown::Int32),
+            StackValue::Int64(_) => self.loader.corlib_wkt(WellKnown::Int64),
             StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) => {
-                self.loader.corlib_type("System.IntPtr")
+                self.loader.corlib_wkt(WellKnown::IntPtr)
             }
-            StackValue::NativeFloat(_) => self.loader.corlib_type("System.Double"),
+            StackValue::NativeFloat(_) => self.loader.corlib_wkt(WellKnown::Double),
             StackValue::ObjectRef(ObjectRef(Some(o))) => self.get_heap_description(*o),
-            StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
+            StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_wkt(WellKnown::Object),
             StackValue::ManagedPtr(m) => Ok(m.inner_type()),
             StackValue::ValueType(o) => Ok(o.description.clone()),
-            StackValue::TypedRef(_, _) => self.loader.corlib_type("System.TypedReference"),
+            StackValue::TypedRef(_, _) => self.loader.corlib_wkt(WellKnown::TypedReference),
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
                 let lock = unsafe { &*ptr.as_ptr() };

@@ -3,7 +3,7 @@
 use crate::{ReflectionIntrinsicHost, types::string_from_heap_obj};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -92,7 +92,7 @@ pub fn intrinsic_runtime_assembly_get_manifest_resource_stream<
         return StepResult::Continue;
     };
 
-    let byte_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Byte"));
+    let byte_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Byte));
     let mut byte_array =
         dotnet_vm_ops::vm_try!(ctx.new_vector(ConcreteType::from(byte_type), resource_bytes.len()));
     byte_array.get_mut().copy_from_slice(resource_bytes);
@@ -101,7 +101,7 @@ pub fn intrinsic_runtime_assembly_get_manifest_resource_stream<
     let byte_array_obj = ctx.alloc_vec_ref(gc, byte_array);
 
     let memory_stream_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.IO.MemoryStream"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::IoMemoryStream));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(memory_stream_type.clone()));
 
     let lookup = GenericLookup::default();

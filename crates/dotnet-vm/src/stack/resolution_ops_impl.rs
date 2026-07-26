@@ -2,7 +2,7 @@ use crate::{
     ResolutionContext,
     stack::{context::VesContext, ops::VmResolutionOps},
 };
-use dotnet_types::generics::GenericLookup;
+use dotnet_types::{WellKnown, generics::GenericLookup};
 
 impl<'a, 'gc> VmResolutionOps<'gc> for VesContext<'a, 'gc> {
     /// Builds the current frame's [`ResolutionContext`] as a short-lived view.
@@ -34,7 +34,7 @@ impl<'a, 'gc> VmResolutionOps<'gc> for VesContext<'a, 'gc> {
                 resolution: self
                     .shared
                     .loader
-                    .corlib_type("System.Object")
+                    .corlib_wkt(WellKnown::Object)
                     .expect("System.Object must exist in corlib")
                     .resolution,
                 type_owner: None,

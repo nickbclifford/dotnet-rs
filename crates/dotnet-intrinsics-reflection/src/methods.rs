@@ -4,7 +4,7 @@ use dotnet_intrinsics_delegates::helpers::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -175,7 +175,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let rmh = ctx
                 .loader()
-                .corlib_type("System.RuntimeMethodHandle")
+                .corlib_wkt(WellKnown::RuntimeMethodHandle)
                 .expect("System.RuntimeMethodHandle must exist");
             let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rmh.clone()));
             instance
@@ -215,7 +215,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let pi_type = ctx
                 .loader()
-                .corlib_type("DotnetRs.ParameterInfo")
+                .corlib_wkt(WellKnown::SupportParameterInfo)
                 .expect("DotnetRs.ParameterInfo not found");
 
             let mut pi_objs = Vec::with_capacity(param_count);
@@ -241,7 +241,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let array_element_type = ctx
                 .loader()
-                .corlib_type("System.Reflection.ParameterInfo")
+                .corlib_wkt(WellKnown::ReflectionParameterInfo)
                 .expect("System.Reflection.ParameterInfo not found");
             let array_obj =
                 dotnet_vm_ops::vm_try!(ctx.new_vector(array_element_type.into(), param_count));
@@ -280,7 +280,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
 
             let generic_arity = method.method().generic_parameters.len();
-            let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
+            let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Type));
             if generic_arity == 0 {
                 return crate::types::populate_reflection_array(
                     ctx,
@@ -474,7 +474,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_method_custom_attributes(
                 ctx, method, None
             ));
-            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
             return crate::types::populate_reflection_array(
                 ctx,
                 attrs,
@@ -498,7 +498,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 method,
                 attribute_filter
             ));
-            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
             return crate::types::populate_reflection_array(
                 ctx,
                 attrs,
@@ -557,7 +557,7 @@ fn create_method_info_delegate<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
     };
 
-    let delegate_base = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+    let delegate_base = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Delegate));
     if !is_type_or_ancestor_named(ctx, &delegate_td, "System.Delegate") {
         return ctx.throw_by_name_with_message(
             "System.ArgumentException",
@@ -841,7 +841,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 if let HeapStorage::Boxed(o) = s {
                     let tr_type = ctx
                         .loader()
-                        .corlib_type("System.TypedReference")
+                        .corlib_wkt(WellKnown::TypedReference)
                         .expect("System.TypedReference must exist");
                     Ok(o.instance_storage
                         .with_data(|data| ctx.read_cts_value(&tr_type.into(), data)))

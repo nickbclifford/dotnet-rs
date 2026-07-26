@@ -3,7 +3,9 @@
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
 use crate::{BEGIN_END_NOT_SUPPORTED_MSG, DelegateInvokeHost, invoke::invoke_delegate};
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    TypeDescription, WellKnown, generics::GenericLookup, members::MethodDescription,
+};
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps};
@@ -100,7 +102,7 @@ pub(super) struct DelegateView<'a, 'gc, T: LoaderOps> {
 
 fn delegate_type<T: LoaderOps>(ctx: &T) -> TypeDescription {
     ctx.loader()
-        .corlib_type("System.Delegate")
+        .corlib_wkt(WellKnown::Delegate)
         .expect("System.Delegate must exist")
 }
 
@@ -144,7 +146,7 @@ impl<'a, 'gc, T: LoaderOps> DelegateView<'a, 'gc, T> {
             let multicast_type = self
                 .ctx
                 .loader()
-                .corlib_type("System.MulticastDelegate")
+                .corlib_wkt(WellKnown::MulticastDelegate)
                 .expect("System.MulticastDelegate must exist");
             let targets_ref = instance
                 .instance_storage
@@ -227,7 +229,7 @@ impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
             let multicast_type = self
                 .ctx
                 .loader()
-                .corlib_type("System.MulticastDelegate")
+                .corlib_wkt(WellKnown::MulticastDelegate)
                 .expect("System.MulticastDelegate must exist");
             instance
                 .instance_storage

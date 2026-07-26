@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::VmError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -49,7 +49,7 @@ pub fn intrinsic_runtime_assembly_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>
         .unwrap_or_default();
 
     let assembly_name_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.AssemblyName"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionAssemblyName));
     let assembly_name_instance = dotnet_vm_ops::vm_try!(ctx.new_object(assembly_name_type.clone()));
 
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
@@ -88,7 +88,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<
         1 => {
             let _inherit = ctx.pop_i32();
             let assembly_obj = ctx.pop_obj();
-            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+            let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
             (
                 assembly_obj,
                 None,
@@ -116,7 +116,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<
                 )
             } else {
                 let attribute_type =
-                    dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
+                    dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Attribute));
                 (
                     assembly_obj,
                     None,
@@ -128,7 +128,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, T: ReflectionIntrinsicHost<
 
     if method.parent.type_name() == "System.Attribute" && assembly_obj.0.is_some() {
         let assembly_base =
-            dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.Assembly"));
+            dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionAssembly));
         let assembly_base_concrete =
             RuntimeType::Type(assembly_base).to_concrete(ctx.loader().as_ref());
         let argument_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(assembly_obj));
@@ -176,7 +176,7 @@ pub fn intrinsic_attribute_get_custom_attributes<
         let _ = ctx.pop();
     }
 
-    let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Attribute"));
+    let attribute_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Attribute));
     let array = dotnet_vm_ops::vm_try!(ctx.new_vector(attribute_type.into(), 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(Box::new(array)));
     ctx.register_new_object(&obj);
@@ -202,7 +202,7 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let runtime_assembly_type = dotnet_vm_ops::vm_try!(
         ctx.loader()
-            .corlib_type("System.Reflection.RuntimeAssembly")
+            .corlib_wkt(WellKnown::ReflectionRuntimeAssembly)
     );
     let asm_handle = dotnet_vm_ops::vm_try!(ctx.new_object(runtime_assembly_type));
     let assembly_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(asm_handle)));
@@ -634,7 +634,7 @@ pub fn handle_get_custom_attributes_bool<'gc, T: ReflectionIntrinsicHost<'gc>>(
         None
     ));
 
-    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
     populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
 }
 
@@ -658,7 +658,7 @@ pub fn handle_get_custom_attributes_typed<'gc, T: ReflectionIntrinsicHost<'gc>>(
         attribute_filter,
     ));
 
-    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
     populate_reflection_array(ctx, custom_attributes, ConcreteType::from(object_type))
 }
 
@@ -733,7 +733,7 @@ pub fn handle_get_methods<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let method_info_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionMethodInfo));
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
@@ -1099,7 +1099,7 @@ pub fn handle_get_member<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ));
 
     let member_info_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionMemberInfo));
     populate_reflection_array(ctx, member_objs, ConcreteType::from(member_info_type))
 }
 
@@ -1120,7 +1120,7 @@ pub fn handle_get_members<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ));
 
     let member_info_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionMemberInfo));
     populate_reflection_array(ctx, member_objs, ConcreteType::from(member_info_type))
 }
 
@@ -1133,7 +1133,7 @@ pub fn handle_get_nested_types<
 ) -> StepResult {
     let _flags = ctx.pop_i32();
     let _obj = ctx.pop_obj();
-    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Type"));
+    let type_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Type));
     populate_reflection_array(ctx, vec![], type_type.into())
 }
 
@@ -1204,7 +1204,7 @@ pub fn handle_get_fields<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let field_info_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.FieldInfo"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionFieldInfo));
     populate_reflection_array(ctx, fields_objs, ConcreteType::from(field_info_type))
 }
 
@@ -1531,7 +1531,7 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let declaring_type_obj = crate::common::get_runtime_type(ctx, declaring_runtime_type.clone());
     let property_type_obj = crate::common::get_runtime_type(ctx, property_type_runtime);
 
-    let property_info_type = ctx.loader().corlib_type("DotnetRs.PropertyInfo")?;
+    let property_info_type = ctx.loader().corlib_wkt(WellKnown::SupportPropertyInfo)?;
     let property_info_instance = ctx.new_object(property_info_type.clone())?;
 
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
@@ -1604,7 +1604,7 @@ pub fn handle_get_properties<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let property_info_type =
-        dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Reflection.PropertyInfo"));
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ReflectionPropertyInfo));
     populate_reflection_array(ctx, property_objs, ConcreteType::from(property_info_type))
 }
 
@@ -1751,7 +1751,7 @@ pub fn handle_get_constructors<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let constructor_info_type = dotnet_vm_ops::vm_try!(
         ctx.loader()
-            .corlib_type("System.Reflection.ConstructorInfo")
+            .corlib_wkt(WellKnown::ReflectionConstructorInfo)
     );
     populate_reflection_array(
         ctx,

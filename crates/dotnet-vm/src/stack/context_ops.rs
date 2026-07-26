@@ -7,7 +7,7 @@ use crate::{
 };
 use dotnet_tracer::Tracer;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     error::{ExecutionError, IntrinsicError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -248,7 +248,7 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
         if let Some(handle) = object.0 {
             self.resolver().get_heap_description(handle)
         } else {
-            self.shared.loader.corlib_type("System.Object")
+            self.shared.loader.corlib_wkt(WellKnown::Object)
         }
     }
 }
@@ -896,7 +896,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                         let object_type = self
                             .shared
                             .loader
-                            .corlib_type("System.Object")
+                            .corlib_wkt(WellKnown::Object)
                             .expect("System.Object must exist in corlib");
                         let method_desc = object_type
                             .definition()

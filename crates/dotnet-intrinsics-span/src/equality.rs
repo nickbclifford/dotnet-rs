@@ -2,7 +2,7 @@ use crate::{SpanIntrinsicHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_simd::sequence_equal as simd_sequence_equal;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
@@ -172,7 +172,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         // Arguments (a, b) are already on the stack from the peek earlier
         let loader = ctx.loader();
         let memory_extensions_type =
-            dotnet_vm_ops::vm_try!(loader.corlib_type("System.MemoryExtensions"));
+            dotnet_vm_ops::vm_try!(loader.corlib_wkt(WellKnown::MemoryExtensions));
         let def = memory_extensions_type.definition();
 
         let (method_idx, _) = match def

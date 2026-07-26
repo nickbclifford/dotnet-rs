@@ -4,7 +4,7 @@ use crate::{
     stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{WellKnown, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
@@ -75,11 +75,8 @@ pub fn intrinsic_exception_capture_dispatch_state<
 ) -> StepResult {
     let _this = ctx.pop_obj();
 
-    let dispatch_state_type = dotnet_vm_ops::vm_try!(
-        ctx.loader()
-            .corlib_type("System.Exception/DispatchState")
-            .or_else(|_| ctx.loader().corlib_type("System.Exception+DispatchState"))
-    );
+    let dispatch_state_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::ExceptionDispatchState));
     let dispatch_state = dotnet_vm_ops::vm_try!(ctx.new_object(dispatch_state_type));
     ctx.push_value_type(dispatch_state);
     StepResult::Continue

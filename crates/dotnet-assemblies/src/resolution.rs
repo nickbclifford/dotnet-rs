@@ -1,6 +1,6 @@
 use crate::{AssemblyLoader, error::AssemblyLoadError, loader::SUPPORT_ASSEMBLY};
 use dotnet_types::{
-    TypeDescription, TypeResolver,
+    TypeDescription, TypeResolver, WellKnown,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -20,6 +20,10 @@ use thiserror::Error;
 impl TypeResolver for AssemblyLoader {
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
         self.corlib_type(name)
+    }
+
+    fn corlib_wkt(&self, handle: WellKnown) -> Result<TypeDescription, TypeResolutionError> {
+        self.corlib_wkt(handle)
     }
 
     fn locate_type(
@@ -160,14 +164,44 @@ impl AssemblyLoader {
         ))
     }
 
+    /// Resolves a core-library type whose metadata name is supplied at runtime.
     pub fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
-        if let Some(t) = self.corlib_cache.get(name) {
+        if let Some(t) = self.dynamic_corlib_cache.get(name) {
             return Ok(t.clone());
         }
 
         let result = self.corlib_type_internal(name)?;
-        self.corlib_cache.insert(name.to_string(), result.clone());
+        self.dynamic_corlib_cache
+            .insert(name.to_string(), result.clone());
         Ok(result)
+    }
+
+    /// Resolves and caches a statically selected core-library or support-library type.
+    pub fn corlib_wkt(&self, wkt: WellKnown) -> Result<TypeDescription, TypeResolutionError> {
+        let cell = &self.wkt_table[wkt as usize];
+        if let Some(resolved) = cell.get() {
+            return Ok(resolved.clone());
+        }
+
+        // `OnceLock::get_or_try_init` is unstable on stable Rust. Resolve before
+        // setting the cell so failures remain uncached and can be retried.
+        let resolved = self.corlib_type_internal_for_wkt(wkt)?;
+        match cell.set(resolved.clone()) {
+            Ok(()) => Ok(resolved),
+            Err(_) => Ok(cell.get().cloned().unwrap_or(resolved)),
+        }
+    }
+
+    fn corlib_type_internal_for_wkt(
+        &self,
+        wkt: WellKnown,
+    ) -> Result<TypeDescription, TypeResolutionError> {
+        match wkt {
+            WellKnown::ExceptionDispatchState => self
+                .corlib_type_internal("System.Exception/DispatchState")
+                .or_else(|_| self.corlib_type_internal("System.Exception+DispatchState")),
+            other => self.corlib_type_internal(other.name()),
+        }
     }
 
     fn corlib_type_internal(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
@@ -355,25 +389,25 @@ impl AssemblyLoader {
 
                 self.locate_type(ty.resolution(), parent)
             }
-            BaseType::Boolean => self.corlib_type("System.Boolean"),
-            BaseType::Char => self.corlib_type("System.Char"),
-            BaseType::Int8 => self.corlib_type("System.SByte"),
-            BaseType::UInt8 => self.corlib_type("System.Byte"),
-            BaseType::Int16 => self.corlib_type("System.Int16"),
-            BaseType::UInt16 => self.corlib_type("System.UInt16"),
-            BaseType::Int32 => self.corlib_type("System.Int32"),
-            BaseType::UInt32 => self.corlib_type("System.UInt32"),
-            BaseType::Int64 => self.corlib_type("System.Int64"),
-            BaseType::UInt64 => self.corlib_type("System.UInt64"),
-            BaseType::Float32 => self.corlib_type("System.Single"),
-            BaseType::Float64 => self.corlib_type("System.Double"),
+            BaseType::Boolean => self.corlib_wkt(WellKnown::Boolean),
+            BaseType::Char => self.corlib_wkt(WellKnown::Char),
+            BaseType::Int8 => self.corlib_wkt(WellKnown::SByte),
+            BaseType::UInt8 => self.corlib_wkt(WellKnown::Byte),
+            BaseType::Int16 => self.corlib_wkt(WellKnown::Int16),
+            BaseType::UInt16 => self.corlib_wkt(WellKnown::UInt16),
+            BaseType::Int32 => self.corlib_wkt(WellKnown::Int32),
+            BaseType::UInt32 => self.corlib_wkt(WellKnown::UInt32),
+            BaseType::Int64 => self.corlib_wkt(WellKnown::Int64),
+            BaseType::UInt64 => self.corlib_wkt(WellKnown::UInt64),
+            BaseType::Float32 => self.corlib_wkt(WellKnown::Single),
+            BaseType::Float64 => self.corlib_wkt(WellKnown::Double),
             BaseType::IntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                self.corlib_type("System.IntPtr")
+                self.corlib_wkt(WellKnown::IntPtr)
             }
-            BaseType::UIntPtr => self.corlib_type("System.UIntPtr"),
-            BaseType::Object => self.corlib_type("System.Object"),
-            BaseType::String => self.corlib_type("System.String"),
-            BaseType::Vector(_, _) | BaseType::Array(_, _) => self.corlib_type("System.Array"),
+            BaseType::UIntPtr => self.corlib_wkt(WellKnown::UIntPtr),
+            BaseType::Object => self.corlib_wkt(WellKnown::Object),
+            BaseType::String => self.corlib_wkt(WellKnown::String),
+            BaseType::Vector(_, _) | BaseType::Array(_, _) => self.corlib_wkt(WellKnown::Array),
         }
     }
 
@@ -624,7 +658,7 @@ impl AssemblyLoader {
                         if method_ref.name == ".ctor"
                             && let BaseType::Array(_, _) = concrete.get()
                         {
-                            let array_type = self.corlib_type("System.Array")?;
+                            let array_type = self.corlib_wkt(WellKnown::Array)?;
                             for (idx, method) in array_type.definition().methods.iter().enumerate()
                             {
                                 if method.name == "CtorArraySentinel" {

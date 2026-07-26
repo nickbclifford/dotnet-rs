@@ -1,6 +1,6 @@
 use crate::{ResolverExecutionContext, ResolverService};
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     comparer::decompose_type_source,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
@@ -251,7 +251,7 @@ where
         if let Some(source) = inner {
             self.loader.find_concrete_type(source.clone())
         } else {
-            self.loader.corlib_type("System.Void")
+            self.loader.corlib_wkt(WellKnown::Void)
         }
     }
 

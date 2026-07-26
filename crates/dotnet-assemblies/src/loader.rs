@@ -9,7 +9,7 @@ use crate::{
 };
 use dashmap::DashMap;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     comparer::TypeComparer,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
@@ -107,7 +107,10 @@ pub struct AssemblyLoader {
     /// Used for name normalization during intrinsic dispatch.
     /// E.g., "DotnetRs.Delegate" → "System.Delegate"
     pub(crate) reverse_stubs: HashMap<String, String>,
-    pub(crate) corlib_cache: DashMap<String, TypeDescription>,
+    /// Lazily resolved descriptors indexed by [`WellKnown`] discriminant.
+    pub(crate) wkt_table: Vec<std::sync::OnceLock<TypeDescription>>,
+    /// String-keyed cache reserved for runtime-provided corlib names.
+    pub(crate) dynamic_corlib_cache: DashMap<String, TypeDescription>,
     pub(crate) type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
     pub(crate) method_cache: DashMap<
         (ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>),
@@ -236,7 +239,10 @@ impl AssemblyLoader {
             native_search_dirs: RwLock::new(Vec::new()),
             stubs: HashMap::new(),
             reverse_stubs: HashMap::new(),
-            corlib_cache: DashMap::new(),
+            wkt_table: std::iter::repeat_with(std::sync::OnceLock::new)
+                .take(WellKnown::COUNT)
+                .collect(),
+            dynamic_corlib_cache: DashMap::new(),
             type_cache: DashMap::new(),
             method_cache: DashMap::with_hasher(DefaultHashBuilder::default()),
             type_cache_hits: AtomicU64::new(0),

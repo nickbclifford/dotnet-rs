@@ -5,6 +5,7 @@
 use crate::{DelegateInvokeHost, helpers::*};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    WellKnown,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
@@ -49,7 +50,7 @@ fn push_delegate_with_invocation_list<'gc, T: DelegateEqualsHost<'gc>>(
 ) -> StepResult {
     let new_delegate = ctx.clone_object(source);
 
-    let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Delegate"));
+    let delegate_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Delegate));
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = dotnet_vm_ops::vm_try!(ctx.new_vector(delegate_concrete, invocation_list.len()));
     let array_obj = ctx.alloc_vec_ref(ctx.gc_with_token(&ctx.no_active_borrows_token()), array_v);

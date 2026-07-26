@@ -32,6 +32,9 @@ pub mod generics;
 pub mod members;
 pub mod resolution;
 pub mod runtime;
+mod wkt;
+
+pub use wkt::WellKnown;
 
 const _: [(); size_of::<TypeIndex>()] = [(); size_of::<usize>()];
 
@@ -52,11 +55,16 @@ pub(crate) const fn sentinel_type_index() -> TypeIndex {
 /// names, metadata tokens, and concrete generic signatures into resolved type
 /// descriptors.
 pub trait TypeResolver {
-    /// Looks up a core-library type by its short metadata name.
+    /// Looks up a core-library type by a runtime-provided metadata name.
     ///
-    /// This is typically used for well-known framework types (for example,
-    /// `System.Object`) that are expected to exist in corlib.
+    /// This is the dynamic fallback for names that are not selected statically.
+    /// Runtime-owned fixed names should use [`TypeResolver::corlib_wkt`] instead.
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, error::TypeResolutionError>;
+
+    /// Looks up a statically selected core-library or support-library type.
+    fn corlib_wkt(&self, handle: WellKnown) -> Result<TypeDescription, error::TypeResolutionError> {
+        self.corlib_type(handle.name())
+    }
 
     /// Resolves a metadata [`UserType`] token within the provided resolution scope.
     fn locate_type(

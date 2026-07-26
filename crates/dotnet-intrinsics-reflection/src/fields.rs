@@ -1,7 +1,7 @@
 use crate::ReflectionIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     runtime::{RuntimeType, runtime_type_from_concrete},
@@ -49,7 +49,7 @@ pub fn intrinsic_field_info_get_custom_attributes_bool<'gc, T: ReflectionIntrins
     let attrs = dotnet_vm_ops::vm_try!(crate::types::collect_field_custom_attributes(
         ctx, field, None
     ));
-    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
     crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type))
 }
 
@@ -72,7 +72,7 @@ pub fn intrinsic_field_info_get_custom_attributes_typed<'gc, T: ReflectionIntrin
         field,
         attribute_filter
     ));
-    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Object"));
+    let object_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Object));
     crate::types::populate_reflection_array(ctx, attrs, ConcreteType::from(object_type))
 }
 
@@ -129,10 +129,10 @@ pub fn intrinsic_field_info_get_field_type<'gc, T: ReflectionIntrinsicHost<'gc>>
 
 fn push_boxed_constant<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
-    type_name: &str,
+    type_handle: WellKnown,
     value: StackValue<'gc>,
 ) -> StepResult {
-    let t = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type(type_name));
+    let t = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(type_handle));
     let boxed = dotnet_vm_ops::vm_try!(ctx.box_value(&ConcreteType::from(t), value));
     ctx.push_obj(boxed);
     StepResult::Continue
@@ -167,30 +167,36 @@ pub fn intrinsic_field_info_get_raw_constant_value<'gc, T: ReflectionIntrinsicHo
 
     match constant {
         Constant::Boolean(v) => {
-            push_boxed_constant(ctx, "System.Boolean", StackValue::Int32(i32::from(*v)))
+            push_boxed_constant(ctx, WellKnown::Boolean, StackValue::Int32(i32::from(*v)))
         }
-        Constant::Char(v) => push_boxed_constant(ctx, "System.Char", StackValue::Int32(*v as i32)),
-        Constant::Int8(v) => push_boxed_constant(ctx, "System.SByte", StackValue::Int32(*v as i32)),
-        Constant::UInt8(v) => push_boxed_constant(ctx, "System.Byte", StackValue::Int32(*v as i32)),
+        Constant::Char(v) => {
+            push_boxed_constant(ctx, WellKnown::Char, StackValue::Int32(*v as i32))
+        }
+        Constant::Int8(v) => {
+            push_boxed_constant(ctx, WellKnown::SByte, StackValue::Int32(*v as i32))
+        }
+        Constant::UInt8(v) => {
+            push_boxed_constant(ctx, WellKnown::Byte, StackValue::Int32(*v as i32))
+        }
         Constant::Int16(v) => {
-            push_boxed_constant(ctx, "System.Int16", StackValue::Int32(*v as i32))
+            push_boxed_constant(ctx, WellKnown::Int16, StackValue::Int32(*v as i32))
         }
         Constant::UInt16(v) => {
-            push_boxed_constant(ctx, "System.UInt16", StackValue::Int32(*v as i32))
+            push_boxed_constant(ctx, WellKnown::UInt16, StackValue::Int32(*v as i32))
         }
-        Constant::Int32(v) => push_boxed_constant(ctx, "System.Int32", StackValue::Int32(*v)),
+        Constant::Int32(v) => push_boxed_constant(ctx, WellKnown::Int32, StackValue::Int32(*v)),
         Constant::UInt32(v) => {
-            push_boxed_constant(ctx, "System.UInt32", StackValue::NativeInt(*v as isize))
+            push_boxed_constant(ctx, WellKnown::UInt32, StackValue::NativeInt(*v as isize))
         }
-        Constant::Int64(v) => push_boxed_constant(ctx, "System.Int64", StackValue::Int64(*v)),
+        Constant::Int64(v) => push_boxed_constant(ctx, WellKnown::Int64, StackValue::Int64(*v)),
         Constant::UInt64(v) => {
-            push_boxed_constant(ctx, "System.UInt64", StackValue::Int64(*v as i64))
+            push_boxed_constant(ctx, WellKnown::UInt64, StackValue::Int64(*v as i64))
         }
         Constant::Float32(v) => {
-            push_boxed_constant(ctx, "System.Single", StackValue::NativeFloat((*v).into()))
+            push_boxed_constant(ctx, WellKnown::Single, StackValue::NativeFloat((*v).into()))
         }
         Constant::Float64(v) => {
-            push_boxed_constant(ctx, "System.Double", StackValue::NativeFloat(*v))
+            push_boxed_constant(ctx, WellKnown::Double, StackValue::NativeFloat(*v))
         }
         Constant::String(chars) => {
             ctx.push_string(CLRString::new(chars.clone()));
@@ -480,7 +486,7 @@ pub fn intrinsic_field_info_get_field_handle<
 ) -> StepResult {
     let obj_ref = ctx.pop_obj();
 
-    let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
+    let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeFieldHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rfh.clone()));
     obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 

@@ -48,7 +48,10 @@ mod tests {
     use super::{instance_field_layout_cached, populate_gc_desc};
     use crate::{context::ResolutionContext, state::SharedGlobalState};
     use dotnet_assemblies::{AssemblyLoader, find_dotnet_app_path};
-    use dotnet_types::generics::{ConcreteType, GenericLookup};
+    use dotnet_types::{
+        WellKnown,
+        generics::{ConcreteType, GenericLookup},
+    };
     use dotnet_value::layout::{LayoutManager, Scalar};
     use dotnetdll::prelude::{BaseType, TypeSource, UserType};
     use std::sync::Arc;
@@ -67,7 +70,7 @@ mod tests {
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let empty = GenericLookup::default();
 
-        let nullable_td = loader.corlib_type("System.Nullable`1").unwrap();
+        let nullable_td = loader.corlib_wkt(WellKnown::Nullable1).unwrap();
         let int_ct = ConcreteType::new(nullable_td.resolution.clone(), BaseType::Int32);
         let lookup = GenericLookup::new(vec![int_ct.clone()]);
 

@@ -15,6 +15,16 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
 
+## Well-Known Type Registry
+
+Runtime code that refers to a fixed core-library or support-library type uses the `WellKnown` enum from `dotnet-types/src/wkt.rs` rather than repeatedly resolving a metadata name. The enum has 59 variants, is represented as a contiguous `usize` index, and provides `WellKnown::name()` for the canonical metadata name. `WellKnown::from_name()` performs the reverse mapping, including both supported spellings of the nested exception dispatch-state type.
+
+`AssemblyLoader` owns `wkt_table: Vec<OnceLock<TypeDescription>>`, initialized with `WellKnown::COUNT` empty cells. A handle's discriminant indexes its cell. `AssemblyLoader::corlib_wkt()` is the one-time resolution seam: on the first successful access to a variant it runs the normal corlib resolution path and stores the resulting descriptor; later accesses clone the cached descriptor. Resolution errors are deliberately not cached, so a type that is not available yet can be retried. Concurrent first accesses may both perform resolution, but `OnceLock` retains one successful result. `WellKnown::ExceptionDispatchState` has a specialized resolver that tries `System.Exception/DispatchState` before `System.Exception+DispatchState`.
+
+The string API, `corlib_type(&str)`, survives as the dynamic fallback. It uses the separate `dynamic_corlib_cache` and does not route names through the well-known table. Its production callers receive names as runtime data or through APIs that accept arbitrary names: a user string passed to `Type.GetType`, the name parameter accepted by the VM's `throw_by_name` helpers, and metadata names encountered while resolving attribute arguments. Fixed runtime-owned names should use `corlib_wkt()` instead.
+
+Core-library availability changes during a loader's lifetime. During `AssemblyLoader` construction, the embedded support assembly is loaded and its stub mappings are populated, so a BCL name such as `System.Delegate` may already resolve to its `DotnetRs` implementation. By contrast, `mscorlib` and `System.Private.CoreLib` entries are loaded lazily by `get_assembly()` when resolution first needs them. The normal lookup order remains stubs, `mscorlib`, `System.Private.CoreLib`, the support assembly, and the legacy fallback. Consequently the well-known table is created empty rather than filled eagerly during construction: forcing every core-library lookup then would defeat lazy loading and could fail in loader configurations where a core library is not yet available. Per-cell lazy initialization also preserves retry behavior when availability changes later.
+
 ## Resolution Pipeline
 
 ### Descriptor Representation (`dotnet-types/src/`)

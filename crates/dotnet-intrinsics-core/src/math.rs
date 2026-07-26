@@ -1,5 +1,6 @@
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
+    WellKnown,
     error::{ExecutionError, VmError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -16,9 +17,9 @@ use std::sync::Arc;
 fn instantiate_comparer<'gc, T: LoaderOps + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     target_type: ConcreteType,
-    comparer_type_name: &str,
+    comparer_type: WellKnown,
 ) -> Result<ObjectRef<'gc>, VmError> {
-    let comparer_td = ctx.loader().corlib_type(comparer_type_name)?;
+    let comparer_td = ctx.loader().corlib_wkt(comparer_type)?;
     let comparer_lookup = GenericLookup::new(vec![target_type]);
 
     // Keep the comparer as a generic type-definition + lookup pair.
@@ -58,7 +59,7 @@ pub fn intrinsic_equality_comparer_get_default<
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,
-        "DotnetRs.Comparers.Equality/GenericEqualityComparer`1",
+        WellKnown::SupportComparersEqualityComparer1,
     ));
     ctx.push_obj(instance);
     StepResult::Continue
@@ -76,7 +77,7 @@ pub fn intrinsic_comparer_get_default<'gc, T: LoaderOps + MemoryOps<'gc> + Typed
     let instance = dotnet_vm_ops::vm_try!(instantiate_comparer(
         ctx,
         target_type,
-        "DotnetRs.Comparers.Ordering/FallbackComparer`1",
+        WellKnown::SupportComparersOrderingComparer1,
     ));
     ctx.push_obj(instance);
     StepResult::Continue

@@ -1,6 +1,7 @@
 use crate::NULL_REF_MSG;
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
+    WellKnown,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
@@ -69,7 +70,7 @@ pub fn intrinsic_string_get_raw_data<'gc, T: TypedStackOps<'gc> + ExceptionOps<'
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = ctx.pop();
-    let char_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.Char"));
+    let char_type = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::Char));
 
     let obj = val.as_object_ref();
     if let Some(handle) = obj.0 {

@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use dotnet_runtime_memory::ops::BaseMemoryOps;
+use dotnet_types::WellKnown;
 use dotnet_value::{StackValue, object::ObjectRef, string::CLRString};
 use dotnet_vm_data::{
     ExceptionState, HandlerAddress, SearchState, UnwindState, UnwindTarget, exceptions::HandlerKind,
@@ -21,7 +22,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let obj_ref = self.alloc_obj_ref(gc, instance);
 
         let base_exception_type =
-            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));
+            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_wkt(WellKnown::Exception));
         if !message.is_empty() {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);
@@ -55,7 +56,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let obj_ref = self.alloc_obj_ref(gc, instance);
 
         let base_exception_type =
-            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.Exception"));
+            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_wkt(WellKnown::Exception));
         if !message.is_empty() {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);

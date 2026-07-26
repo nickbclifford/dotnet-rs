@@ -12,7 +12,7 @@ use crate::{
 };
 use dotnet_metrics::{CacheStats, RuntimeMetricsSnapshot};
 use dotnet_tracer::Tracer;
-use dotnet_types::members::MethodDescription;
+use dotnet_types::{WellKnown, members::MethodDescription};
 use dotnet_utils::{
     ArenaId,
     gc::GCHandle,
@@ -300,7 +300,7 @@ impl Executor {
                                 "Entrypoint parameter must be a string[] vector (ECMA-335 II.15.4.1.2)"
                             );
 
-                            let string_type = ctx.loader().corlib_type("System.String")?;
+                            let string_type = ctx.loader().corlib_wkt(WellKnown::String)?;
                             let mut argv_vector = ctx.new_vector(string_type.into(), argv.len())?;
 
                             for (arg, chunk) in argv

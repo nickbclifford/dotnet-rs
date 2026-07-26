@@ -1,5 +1,5 @@
 use crate::{
-    TypeDescription, TypeResolver,
+    TypeDescription, TypeResolver, WellKnown,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     resolution::ResolutionS,
@@ -89,12 +89,12 @@ pub fn runtime_type_from_concrete(
                     (Some("System"), "Object") => RuntimeType::Object,
                     (Some("System"), "String") => RuntimeType::String,
                     (Some("System"), "Delegate") => loader
-                        .corlib_type("System.Delegate")
+                        .corlib_wkt(WellKnown::Delegate)
                         .ok()
                         .map(RuntimeType::Type)
                         .unwrap_or_else(|| RuntimeType::Type(td.clone())),
                     (Some("System"), "MulticastDelegate") => loader
-                        .corlib_type("System.MulticastDelegate")
+                        .corlib_wkt(WellKnown::MulticastDelegate)
                         .ok()
                         .map(RuntimeType::Type)
                         .unwrap_or_else(|| RuntimeType::Type(td.clone())),
@@ -197,7 +197,7 @@ runtime_type_impls! {
     },
     resolution: |loader| {
         Void | TypedReference => loader
-            .corlib_type("System.Object")
+            .corlib_wkt(WellKnown::Object)
             .expect("System.Object must exist")
             .resolution
             .clone(),
@@ -212,7 +212,7 @@ runtime_type_impls! {
         | ByRef(_)
         | ValuePointer(_, _)
         | FunctionPointer(_) => loader
-            .corlib_type("System.Object")
+            .corlib_wkt(WellKnown::Object)
             .expect("System.Object must exist")
             .resolution,
     },
@@ -256,12 +256,12 @@ runtime_type_impls! {
     to_concrete: |loader, corlib_res| {
         Void => ConcreteType::from(
             loader
-                .corlib_type("System.Void")
+                .corlib_wkt(WellKnown::Void)
                 .expect("System.Void must exist"),
         ),
         TypedReference => ConcreteType::from(
             loader
-                .corlib_type("System.TypedReference")
+                .corlib_wkt(WellKnown::TypedReference)
                 .expect("System.TypedReference must exist"),
         ),
         Type(td) => ConcreteType::from(td.clone()),
@@ -300,7 +300,7 @@ runtime_type_impls! {
         },
         ByRef(t) => {
             let by_ref_type = loader
-                .corlib_type("System.ByReference`1")
+                .corlib_wkt(WellKnown::ByRef1)
                 .expect("System.ByReference`1 not found");
             ConcreteType::new(
                 by_ref_type.resolution.clone(),

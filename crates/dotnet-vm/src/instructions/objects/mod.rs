@@ -10,7 +10,7 @@ const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid p
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 const OBJECT_IO_INLINE_BUFFER_SIZE: usize = 64;
 use dotnet_macros::dotnet_instruction;
-use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
+use dotnet_types::{WellKnown, comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
     CLRString, StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
@@ -159,9 +159,14 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
             type_name.as_ref(),
             "System.Delegate" | "System.MulticastDelegate"
         ) {
+            let handle = match type_name.as_ref() {
+                "System.Delegate" => WellKnown::Delegate,
+                "System.MulticastDelegate" => WellKnown::MulticastDelegate,
+                _ => unreachable!("delegate base type was guarded above"),
+            };
             let base = ctx
                 .loader()
-                .corlib_type(&type_name)
+                .corlib_wkt(handle)
                 .expect("Failed to locate corlib base for delegate");
             let idx = base
                 .definition()

@@ -1,6 +1,6 @@
 use crate::{ReflectionIntrinsicHost, RuntimeTypeContext};
 use dotnet_types::{
-    TypeDescription,
+    TypeDescription, WellKnown,
     comparer::decompose_type_source,
     error::{ExecutionError, TypeResolutionError, VmError},
     generics::GenericLookup,
@@ -126,14 +126,14 @@ pub(crate) fn write_reflection_index(
 
 fn alloc_reflection_obj<'gc>(
     ctx: &mut impl ReflectionIntrinsicHost<'gc>,
-    corlib_type_name: &str,
+    corlib_type: WellKnown,
     index: usize,
 ) -> ObjectRef<'gc> {
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let rt = ctx
         .loader()
-        .corlib_type(corlib_type_name)
-        .unwrap_or_else(|_| panic!("{corlib_type_name} not found"));
+        .corlib_wkt(corlib_type)
+        .unwrap_or_else(|_| panic!("{} not found", corlib_type.name()));
     let rt_obj = ctx
         .new_object(rt.clone())
         .expect("Failed to create reflection object");
@@ -155,7 +155,7 @@ pub fn get_runtime_type<'gc>(
     }
 
     let index = ctx.reflection_runtime_type_index_get_or_insert(target.clone());
-    let obj_ref = alloc_reflection_obj(ctx, "System.RuntimeType", index);
+    let obj_ref = alloc_reflection_obj(ctx, WellKnown::RuntimeType, index);
 
     ctx.reflection_cache_runtime_type(target, obj_ref);
     obj_ref
@@ -172,7 +172,7 @@ pub fn resolve_runtime_type<'gc>(
 
         let index_field = ctx
             .loader()
-            .corlib_type("System.RuntimeType")
+            .corlib_wkt(WellKnown::RuntimeType)
             .ok()
             .and_then(|owner| instance.instance_storage.field::<usize>(owner, "index"));
 
@@ -182,7 +182,7 @@ pub fn resolve_runtime_type<'gc>(
 
         if let Some(type_impl) = ctx
             .loader()
-            .corlib_type("System.Reflection.TypeDelegator")
+            .corlib_wkt(WellKnown::ReflectionTypeDelegator)
             .ok()
             .and_then(|owner| {
                 instance
@@ -392,13 +392,13 @@ pub fn get_runtime_method_obj<'gc>(
     let index = get_runtime_method_index(ctx, method.clone(), lookup.clone()) as usize;
 
     let is_ctor = method.method().name == ".ctor" || method.method().name == ".cctor";
-    let class_name = if is_ctor {
-        "DotnetRs.ConstructorInfo"
+    let class = if is_ctor {
+        WellKnown::SupportConstructorInfo
     } else {
-        "DotnetRs.MethodInfo"
+        WellKnown::SupportMethodInfo
     };
 
-    let obj_ref = alloc_reflection_obj(ctx, class_name, index);
+    let obj_ref = alloc_reflection_obj(ctx, class, index);
 
     ctx.reflection_cache_runtime_method_obj(method, lookup, obj_ref);
     obj_ref
@@ -414,7 +414,7 @@ pub fn get_runtime_field_obj<'gc>(
     }
 
     let index = get_runtime_field_index(ctx, field.clone(), lookup.clone()) as usize;
-    let obj_ref = alloc_reflection_obj(ctx, "DotnetRs.FieldInfo", index);
+    let obj_ref = alloc_reflection_obj(ctx, WellKnown::SupportFieldInfo, index);
 
     ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref);
     obj_ref

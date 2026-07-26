@@ -1,4 +1,4 @@
-use dotnet_types::{comparer::TypeComparer, generics::ConcreteType};
+use dotnet_types::{WellKnown, comparer::TypeComparer, generics::ConcreteType};
 use dotnet_value::object::{HeapStorage, Object};
 use dotnetdll::prelude::*;
 
@@ -10,15 +10,15 @@ pub(super) fn vector_matches_generic_array_interfaces(
     let comparer = TypeComparer::new(loader);
 
     [
-        "System.Collections.Generic.IEnumerable`1",
-        "System.Collections.Generic.ICollection`1",
-        "System.Collections.Generic.IList`1",
-        "System.Collections.Generic.IReadOnlyCollection`1",
-        "System.Collections.Generic.IReadOnlyList`1",
+        WellKnown::IEnumerable1,
+        WellKnown::ICollection1,
+        WellKnown::IList1,
+        WellKnown::IReadOnlyCollection1,
+        WellKnown::IReadOnlyList1,
     ]
-    .iter()
-    .any(|interface_name| {
-        let Ok(interface_td) = loader.corlib_type(interface_name) else {
+    .into_iter()
+    .any(|interface| {
+        let Ok(interface_td) = loader.corlib_wkt(interface) else {
             return false;
         };
 

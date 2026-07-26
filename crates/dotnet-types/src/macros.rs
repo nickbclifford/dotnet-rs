@@ -36,7 +36,7 @@ macro_rules! runtime_type_impls {
                 match self {
                     $(
                         $variant => $res_loader
-                            .corlib_type("System.Object")
+                            .corlib_wkt(WellKnown::Object)
                             .expect("System.Object must exist")
                             .resolution,
                     )*
@@ -54,7 +54,7 @@ macro_rules! runtime_type_impls {
 
             pub fn to_concrete(&self, $conc_loader: &impl TypeResolver) -> ConcreteType {
                 let $conc_res = $conc_loader
-                    .corlib_type("System.Object")
+                    .corlib_wkt(WellKnown::Object)
                     .expect("System.Object must exist")
                     .resolution;
                 use RuntimeType::*;

@@ -1,5 +1,6 @@
 use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
+use dotnet_types::WellKnown;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
@@ -65,7 +66,7 @@ pub fn ldtoken_type<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> St
     let rt_obj = ctx.get_runtime_type(runtime_type);
 
     let res_ctx = ctx.current_context();
-    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rth.clone()));
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
@@ -83,7 +84,7 @@ pub fn ldtoken_method<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -
     let method_obj = ctx.get_runtime_method_obj(method, lookup);
 
     let res_ctx = ctx.current_context();
-    let rmh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeMethodHandle"));
+    let rmh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeMethodHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rmh.clone()));
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
@@ -98,7 +99,7 @@ pub fn ldtoken_field<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> 
     let field_obj = ctx.get_runtime_field_obj(field, lookup);
 
     let res_ctx = ctx.current_context();
-    let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
+    let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeFieldHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rfh.clone()));
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 

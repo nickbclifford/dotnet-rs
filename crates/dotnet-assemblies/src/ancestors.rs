@@ -1,5 +1,5 @@
 use crate::AssemblyLoader;
-use dotnet_types::TypeDescription;
+use dotnet_types::{TypeDescription, WellKnown};
 use dotnetdll::prelude::*;
 
 impl AssemblyLoader {
@@ -33,9 +33,14 @@ impl<'a> Iterator for AncestorsImpl<'a> {
                 let raw_parent_name = parent.type_name(child.resolution.definition());
                 let parent_name = self.assemblies.canonical_type_name(&raw_parent_name);
                 if matches!(parent_name, "System.Delegate" | "System.MulticastDelegate") {
+                    let parent = if parent_name == "System.Delegate" {
+                        WellKnown::Delegate
+                    } else {
+                        WellKnown::MulticastDelegate
+                    };
                     Some(
                         self.assemblies
-                            .corlib_type(parent_name)
+                            .corlib_wkt(parent)
                             .expect("Failed to locate delegate parent type in ancestors"),
                     )
                 } else {
