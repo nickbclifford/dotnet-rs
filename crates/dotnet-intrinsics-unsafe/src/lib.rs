@@ -8,7 +8,7 @@
 //! ## Host Trait
 //!
 //! VM contexts integrating this crate implement [`UnsafeIntrinsicHost<'gc>`].
-//! That trait extends [`VmUnsafeIntrinsicHost<'gc>`] from `dotnet-vm-ops`
+//! That trait extends [`UnsafeBaseOps<'gc>`] from `dotnet-vm-ops`
 //! with crate-specific hooks used by unsafe/marshalling handlers:
 //!
 //! - `unsafe_type_layout` and `unsafe_resolve_runtime_type` for runtime
@@ -26,7 +26,10 @@ use dotnet_types::{
 };
 use dotnet_value::{layout::LayoutManager, object::ObjectRef, pointer::PointerOrigin};
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::{NULL_REF_MSG, ops::UnsafeIntrinsicHost as VmUnsafeIntrinsicHost};
+use dotnet_vm_ops::{
+    NULL_REF_MSG,
+    ops::{TypeLayoutOps, UnsafeBaseOps},
+};
 use std::sync::Arc;
 
 pub mod buffer;
@@ -34,11 +37,14 @@ pub mod marshal;
 pub(crate) mod mem_helpers;
 pub mod unsafe_ptr;
 
-pub trait UnsafeIntrinsicHost<'gc>: VmUnsafeIntrinsicHost<'gc> {
+pub trait UnsafeIntrinsicHost<'gc>: UnsafeBaseOps<'gc> + TypeLayoutOps {
+    #[inline]
     fn unsafe_type_layout(
         &self,
         t: ConcreteType,
-    ) -> Result<Arc<LayoutManager>, TypeResolutionError>;
+    ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
+        self.type_layout(t)
+    }
 
     fn unsafe_check_read_safety(
         &self,

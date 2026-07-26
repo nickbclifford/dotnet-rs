@@ -319,15 +319,17 @@ impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<
     }
 }
 
-impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {
+impl<'a, 'gc> dotnet_vm_ops::ops::TypeLayoutOps for VesContext<'a, 'gc> {
     #[inline]
-    fn span_type_layout(
+    fn type_layout(
         &self,
         t: ConcreteType,
     ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
         crate::layout::type_layout(t, &self.current_context())
     }
 }
+
+impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> dotnet_intrinsics_span::SpanPointerIntrospectionHost<'gc> for VesContext<'a, 'gc> {
     #[inline]
@@ -486,14 +488,6 @@ impl<'a, 'gc> dotnet_intrinsics_threading::StackSlotWriteHost<'gc> for VesContex
 }
 
 impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<'a, 'gc> {
-    #[inline]
-    fn unsafe_type_layout(
-        &self,
-        t: ConcreteType,
-    ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
-        crate::layout::type_layout(t, &self.current_context())
-    }
-
     #[inline]
     fn unsafe_check_read_safety(
         &self,

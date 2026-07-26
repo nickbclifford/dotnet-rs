@@ -12,7 +12,7 @@
 //! ## Host Trait
 //!
 //! VM contexts integrate this crate through [`ThreadingIntrinsicHost<'gc>`],
-//! which composes [`VmThreadingIntrinsicHost<'gc>`], [`MonitorHost<'gc>`],
+//! which composes [`ThreadingBaseOps<'gc>`], [`MonitorHost<'gc>`],
 //! [`RawMemoryOps<'gc>`], and [`StackSlotWriteHost<'gc>`].
 //!
 //! [`MonitorHost<'gc>`] defines the monitor-specific synchronization hooks used
@@ -26,7 +26,7 @@
 //! discovered and wired into generated dispatch tables.
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingIntrinsicHost as VmThreadingIntrinsicHost};
+use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingBaseOps};
 use std::time::Instant;
 
 pub(crate) mod atomic_dispatch;
@@ -81,7 +81,7 @@ pub trait StackSlotWriteHost<'gc> {
 
 dotnet_vm_ops::trait_alias! {
     pub trait ThreadingIntrinsicHost<'gc> =
-        VmThreadingIntrinsicHost<'gc>
+        ThreadingBaseOps<'gc>
         + MonitorHost<'gc>
         + RawMemoryOps<'gc>
         + StackSlotWriteHost<'gc>;

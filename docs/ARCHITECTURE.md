@@ -141,14 +141,18 @@ This model avoids publishing naked `'static` metadata references while preservin
 
 ## Trait Architecture
 
-The VES trait system is split across two crates to avoid circular dependencies:
+The core VES trait tower is split between `dotnet-vm-ops` and `dotnet-vm` to
+avoid circular dependencies. Intrinsic crates extend the lower layer with
+crate-local composite host traits: they depend on `dotnet-vm-ops`, never on
+`dotnet-vm`.
 
 ### Base Traits (`dotnet-vm-ops/src/ops.rs`)
 Foundational traits that instruction handlers and intrinsics can target without depending on `dotnet-vm`:
 - `EvalStackOps`, `TypedStackOps`, `LocalOps`, `ArgumentOps`, `VariableOps`
 - `ExceptionOps`, `RawMemoryOps`, `ThreadOps`, `LoaderOps`
-- `MemoryOps`, `ResolutionOps`, `ReflectionOps`, `StaticsOps`
+- `MemoryOps`, `ResolutionOps`, `ReflectionOps`, `TypeLayoutOps`, `StaticsOps`
 - `VesBaseOps`, `VesInternals`, `ExceptionContext`, `PInvokeContext`
+- `SpanBaseOps`, `ThreadingBaseOps`, `ReflectionBaseOps`, `UnsafeBaseOps` (base capability aliases extended by their corresponding intrinsic crates)
 
 ### Extended Traits (`dotnet-vm/src/stack/ops.rs`)
 VM-specific extensions (all `Vm`-prefixed) that add resolver, shared state, and reflection capabilities on top of the base traits:
@@ -160,7 +164,7 @@ VM-specific extensions (all `Vm`-prefixed) that add resolver, shared state, and 
 - `VmStaticsOps` (extends `StaticsOps` with `StaticStorageManager` access)
 - `VmCallOps` (VM-local frame construction and method dispatch)
 - `VmExceptionContext` / `VmPInvokeContext` (VM-side extensions of `ExceptionContext` / `PInvokeContext`)
-- `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus the `dotnet-intrinsics-*` host traits. Primary generic bound for instruction handlers.
+- `VesOps`: The unified trait combining `PInvokeContext + VmStackOps + VmRawMemoryOps + VmResolutionOps + VmReflectionOps + VmLoaderOps + VmStaticsOps + ThreadOps + VmCallOps` plus the composite host traits defined by the `dotnet-intrinsics-*` crates. These crate-level composites—such as `SpanIntrinsicHost`, `ThreadingIntrinsicHost`, `ReflectionIntrinsicHost`, and `UnsafeIntrinsicHost`—are the names bound directly in `VesOps`; the corresponding `*BaseOps` aliases remain in `dotnet-vm-ops`. `VesOps` is the primary generic bound for instruction handlers.
 
 ### Usage Pattern
 ```rust

@@ -1,6 +1,5 @@
 use crate::{
     MethodInfo, MethodType, ResolutionContext, StepResult,
-    layout::type_layout,
     resolver::VmResolverService,
     stack::{
         context::VesContext,
@@ -283,13 +282,6 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         self.constructor_frame(instance, method, generic_inst)
-    }
-
-    fn reflection_type_layout(
-        &self,
-        t: ConcreteType,
-    ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
-        type_layout(t, &self.current_context())
     }
 }
 

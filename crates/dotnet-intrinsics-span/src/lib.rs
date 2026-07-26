@@ -9,7 +9,7 @@
 //!
 //! VM contexts integrating this crate implement [`SpanIntrinsicHost<'gc>`], a
 //! composed trait alias that extends
-//! `dotnet_vm_ops::ops::SpanIntrinsicHost<'gc>` with span-specific host seams.
+//! `dotnet_vm_ops::ops::SpanBaseOps<'gc>` with span-specific host seams.
 //! In particular:
 //!
 //! - [`LayoutQueryHost`] supplies `span_type_layout`, allowing handlers to
@@ -39,7 +39,7 @@ use dotnet_value::{
     pointer::PointerOrigin,
 };
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::SpanIntrinsicHost as VmSpanIntrinsicHost;
+use dotnet_vm_ops::ops::{SpanBaseOps, TypeLayoutOps};
 use std::sync::Arc;
 
 pub mod conversions;
@@ -47,8 +47,11 @@ pub mod ctor;
 pub mod equality;
 pub mod helpers;
 
-pub trait LayoutQueryHost {
-    fn span_type_layout(&self, t: ConcreteType) -> Result<Arc<LayoutManager>, TypeResolutionError>;
+pub trait LayoutQueryHost: TypeLayoutOps {
+    #[inline]
+    fn span_type_layout(&self, t: ConcreteType) -> Result<Arc<LayoutManager>, TypeResolutionError> {
+        self.type_layout(t)
+    }
 }
 
 pub trait SpanPointerIntrospectionHost<'gc> {
@@ -84,7 +87,7 @@ pub trait SpanRuntimeHost<'gc> {
 
 dotnet_vm_ops::trait_alias! {
     pub trait SpanIntrinsicHost<'gc> =
-        VmSpanIntrinsicHost<'gc>
+        SpanBaseOps<'gc>
         + LayoutQueryHost
         + SpanPointerIntrospectionHost<'gc>
         + SpanObjectFactoryHost<'gc>

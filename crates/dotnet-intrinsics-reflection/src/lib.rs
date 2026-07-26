@@ -16,7 +16,7 @@
 //!
 //! VM contexts integrating this crate implement [`ReflectionIntrinsicHost`],
 //! which combines the baseline VM contract
-//! (`dotnet_vm_ops::ops::ReflectionIntrinsicHost<'gc>`) with this crate's
+//! (`dotnet_vm_ops::ops::ReflectionBaseOps<'gc>`) with this crate's
 //! [`ResolutionContextHost`] and [`ReflectionRegistryHost`] extension traits.
 //! Together, these traits provide stack/exception operations, reflection type
 //! construction, invocation hooks, and runtime-object caching/index registries
@@ -38,7 +38,10 @@ use dotnet_value::{
     object::{Object, ObjectRef},
 };
 use dotnet_vm_data::{FrameReturnAction, MethodInfo};
-use dotnet_vm_ops::{NULL_REF_MSG, ops::ReflectionIntrinsicHost as VmReflectionIntrinsicHost};
+use dotnet_vm_ops::{
+    NULL_REF_MSG,
+    ops::{ReflectionBaseOps, TypeLayoutOps},
+};
 use dotnetdll::prelude::{MethodType, UserType};
 use std::sync::Arc;
 
@@ -60,7 +63,7 @@ pub trait RuntimeTypeContext {
     fn reflection_method_owner(&self) -> Option<MethodDescription>;
 }
 
-pub trait ResolutionContextHost<'gc> {
+pub trait ResolutionContextHost<'gc>: TypeLayoutOps {
     fn reflection_make_runtime_type_with_lookup(
         &self,
         source: &MethodType,
@@ -112,7 +115,9 @@ pub trait ResolutionContextHost<'gc> {
     fn reflection_type_layout(
         &self,
         t: ConcreteType,
-    ) -> Result<Arc<LayoutManager>, TypeResolutionError>;
+    ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
+        self.type_layout(t)
+    }
 }
 
 pub trait ReflectionRegistryHost<'gc> {
@@ -193,7 +198,7 @@ pub trait ReflectionRegistryHost<'gc> {
 
 dotnet_vm_ops::trait_alias! {
     pub trait ReflectionIntrinsicHost<'gc> =
-        VmReflectionIntrinsicHost<'gc>
+        ReflectionBaseOps<'gc>
         + ResolutionContextHost<'gc>
         + ReflectionRegistryHost<'gc>;
 }

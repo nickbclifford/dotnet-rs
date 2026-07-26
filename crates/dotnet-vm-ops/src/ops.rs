@@ -476,6 +476,13 @@ pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
     ) -> Result<TypeDescription, TypeResolutionError>;
 }
 
+pub trait TypeLayoutOps {
+    fn type_layout(
+        &self,
+        t: dotnet_types::generics::ConcreteType,
+    ) -> Result<Arc<LayoutManager>, TypeResolutionError>;
+}
+
 pub trait VesInternals<'gc> {
     fn back_up_ip(&mut self);
     fn branch(&mut self, target: usize);
@@ -564,7 +571,7 @@ crate::trait_alias! {
     /// - pointer/data reads and writes (`read_unaligned`, `write_unaligned`)
     /// - allocation and reflection helpers (`new_object`, `get_heap_description`)
     /// - element type/layout resolution (`make_concrete`, `instance_field_layout`)
-    pub trait SpanIntrinsicHost<'gc> =
+    pub trait SpanBaseOps<'gc> =
         TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
@@ -578,7 +585,7 @@ crate::trait_alias! {
     /// - memory safety checks and raw reads/writes (`read_bytes`, `write_bytes`)
     /// - runtime type sizing/layout (`make_concrete`, `instance_field_layout`)
     /// - object/reference helpers (`new_object`, `get_heap_description`)
-    pub trait UnsafeIntrinsicHost<'gc> =
+    pub trait UnsafeBaseOps<'gc> =
         TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
@@ -592,7 +599,7 @@ crate::trait_alias! {
     /// - exception throws for invalid synchronization inputs
     /// - atomic/raw memory operations (`compare_exchange_atomic`, `load_atomic`, `store_atomic`)
     /// - thread identity queries (`thread_id`)
-    pub trait ThreadingIntrinsicHost<'gc> =
+    pub trait ThreadingBaseOps<'gc> =
         TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
@@ -606,7 +613,7 @@ crate::trait_alias! {
     /// - reflection lookup and resolution (`get_heap_description`, `make_concrete`, `is_a`)
     /// - method construction/invocation (`return_frame`, frame state via `VesInternals`)
     /// - static storage initialization for constructed generic types
-    pub trait ReflectionIntrinsicHost<'gc> =
+    pub trait ReflectionBaseOps<'gc> =
         TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps

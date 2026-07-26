@@ -16,8 +16,8 @@ pub const NULL_REF_MSG: &str = "Object reference not set to an instance of an ob
 pub use dotnet_macros::trait_alias;
 pub use ops::{
     ArgumentOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps,
-    LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionIntrinsicHost, ReflectionOps,
-    ResolutionOps, SimdCapabilityOps, SimdIntrinsicHost, SpanIntrinsicHost, StackOps, StaticsOps,
-    StringIntrinsicHost, ThreadOps, ThreadingIntrinsicHost, TypedStackOps, UnsafeIntrinsicHost,
+    LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionBaseOps, ReflectionOps,
+    ResolutionOps, SimdCapabilityOps, SimdIntrinsicHost, SpanBaseOps, StackOps, StaticsOps,
+    StringIntrinsicHost, ThreadOps, ThreadingBaseOps, TypeLayoutOps, TypedStackOps, UnsafeBaseOps,
     VariableOps, VesBaseOps, VesInternals,
 };

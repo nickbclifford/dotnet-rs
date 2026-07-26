@@ -479,15 +479,11 @@ mod host_adapter_trait_tests {
             for<'a, 'gc> VesContext<'a, 'gc>: vm_ops::StringIntrinsicHost<'gc>
                 + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
                 + vm_ops::DelegateIntrinsicHost<'gc>
-                + vm_ops::SpanIntrinsicHost<'gc>
                 + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
                 + vm_ops::SimdIntrinsicHost<'gc>
-                + vm_ops::UnsafeIntrinsicHost<'gc>
                 + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
-                + vm_ops::ThreadingIntrinsicHost<'gc>
                 + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
-                + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
-                + vm_ops::ReflectionIntrinsicHost<'gc>,
+                + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>,
         {
         }
 
@@ -510,10 +506,7 @@ mod host_adapter_trait_tests {
                 dotnet_intrinsics_delegates::helpers::try_delegate_dispatch::<T>;
         }
 
-        fn assert_span_handler<
-            'gc,
-            T: vm_ops::SpanIntrinsicHost<'gc> + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>,
-        >() {
+        fn assert_span_handler<'gc, T: dotnet_intrinsics_span::SpanIntrinsicHost<'gc>>() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_span::equality::intrinsic_memory_extensions_sequence_equal::<T>;
         }
@@ -523,18 +516,14 @@ mod host_adapter_trait_tests {
                 dotnet_intrinsics_core::simd::intrinsic_vector128_is_hardware_accelerated::<T>;
         }
 
-        fn assert_unsafe_handler<
-            'gc,
-            T: vm_ops::UnsafeIntrinsicHost<'gc> + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>,
-        >() {
+        fn assert_unsafe_handler<'gc, T: dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>>() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_unsafe::marshal::intrinsic_marshal_offset_of::<T>;
         }
 
         fn assert_threading_handler<
             'gc,
-            T: vm_ops::ThreadingIntrinsicHost<'gc>
-                + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>,
+            T: dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>,
         >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_threading::monitor::intrinsic_monitor_reliable_enter::<T>;
@@ -542,8 +531,7 @@ mod host_adapter_trait_tests {
 
         fn assert_reflection_handler<
             'gc,
-            T: vm_ops::ReflectionIntrinsicHost<'gc>
-                + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>,
+            T: dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>,
         >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
                 dotnet_intrinsics_reflection::methods::runtime_method_info_intrinsic_call::<T>;
