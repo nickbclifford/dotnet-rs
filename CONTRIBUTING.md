@@ -6,8 +6,37 @@ Thanks for contributing to `dotnet-rs`.
 
 Before running local builds or tests, install:
 
-- **Rust (stable toolchain)**
+- **Rust 1.95.0**, selected by the repository's `rust-toolchain.toml` and
+  including the `clippy` and `rustfmt` components. Rustup activates this pin
+  automatically when commands are run from the repository.
 - **.NET SDK** (required for fixture compilation and build-script paths that invoke dotnet/MSBuild)
+
+## Unsafe code policy
+
+Unsafe code must make the invariant that justifies it reviewable at the point
+where it is relied on. Follow these rules when adding or changing unsafe code:
+
+- Put a `// SAFETY:` comment immediately above every `unsafe { ... }` block.
+  The comment must explain the invariant that makes the operation valid; it
+  must not merely restate the operation.
+- Do not use a `where` clause as proof for `unsafe impl Send` or `unsafe impl
+  Sync`: a bound only makes the implementation conditional. Use an
+  unconditional implementation when it is valid (retaining any required
+  feature `cfg`), document its SAFETY invariant, and add an
+  `assert_impl_all!` guard in a `#[cfg(test)]` block to mechanically check the
+  intended traits.
+- An `unsafe impl Collect` must trace every contained `Gc<'gc, _>` handle. For
+  types that are `'static` and contain no GC handles, use `static_collect!`.
+  For a non-`'static` type with no GC handles, write
+  `const NEEDS_TRACE: bool = false` in its `Collect` implementation.
+- A layout transmute must have a co-located size assertion and a `SAFETY:`
+  comment that explicitly explains the representation and validity reasoning.
+
+The workspace enforces this policy through `[workspace.lints.clippy]` in the
+root `Cargo.toml`: `undocumented_unsafe_blocks = "deny"` and
+`multiple_unsafe_ops_per_block = "deny"`. Member crates inherit these lints;
+keep unsafe operations individually proved rather than weakening the workspace
+configuration.
 
 ## Panic-vs-Result policy
 
@@ -49,7 +78,7 @@ For `dotnet-vm` changes that add or modify `unsafe`, the accepted local signoff 
 
 ```bash
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
+cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
 Why this is the project-standard invocation right now:
@@ -58,6 +87,10 @@ Why this is the project-standard invocation right now:
 - `-Zmiri-ignore-leaks` is needed for non-joined background worker threads that are not VM-unsafe regressions.
 
 Until upstream dependency behavior changes, strict-provenance is treated as infeasible for `dotnet-vm` unsafe-gate signoff.
+The Miri-only nightly is pinned separately because `rust-toolchain.toml` selects
+stable by default. As recorded in [`docs/CI.md`](docs/CI.md), the targeted VM
+suite did not complete within the validation time box on this nightly, so the
+pin records the attempted toolchain rather than a known-passing Miri result.
 
 ## Documentation drift check
 

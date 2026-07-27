@@ -18,6 +18,7 @@
 //! [`flush_write_barrier_buffer`]) records cross-arena reference writes and flushes buffered
 //! entries at safepoints (and panic unwind) so GC marking sees a complete inter-arena
 //! reference graph. See `docs/GC_AND_MEMORY_SAFETY.md` for the end-to-end design.
+
 pub mod access;
 pub mod heap;
 pub mod host;

@@ -18,6 +18,7 @@
 //!
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
 //! handlers are discovered and wired into generated intrinsic dispatch tables.
+
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
 };

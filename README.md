@@ -6,7 +6,8 @@
 
 ### Prerequisites
 
-- Rust stable toolchain (`cargo`, `rustc`)
+- Rust 1.95.0 (`cargo`, `rustc`), selected automatically by
+  [`rust-toolchain.toml`](rust-toolchain.toml)
 - .NET SDK installed locally (provides the runtime assemblies and supports fixture/build-script paths)
 
 ### Build the CLI

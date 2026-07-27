@@ -19,6 +19,10 @@ use dotnetdll::{
 };
 use std::path::PathBuf;
 
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the fuzz loader is confined to this thread-local corpus execution context"
+)]
 fn get_loader() -> Arc<AssemblyLoader> {
     thread_local! {
         static LOADER: Arc<AssemblyLoader> = {
@@ -65,6 +69,10 @@ fn get_loader() -> Arc<AssemblyLoader> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the mock fuzz loader is confined to this thread-local test fixture"
+)]
 fn get_mock_loader() -> Arc<AssemblyLoader> {
     thread_local! {
         static MOCK_LOADER: Arc<AssemblyLoader> = {

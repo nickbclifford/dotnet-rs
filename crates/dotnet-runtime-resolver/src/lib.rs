@@ -14,7 +14,7 @@
 //!
 //! For design context and cache behavior details, see
 //! `docs/TYPE_RESOLUTION_AND_CACHING.md`.
-#![allow(clippy::mutable_key_type)]
+
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,

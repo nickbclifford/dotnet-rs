@@ -371,6 +371,8 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
                     // Unbox this to a managed pointer. This is required when a virtual call
                     // on a boxed value type reaches a value type override.
                     let ptr = obj.as_heap_storage(|storage| match storage {
+                        // SAFETY: The active object borrow keeps the matched instance storage
+                        // stable while its base address is captured into an owner-backed ManagedPtr.
                         HeapStorage::Boxed(o) | HeapStorage::Obj(o) => unsafe {
                             o.instance_storage.raw_data_ptr()
                         },

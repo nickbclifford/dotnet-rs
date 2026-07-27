@@ -35,7 +35,9 @@ fn test_managed_ptr_offset_oob() {
 
         let ptr = managed_ptr_to_heap_object_start(obj);
 
-        // Offset by much more than size of ValueType should panic
+        // Offset by much more than size of ValueType should panic.
+        // SAFETY: The test invokes the unsafe operation specifically to verify its
+        // runtime bounds validation rejects this out-of-bounds offset.
         unsafe {
             ptr.offset(1000);
         }
@@ -51,6 +53,7 @@ fn test_managed_ptr_offset_valid() {
         let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by 4 bytes (end of object) should be valid
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         unsafe {
             ptr.offset(4);
         }
@@ -75,6 +78,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         );
 
         ptr_unmanaged.write(&mut buf);
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
         assert_eq!(info.address, nonnull_from_exposed_addr(unmanaged_addr));
         assert_eq!(info.origin, PointerOrigin::Unmanaged);
@@ -93,6 +97,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         .with_stack_origin(stack_slot, ByteOffset(0));
 
         ptr_stack.write(&mut buf);
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
         assert_eq!(info.address, nonnull_from_exposed_addr(stack_addr));
         assert_eq!(info.origin, PointerOrigin::Stack(stack_slot));
@@ -112,6 +117,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         );
 
         ptr_heap.write(&mut buf);
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
         assert_eq!(info.address, nonnull_from_exposed_addr(base_addr + offset));
         assert_eq!(info.origin, PointerOrigin::Heap(obj));
@@ -132,6 +138,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         );
 
         ptr_static.write(&mut buf);
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
         assert_eq!(
             info.address,
@@ -153,6 +160,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             // We only use this raw pointer to validate serialization/deserialization logic.
             let ptr_lock = Gc::as_ptr(obj.0.unwrap())
                 .cast::<dotnet_utils::gc::ThreadSafeLock<crate::object::ObjectInner<'static>>>();
+            // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
             let ptr = unsafe { ObjectPtr::from_raw(ptr_lock).unwrap() };
             let arena_id = ptr.owner_id();
             let cross_offset = 12;
@@ -165,6 +173,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             );
 
             ptr_cross.write(&mut buf);
+            // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
             let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
             assert_eq!(
                 info.address,
@@ -219,6 +228,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
         );
 
         ptr_transient.write(&mut buf);
+        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let result = unsafe { ManagedPtr::read_unchecked(&buf) };
         assert!(result.is_err(), "Transient recovery should fail for safety");
 
@@ -290,6 +300,7 @@ fn test_read_stack_info_miri() {
     buf[0..8].copy_from_slice(&w0.to_ne_bytes());
     buf[8..16].copy_from_slice(&w1.to_ne_bytes());
 
+    // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
     let info = unsafe { ManagedPtr::read_stack_info(&buf) };
     assert_eq!(info.address, nonnull_from_exposed_addr(addr));
     assert_eq!(info.offset.as_usize(), offset);
@@ -309,6 +320,7 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
     );
 
     ptr.write(&mut buf);
+    // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
     let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
     assert_eq!(info.address, nonnull_from_exposed_addr(addr));
     assert_eq!(info.origin, PointerOrigin::Unmanaged);

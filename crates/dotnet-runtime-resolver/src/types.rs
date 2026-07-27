@@ -255,6 +255,8 @@ where
             StackValue::TypedRef(_, _) => self.loader.corlib_wkt(WellKnown::TypedReference),
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
+                // SAFETY: Cross-arena object pointers are live GC handles maintained by the
+                // thread manager; borrowing their lock yields the stable shared object view.
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
                 self.get_heap_description_inner(&guard)

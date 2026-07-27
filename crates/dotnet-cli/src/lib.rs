@@ -7,7 +7,7 @@
 //! - `multithreading`: Enables OS-thread execution support (including .NET `Thread`,
 //!   `Monitor`, and stop-the-world GC coordination across per-thread arenas). Pulls in
 //!   `parking_lot`.
-#![allow(clippy::arc_with_non_send_sync)]
+
 use clap::Parser;
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult};
@@ -79,6 +79,10 @@ pub fn run_cli() -> ExitCode {
         }
     }
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "AssemblyLoader remains thread-confined while Arc provides a uniform ownership model"
+    )]
     let loader = match args.assemblies {
         Some(assemblies_dir) => match dotnet_assemblies::AssemblyLoader::new(assemblies_dir) {
             Ok(l) => Arc::new(l),
@@ -136,7 +140,10 @@ pub fn run_cli() -> ExitCode {
         }
     };
 
-    #[allow(clippy::arc_with_non_send_sync)]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "SharedGlobalState uses Arc uniformly and has a configuration-specific single-threaded safety proof"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 

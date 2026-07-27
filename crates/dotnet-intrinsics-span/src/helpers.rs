@@ -47,6 +47,8 @@ pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
     // SAFETY: `span_ptr` points to a Span value validated by the caller and `ptr_bytes` matches
     // the serialized `ManagedPtr` width expected for the `_reference` field.
     let mut ptr_bytes = ManagedPtr::serialization_buffer();
+    // SAFETY: The field position and serialization buffer were validated above; `read_bytes`
+    // accesses exactly that in-bounds `_reference` representation.
     unsafe {
         ctx.read_bytes(
             span_ptr.origin().clone(),

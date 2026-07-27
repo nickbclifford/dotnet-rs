@@ -14,10 +14,14 @@ use std::sync::Arc;
 
 pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
     if let StackValue::ManagedPtr(m) = val {
+        // SAFETY: This intrinsic's caller supplies the byte offset and preserves the managed
+        // pointer's origin; `offset` only forms the corresponding managed address.
         let new_m = unsafe { m.into_inner().offset(byte_offset) };
         StackValue::ManagedPtr(new_m.into())
     } else {
         let ptr = val.as_ptr();
+        // SAFETY: The native pointer overload delegates its range/validity contract to the CLR
+        // caller; this operation only applies that requested byte offset.
         let result_ptr = unsafe { ptr.offset(byte_offset) };
         StackValue::NativeInt(result_ptr as isize)
     }

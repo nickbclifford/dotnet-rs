@@ -48,8 +48,12 @@ fn chunked_clear_with_safe_point<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let mut offset = 0usize;
     while offset < total_count {
         let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "forming the chunk pointer and clearing that chunk share one validated range proof"
+        )]
+        // SAFETY: Destination pointer is valid for `total_count` bytes by intrinsic contract.
         unsafe {
-            // SAFETY: Destination pointer is valid for `total_count` bytes by intrinsic contract.
             dotnet_simd::clear_raw(dst.add(offset), current_chunk);
         }
         offset += current_chunk;
@@ -141,6 +145,8 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     for i in 0..len {
         let offset = base_offset + i * elem_size;
         if let Err(e) =
+            // SAFETY: `ptr_info` returned the managed origin and offset for `destination`; the
+            // layout was resolved for the generic element type before the write.
             unsafe { ctx.write_unaligned(origin.clone(), offset, value.clone(), &layout) }
         {
             return StepResult::not_implemented(format!("SpanHelpers.Fill failed: {e}"));

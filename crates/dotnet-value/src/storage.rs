@@ -208,8 +208,13 @@ impl BoundedPtr {
 
     /// # Safety
     /// The caller must ensure that `offset` is within the bounds of `self.ptr` and `self.len`.
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the checked offset is converted to a slice and decoded as one field value"
+    )]
     pub unsafe fn read<T: FieldType>(&self, offset: usize) -> T {
         assert!(offset + size_of::<T>() <= self.len);
+        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
         unsafe {
             T::read_from(std::slice::from_raw_parts(
                 self.ptr.add(offset),
@@ -252,6 +257,13 @@ impl PartialEq for FieldStorage {
 }
 
 impl Drop for FieldStorage {
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "drop has exclusive access while retrieving and dereferencing the single-threaded storage pointer"
+        )
+    )]
     fn drop(&mut self) {
         #[cfg(feature = "multithreading")]
         let data: &mut Vec<u8> = self.data.get_mut();
@@ -294,6 +306,13 @@ impl FieldStorage {
         })
     }
 
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the read-borrow token and raw pointer dereference jointly create one scoped shared slice"
+        )
+    )]
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
         self.validate_magic();
 
@@ -313,6 +332,13 @@ impl FieldStorage {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the write-borrow token and raw pointer dereference jointly create one scoped mutable slice"
+        )
+    )]
     pub fn with_data_mut<T>(&self, f: impl FnOnce(&mut [u8]) -> T) -> T {
         self.validate_magic();
 
@@ -339,6 +365,13 @@ impl FieldStorage {
         self.layout.get_field(owner, name).is_some()
     }
 
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the read-borrow token and raw pointer dereference jointly create one guarded field slice"
+        )
+    )]
     pub fn get_field_local(&self, owner: TypeDescription, name: &str) -> FieldDataReadGuard<'_> {
         self.validate_magic();
         let field = self.layout.get_field(owner, name).expect("Field not found");
@@ -366,6 +399,13 @@ impl FieldStorage {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the write-borrow token and raw pointer dereference jointly create one guarded field slice"
+        )
+    )]
     pub fn get_field_mut_local(
         &self,
         owner: TypeDescription,
@@ -415,6 +455,7 @@ impl FieldStorage {
         let guard = self.get_field_local(owner, name);
         let field_ptr = guard.as_ptr();
         validate_alignment(field_ptr, alignment);
+        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
         unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
     }
 
@@ -442,9 +483,17 @@ impl FieldStorage {
         let mut guard = self.get_field_mut_local(owner, name);
         let field_ptr = guard.as_mut_ptr();
         validate_alignment(field_ptr, alignment);
+        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
         unsafe { Atomic::store_field(field_ptr, value, ord) }
     }
 
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "this raw-data accessor retrieves and dereferences one stable storage pointer"
+        )
+    )]
     pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
         self.validate_magic();
         // SAFETY: Caller guarantees data stability per this method's contract.
@@ -456,6 +505,13 @@ impl FieldStorage {
     /// # Safety
     /// The caller must ensure that synchronization is provided elsewhere (e.g. during STW GC)
     /// or that the data is otherwise stable and no writers are active.
+    #[cfg_attr(
+        not(feature = "multithreading"),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "this raw-data accessor retrieves and dereferences one caller-synchronized storage pointer"
+        )
+    )]
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         // SAFETY: Caller upholds synchronization guarantees.
         unsafe { (*self.data.data_ptr()).as_mut_ptr() }
@@ -478,6 +534,8 @@ impl FieldStorage {
     }
 }
 
+// SAFETY: `layout.trace` visits every ObjectRef and ManagedPtr slot described by this storage's
+// immutable layout. Tracing runs during STW, so `raw_data_unsynchronized` observes stable bytes.
 unsafe impl<'gc> Collect<'gc> for FieldStorage {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // SAFETY: Tracing also happens during a stop-the-world pause, same reasoning as above

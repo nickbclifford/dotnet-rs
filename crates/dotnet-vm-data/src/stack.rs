@@ -225,8 +225,12 @@ impl<'gc> EvaluationStack<'gc> {
                 if let PointerOrigin::Stack(idx) = m.origin() {
                     let off = m.byte_offset();
                     let slot_ptr = resolve_slot_ptr(*idx);
-                    let new_ptr =
-                        unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off.as_usize())) };
+                    // SAFETY: `slot_ptr` identifies the start of the live stack slot and
+                    // `off` was recorded from that slot when the pointer was created.
+                    let raw_ptr = unsafe { slot_ptr.as_ptr().add(off.as_usize()) };
+                    // SAFETY: adding the recorded offset to a non-null stack-slot pointer
+                    // preserves non-nullness.
+                    let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
                     m.update_cached_ptr(new_ptr);
                 }
             }
@@ -237,14 +241,18 @@ impl<'gc> EvaluationStack<'gc> {
                         if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
                             let offset_val = offset.as_usize();
                             let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
+                            // SAFETY: `slice` is exactly one serialized ManagedPtr field,
+                            // selected by the layout manager from storage it previously wrote.
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
                             if let PointerOrigin::Stack(idx) = info.origin {
                                 let slot_ptr = resolve_slot_ptr(idx);
-                                let new_ptr = unsafe {
-                                    NonNull::new_unchecked(
-                                        slot_ptr.as_ptr().add(info.offset.as_usize()),
-                                    )
-                                };
+                                // SAFETY: `slot_ptr` and `info.offset` were recorded from
+                                // the live stack slot when this managed pointer was created.
+                                let raw_ptr =
+                                    unsafe { slot_ptr.as_ptr().add(info.offset.as_usize()) };
+                                // SAFETY: adding the recorded offset to a non-null stack-slot
+                                // pointer preserves non-nullness.
+                                let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
                                 let ptr_size = ObjectRef::SIZE;
                                 let word0: usize = 1
                                     | ((idx.as_usize() & 0x3FFFFFFF) << 3)

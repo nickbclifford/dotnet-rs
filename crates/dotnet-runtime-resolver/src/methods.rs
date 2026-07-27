@@ -139,6 +139,10 @@ where
         method_for_lookup
     }
 
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "MethodDescription override keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     fn find_override_implementation(
         &self,
         this_type: TypeDescription,
@@ -224,6 +228,10 @@ where
         Ok(None)
     }
 
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     fn enqueue_interface_type(
         &self,
         interface_source: &TypeSource<MemberType>,
@@ -243,6 +251,10 @@ where
         Ok(())
     }
 
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     fn find_interface_override_for_receiver(
         &self,
         receiver_type: TypeDescription,

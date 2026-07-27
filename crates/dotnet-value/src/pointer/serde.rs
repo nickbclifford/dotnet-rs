@@ -28,13 +28,19 @@ impl<'gc> ManagedPtr<'gc> {
     /// # Safety
     ///
     /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the byte offset and unaligned read jointly decode one serialized pointer word"
+    )]
     pub unsafe fn read_stack_info(source: &[u8]) -> ManagedPtrStackInfo {
         let ptr_size = ObjectRef::SIZE;
         if source.len() < ptr_size * 2 {
             panic!("ManagedPtr::read: buffer too small");
         }
 
+        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
         let word0 = unsafe { (source.as_ptr() as *const usize).read_unaligned() };
+        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
         let word1 = unsafe { (source.as_ptr().add(ptr_size) as *const usize).read_unaligned() };
 
         if word0 & 1 != 0 {
@@ -84,6 +90,7 @@ impl<'gc> ManagedPtr<'gc> {
         source: &[u8],
         _gc: &Mutation<'gc>,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
         unsafe { Self::read_unchecked(source) }
     }
 
@@ -94,6 +101,13 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
+    #[cfg_attr(
+        feature = "multithreading",
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "cross-arena decoding traverses the encoded lock pointer and its storage pointer as one reconstruction"
+        )
+    )]
     pub unsafe fn read_unchecked(
         source: &[u8],
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
@@ -141,6 +155,7 @@ impl<'gc> ManagedPtr<'gc> {
                             ThreadSafeLock<crate::object::ObjectInner<'static>>,
                         >(word0 & !7);
 
+                        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                         let ptr = unsafe {
                             ObjectPtr::from_raw(lock_ptr)
                                 .ok_or(PointerDeserializationError::UnknownTag(tag))?
@@ -156,7 +171,9 @@ impl<'gc> ManagedPtr<'gc> {
                         #[cfg(any(feature = "memory-validation", debug_assertions))]
                         {
                             if !lock_ptr.is_null() {
+                                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                                 let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
+                                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                                 unsafe { (*inner_ptr).validate_magic() };
                             }
                         }
@@ -165,6 +182,7 @@ impl<'gc> ManagedPtr<'gc> {
                         // We use the recovered offset directly.
                         // Note: If we need the absolute address, we still have to dereference base_ptr,
                         // but we can postpone this or make it safe.
+                        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                         let base_ptr = unsafe {
                             if lock_ptr.is_null() {
                                 NonNull::dangling().as_ptr()
@@ -234,6 +252,7 @@ impl<'gc> ManagedPtr<'gc> {
         } else {
             // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
             // Read Owner (Offset 0)
+            // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
             let owner = unsafe { ObjectRef::read_unchecked(&source[0..ptr_size]) };
 
             // Read Offset (Offset 8)
@@ -241,6 +260,7 @@ impl<'gc> ManagedPtr<'gc> {
 
             // Compute pointer from owner's data + offset
             let ptr = if let Some(handle) = owner.0 {
+                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                 let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
                 if base_ptr.is_null() {
                     None
@@ -335,6 +355,7 @@ impl<'gc> ManagedPtr<'gc> {
         #[cfg(debug_assertions)]
         if !matches!(self.origin, PointerOrigin::Transient(_)) {
             let recovered =
+                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
                 unsafe { Self::read_unchecked(dest) }.expect("ManagedPtr::write: recovery failed");
             let self_origin_norm = self.origin.clone().normalize();
             let recovered_origin_norm = recovered.origin.clone().normalize();

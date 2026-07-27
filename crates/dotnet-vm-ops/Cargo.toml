@@ -29,3 +29,6 @@ fuzzing = [
 ]
 # Forwards benchmark-only instrumentation support into vm-data.
 bench-instrumentation = ["dotnet-vm-data/bench-instrumentation"]
+
+[lints]
+workspace = true

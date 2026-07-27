@@ -15,6 +15,10 @@ use dotnetdll::{
     },
 };
 
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the mock AssemblyLoader is confined to this thread-local test fixture"
+)]
 fn get_mock_loader() -> Arc<AssemblyLoader> {
     thread_local! {
         static MOCK_LOADER: Arc<AssemblyLoader> = {
@@ -171,6 +175,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         let gc_handle = GCHandle::new(
             gc,
             #[cfg(feature = "multithreading")]
+            // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
             unsafe {
                 engine.stack.arena_inner_gc()
             },
@@ -194,6 +199,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
             let gc_handle = GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
+                // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
                 unsafe {
                     engine.stack.arena_inner_gc()
                 },

@@ -16,7 +16,7 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnetdll::prelude::*;
-use gc_arena::Collect;
+use gc_arena::{Collect, static_collect};
 use std::sync::Arc;
 
 pub mod exceptions;
@@ -75,7 +75,7 @@ impl MethodState {
     }
 }
 
-unsafe impl<'gc> Collect<'gc> for MethodState {}
+static_collect!(MethodState);
 
 /// Fully parsed, cache-ready view of a resolved managed method.
 ///
@@ -101,7 +101,11 @@ pub struct MethodInfo<'a> {
     pub is_cctor: bool,
 }
 
-unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {}
+// SAFETY: MethodInfo contains only metadata borrows, ordinary values, and Arc-owned
+// metadata; it contains no GC handles that need tracing.
+unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {
+    const NEEDS_TRACE: bool = false;
+}
 
 /// GC-collectable wrapper around [`MethodDescription`] for storage in runtime state.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Collect)]

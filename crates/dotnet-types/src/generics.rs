@@ -3,7 +3,7 @@ use dotnetdll::prelude::{
     Accessibility, BaseType, Kind, MemberAccessibility, MethodType, Resolution, ResolvedDebug,
     TypeSource, UserType,
 };
-use gc_arena::{Collect, collect::Trace};
+use gc_arena::static_collect;
 use lru::LruCache;
 use std::{
     cell::RefCell,
@@ -45,9 +45,7 @@ impl<'a> Arbitrary<'a> for ConcreteType {
     }
 }
 
-unsafe impl<'gc> Collect<'gc> for ConcreteType {
-    fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
-}
+static_collect!(ConcreteType);
 
 impl From<TypeDescription> for ConcreteType {
     fn from(td: TypeDescription) -> Self {
@@ -91,7 +89,10 @@ impl ConcreteType {
         )
     }
 
-    #[allow(clippy::mutable_key_type)]
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "ConcreteType descriptor keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     pub fn is_value_type(&self, loader: &impl TypeResolver) -> bool {
         match self.base.as_ref() {
             BaseType::Type {
@@ -265,9 +266,7 @@ impl<'a> Arbitrary<'a> for GenericLookup {
     }
 }
 
-unsafe impl<'gc> Collect<'gc> for GenericLookup {
-    fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
-}
+static_collect!(GenericLookup);
 
 impl GenericLookup {
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {
@@ -679,6 +678,8 @@ mod constraint_cycle_tests {
         let type_index = resolution.push_type_definition(type_def);
         let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
         let arena = Arc::new(MetadataArena::new());
+        // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+        // converts it back exactly once in `MetadataArena::drop`.
         unsafe { arena.add_resolution(ptr) };
         (ResolutionS::new(ptr, arena), type_index)
     }

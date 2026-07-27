@@ -253,19 +253,13 @@ mod method_description_eq_hash_tests {
     use std::{
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
-        mem::size_of,
     };
 
-    /// Construct a `TypeIndex` from raw bytes.  `TypeIndex` has no public
-    /// constructor so we replicate the transmute trick used in `generics.rs`
-    /// tests and `comparer.rs` helpers.
+    /// Construct a deterministic `TypeIndex` for test data through the crate's
+    /// centralized compatibility helper. Repeating the byte preserves the
+    /// historical test values while avoiding a second layout transmute.
     fn make_type_index(byte: u8) -> TypeIndex {
-        // SAFETY: TypeIndex is a plain integer wrapper; any bit pattern is valid.
-        unsafe {
-            std::mem::transmute::<[u8; size_of::<TypeIndex>()], TypeIndex>(
-                [byte; size_of::<TypeIndex>()],
-            )
-        }
+        crate::type_index_from_usize(usize::from_ne_bytes([byte; std::mem::size_of::<usize>()]))
     }
 
     fn hash_of(desc: &MethodDescription) -> u64 {
@@ -290,7 +284,7 @@ mod method_description_eq_hash_tests {
     /// Two `MethodDescription` values whose `parent` fields refer to different
     /// declaring types must not compare equal.
     #[test]
-    fn method_descriptions_with_different_parents_falsely_compare_equal() {
+    fn method_descriptions_with_different_parents_are_not_equal() {
         let parent_a = TypeDescription::new(ResolutionS::NULL, make_type_index(0));
         let parent_b = TypeDescription::new(ResolutionS::NULL, make_type_index(1));
         assert_ne!(parent_a, parent_b, "precondition: parents must differ");
@@ -319,7 +313,7 @@ mod method_description_eq_hash_tests {
     /// `HashMap<MethodDescription, _>` and `HashSet<MethodDescription>`
     /// cannot alias entries from different declaring types.
     #[test]
-    fn method_descriptions_with_different_parents_produce_identical_hashes() {
+    fn method_descriptions_with_different_parents_produce_different_hashes() {
         let parent_a = TypeDescription::new(ResolutionS::NULL, make_type_index(0));
         let parent_b = TypeDescription::new(ResolutionS::NULL, make_type_index(1));
         assert_ne!(parent_a, parent_b, "precondition: parents must differ");

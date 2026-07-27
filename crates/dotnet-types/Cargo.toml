@@ -11,6 +11,12 @@ thiserror = { workspace = true }
 lru = { workspace = true }
 arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
+[dev-dependencies]
+static_assertions = "1"
+
 [features]
 fuzzing = ["dep:arbitrary"]
 generic-constraint-validation = []
+
+[lints]
+workspace = true

@@ -9,6 +9,7 @@ mod tests {
     fn test_read_branded_null() {
         with_test_gc_context(|gc_handle| {
             let null_bytes = 0usize.to_ne_bytes();
+            // SAFETY: The test fixture keeps the referenced object and its backing storage alive for this operation.
             unsafe {
                 let obj = ObjectRef::read_branded(&null_bytes, &gc_handle);
                 assert!(obj.0.is_none());
@@ -23,6 +24,7 @@ mod tests {
             let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = [0u8; ObjectRef::SIZE];
             obj.write(&mut buffer);
+            // SAFETY: The test fixture keeps the referenced object and its backing storage alive for this operation.
             unsafe {
                 let read_obj = ObjectRef::read_branded(&buffer, &gc_handle);
                 assert_eq!(read_obj, obj);

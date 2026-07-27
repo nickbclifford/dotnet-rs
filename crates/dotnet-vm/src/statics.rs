@@ -61,16 +61,12 @@ impl Clone for StaticStorage {
     }
 }
 
-// SAFETY: `StaticStorage::trace` correctly traces its `storage` field, which contains all
-// GC-managed references. The atomic fields (`init_state`, `initializing_thread`) and
-// synchronization primitives (`init_cond`, `init_mutex`) are not GC-managed and do not need
-// tracing. FieldStorage::trace uses atomic reads for ObjectRefs, ensuring thread-safe tracing
-// during stop-the-world GC pauses.
+// SAFETY: `StaticStorage::trace` traces its `storage` field, which contains all GC-managed
+// references. The atomic fields (`init_state`, `initializing_thread`) and synchronization
+// primitives (`init_cond`, `init_mutex`) contain no GC handles. `FieldStorage::trace` reads its
+// backing bytes only during the stop-the-world tracing phase, when mutators cannot modify them.
 unsafe impl<'gc> Collect<'gc> for StaticStorage {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        // Tracing is safe because FieldStorage::trace uses atomic reads for ObjectRefs
-        // and we are during a stop-the-world pause or at least in a state where
-        // the GC has control.
         self.storage.trace(cc);
     }
 }
@@ -364,7 +360,10 @@ impl StaticStorageManager {
             }
 
             let mut shard = self.shards[shard_idx].write();
-            #[allow(clippy::arc_with_non_send_sync)]
+            #[allow(
+                clippy::arc_with_non_send_sync,
+                reason = "StaticStorage is shard-confined in single-threaded builds while Arc preserves one ownership model"
+            )]
             shard.entry(key.clone()).or_insert_with(|| {
                 Arc::new(StaticStorage {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),

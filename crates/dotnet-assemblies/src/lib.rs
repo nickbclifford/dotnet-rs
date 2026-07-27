@@ -2,6 +2,7 @@
 //!
 //! Assembly loading and metadata resolution for the dotnet-rs VM.
 //! This crate handles finding, loading, and caching .NET assemblies from the file system.
+
 pub mod ancestors;
 #[cfg(test)]
 mod drop_tests;

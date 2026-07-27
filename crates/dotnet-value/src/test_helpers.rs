@@ -82,6 +82,7 @@ pub(crate) fn with_test_gc_context<R>(
     let _thread_id_guard = ManagedThreadIdGuard::set(arena_id);
 
     #[cfg(feature = "multithreading")]
+    // SAFETY: The test helper constructs and retains valid arena-backed storage for this operation.
     let arena_handle = unsafe {
         std::mem::transmute::<
             &dotnet_utils::gc::ArenaHandleInner,

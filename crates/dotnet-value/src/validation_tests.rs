@@ -39,6 +39,9 @@ mod tests {
         let arena_id = ArenaId(100);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
+        // SAFETY: The local owner retains the ArenaHandleInner until after the
+        // `arena.mutate` closure finishes, so the test-only `'static` borrow cannot
+        // outlive the owner.
         let arena_handle = unsafe {
             std::mem::transmute::<
                 &dotnet_utils::gc::ArenaHandleInner,
@@ -74,6 +77,9 @@ mod tests {
         let current_id = ArenaId(102);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let _owner_handle_owner = dotnet_utils::gc::ArenaHandle::new(owner_id);
+        // SAFETY: The local owner retains the ArenaHandleInner until after the
+        // `arena.mutate` closure finishes, so the test-only `'static` borrow cannot
+        // outlive the owner.
         let owner_handle = unsafe {
             std::mem::transmute::<
                 &dotnet_utils::gc::ArenaHandleInner,

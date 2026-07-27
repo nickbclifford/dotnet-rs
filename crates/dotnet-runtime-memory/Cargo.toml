@@ -29,3 +29,6 @@ memory-validation = [
 ]
 # Enables benchmark-only heap/memory instrumentation and metrics forwarding.
 bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumentation"]
+
+[lints]
+workspace = true

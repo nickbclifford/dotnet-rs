@@ -105,9 +105,12 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 
     pub fn record_ref(&mut self, target: ObjectRef<'gc>) {
         if let Some(h) = target.0 {
-            // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
-            // does not move or mutate the object.
-            let ref_tid = unsafe { (*h.as_ptr()).owner_id() };
+            // SAFETY: `h` is a live GC handle, so extracting its raw pointer preserves a valid
+            // reference to the object for this synchronous recorder operation.
+            let ptr = unsafe { h.as_ptr() };
+            // SAFETY: `ptr` came from the live handle above; reading immutable `owner_id` neither
+            // moves nor mutates the object.
+            let ref_tid = unsafe { (*ptr).owner_id() };
             if ref_tid != self.arena_id {
                 self.buffer
                     .push((ref_tid, gc_arena::Gc::as_ptr(h).expose_provenance()));
@@ -148,10 +151,15 @@ impl<'gc> MemoryOwner<'gc> {
     pub fn owner_id(&self) -> ArenaId {
         match self {
             Self::Local(r) => {
-                // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
-                // does not move or mutate the object.
-                r.0.map(|h| unsafe { (*h.as_ptr()).owner_id() })
-                    .unwrap_or(ArenaId(0))
+                r.0.map(|h| {
+                    // SAFETY: `h` is a live GC handle, so extracting its raw pointer preserves
+                    // a valid reference to the object for this closure.
+                    let ptr = unsafe { h.as_ptr() };
+                    // SAFETY: `ptr` came from the live handle above; reading immutable `owner_id`
+                    // neither moves nor mutates its object.
+                    unsafe { (*ptr).owner_id() }
+                })
+                .unwrap_or(ArenaId(0))
             }
             #[cfg(feature = "multithreading")]
             Self::CrossArena(_, tid, _) => *tid,

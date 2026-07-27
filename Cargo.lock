@@ -610,6 +610,7 @@ dependencies = [
  "dotnetdll",
  "gc-arena",
  "lru",
+ "static_assertions",
  "thiserror",
 ]
 
@@ -677,6 +678,7 @@ dependencies = [
  "phf_codegen",
  "proc-macro2",
  "quote",
+ "static_assertions",
  "syn 2.0.117",
  "tracing",
 ]

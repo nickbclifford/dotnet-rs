@@ -180,30 +180,18 @@ impl<'a> Arbitrary<'a> for ObjectPtr {
     }
 }
 
-// SAFETY: `ObjectPtr` is a raw-pointer wrapper (`NonNull`) so Rust does not
-// automatically inherit `Send`/`Sync` from the pointee.  We restore those
-// marker impls here, but only under the same conditions that
-// `ThreadSafeLock<ObjectInner<'static>>` itself satisfies `Send`/`Sync`.
-//
-// * `Send`: transferring ownership of an `ObjectPtr` to another thread is
-//   safe as long as the underlying `ThreadSafeLock<ObjectInner<'static>>`
-//   can also be sent — i.e. `ObjectInner<'static>: Send`.  The where-clause
-//   enforces this at compile time and automatically tightens if
-//   `ThreadSafeLock`'s own `Send` bound ever changes.
+// SAFETY: `ObjectPtr` is a raw pointer to a `ThreadSafeLock`. Under
+// multithreading, `ThreadSafeLock<T: Send + Sync>` is `Send + Sync` (verified
+// by `assert_impl_all!` below). `ObjectInner<'static>: Send + Sync` is
+// confirmed by the test assertions in this module.
 #[cfg(feature = "multithreading")]
-unsafe impl Send for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Send {}
+unsafe impl Send for ObjectPtr {}
 
-// SAFETY: Sharing `&ObjectPtr` across threads gives concurrent read access to
-// the underlying `ThreadSafeLock`.  That is safe under the same conditions
-// `ThreadSafeLock` requires for its own `Sync` impl — concretely,
-// `ObjectInner<'static>: Send + Sync` (Step 1.1 tightened this bound).
-// The where-clause propagates any future tightening automatically.
-//
-// These impls are gated on `multithreading` because under the single-threaded
-// backend `ThreadSafeLock` wraps `gc_arena::lock::RefLock` (a `RefCell`),
-// which is `!Send + !Sync`.
+// SAFETY: Same rationale as the `Send` implementation above. These impls are
+// gated on `multithreading` because the single-threaded backend uses
+// `gc_arena::lock::RefLock`, which is `!Send + !Sync`.
 #[cfg(feature = "multithreading")]
-unsafe impl Sync for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Sync {}
+unsafe impl Sync for ObjectPtr {}
 
 impl ObjectPtr {
     pub(crate) fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self {
@@ -221,6 +209,10 @@ impl ObjectPtr {
         self.0.as_ptr()
     }
 
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the NonNull dereference and lock's interior-pointer access form one immutable owner-id read"
+    )]
     pub fn owner_id(&self) -> ArenaId {
         // SAFETY: `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
         // `as_ref()` yields a shared reference; `as_ptr()` gives a raw pointer
@@ -275,6 +267,16 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
     }
 }
 
+#[cfg_attr(
+    feature = "multithreading",
+    expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the tracing-only owner-id read traverses the GC pointer and lock interior as one immutable operation"
+    )
+)]
+// SAFETY: A local handle is traced through its `Gc` implementation. During coordinated
+// multithreaded collection, a non-local handle is instead recorded as a cross-arena root so its
+// owning arena traces it; no reference-bearing variant is skipped.
 unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         if let Some(h) = self.0 {
@@ -308,7 +310,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
 //noinspection RsAssertEqual
 // we assume this type is pointer-sized basically everywhere (for serialization/layout purposes)
 // dependency-wise everything guarantees it; this is just a sanity check for the implementation
-const _: () = assert!(ObjectRef::SIZE == size_of::<usize>());
+const _: () = assert!(size_of::<ObjectRef<'static>>() == size_of::<usize>());
 const _: () = assert!(size_of::<Option<SyncBlockIndex>>() == size_of::<usize>());
 
 impl PartialEq for ObjectRef<'_> {
@@ -351,6 +353,8 @@ impl<'gc> ObjectRef<'gc> {
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         self.0.map(|h| {
             let inner = h.borrow();
+            // SAFETY: The active shared object borrow keeps the matched storage allocation live
+            // and excludes mutation while its base address is captured.
             NonNull::new(unsafe { inner.storage.raw_data_ptr() })
                 .expect("Object storage pointer is null")
         })
@@ -412,10 +416,18 @@ impl<'gc> ObjectRef<'gc> {
     /// Reads an ObjectRef from a byte slice without lifetime branding.
     ///
     /// # Safety
-    /// - `source` must contain a valid, properly aligned `Gc` pointer (or null).
+    /// - `source` must contain at least [`ObjectRef::SIZE`] bytes encoding a valid `Gc` pointer
+    ///   (or null). The bytes may be unaligned.
     /// - The caller must ensure the returned `ObjectRef` does not outlive the
     ///   arena generation it belongs to.
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "this parser validates one serialized object-reference representation before reconstructing it"
+    )]
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
+        // SAFETY: The caller supplies a complete serialized ObjectRef whose non-null pointer is
+        // live for the returned lifetime; the tagged branches below additionally validate arena
+        // registration before reconstructing a handle.
         unsafe {
             let ptr_val = {
                 // SAFETY: Use read_unaligned to avoid UB on unaligned access.
@@ -529,9 +541,18 @@ impl<'gc> ObjectRef<'gc> {
     /// - `source` must contain a valid `Gc` pointer.
     /// - The pointer must belong to the arena associated with `gc`.
     pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> Self {
+        // SAFETY: The caller guarantees that `source` contains a live handle from `_gc`'s arena;
+        // the mutation token brands the reconstructed reference with that arena lifetime.
         unsafe { Self::read_unchecked(source) }
     }
 
+    #[cfg_attr(
+        feature = "multithreading",
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the immutable owner-id read traverses the GC pointer and lock interior as one encoding operation"
+        )
+    )]
     pub fn write(&self, dest: &mut [u8]) {
         let ptr_val: usize = match self.0 {
             None => 0,
@@ -542,13 +563,9 @@ impl<'gc> ObjectRef<'gc> {
                     // Encode arena ownership with Tag 5 for every managed owner.
                     // This keeps ownership metadata intact when references flow through
                     // shared storage (e.g. statics) and are later read on another thread.
-                    // SAFETY: We can safely access owner_id during write because:
-                    // 1. The Gc<T> is alive (we hold a reference via self.0)
-                    // 2. We use raw pointer access to avoid deadlocking with the write lock on the owner object.
-                    //    The owner_id is immutable after object creation.
                     let lock_ptr = Gc::as_ptr(s);
-                    // DANGER: speculative read of owner_id.
-                    // Safe because owner_id is immutable after object creation.
+                    // SAFETY: `s` keeps the lock allocation alive. `owner_id` is immutable after
+                    // object creation, so this raw read cannot race with a write to that field.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != ArenaId::INVALID {
                         // Verify with a lease that the arena is still alive before
@@ -907,6 +924,11 @@ mod tests {
     #[cfg(feature = "multithreading")]
     static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(2000);
 
+    #[cfg(feature = "multithreading")]
+    struct EmptyTestRoot;
+    #[cfg(feature = "multithreading")]
+    gc_arena::static_collect!(EmptyTestRoot);
+
     #[test]
     fn sync_block_index_encoding_is_compact() {
         assert_eq!(size_of::<Option<SyncBlockIndex>>(), size_of::<usize>());
@@ -927,6 +949,10 @@ mod tests {
 
     #[cfg(feature = "multithreading")]
     assert_impl_all!(ObjectPtr: Send, Sync);
+    #[cfg(feature = "multithreading")]
+    assert_impl_all!(ObjectInner<'static>: Send, Sync);
+    #[cfg(feature = "multithreading")]
+    assert_impl_all!(ThreadSafeLock<ObjectInner<'static>>: Send, Sync);
     #[cfg(not(feature = "multithreading"))]
     assert_not_impl_all!(ObjectPtr: Send);
     #[cfg(not(feature = "multithreading"))]
@@ -988,11 +1014,7 @@ mod tests {
     #[test]
     fn test_read_unchecked_cross_arena_valid() {
         use gc_arena::{Arena, Rootable};
-        struct Root;
-        unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
-            fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
-        }
-        let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
+        let arena = Arena::<Rootable![EmptyTestRoot]>::new(|_mc| EmptyTestRoot);
         arena.mutate(|mc, _root| {
             let arena_id = ArenaId::new(1001);
             register_arena(arena_id, Arc::new(AtomicBool::new(false)));
@@ -1028,11 +1050,6 @@ mod tests {
     fn test_write_encodes_owner_tag_even_on_owner_thread() {
         use gc_arena::{Arena, Rootable};
 
-        struct Root;
-        unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
-            fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
-        }
-
         let arena_id = next_test_arena_id();
         let _thread_guard = ManagedThreadIdGuard::set(arena_id);
         register_arena(arena_id, Arc::new(AtomicBool::new(false)));
@@ -1049,7 +1066,7 @@ mod tests {
                 &'static dotnet_utils::gc::ArenaHandleInner,
             >(arena_handle_owner.as_inner())
         };
-        let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
+        let arena = Arena::<Rootable![EmptyTestRoot]>::new(|_mc| EmptyTestRoot);
         arena.mutate(|mc, _root| {
             #[cfg(not(feature = "memory-validation"))]
             let handle = GCHandle::new(mc, arena_handle);

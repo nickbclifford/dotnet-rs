@@ -486,6 +486,7 @@ impl<'gc> ManagedPtr<'gc> {
                     // Static data pointer or absolute pointer - use cached value
                     self._value.expect("ManagedPtr::with_data: null pointer")
                 };
+                // SAFETY: The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
                 let slice = unsafe { NonNull::slice_from_raw_parts(ptr, size).as_ref() };
                 f(slice)
             }
@@ -605,6 +606,7 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
+// SAFETY: The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
 unsafe impl<'gc> Collect<'gc> for ManagedPtr<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.origin.trace(cc);

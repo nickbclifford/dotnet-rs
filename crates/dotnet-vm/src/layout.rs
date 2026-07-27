@@ -57,6 +57,10 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the AssemblyLoader is confined to this single-threaded layout test"
+    )]
     fn nullable_int_layout_has_empty_gc_desc() {
         let loader = Arc::new(
             AssemblyLoader::new(

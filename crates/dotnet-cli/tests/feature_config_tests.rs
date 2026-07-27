@@ -1,6 +1,6 @@
 //! Configuration-specific tests for feature flags
 //! Tests that verify the correct behavior of different feature configurations
-#![allow(clippy::arc_with_non_send_sync)]
+
 #[cfg(feature = "multithreading")]
 use dotnet_vm::threading::ThreadManagerOps;
 
@@ -93,8 +93,9 @@ fn test_multithreading_arena_handle() {
 fn test_multithreading_cross_arena_value() {
     use dotnet_value::StackValue;
 
-    // Test that CrossArenaObjectRef variant exists
-    // We create a simple ObjectPtr by transmuting a pointer value
+    // Test that CrossArenaObjectRef variant exists.
+    // SAFETY: This compile-only test never dereferences the ObjectPtr; `0x1000` is nonzero and
+    // has the pointer-sized representation required by the transparent non-null pointer wrapper.
     let ptr = unsafe { std::mem::transmute::<usize, dotnet_value::object::ObjectPtr>(0x1000) };
     let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId(1));
     // If this compiles, the variant exists and works
@@ -118,6 +119,10 @@ fn test_basic_functionality_exists() {
 // Helper Functions
 // ============================================================================
 
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the AssemblyLoader fixture is confined to this thread-local test cache"
+)]
 fn create_test_loader() -> Arc<dotnet_assemblies::AssemblyLoader> {
     thread_local! {
         static LOADER: Arc<dotnet_assemblies::AssemblyLoader> = {

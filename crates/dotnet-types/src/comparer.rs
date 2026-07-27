@@ -826,7 +826,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         self.loader.canonical_type_name(&ty_name) == name
     }
 
-    #[allow(clippy::mutable_key_type)]
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     pub fn is_subclass_of(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut curr = source.clone();
         let mut seen = HashSet::new();
@@ -856,7 +859,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         false
     }
 
-    #[allow(clippy::mutable_key_type)]
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     pub fn implements_interface(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
@@ -1538,6 +1544,8 @@ mod tests {
         // Box::from_raw on the same pointer, so ownership is correctly transferred.
         let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
         let arena = Arc::new(MetadataArena::new());
+        // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+        // converts it back exactly once in `MetadataArena::drop`.
         unsafe { arena.add_resolution(ptr) };
         let res_s = ResolutionS::new(ptr, arena);
 
@@ -1575,6 +1583,8 @@ mod tests {
 
             let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
             let arena = Arc::new(MetadataArena::new());
+            // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+            // converts it back exactly once in `MetadataArena::drop`.
             unsafe { arena.add_resolution(ptr) };
             (ResolutionS::new(ptr, arena), type_index)
         }

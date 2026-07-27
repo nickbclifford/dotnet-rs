@@ -82,6 +82,8 @@ fn write_i32_out_arg<'gc, T: ExceptionOps<'gc> + RawMemoryOps<'gc>>(
 ) -> Result<(), StepResult> {
     let (origin, offset) = get_ptr_info(ctx, out_arg)?;
     let layout = LayoutManager::Scalar(Scalar::Int32);
+    // SAFETY: `get_ptr_info` decoded the managed Int32 out parameter, and `layout` matches the
+    // four-byte value written through that origin and offset.
     unsafe {
         ctx.write_unaligned(origin, offset, StackValue::Int32(value), &layout)
             .map_err(|e| StepResult::Error(e.into()))
@@ -127,6 +129,8 @@ fn try_write_utf16_to_span<'gc, T: RawMemoryOps<'gc>>(
         bytes.extend_from_slice(&ch.to_ne_bytes());
     }
 
+    // SAFETY: `read_span_reference` decoded the live span origin, the length check proves room for
+    // every UTF-16 code unit, and `bytes` contains exactly `chars.len() * 2` bytes.
     unsafe {
         ctx.write_bytes(span_ptr.origin().clone(), span_ptr.byte_offset(), &bytes)
             .map_err(|e| StepResult::Error(e.into()))?;

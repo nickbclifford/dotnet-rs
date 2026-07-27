@@ -219,6 +219,9 @@ fn ldelema_internal<
         if index >= v.layout.length {
             return Err(());
         }
+        #[expect(clippy::multiple_unsafe_ops_per_block, reason = "retrieving vector storage and deriving its checked element address share one bounds proof")]
+        // SAFETY: `index < v.layout.length` above, and `element_offset` uses the vector's own
+        // element stride, so the derived address lies within its live backing storage.
         let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
         Ok(ptr)
     }));

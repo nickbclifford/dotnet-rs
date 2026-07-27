@@ -38,6 +38,10 @@ impl Deref for VmResolverService {
 }
 
 impl VmResolverService {
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "VmResolverCaches uses Arc uniformly and is thread-confined in the single-threaded configuration"
+    )]
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         let caches = Arc::new(VmResolverCaches::new(shared.caches.clone()));
         let layout = VmResolverLayout::new(shared.caches.clone());
@@ -49,6 +53,10 @@ impl VmResolverService {
         Self { inner }
     }
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "VmResolverCaches uses Arc uniformly and is thread-confined in the single-threaded configuration"
+    )]
     pub fn from_parts(loader: Arc<AssemblyLoader>, caches: Arc<GlobalCaches>) -> Self {
         let adapter = Arc::new(VmResolverCaches::new(caches.clone()));
         let layout = VmResolverLayout::new(caches);

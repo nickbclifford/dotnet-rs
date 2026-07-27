@@ -201,6 +201,8 @@ pub fn delegate_get_hash_code<'gc, T: DelegateEqualsHost<'gc>>(
     let (target, index) = get_delegate_info(ctx, this);
     let mut hash = index as i32;
     if let Some(t) = target.0 {
+        // SAFETY: `t` is a live GC handle from the delegate target; exposing its address only
+        // derives the process-local hash component and neither dereferences nor mutates it.
         hash ^= unsafe { t.as_ptr() as i32 };
     }
 

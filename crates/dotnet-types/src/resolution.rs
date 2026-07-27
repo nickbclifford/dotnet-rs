@@ -74,8 +74,10 @@ impl Drop for MetadataArena {
 // The metadata is immutable after construction. Access to the storage is guarded by Mutex.
 // The raw pointers themselves point to 'static data (leaked boxes), and the Arc ensures
 // the arena lives as long as any descriptor pointing into it.
-unsafe impl Send for MetadataArena where Resolution<'static>: Send {}
-unsafe impl Sync for MetadataArena where Resolution<'static>: Sync {}
+unsafe impl Send for MetadataArena {}
+// SAFETY: See the immediately preceding `Send` proof; synchronized access and immutable
+// metadata also make shared references to this arena safe.
+unsafe impl Sync for MetadataArena {}
 
 #[derive(Clone)]
 pub struct ResolutionS(Option<(Arc<MetadataArena>, NonNull<Resolution<'static>>)>);
@@ -95,8 +97,10 @@ static_collect!(ResolutionS);
 // any ResolutionS exists. The raw pointer lifetime is guaranteed by the Arc.
 // Thread-safety is guaranteed by the Arc's ref-counting and the read-only nature
 // of metadata once loaded.
-unsafe impl Send for ResolutionS where Resolution<'static>: Send {}
-unsafe impl Sync for ResolutionS where Resolution<'static>: Sync {}
+unsafe impl Send for ResolutionS {}
+// SAFETY: See the immediately preceding `Send` proof; the shared metadata is immutable
+// and the owning `Arc<MetadataArena>` remains synchronized.
+unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
     pub const NULL: Self = Self(None);
 
@@ -134,6 +138,11 @@ impl ResolutionS {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(MetadataArena: Send, Sync);
+    assert_impl_all!(ResolutionS: Send, Sync);
+    assert_impl_all!(Resolution<'static>: Send, Sync);
 
     #[test]
     fn test_descriptor_lifetime_safety() {

@@ -24,6 +24,7 @@
 //!
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how intrinsic handlers are
 //! discovered and wired into generated dispatch tables.
+
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingBaseOps};

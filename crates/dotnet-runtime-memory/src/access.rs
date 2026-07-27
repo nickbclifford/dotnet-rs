@@ -141,6 +141,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
 
                 // 3. Perform Read
+                // SAFETY: The closure keeps `owner`'s storage stable; the preceding bounds and
+                // layout checks prove this derived pointer is valid for the requested read.
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })
         } else {
@@ -210,6 +212,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             // bounds-checked above; `ptr.add` within that range is valid.
                             #[cfg(feature = "bench-instrumentation")]
                             let layout_scan_start = Instant::now();
+                            // SAFETY: The layout scan uses the same live, bounds-checked object range.
                             unsafe {
                                 self.record_refs_in_range_with_recorder(
                                     gc,
@@ -683,6 +686,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             ));
         }
         validate_atomic_access(ptr as *const u8, false);
+        // SAFETY: This unsafe function's documented precondition supplies a non-null writable
+        // range for `ptr`; the callee performs the layout-specific write within that range.
         unsafe { self.write_value_internal(gc, ptr, None, value, layout) }
     }
 
@@ -705,14 +710,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
         let mut buf = [0u8; ObjectRef::SIZE];
-        // SAFETY: The caller guarantees `ptr` points to `ObjectRef::SIZE` bytes
-        // of readable memory within a live object's storage.  `buf` is a
-        // distinct stack allocation so there is no aliasing.
-        unsafe {
-            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
-            let r = ObjectRef::read_branded(&buf, &gc);
-            self.record_objref_cross_arena_with_recorder(r, owner_tid, recorder);
-        }
+        // SAFETY: The caller guarantees `ptr` points to `ObjectRef::SIZE` readable bytes in a
+        // live object. `buf` is a distinct stack allocation of exactly that size.
+        unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE) };
+        // SAFETY: `buf` now holds one complete branded ObjectRef serialization copied above.
+        let r = unsafe { ObjectRef::read_branded(&buf, &gc) };
+        self.record_objref_cross_arena_with_recorder(r, owner_tid, recorder);
     }
 
     #[cfg(feature = "multithreading")]
@@ -733,14 +736,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         owner_tid: ArenaId,
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
-        // SAFETY: The caller guarantees `ptr` points to `ManagedPtr::SIZE` bytes
-        // of readable memory within a live object's storage.  `from_raw_parts`
-        // is sound because `ManagedPtr::SIZE` matches the slice length and `ptr`
-        // is valid for that many bytes.
-        let info = unsafe {
-            ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
-                .expect("record_managedptr_at_ptr: failed to read ManagedPtr")
-        };
+        // SAFETY: The caller guarantees `ptr` points to `ManagedPtr::SIZE` readable bytes in a
+        // live object; the resulting slice uses exactly that serialization width.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, ManagedPtr::SIZE) };
+        // SAFETY: `bytes` is the complete live ManagedPtr representation validated above.
+        let info = unsafe { ManagedPtr::read_branded(bytes, &gc) }
+            .expect("record_managedptr_at_ptr: failed to read ManagedPtr");
         match &info.origin {
             PointerOrigin::Heap(r) => {
                 self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
@@ -797,11 +798,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         _recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) -> Result<(), MemoryAccessError> {
-        // SAFETY: `ptr` is non-null (checked immediately below) and has been
-        // validated by the caller (`write_unaligned` / `write_to_heap` paths
-        // perform bounds and integrity checks before reaching here).
-        // All `write_unaligned` calls are sound because `ptr` is valid for
-        // the write size and unaligned writes are explicitly allowed.
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the layout-dispatched writes share the caller-validated raw storage range"
+        )]
+        // SAFETY: `ptr` is non-null (checked immediately below) and has been validated by the
+        // caller (`write_unaligned` / `write_to_heap` paths perform bounds and integrity checks).
+        // All layout-dispatched unaligned writes stay within that valid range.
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -994,66 +997,64 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
                 self.record_objref_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
-            LayoutManager::Scalar(Scalar::ManagedPtr) => unsafe {
-                self.record_managedptr_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
-            },
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // SAFETY: `ptr` names the caller-validated live scalar slot and this branch uses
+                // the matching ManagedPtr layout.
+                unsafe { self.record_managedptr_at_ptr_with_recorder(gc, ptr, owner_tid, recorder) }
+            }
             LayoutManager::Field(flm) => {
                 // Use GcDesc for fast ObjectRef recording
                 let ptr_size = ObjectRef::SIZE;
                 flm.gc_desc.for_each_word_index(|word_index| {
                     let offset = word_index * ptr_size;
-                    // SAFETY: `offset` is a word-aligned byte offset derived from
-                    // the layout's GC bitmap; `ptr.add(offset)` stays within the
-                    // field struct whose total size is bounded by the allocation.
+                    // SAFETY: `offset` is a word-aligned byte offset from the layout's GC bitmap,
+                    // so it lies within this live field-storage allocation.
+                    let child = unsafe { ptr.add(offset) };
+                    // SAFETY: `child` is the validated ObjectRef slot derived above.
                     unsafe {
-                        self.record_objref_at_ptr_with_recorder(
-                            gc,
-                            ptr.add(offset),
-                            owner_tid,
-                            recorder,
-                        );
-                    }
+                        self.record_objref_at_ptr_with_recorder(gc, child, owner_tid, recorder)
+                    };
                 });
                 for offset in &flm.gc_desc.unaligned_offsets {
-                    // SAFETY: Unaligned offsets are validated by layout construction
-                    // to lie within the struct's storage.
+                    // SAFETY: Layout construction validates every unaligned offset as lying
+                    // within this live field-storage allocation.
+                    let child = unsafe { ptr.add(*offset) };
+                    // SAFETY: `child` is the validated ObjectRef slot derived above.
                     unsafe {
-                        self.record_objref_at_ptr_with_recorder(
-                            gc,
-                            ptr.add(*offset),
-                            owner_tid,
-                            recorder,
-                        );
-                    }
+                        self.record_objref_at_ptr_with_recorder(gc, child, owner_tid, recorder)
+                    };
                 }
                 // Use visit_managed_ptrs for recursive ManagedPtr recording
                 if flm.has_ref_fields {
                     // SAFETY: `visit_managed_ptrs` yields offsets that are within
                     // the field struct's backing storage; `ptr.add(offset)` is valid.
-                    flm.visit_managed_ptrs(ByteOffset(0), &mut |offset| unsafe {
-                        self.record_managedptr_at_ptr_with_recorder(
-                            gc,
-                            ptr.add(offset.as_usize()),
-                            owner_tid,
-                            recorder,
-                        );
+                    flm.visit_managed_ptrs(ByteOffset(0), &mut |offset| {
+                        // SAFETY: The layout visitor yields offsets within this live field range.
+                        let child = unsafe { ptr.add(offset.as_usize()) };
+                        // SAFETY: `child` is the validated ManagedPtr slot derived above.
+                        unsafe {
+                            self.record_managedptr_at_ptr_with_recorder(
+                                gc, child, owner_tid, recorder,
+                            )
+                        };
                     });
                 }
             }
             LayoutManager::Array(arr) if arr.element_layout.is_or_contains_refs() => {
                 let elem_size = arr.element_layout.size().as_usize();
                 for i in 0..arr.length {
-                    // SAFETY: `i * elem_size` is within the array allocation
-                    // because `i < arr.length` and `arr.length * elem_size`
-                    // equals the total allocation size.
+                    // SAFETY: `i < arr.length`, and `arr.length * elem_size` is the live array's
+                    // total allocation size, so this element offset is in bounds.
+                    let child = unsafe { ptr.add(i * elem_size) };
+                    // SAFETY: `child` is the validated element base derived above.
                     unsafe {
                         self.record_refs_recursive_with_recorder(
                             gc,
-                            ptr.add(i * elem_size),
+                            child,
                             &arr.element_layout,
                             recorder,
-                        );
-                    }
+                        )
+                    };
                 }
             }
             _ => {}
@@ -1097,19 +1098,20 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let f_start = field.position.as_usize();
                     let f_end = f_start + field.layout.size().as_usize();
                     if f_start < range_end && f_end > range_start {
-                        // SAFETY: `f_start` is a field offset within the struct
-                        // layout; `ptr.add(f_start)` remains within the struct's
-                        // backing storage which the caller guarantees is live.
+                        // SAFETY: `f_start` is a layout-provided field offset within the
+                        // caller-validated live struct storage.
+                        let child = unsafe { ptr.add(f_start) };
+                        // SAFETY: `child` is the validated field base derived above.
                         unsafe {
                             self.record_refs_in_range_with_recorder(
                                 gc,
-                                ptr.add(f_start),
+                                child,
                                 &field.layout,
                                 range_start.saturating_sub(f_start),
                                 range_end.saturating_sub(f_start),
                                 recorder,
-                            );
-                        }
+                            )
+                        };
                     }
                 }
             }
@@ -1128,18 +1130,20 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 for i in start_idx..end_idx {
                     let f_start = i * elem_size;
-                    // SAFETY: `f_start = i * elem_size` with `i < alm.length`
-                    // is within the array's backing storage.
+                    // SAFETY: `f_start = i * elem_size` with `i < alm.length`, so it lies in the
+                    // caller-validated live array storage.
+                    let child = unsafe { ptr.add(f_start) };
+                    // SAFETY: `child` is the validated element base derived above.
                     unsafe {
                         self.record_refs_in_range_with_recorder(
                             gc,
-                            ptr.add(f_start),
+                            child,
                             &alm.element_layout,
                             range_start.saturating_sub(f_start),
                             range_end.saturating_sub(f_start),
                             recorder,
-                        );
-                    }
+                        )
+                    };
                 }
             }
             _ => {}
@@ -1160,8 +1164,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
-        // SAFETY: The caller must ensure `ptr` is valid for reads and within bounds.
-        // This is verified by `read_unaligned` before calling this method.
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the layout-dispatched reads share the caller-validated raw storage range"
+        )]
+        // SAFETY: The caller ensures `ptr` is valid for reads and within bounds, as verified by
+        // `read_unaligned` before reaching this layout-dispatched operation.
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(

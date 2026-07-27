@@ -101,7 +101,9 @@ unsafe fn index_of_char_sse2(chars: &[u16], needle: u16) -> Option<usize> {
 
     while offset + X86_LANES_U16 <= chars.len() {
         // SAFETY: Bounds guarantee at least 16 bytes from `offset`.
-        let chunk = unsafe { _mm_loadu_si128(chars.as_ptr().add(offset).cast::<__m128i>()) };
+        let chunk_ptr = unsafe { chars.as_ptr().add(offset) }.cast::<__m128i>();
+        // SAFETY: `chunk_ptr` addresses at least 16 readable bytes in `chars`.
+        let chunk = unsafe { _mm_loadu_si128(chunk_ptr) };
         let cmp = _mm_cmpeq_epi16(chunk, needle_pattern);
         let mask = _mm_movemask_epi8(cmp);
         if mask != 0 {
@@ -129,7 +131,9 @@ unsafe fn all_ascii_whitespace_sse2(chars: &[u16]) -> Option<bool> {
 
     while offset + X86_LANES_U16 <= chars.len() {
         // SAFETY: Bounds guarantee at least 16 bytes from `offset`.
-        let chunk = unsafe { _mm_loadu_si128(chars.as_ptr().add(offset).cast::<__m128i>()) };
+        let chunk_ptr = unsafe { chars.as_ptr().add(offset) }.cast::<__m128i>();
+        // SAFETY: `chunk_ptr` addresses at least 16 readable bytes in `chars`.
+        let chunk = unsafe { _mm_loadu_si128(chunk_ptr) };
         let ascii_bits = _mm_and_si128(chunk, ascii_mask);
         if _mm_movemask_epi8(_mm_cmpeq_epi16(ascii_bits, zero)) != 0xFFFF_i32 {
             return None;
@@ -185,7 +189,9 @@ unsafe fn index_of_char_neon(chars: &[u16], needle: u16) -> Option<usize> {
 
     while offset + AARCH64_LANES_U16 <= chars.len() {
         // SAFETY: Bounds guarantee at least 8 u16 lanes from `offset`.
-        let chunk = unsafe { vld1q_u16(chars.as_ptr().add(offset)) };
+        let chunk_ptr = unsafe { chars.as_ptr().add(offset) };
+        // SAFETY: `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
+        let chunk = unsafe { vld1q_u16(chunk_ptr) };
         let cmp = vceqq_u16(chunk, needle_pattern);
 
         let mut lane_matches = [0u16; AARCH64_LANES_U16];
@@ -215,7 +221,9 @@ unsafe fn all_ascii_whitespace_neon(chars: &[u16]) -> Option<bool> {
 
     while offset + AARCH64_LANES_U16 <= chars.len() {
         // SAFETY: Bounds guarantee at least 8 u16 lanes from `offset`.
-        let chunk = unsafe { vld1q_u16(chars.as_ptr().add(offset)) };
+        let chunk_ptr = unsafe { chars.as_ptr().add(offset) };
+        // SAFETY: `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
+        let chunk = unsafe { vld1q_u16(chunk_ptr) };
         let ascii_bits = vandq_u16(chunk, ascii_mask);
         let mut lanes = [0u16; AARCH64_LANES_U16];
         // SAFETY: `lanes` is valid for 8 lanes.

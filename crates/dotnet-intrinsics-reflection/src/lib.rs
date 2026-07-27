@@ -1,4 +1,3 @@
-#![allow(clippy::mutable_key_type)]
 //! Reflection intrinsic handlers and runtime reflection host interfaces.
 //!
 //! This crate provides `#[dotnet_intrinsic]` handlers for reflection-heavy
@@ -25,6 +24,7 @@
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
 //! handlers in this crate are discovered and wired into generated intrinsic
 //! dispatch tables.
+
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,

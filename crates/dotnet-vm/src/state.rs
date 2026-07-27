@@ -346,15 +346,21 @@ pub struct SharedGlobalState {
     pub app_context_switches: DashMap<String, bool>,
 }
 
-// SAFETY: Under `--no-default-features` the runtime is single-threaded; `SharedGlobalState` is
-// never accessed concurrently.  The `!Sync`/`!Send` fields are compat `Mutex`/`RwLock` wrappers
-// over `RefCell` and `NonNull`-bearing descriptors, all safe here because no concurrent access
-// can occur in this build.  These impls are intentionally absent when `multithreading` is
-// enabled so the real thread-safe types provide the `Send`/`Sync` guarantees instead.
 #[cfg(not(feature = "multithreading"))]
+// SAFETY: Under `--no-default-features` the runtime is single-threaded; `SharedGlobalState` is
+// never accessed concurrently. This explicit `Send`/`Sync` proof keeps `Arc<SharedGlobalState>`
+// as the uniform ownership model across configurations. The `!Sync`/`!Send` fields are compat
+// `Mutex`/`RwLock` wrappers over `RefCell` and `NonNull`-bearing descriptors, all safe here
+// because no concurrent access can occur in this build. These impls are intentionally absent when
+// `multithreading` is enabled so the real thread-safe types provide the `Send`/`Sync` guarantees
+// instead.
 unsafe impl Sync for SharedGlobalState {}
 #[cfg(not(feature = "multithreading"))]
+// SAFETY: The same single-threaded invariant above also prevents cross-thread transfer.
 unsafe impl Send for SharedGlobalState {}
+
+#[cfg(all(test, not(feature = "multithreading")))]
+static_assertions::assert_impl_all!(SharedGlobalState: Send, Sync);
 
 impl GlobalCaches {
     pub fn get_method_info(
@@ -412,7 +418,10 @@ impl GlobalCaches {
 }
 
 impl SharedGlobalState {
-    #[allow(clippy::arc_with_non_send_sync)]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "SharedGlobalState uses Arc uniformly and has a configuration-specific single-threaded safety proof"
+    )]
     pub fn new(loader: Arc<AssemblyLoader>) -> Self {
         let tracer = Tracer::new();
         let metrics = Arc::new(RuntimeMetrics::new());
@@ -520,6 +529,10 @@ impl SharedGlobalState {
         }
     }
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "ResolutionShared uses Arc uniformly and is thread-confined in the single-threaded configuration"
+    )]
     pub fn resolution_shared(self: &Arc<Self>) -> Arc<crate::context::ResolutionShared> {
         self.resolution_shared_cache
             .get_or_init(|| {

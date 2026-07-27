@@ -25,6 +25,12 @@ use gc_arena::Gc;
 use libffi::middle::*;
 use std::{ffi::c_void, marker::PhantomPinned, ptr::NonNull, sync::Arc};
 
+/// Process-global compatibility slot for the VM's P/Invoke last-error intrinsics.
+///
+/// # Safety
+/// All reads and writes must be externally serialized. This is not thread-local and therefore
+/// cannot be accessed concurrently without a data race; replacing it with per-thread state is a
+/// separate runtime-behavior change.
 pub static mut LAST_ERROR: i32 = 0;
 
 type ObjectReadGuard<'a, 'gc> = ThreadSafeReadGuard<'a, dotnet_value::object::ObjectInner<'gc>>;
@@ -35,6 +41,8 @@ struct PinnedGuard<'gc> {
 
 impl<'gc> PinnedGuard<'gc> {
     pub unsafe fn new(handle: dotnet_value::object::ObjectHandle<'gc>) -> Self {
+        // SAFETY: `handle` is a live GC handle supplied by the marshaling path; its object lock
+        // remains valid for `'gc`, and the resulting guard is retained by this PinnedGuard.
         let guard = unsafe {
             let lock_ref: &'gc dotnet_utils::gc::ThreadSafeLock<
                 dotnet_value::object::ObjectInner<'gc>,
@@ -570,6 +578,9 @@ fn handle_pinvoke_return<'gc>(
                     .into(),
                 );
             }
+            // SAFETY: Native interop returns the `Arc::as_ptr` handle paired with this
+            // TypedReference. Reconstituting it temporarily and restoring the raw ownership
+            // leaves the native reference count intact while producing an owned clone.
             let type_desc = unsafe {
                 let arc = Arc::from_raw(type_ptr);
                 let clone = arc.clone();
@@ -692,6 +703,8 @@ fn external_call_impl<'gc>(
         .zip(&method.signature().parameters)
         .enumerate()
     {
+        // SAFETY: `args` contains libffi Type values constructed for every signature parameter;
+        // their raw pointers remain valid for the duration of this marshaling loop.
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
         match v {
             StackValue::Int32(val) => {
@@ -810,10 +823,15 @@ fn external_call_impl<'gc>(
                     pinned_objects.push(owner);
                 }
                 let mut bytes = ManagedPtr::serialization_buffer();
-                // SAFETY: For heap-backed pointers we pin and keep the guard alive in
-                // `local_guards` before taking/offsetting raw addresses; for non-heap pointers we
-                // only expose addresses already represented by `ManagedPtr`.
-                let addr = unsafe {
+                #[expect(
+                    clippy::multiple_unsafe_ops_per_block,
+                    reason = "obtaining and offsetting the pinned raw address is one heap-pointer marshaling proof"
+                )]
+                let addr =
+                    // SAFETY: For heap-backed pointers we pin and keep the guard alive in
+                    // `local_guards` before taking/offsetting raw addresses; for non-heap pointers we
+                    // only expose addresses already represented by `ManagedPtr`.
+                    unsafe {
                     if let PointerOrigin::Heap(obj) = p.origin() {
                         if let Some(h) = obj.0 {
                             let guard = PinnedGuard::new(h);
@@ -853,6 +871,10 @@ fn external_call_impl<'gc>(
                 let is_ref = matches!(p_type, ParameterType::Ref(_));
 
                 if is_ref {
+                    #[expect(
+                        clippy::multiple_unsafe_ops_per_block,
+                        reason = "the managed read and copy into its equally sized owned buffer share one bounds proof"
+                    )]
                     // SAFETY: `p.with_data` validates access against the managed origin and we copy
                     // at most `buf_len` bytes into an owned buffer of the same length.
                     unsafe {
@@ -886,10 +908,15 @@ fn external_call_impl<'gc>(
                         pinned_objects.push(owner);
                     }
 
-                    // SAFETY: Heap pointers are pinned and their guards are kept alive in
-                    // `local_guards`; non-heap pointers come from `ManagedPtr` origin data and are
-                    // forwarded as-is for the duration of this call.
-                    let ptr = unsafe {
+                    #[expect(
+                        clippy::multiple_unsafe_ops_per_block,
+                        reason = "obtaining and offsetting the pinned raw address is one heap-pointer marshaling proof"
+                    )]
+                    let ptr =
+                        // SAFETY: Heap pointers are pinned and their guards are kept alive in
+                        // `local_guards`; non-heap pointers come from `ManagedPtr` origin data and are
+                        // forwarded as-is for the duration of this call.
+                        unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
                                 let guard = PinnedGuard::new(h);

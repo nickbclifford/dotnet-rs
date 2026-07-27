@@ -12,8 +12,9 @@ use dotnet_tracer::Tracer;
 use dotnet_utils::{
     ArenaId,
     gc::{
-        STW_TRACING_GENERATION_SENTINEL, register_arena, set_currently_tracing_with_stw,
-        take_found_cross_arena_refs_with_generation, try_acquire_lease,
+        STW_TRACING_GENERATION_SENTINEL, has_active_thread_safe_write_guard, register_arena,
+        set_currently_tracing_with_stw, take_found_cross_arena_refs_with_generation,
+        try_acquire_lease,
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, OrderedMutex,
@@ -356,6 +357,13 @@ impl super::ThreadManagerBackend for ThreadManager {
             return;
         }
 
+        // A writer must remain running until its guard drops. Marking traces
+        // ThreadSafeLock contents under a read lock, so parking here would leave
+        // the collector unable to acquire that lock.
+        if has_active_thread_safe_write_guard() {
+            return;
+        }
+
         // Safepoint visibility guarantee: flush deferred write-barrier entries
         // before this thread is counted as stopped.
         flush_write_barrier_buffer();
@@ -406,6 +414,11 @@ impl super::ThreadManagerBackend for ThreadManager {
     }
 
     fn request_stop_the_world(&self) -> Self::Guard<'_> {
+        assert!(
+            !has_active_thread_safe_write_guard(),
+            "cannot initiate stop-the-world collection while holding a ThreadSafeLock write guard",
+        );
+
         let start_time = Instant::now();
         const WARN_TIMEOUT: Duration = Duration::from_secs(1);
         #[cfg(feature = "multithreading")]
@@ -850,6 +863,43 @@ mod tests {
             .expect("second request_stop_the_world did not acquire coordination lock after drop");
         release_tx.send(()).unwrap();
         join.join().unwrap();
+    }
+
+    #[test]
+    fn request_stop_the_world_rejects_active_thread_safe_write_guard() {
+        use dotnet_utils::gc::ThreadSafeLock;
+        use gc_arena::{Arena, Rootable};
+        use std::panic;
+
+        type TestArena = Arena<Rootable![ThreadSafeLock<i32>]>;
+
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(0));
+        arena.mutate_root(|mc, lock| {
+            let _writer = lock.borrow_mut(mc);
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let _guard = manager.request_stop_the_world();
+            }));
+
+            let payload = result.expect_err(
+                "stop-the-world collection must reject an active ThreadSafeLock writer",
+            );
+            let message = if let Some(message) = payload.downcast_ref::<&str>() {
+                *message
+            } else if let Some(message) = payload.downcast_ref::<String>() {
+                message.as_str()
+            } else {
+                "<non-string panic payload>"
+            };
+            assert!(
+                message.contains(
+                    "cannot initiate stop-the-world collection while holding a ThreadSafeLock write guard"
+                ),
+                "unexpected panic payload: {message}",
+            );
+        });
+
+        assert!(!manager.is_gc_stop_requested());
     }
 
     #[cfg(debug_assertions)]

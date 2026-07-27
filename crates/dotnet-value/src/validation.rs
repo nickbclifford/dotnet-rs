@@ -1,5 +1,7 @@
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 use gc_arena::Collect;
+#[cfg(not(any(feature = "memory-validation", debug_assertions)))]
+use gc_arena::static_collect;
 
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Collect)]
@@ -11,10 +13,7 @@ pub struct ValidationTag(u64);
 pub struct ValidationTag;
 
 #[cfg(not(any(feature = "memory-validation", debug_assertions)))]
-// SAFETY: ValidationTag is empty when validation is disabled.
-unsafe impl<'gc> gc_arena::Collect<'gc> for ValidationTag {
-    fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
-}
+static_collect!(ValidationTag);
 
 #[cfg(all(not(feature = "memory-validation"), not(debug_assertions)))]
 const _: () = assert!(core::mem::size_of::<ValidationTag>() == 0);

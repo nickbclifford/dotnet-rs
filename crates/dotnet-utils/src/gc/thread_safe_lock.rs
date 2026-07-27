@@ -2,6 +2,9 @@ use gc_arena::{Collect, Mutation, barrier::Unlock, collect::Trace};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreading")]
+use std::cell::Cell;
+
+#[cfg(feature = "multithreading")]
 use parking_lot::{
     MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
@@ -10,6 +13,46 @@ use parking_lot::{
 use gc_arena::lock::RefLock as RwLock;
 #[cfg(not(feature = "multithreading"))]
 use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
+
+#[cfg(feature = "multithreading")]
+thread_local! {
+    static ACTIVE_WRITE_GUARDS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Returns whether this thread currently holds a mutable `ThreadSafeLock` guard.
+///
+/// A managed thread in this state must not park at a GC safepoint: the collector
+/// traces lock contents under a read lock, which requires every stopped thread to
+/// have released its write guards first.
+#[cfg(feature = "multithreading")]
+pub fn has_active_thread_safe_write_guard() -> bool {
+    ACTIVE_WRITE_GUARDS.get() != 0
+}
+
+#[cfg(feature = "multithreading")]
+struct SafepointWriteGuard;
+
+#[cfg(feature = "multithreading")]
+impl SafepointWriteGuard {
+    fn enter() -> Self {
+        ACTIVE_WRITE_GUARDS.set(
+            ACTIVE_WRITE_GUARDS
+                .get()
+                .checked_add(1)
+                .expect("ThreadSafeLock write-guard depth overflow"),
+        );
+        Self
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl Drop for SafepointWriteGuard {
+    fn drop(&mut self) {
+        let depth = ACTIVE_WRITE_GUARDS.get();
+        debug_assert!(depth > 0, "unbalanced ThreadSafeLock write guard");
+        ACTIVE_WRITE_GUARDS.set(depth - 1);
+    }
+}
 
 /// A thread-safe lock for GC-managed objects.
 ///
@@ -45,6 +88,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
             guard: RwLockWriteGuard::map(self.inner.write(), |x| x),
+            safepoint_guard: SafepointWriteGuard::enter(),
         }
     }
 
@@ -64,6 +108,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
         let _ = _gc;
         self.inner.try_write().map(|guard| ThreadSafeWriteGuard {
             guard: RwLockWriteGuard::map(guard, |x| x),
+            safepoint_guard: SafepointWriteGuard::enter(),
         })
     }
 
@@ -141,17 +186,20 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     }
 }
 
+// SAFETY: Both lock backends expose `T` to the tracer only through a shared
+// borrow. The multithreaded backend requires the GC safepoint protocol to keep
+// write-guard holders running until they release their guards, then verifies
+// that invariant with `try_read` before tracing. The single-threaded `RefLock`
+// implementation delegates to its `Collect` implementation.
 unsafe impl<'gc, T: Collect<'gc> + 'gc> Collect<'gc> for ThreadSafeLock<T> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         #[cfg(feature = "multithreading")]
         {
-            // SAFETY: Tracing happens during a stop-the-world pause, so no other
-            // threads are running. We can safely access the inner value without
-            // acquiring the lock. This avoids deadlock (or panic) if a thread was
-            // already holding the write lock when it reached a safe point.
-            unsafe {
-                (*self.inner.data_ptr()).trace(cc);
-            }
+            let guard = self
+                .inner
+                .try_read()
+                .expect("ThreadSafeLock write guard remained active during stop-the-world tracing");
+            guard.trace(cc);
         }
         #[cfg(not(feature = "multithreading"))]
         {
@@ -198,6 +246,8 @@ impl<T: ?Sized> Deref for ThreadSafeReadGuard<'_, T> {
 /// RAII guard for mutable borrows.
 pub struct ThreadSafeWriteGuard<'a, T: ?Sized> {
     guard: MappedRwLockWriteGuard<'a, T>,
+    #[cfg(feature = "multithreading")]
+    safepoint_guard: SafepointWriteGuard,
 }
 
 impl<'a, T: ?Sized> ThreadSafeWriteGuard<'a, T> {
@@ -205,11 +255,18 @@ impl<'a, T: ?Sized> ThreadSafeWriteGuard<'a, T> {
     where
         F: FnOnce(&mut T) -> &mut U,
     {
+        let ThreadSafeWriteGuard {
+            guard,
+            #[cfg(feature = "multithreading")]
+            safepoint_guard,
+        } = this;
         ThreadSafeWriteGuard {
             #[cfg(feature = "multithreading")]
-            guard: MappedRwLockWriteGuard::map(this.guard, f),
+            guard: MappedRwLockWriteGuard::map(guard, f),
             #[cfg(not(feature = "multithreading"))]
-            guard: std::cell::RefMut::map(this.guard, f),
+            guard: std::cell::RefMut::map(guard, f),
+            #[cfg(feature = "multithreading")]
+            safepoint_guard,
         }
     }
 }
@@ -228,20 +285,6 @@ impl<T: ?Sized> DerefMut for ThreadSafeWriteGuard<'_, T> {
     }
 }
 
-// SAFETY: In multithreading mode this wrapper is backed by
-// `parking_lot::RwLock<T>`, which is `Send` when `T: Send`.
-#[cfg(feature = "multithreading")]
-unsafe impl<T: Send> Send for ThreadSafeLock<T> {}
-
-// SAFETY: `ThreadSafeLock<T>` allows `&ThreadSafeLock<T>` to be used from
-// multiple threads concurrently.  Read-borrows hand out `&T` references that
-// may be observed by many threads at once, so `T: Sync` is required.
-// Write-borrows hand out `&mut T` which may be sent across a thread boundary,
-// so `T: Send` is also required.  These bounds mirror
-// `parking_lot::RwLock<T>` exactly.
-#[cfg(feature = "multithreading")]
-unsafe impl<T: Send + Sync> Sync for ThreadSafeLock<T> {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +302,8 @@ mod tests {
     assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Send);
     #[cfg(feature = "multithreading")]
     assert_not_impl_all!(ThreadSafeLock<Rc<u8>>: Sync);
+    #[cfg(feature = "multithreading")]
+    assert_not_impl_all!(ThreadSafeWriteGuard<'static, i32>: Send);
 
     #[cfg(not(feature = "multithreading"))]
     assert_impl_all!(ThreadSafeLock<i32>: Send);
@@ -317,6 +362,29 @@ mod tests {
             let _writer = lock.borrow_mut(mc);
             // Should fail to get reader while writer is active
             assert!(lock.try_borrow().is_none());
+        });
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn write_guards_track_safepoint_exclusion_across_mapping() {
+        use gc_arena::{Arena, Rootable};
+
+        type TestArena = Arena<Rootable![ThreadSafeLock<(i32, i32)>]>;
+
+        assert!(!has_active_thread_safe_write_guard());
+        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new((1, 2)));
+        arena.mutate_root(|mc, lock| {
+            let guard = lock.borrow_mut(mc);
+            assert!(has_active_thread_safe_write_guard());
+
+            let mut mapped = ThreadSafeWriteGuard::map(guard, |pair| &mut pair.1);
+            assert!(has_active_thread_safe_write_guard());
+            *mapped = 3;
+            drop(mapped);
+
+            assert!(!has_active_thread_safe_write_guard());
+            assert_eq!(*lock.borrow(), (1, 3));
         });
     }
 }

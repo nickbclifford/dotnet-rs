@@ -20,3 +20,6 @@ metadata-validation = []
 
 [build-dependencies]
 dotnet-build-tools = { workspace = true }
+
+[lints]
+workspace = true

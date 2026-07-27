@@ -1,4 +1,3 @@
-#![allow(clippy::arc_with_non_send_sync)]
 use dotnet_assemblies as assemblies;
 use dotnet_types::{TypeDescription, members::MethodDescription, resolution::ResolutionS};
 use dotnet_vm::{self as vm, state};
@@ -34,6 +33,10 @@ impl TestHarness {
         PathBuf::from(env!("DOTNET_FIXTURES_BASE"))
     }
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the integration harness is confined to this thread-local test cache"
+    )]
     pub fn get() -> Arc<Self> {
         thread_local! {
             static INSTANCE: Arc<TestHarness> = Arc::new(TestHarness::new());
@@ -41,6 +44,10 @@ impl TestHarness {
         INSTANCE.with(|i| i.clone())
     }
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the AssemblyLoader fixture is confined to this thread-local integration harness"
+    )]
     fn new() -> Self {
         let assemblies_path = assemblies::find_dotnet_app_path()
             .expect("could not find .NET shared path")

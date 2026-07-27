@@ -22,6 +22,7 @@
 //! behavior, and `docs/BUILD_TIME_CODE_GENERATION.md` for how
 //! `#[dotnet_intrinsic]` handlers in this crate are registered into generated
 //! intrinsic tables.
+
 use dotnet_types::{
     error::TypeResolutionError, generics::GenericLookup, members::MethodDescription,
 };

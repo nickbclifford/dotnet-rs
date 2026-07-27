@@ -23,3 +23,6 @@ fuzzing = ["dep:arbitrary", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]
 
 [dev-dependencies]
 static_assertions = "1"
+
+[lints]
+workspace = true

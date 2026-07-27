@@ -161,7 +161,7 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - `GcScopeGuard<'ctx>` is an owner-carrying RAII guard. The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
 - Construct via `GcScopeGuard::enter(ctx, token)` — increments the `active_borrows` scope counter; when `counter > 0`, `VesContext`'s `RawMemoryOps::check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager. (The plain `CallStack::check_gc_safe_point` does not consult this counter — it only loads `is_gc_stop_requested()`.)
 - RAII — `Drop` decrements the counter.
-- **`data_ptr()` Tracing**: During the STW pause, `gc-arena` tracing callbacks use `raw_data_ptr()` or `data_ptr()` to read object fields, directly bypassing `ThreadSafeLock` checks. This is safe because all mutator threads are suspended.
+- **`ThreadSafeLock` tracing**: Mutable guards increment a thread-local safepoint-exclusion counter. A thread holding such a guard remains running until it releases the guard, and an initiating thread is rejected if it attempts to begin STW in that state. The `Collect for ThreadSafeLock<T>` implementation uses `try_read()` and fails fast if this protocol was violated; that implementation never forms a shared reference by bypassing the lock. Other STW-only raw-storage reads remain separately documented at their call sites and rely on all mutators having stopped.
 
 ### Rules (enforced by convention, not compiler)
 1. Never call `check_gc_safe_point()` while holding a heap borrow.
@@ -294,8 +294,8 @@ All GC-managed allocation and reference writes require a `&Mutation<'gc>` token,
 
 Rules:
 - **Never store the `&Mutation<'gc>` token or any value derived from it outside the `mutate` closure.** The `'gc` lifetime is invariant and is scoped to the closure; Rust enforces this for safe code. Unsafe cross-arena paths must compensate manually.
-- **`ThreadSafeLock<T>` and the mutation token**: In single-threaded mode, `ThreadSafeLock<T>` wraps `gc_arena::RefLock<T>` — `borrow_mut` requires a `&Mutation<'gc>` witness. In multi-threaded mode it wraps `parking_lot::RwLock<T>` and does not require the token for locking, but the caller is still responsible for ensuring no collection is in progress (enforced structurally by the STW protocol). The two code paths are gated by `#[cfg(feature = "multithreading")]` in `crates/dotnet-utils/src/gc/thread_safe_lock.rs`.
-- **STW tracing callbacks** bypass `ThreadSafeLock` checks and read object fields via `raw_data_ptr()` / `data_ptr()` directly. This is safe only because all mutator threads are suspended at a safe point before tracing begins.
+- **`ThreadSafeLock<T>` and the mutation token**: In single-threaded mode, `ThreadSafeLock<T>` wraps `gc_arena::RefLock<T>` — `borrow_mut` requires a `&Mutation<'gc>` witness. In multi-threaded mode it wraps `parking_lot::RwLock<T>` and tracks mutable guards as safepoint-excluding scopes. The mutation token remains the witness that the caller is in an arena mutation context. The two code paths are gated by `#[cfg(feature = "multithreading")]` in `crates/dotnet-utils/src/gc/thread_safe_lock.rs`.
+- **`ThreadSafeLock<T>` tracing** acquires a read guard with `try_read()` before tracing `T`. Managed threads cannot park while holding a mutable guard, and STW initiation while holding one is rejected. Failure to acquire the read guard is therefore a detected safepoint-protocol violation rather than an unchecked alias. This guarantee is specific to the lock wrapper's `Collect` implementation; raw-storage tracing in `FieldStorage`, static storage, and cross-arena owner-ID reads has its own STW proof.
 
 #### `'gc` Lifetime Branding
 Every `Gc<'gc, T>` handle is branded with the invariant `'gc` lifetime of the arena that owns it. This prevents handles from outliving their arena or being compared across different arenas at compile time.

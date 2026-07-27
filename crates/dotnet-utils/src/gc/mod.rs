@@ -11,6 +11,8 @@ pub mod arena;
 pub mod cross_arena;
 pub mod thread_safe_lock;
 
+#[cfg(feature = "multithreading")]
+pub use thread_safe_lock::has_active_thread_safe_write_guard;
 pub use thread_safe_lock::{ThreadSafeLock, ThreadSafeReadGuard, ThreadSafeWriteGuard};
 
 #[cfg(feature = "multithreading")]

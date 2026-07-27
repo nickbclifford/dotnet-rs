@@ -13,8 +13,8 @@
 //! - `DenySandbox` (feature `fuzzing`): sandbox implementation that rejects
 //!   all native calls so fuzz targets can exercise managed code paths without
 //!   executing host-native functions.
-//! - [`LAST_ERROR`]: per-call native OS error tracking slot updated by the
-//!   invocation path for `GetLastError`/`errno`-style interop patterns.
+//! - [`LAST_ERROR`]: process-global compatibility slot for `GetLastError`/`errno`-style
+//!   interop. Its unsafe API requires external serialization; it is not thread-local.
 
 mod call;
 mod call_types;

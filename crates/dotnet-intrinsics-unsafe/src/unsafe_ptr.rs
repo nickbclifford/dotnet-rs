@@ -27,6 +27,8 @@ pub fn intrinsic_unsafe_as_pointer<
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = match val {
+        // SAFETY: `with_data(0, ...)` exposes no bytes and only obtains the address associated
+        // with this live managed pointer for the Unsafe.AsPointer contract.
         StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
         StackValue::NativeInt(i) => std::ptr::with_exposed_provenance_mut::<u8>(i as usize),
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
@@ -523,6 +525,8 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
             None,
         ),
         StackValue::ManagedPtr(m) => (
+            // SAFETY: `with_data(0, ...)` only exposes the address represented by the live
+            // managed pointer; no data is read or written here.
             unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
             m.is_pinned(),
             m.origin().clone(),
@@ -625,6 +629,8 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
+    // SAFETY: `ptr_info` validates the source pointer's origin and offset, and `layout` and
+    // `target_type` were resolved for the requested generic type.
     match unsafe { ctx.read_unaligned(origin, offset, &layout, Some(target_type)) } {
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
@@ -673,6 +679,8 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
+    // SAFETY: `ptr_info` validates the destination pointer's origin and offset, while `layout`
+    // was resolved for the requested generic type before this write.
     match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}
         Err(e) => {

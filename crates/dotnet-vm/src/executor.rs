@@ -12,7 +12,9 @@ use crate::{
 };
 use dotnet_metrics::{CacheStats, RuntimeMetricsSnapshot};
 use dotnet_tracer::Tracer;
-use dotnet_types::{WellKnown, members::MethodDescription};
+#[cfg(not(feature = "fuzzing"))]
+use dotnet_types::WellKnown;
+use dotnet_types::members::MethodDescription;
 use dotnet_utils::{
     ArenaId,
     gc::GCHandle,

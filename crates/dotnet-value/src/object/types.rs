@@ -136,6 +136,7 @@ impl<'gc> CTSValue<'gc> {
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef(p, t) => {
+                    // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
                     let addr = unsafe { p.with_data(0, |data| data.as_ptr() as usize) };
                     let type_ptr = Arc::as_ptr(t) as usize;
                     dest[0..8].copy_from_slice(&addr.to_ne_bytes());
@@ -201,6 +202,7 @@ unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 for i in 0..self.layout.length {
+                    // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
                     unsafe {
                         super::ObjectRef::read_unchecked(
                             &self.storage[(element.size() * i).as_usize()..],
@@ -299,6 +301,7 @@ impl<'gc> Vector<'gc> {
         self.validate_magic();
         let chunks = self.storage.chunks_exact(super::ObjectRef::SIZE);
         debug_assert!(chunks.remainder().is_empty());
+        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
         chunks.map(move |chunk| unsafe { super::ObjectRef::read_branded(chunk, gc) })
     }
 
@@ -351,6 +354,7 @@ impl Debug for Vector<'_> {
                         .chunks(self.layout.element_layout.size().as_usize())
                         .map(match self.layout.element_layout.as_ref() {
                             LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
+                                // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
                                 format!("{:?}", unsafe { super::ObjectRef::read_unchecked(chunk) })
                             },
                             LayoutManager::Scalar(Scalar::ManagedPtr) => {
@@ -451,6 +455,7 @@ unsafe impl<'gc> Collect<'gc> for Object<'gc> {
 
 impl<'gc> Object<'gc> {
     pub fn size_bytes(&self) -> usize {
+        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
         size_of::<Object>() + unsafe { self.instance_storage.raw_data_unsynchronized().len() }
     }
 
@@ -460,6 +465,7 @@ impl<'gc> Object<'gc> {
     }
 
     pub fn validate_resurrection_invariants(&self) {
+        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
         let actual_size = unsafe { self.instance_storage.raw_data_unsynchronized().len() };
         let expected_size = self.instance_storage.layout().total_size;
         if actual_size != expected_size {

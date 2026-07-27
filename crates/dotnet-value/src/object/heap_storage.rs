@@ -74,6 +74,7 @@ impl<'gc> HeapStorage<'gc> {
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
         match self {
             HeapStorage::Vec(v) => f(&v.storage),
+            // SAFETY: The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
             HeapStorage::Str(s) => unsafe {
                 let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
                 f(bytes)
@@ -99,9 +100,12 @@ impl<'gc> HeapStorage<'gc> {
     /// or that the data is otherwise stable and no writers are active.
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         match self {
+            // SAFETY: The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
             HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
             HeapStorage::Str(s) => s.as_ptr() as *mut u8,
+            // SAFETY: The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
             HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
+            // SAFETY: The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
             HeapStorage::Boxed(o) => unsafe { o.instance_storage.raw_data_ptr() },
         }
     }

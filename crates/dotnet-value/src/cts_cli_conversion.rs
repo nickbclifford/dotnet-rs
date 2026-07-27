@@ -174,6 +174,7 @@ impl CtsToCli {
                 let obj = if ptr.is_null() {
                     None
                 } else {
+                    // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
                     Some(unsafe { Gc::from_ptr(ptr) })
                 };
                 StackValue::ObjectRef(ObjectRef(obj))
@@ -240,6 +241,7 @@ impl CliToCts {
             StackValue::NativeInt(i) => Ok((i as usize) as u32),
             StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().expose_provenance() as u32),
             StackValue::ManagedPtr(p) => {
+                // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
                 let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
                 Ok(ptr.expose_provenance() as u32)
             }
@@ -280,6 +282,7 @@ impl CliToCts {
                 })
             }
             StackValue::ManagedPtr(p) => {
+                // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
                 let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
                 ptr.expose_provenance().try_into().map_err(|_| {
                     TypeResolutionError::InvalidLayout(

@@ -21,3 +21,6 @@ default = ["multithreading"]
 multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading", "dotnet-vm-ops/multithreading"]
 memory-validation = ["dotnet-value/memory-validation", "dotnet-vm-ops/memory-validation"]
 fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing", "dotnet-vm-ops/fuzzing"]
+
+[lints]
+workspace = true

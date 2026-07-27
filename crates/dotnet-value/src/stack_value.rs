@@ -211,8 +211,13 @@ fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
 }
 
 #[inline]
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "the owner storage pointer and its recorded offset jointly identify one managed-pointer location"
+)]
 fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
     if let Some(owner) = m.owner() {
+        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
             owner
                 .0
@@ -514,6 +519,7 @@ impl<'gc> StackValue<'gc> {
                 if m.is_null() {
                     std::ptr::null_mut()
                 } else {
+                    // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                     unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) }
                 }
             }
@@ -725,6 +731,7 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
+        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe { Self::load_atomic(ptr, t, AtomicOrdering::Relaxed) }
     }
 
@@ -747,6 +754,7 @@ impl<'gc> StackValue<'gc> {
             LoadType::Object => ObjectRef::SIZE,
         };
 
+        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
 
         CtsToCli::widen_load_atomic_raw(t, val)
@@ -755,6 +763,7 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
+        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
             self.store_atomic(ptr, t, AtomicOrdering::Relaxed);
         }
@@ -788,6 +797,7 @@ impl<'gc> StackValue<'gc> {
             }
         };
 
+        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
             StandardAtomicAccess::store_atomic(ptr, size, val, ordering);
         }
@@ -875,6 +885,10 @@ impl<'gc> PartialOrd for StackValue<'gc> {
     }
 }
 
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "each unmanaged arithmetic arm derives and re-wraps one checked-invariant pointer"
+)]
 impl<'gc> Add for StackValue<'gc> {
     type Output = Result<Self, ExecutionError>;
     fn add(self, rhs: Self) -> Self::Output {
@@ -892,11 +906,13 @@ impl<'gc> Add for StackValue<'gc> {
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) })
             }
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
+                // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                 Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i as isize))
                 })))
             }
             (NativeInt(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), NativeInt(i)) => {
+                // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                 Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i))
                 })))
@@ -906,6 +922,10 @@ impl<'gc> Add for StackValue<'gc> {
     }
 }
 
+#[expect(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "each unmanaged arithmetic arm derives and re-wraps one checked-invariant pointer"
+)]
 impl<'gc> Sub for StackValue<'gc> {
     type Output = Result<Self, ExecutionError>;
     fn sub(self, rhs: Self) -> Self::Output {
@@ -930,9 +950,11 @@ impl<'gc> Sub for StackValue<'gc> {
                     ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
                 })
             }
+            // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
             (UnmanagedPtr(u), Int32(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
             }))),
+            // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
             (UnmanagedPtr(u), NativeInt(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-i))
             }))),

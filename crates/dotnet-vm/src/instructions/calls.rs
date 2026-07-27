@@ -223,6 +223,8 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 &ctx.current_context()
             ));
 
+            // SAFETY: `m` is a non-null managed pointer, and its origin/offset identify storage
+            // for the resolved constrained type layout; `read_unaligned` verifies that range.
             let value = match unsafe {
                 ctx.read_unaligned(
                     m.origin().clone(),
@@ -277,15 +279,23 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                             }
                         }
                     }
-                    _ => unsafe {
-                        // Heap/static/transient: the target stores a serialized ObjectRef
-                        m.with_data(ObjectRef::SIZE, |data| {
-                            ObjectRef::read_branded(
-                                data,
-                                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                            )
-                        })
-                    },
+                    _ => {
+                        #[expect(
+                            clippy::multiple_unsafe_ops_per_block,
+                            reason = "reading a serialized ObjectRef and branding it share one managed-pointer validity proof"
+                        )]
+                        // SAFETY: Heap/static/transient targets store a serialized ObjectRef, and
+                        // `m` supplies the validated managed range used to brand that reference.
+                        unsafe {
+                            // Heap/static/transient: the target stores a serialized ObjectRef
+                            m.with_data(ObjectRef::SIZE, |data| {
+                                ObjectRef::read_branded(
+                                    data,
+                                    &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+                                )
+                            })
+                        }
+                    }
                 }
             }
             rest => {

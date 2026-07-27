@@ -19,3 +19,6 @@ multithreading = [
     "dotnet-utils/multithreading",
     "dotnet-value/multithreading",
 ]
+
+[lints]
+workspace = true

@@ -9,7 +9,6 @@
 //! - **[`MethodDescription`]**: Represents a resolved .NET method.
 //! - **[`FieldDescription`]**: Represents a resolved .NET field.
 //! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
-#![allow(clippy::mutable_key_type)]
 #[cfg(doc)]
 use crate::members::FieldDescription;
 
@@ -36,11 +35,16 @@ mod wkt;
 
 pub use wkt::WellKnown;
 
-const _: [(); size_of::<TypeIndex>()] = [(); size_of::<usize>()];
+const _: () = assert!(size_of::<TypeIndex>() == size_of::<usize>());
 
 #[inline]
 pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
-    // SAFETY: `dotnetdll` defines `TypeIndex` as a newtype around `usize`.
+    // SAFETY: `dotnetdll`'s `basic_index!` macro currently defines `TypeIndex` as
+    // `pub struct TypeIndex(pub(crate) usize)`. Its sole field accepts every `usize`
+    // bit pattern, so `index` is valid for `TypeIndex`; the const assertion above
+    // confirms that the two types currently have equal sizes. `TypeIndex` lacks a
+    // transparent representation or public constructor. The owner-confirmed upstream
+    // follow-up is `pub const fn TypeIndex::new(usize) -> TypeIndex`.
     unsafe { std::mem::transmute::<usize, TypeIndex>(index) }
 }
 

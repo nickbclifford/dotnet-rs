@@ -9,7 +9,6 @@
 //! - [`GC_BENCHMARK`]: Allocation pressure and GC throughput.
 //!
 //! See `docs/BENCHMARK_WORKFLOW.md` for PGO and profile guidance.
-#![allow(clippy::arc_with_non_send_sync)]
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult, state, sync::Arc};
 use dotnetdll::prelude::{EntryPoint, MethodMemberIndex, ReadOptions};
@@ -154,6 +153,10 @@ impl Default for BenchHarness {
 }
 
 impl BenchHarness {
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the benchmark harness is single-threaded and Arc preserves the runtime ownership model"
+    )]
     pub fn new() -> Self {
         let assemblies_path = dotnet_assemblies::find_dotnet_app_path()
             .expect("could not find .NET shared path")
@@ -293,6 +296,10 @@ impl BenchHarness {
 ///
 /// `options` is applied to every assembly the loader parses, letting callers compare lazy vs
 /// eager decoding for the whole assembly graph.
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "cold-start benchmarks execute on one thread while retaining the runtime Arc ownership model"
+)]
 pub fn cold_run(assemblies_path: &str, dll_path: &Path, options: ReadOptions) -> u8 {
     let mut loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path.to_string())
         .expect("failed to create AssemblyLoader");

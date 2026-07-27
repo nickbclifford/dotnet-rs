@@ -49,3 +49,6 @@ harness = false
 [[bench]]
 name = "cold_start"
 harness = false
+
+[lints]
+workspace = true

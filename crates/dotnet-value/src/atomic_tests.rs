@@ -9,9 +9,14 @@ mod tests {
         miri,
         ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
     )]
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the test intentionally exercises a sequence of atomic operations over one owned buffer"
+    )]
     fn test_atomic_load_store() {
         let mut data = Aligned8([0u8; 8]);
         let ptr = data.0.as_mut_ptr();
+        // SAFETY: The test owns valid backing storage for every atomic operation performed here.
         unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
@@ -82,6 +87,7 @@ mod tests {
             let ptr = data_clone.0.as_ptr() as *mut u8;
             let mut i = 0;
             while !stop_clone.load(Ordering::Relaxed) {
+                // SAFETY: The test owns valid backing storage for every atomic operation performed here.
                 unsafe {
                     StackValue::Int64(i).store_atomic(
                         ptr,
@@ -97,6 +103,7 @@ mod tests {
         let reader = thread::spawn(move || {
             let ptr = data_clone2.0.as_ptr();
             while !stop_clone2.load(Ordering::Relaxed) {
+                // SAFETY: The test owns valid backing storage for every atomic operation performed here.
                 unsafe {
                     let val =
                         StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire);
@@ -116,6 +123,10 @@ mod tests {
         miri,
         ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
     )]
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the test intentionally exercises object atomic load/store sequencing over one owned buffer"
+    )]
     fn test_atomic_object_load_store() {
         use crate::{
             object::{HeapStorage, ObjectRef},
@@ -127,6 +138,7 @@ mod tests {
             let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = Aligned8([0u8; 8]);
             let ptr = buffer.0.as_mut_ptr();
+            // SAFETY: The test owns valid backing storage for every atomic operation performed here.
             unsafe {
                 StackValue::ObjectRef(obj).store_atomic(
                     ptr,
@@ -158,13 +170,14 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_load() {
         let data = [0u8; 16];
+        // SAFETY: Offset one remains within this test's sixteen-byte backing allocation.
         let ptr = unsafe { data.as_ptr().add(1) };
+        // SAFETY: `ptr` points into the live test allocation; the checked operation is
+        // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
         }
     }
     #[repr(align(8))]
     struct ThreadSafeBox([u8; 8]);
-    unsafe impl Sync for ThreadSafeBox {}
-    unsafe impl Send for ThreadSafeBox {}
 }

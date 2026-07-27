@@ -68,6 +68,10 @@ enum InterfaceTraversalControl {
     Stop,
 }
 
+#[allow(
+    clippy::mutable_key_type,
+    reason = "RuntimeType traversal keys are intentional pending supervised/new-cache-primitive interning"
+)]
 fn traverse_interfaces_and_base_types<'gc, T, F>(
     ctx: &mut T,
     rt: RuntimeType,

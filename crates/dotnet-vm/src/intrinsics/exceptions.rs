@@ -32,6 +32,8 @@ pub fn intrinsic_get_stack_traces_deep_copy<
         Ok(v) => v,
         Err(e) => return e,
     };
+    // SAFETY: `get_ptr_info` decoded the managed object-reference out parameter, and `layout`
+    // matches the null ObjectRef representation written through that origin and offset.
     dotnet_vm_ops::vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
     });
@@ -40,6 +42,8 @@ pub fn intrinsic_get_stack_traces_deep_copy<
         Ok(v) => v,
         Err(e) => return e,
     };
+    // SAFETY: `get_ptr_info` decoded the managed object-reference out parameter, and `layout`
+    // matches the null ObjectRef representation written through that origin and offset.
     dotnet_vm_ops::vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
     });

@@ -17,3 +17,6 @@ default = ["multithreading"]
 multithreading = ["dep:parking_lot"]
 memory-validation = []
 fuzzing = ["dep:arbitrary"]
+
+[lints]
+workspace = true

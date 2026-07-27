@@ -434,6 +434,8 @@ unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
         }
         #[cfg(feature = "multithreading")]
         for ptr in self.cross_arena_roots.borrow().iter() {
+            // SAFETY: Cross-arena roots store live GC pointers recorded by the thread manager;
+            // reconstructing the handle only traces that still-owned root.
             unsafe {
                 Gc::from_ptr(ptr.as_ptr()).trace(cc);
             }

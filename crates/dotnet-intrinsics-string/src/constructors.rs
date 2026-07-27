@@ -210,8 +210,12 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
     let value = if !ptr.is_null() {
         let mut chars = Vec::new();
         let mut i = 0;
-        // SAFETY: We assume the pointer is valid and points to a null-terminated string.
-        // This is a standard assumption for string constructors taking a pointer.
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "walking the caller-provided C string requires pointer addition and dereference"
+        )]
+        // SAFETY: The CLR pointer overload contract supplies a valid, null-terminated u16 string;
+        // each iteration remains within that string until the terminating zero is observed.
         unsafe {
             loop {
                 let c = *ptr.add(i);

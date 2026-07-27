@@ -12,7 +12,7 @@ Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuz
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
 | `.github/workflows/ci.yml`       | stable    | Yes                      | push/PR to `main`/`master`     | Format, clippy, and test gates       |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
-| `.github/workflows/miri.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
+| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
 
 ## `ci.yml` — Blocking Correctness Gate
@@ -222,18 +222,26 @@ The workflow runs per crate (`fail-fast: false`):
 
 The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. Strict-provenance is currently infeasible for `dotnet-vm` because dependency-level integer-to-pointer casts are reached during assembly parsing before VM unsafe sites execute.
 
+The workflow pins `nightly-2026-05-27`, which locally reports
+`rustc 1.98.0-nightly (d1fc603d1 2026-05-26)`. The documented `dotnet-vm`
+unsafe-gate command was attempted with that toolchain, but did not complete
+within five minutes: it stalled during the second `fault_tests` test after
+the known dependency integer-to-pointer-cast warnings. Consequently, this
+pin records the attempted nightly; a passing result for the targeted suite
+has not yet been established. The non-blocking workflow remains intentional.
+
 Local commands:
 
 ```bash
-rustup toolchain install nightly
-rustup component add miri --toolchain nightly
+rustup toolchain install nightly-2026-05-27
+rustup component add miri --toolchain nightly-2026-05-27
 
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly miri test -p dotnet-value -- --test-threads=1
+cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly miri test -p dotnet-assemblies -- --test-threads=1
+cargo +nightly-2026-05-27 miri test -p dotnet-assemblies -- --test-threads=1
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
+cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
 ## `valgrind.yml` — Non-Blocking Leak/Uninit Checks

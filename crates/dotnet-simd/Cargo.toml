@@ -6,3 +6,6 @@ edition = "2024"
 [features]
 default = []
 simd = []
+
+[lints]
+workspace = true

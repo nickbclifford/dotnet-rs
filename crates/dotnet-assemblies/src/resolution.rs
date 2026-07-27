@@ -892,6 +892,8 @@ pub(crate) fn load_resolution_core(
     let aligned_ptr = Box::into_raw(aligned_boxed);
     // SAFETY: We manually track this leaked box to reclaim it later.
     let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
+    // SAFETY: `aligned_ptr` is a live allocation just returned by `Box::into_raw`, and the arena
+    // records ownership to reclaim it without dereferencing the pointer at this call.
     unsafe {
         arena.add_u64_slice(aligned_ptr);
     }

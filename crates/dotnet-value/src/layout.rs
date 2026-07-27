@@ -138,9 +138,11 @@ impl LayoutManager {
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 let info = unsafe { ManagedPtr::read_unchecked(storage) }
                     .expect("LayoutManager::trace: failed to read ManagedPtr");
                 info.origin.trace(cc);
@@ -168,9 +170,11 @@ impl LayoutManager {
     ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 let info = unsafe { ManagedPtr::read_branded(storage, fc) }
                     .expect("LayoutManager::resurrect: failed to read ManagedPtr");
                 info.origin.resurrect(fc, visited, depth);
@@ -360,6 +364,7 @@ impl GcDesc {
 
                 // Use read_unchecked to handle potential unaligned access safely
                 // and correctly reconstruct the ObjectRef.
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
                 ptr.trace(cc);
             }
@@ -367,6 +372,7 @@ impl GcDesc {
 
         for offset in &self.unaligned_offsets {
             if *offset + ptr_size <= storage.len() {
+                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[*offset..]) };
                 ptr.trace(cc);
             }
@@ -583,6 +589,7 @@ impl_scalar_field_type!(usize, Scalar::NativeInt);
 impl<'gc> FieldType for ObjectRef<'gc> {
     const SCALAR: Scalar = Scalar::ObjectRef;
     fn read_from(bytes: &[u8]) -> Self {
+        // SAFETY: The layout selected this field and storage contains its valid serialized representation.
         unsafe { ObjectRef::read_unchecked(bytes) }
     }
     fn write_to(&self, bytes: &mut [u8]) {
@@ -593,6 +600,7 @@ impl<'gc> FieldType for ObjectRef<'gc> {
 impl<'gc> FieldType for ManagedPtr<'gc> {
     const SCALAR: Scalar = Scalar::ManagedPtr;
     fn read_from(bytes: &[u8]) -> Self {
+        // SAFETY: The layout selected this field and storage contains its valid serialized representation.
         let info = unsafe {
             ManagedPtr::read_unchecked(bytes)
                 .expect("bytes were written by ManagedPtr::write_to for this same field")
@@ -605,7 +613,6 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
 }
 
 #[cfg(test)]
-#[allow(clippy::mutable_key_type)]
 mod tests {
     use super::*;
 
@@ -638,6 +645,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "FieldKey descriptor keys are intentional pending supervised/new-cache-primitive interning"
+    )]
     fn test_field_layout_manager_recursion() {
         // Inner struct: { int i; ref int r; }
         // ManagedPtr is 24 bytes, Int32 is 4 bytes.

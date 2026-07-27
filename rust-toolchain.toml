@@ -1,0 +1,5 @@
+# This is the repository's stable default. The Miri-only nightly pin lives in
+# .github/workflows/miri.yml and is documented in docs/CI.md.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
