@@ -85,56 +85,108 @@ impl std::fmt::Display for CacheStat {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CacheSizes {
-    pub layout_size: usize,
-    pub layout_bytes: u64,
-    pub vmt_size: usize,
-    pub vmt_bytes: u64,
-    pub intrinsic_size: usize,
-    pub intrinsic_bytes: u64,
-    pub intrinsic_field_size: usize,
-    pub intrinsic_field_bytes: u64,
-    pub hierarchy_size: usize,
-    pub hierarchy_bytes: u64,
-    pub static_field_layout_size: usize,
-    pub static_field_layout_bytes: u64,
-    pub instance_field_layout_size: usize,
-    pub instance_field_layout_bytes: u64,
-    pub value_type_size: usize,
-    pub value_type_bytes: u64,
-    pub has_finalizer_size: usize,
-    pub has_finalizer_bytes: u64,
-    pub overrides_size: usize,
-    pub overrides_bytes: u64,
-    pub method_info_size: usize,
-    pub method_info_bytes: u64,
-    pub assembly_type_info: (u64, u64, usize),
-    pub assembly_method_info: (u64, u64, usize),
-    pub shared_runtime_types_size: usize,
-    pub shared_runtime_types_bytes: u64,
-    pub shared_runtime_methods_size: usize,
-    pub shared_runtime_methods_bytes: u64,
-    pub shared_runtime_fields_size: usize,
-    pub shared_runtime_fields_bytes: u64,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheSize {
+    pub entries: usize,
+    pub bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CacheKind {
-    Layout,
-    Intrinsic,
-    IntrinsicField,
-    Hierarchy,
-    Vmt,
-    StaticFieldLayout,
-    InstanceFieldLayout,
-    ValueType,
-    HasFinalizer,
-    Overrides,
-    MethodInfo,
-    SharedRuntimeTypes,
-    SharedRuntimeMethods,
-    SharedRuntimeFields,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheSizes {
+    pub caches: [CacheSize; CacheKind::COUNT],
+    pub assembly_type_info: (u64, u64, usize),
+    pub assembly_method_info: (u64, u64, usize),
+}
+
+macro_rules! count_cache_kinds {
+    ($($kind:ident),* $(,)?) => {
+        <[()]>::len(&[$(count_cache_kinds!(@one $kind)),*])
+    };
+    (@one $kind:ident) => {
+        ()
+    };
+}
+
+macro_rules! define_cache_kinds {
+    (
+        global {
+            $($global:ident => { key: $global_key:literal, front: $global_front:literal }),+ $(,)?
+        }
+        shared {
+            $($shared:ident => { key: $shared_key:literal, front: $shared_front:literal }),+ $(,)?
+        }
+    ) => {
+        /// Stable identities for cache metrics and indexed size reports.
+        #[repr(usize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum CacheKind {
+            $($global,)+
+            $($shared,)+
+        }
+
+        impl CacheKind {
+            /// VM-global cache kinds in registry/report order.
+            pub const GLOBAL: [Self; count_cache_kinds!($($global),+)] =
+                [$(Self::$global,)+];
+
+            /// Every cache kind in its stable metric-array order.
+            pub const ALL: [Self;
+                count_cache_kinds!($($global),+) + count_cache_kinds!($($shared),+)
+            ] = [$(Self::$global,)+ $(Self::$shared,)+];
+
+            /// Number of cache kinds represented in metric arrays.
+            pub const COUNT: usize = Self::ALL.len();
+
+            /// Returns this kind's stable index in [`Self::ALL`].
+            #[inline]
+            pub const fn as_index(self) -> usize {
+                self as usize
+            }
+
+            /// Returns this kind's stable snake-case benchmark-map key.
+            #[inline]
+            pub const fn as_key(self) -> &'static str {
+                match self {
+                    $(Self::$global => $global_key,)+
+                    $(Self::$shared => $shared_key,)+
+                }
+            }
+
+            /// Whether benchmark snapshots expose a front-cache tier for this kind.
+            #[inline]
+            pub const fn has_front_cache(self) -> bool {
+                match self {
+                    $(Self::$global => $global_front,)+
+                    $(Self::$shared => $shared_front,)+
+                }
+            }
+        }
+    };
+}
+
+// This is the declaration site for metric identity, stable keys, array order, global-cache
+// membership, and front-cache snapshot membership. Adding a cache kind must not require parallel
+// match arms or counter fields elsewhere in this crate. Append new global kinds after MethodInfo
+// so the current CacheStats display order remains a stable prefix.
+define_cache_kinds! {
+    global {
+        Layout => { key: "layout", front: false },
+        Vmt => { key: "vmt", front: true },
+        Intrinsic => { key: "intrinsic", front: false },
+        IntrinsicField => { key: "intrinsic_field", front: false },
+        Hierarchy => { key: "hierarchy", front: true },
+        StaticFieldLayout => { key: "static_field_layout", front: false },
+        InstanceFieldLayout => { key: "instance_field_layout", front: false },
+        ValueType => { key: "value_type", front: false },
+        HasFinalizer => { key: "has_finalizer", front: false },
+        Overrides => { key: "overrides", front: false },
+        MethodInfo => { key: "method_info", front: true },
+    }
+    shared {
+        SharedRuntimeTypes => { key: "shared_runtime_types", front: false },
+        SharedRuntimeMethods => { key: "shared_runtime_methods", front: false },
+        SharedRuntimeFields => { key: "shared_runtime_fields", front: false },
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,6 +297,12 @@ pub struct BenchInstrumentationSnapshot {
 
 const GC_PAUSE_SAMPLE_WINDOW: usize = 1_000;
 
+#[derive(Debug, Default)]
+struct CacheCounters {
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
 /// Metrics counters.
 ///
 /// All counters use `Ordering::Relaxed` because they are independent and do not
@@ -267,35 +325,8 @@ pub struct RuntimeMetrics {
     pub current_external_allocated: AtomicU64,
     /// Snapshot of per-arena allocation-pressure counters
     arena_gc_pressure_by_arena: Mutex<BTreeMap<String, ArenaGcPressureSnapshot>>,
-    /// Cache hit/miss counters
-    pub layout_cache_hits: AtomicU64,
-    pub layout_cache_misses: AtomicU64,
-    pub intrinsic_cache_hits: AtomicU64,
-    pub intrinsic_cache_misses: AtomicU64,
-    pub intrinsic_field_cache_hits: AtomicU64,
-    pub intrinsic_field_cache_misses: AtomicU64,
-    pub hierarchy_cache_hits: AtomicU64,
-    pub hierarchy_cache_misses: AtomicU64,
-    pub vmt_cache_hits: AtomicU64,
-    pub vmt_cache_misses: AtomicU64,
-    pub static_field_layout_cache_hits: AtomicU64,
-    pub static_field_layout_cache_misses: AtomicU64,
-    pub instance_field_layout_cache_hits: AtomicU64,
-    pub instance_field_layout_cache_misses: AtomicU64,
-    pub value_type_cache_hits: AtomicU64,
-    pub value_type_cache_misses: AtomicU64,
-    pub has_finalizer_cache_hits: AtomicU64,
-    pub has_finalizer_cache_misses: AtomicU64,
-    pub overrides_cache_hits: AtomicU64,
-    pub overrides_cache_misses: AtomicU64,
-    pub method_info_cache_hits: AtomicU64,
-    pub method_info_cache_misses: AtomicU64,
-    pub shared_runtime_types_cache_hits: AtomicU64,
-    pub shared_runtime_types_cache_misses: AtomicU64,
-    pub shared_runtime_methods_cache_hits: AtomicU64,
-    pub shared_runtime_methods_cache_misses: AtomicU64,
-    pub shared_runtime_fields_cache_hits: AtomicU64,
-    pub shared_runtime_fields_cache_misses: AtomicU64,
+    /// Cache hit/miss counters indexed by [`CacheKind`].
+    cache_counters: [CacheCounters; CacheKind::COUNT],
     #[cfg(feature = "bench-instrumentation")]
     eval_stack_reallocations: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
@@ -358,23 +389,11 @@ pub struct RuntimeMetrics {
     #[cfg(feature = "bench-instrumentation")]
     intrinsic_calls_by_signature: Mutex<BTreeMap<String, u64>>,
     #[cfg(feature = "bench-instrumentation")]
-    method_info_key_clones: AtomicU64,
+    cache_key_clones: [AtomicU64; CacheKind::COUNT],
     #[cfg(feature = "bench-instrumentation")]
-    vmt_key_clones: AtomicU64,
+    front_cache_hits: [AtomicU64; CacheKind::COUNT],
     #[cfg(feature = "bench-instrumentation")]
-    hierarchy_key_clones: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    method_info_front_cache_hits: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    method_info_front_cache_misses: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    vmt_front_cache_hits: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    vmt_front_cache_misses: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    hierarchy_front_cache_hits: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    hierarchy_front_cache_misses: AtomicU64,
+    front_cache_misses: [AtomicU64; CacheKind::COUNT],
 }
 
 impl RuntimeMetrics {
@@ -422,247 +441,21 @@ impl RuntimeMetrics {
 
     #[inline]
     pub fn record_cache(&self, kind: CacheKind, event: CacheEvent) {
-        match (kind, event) {
-            (CacheKind::Layout, CacheEvent::Hit) => {
-                self.layout_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Layout, CacheEvent::Miss) => {
-                self.layout_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Intrinsic, CacheEvent::Hit) => {
-                self.intrinsic_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Intrinsic, CacheEvent::Miss) => {
-                self.intrinsic_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::IntrinsicField, CacheEvent::Hit) => {
-                self.intrinsic_field_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::IntrinsicField, CacheEvent::Miss) => {
-                self.intrinsic_field_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Hierarchy, CacheEvent::Hit) => {
-                self.hierarchy_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Hierarchy, CacheEvent::Miss) => {
-                self.hierarchy_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Vmt, CacheEvent::Hit) => {
-                self.vmt_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Vmt, CacheEvent::Miss) => {
-                self.vmt_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::StaticFieldLayout, CacheEvent::Hit) => {
-                self.static_field_layout_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::StaticFieldLayout, CacheEvent::Miss) => {
-                self.static_field_layout_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::InstanceFieldLayout, CacheEvent::Hit) => {
-                self.instance_field_layout_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::InstanceFieldLayout, CacheEvent::Miss) => {
-                self.instance_field_layout_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::ValueType, CacheEvent::Hit) => {
-                self.value_type_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::ValueType, CacheEvent::Miss) => {
-                self.value_type_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::HasFinalizer, CacheEvent::Hit) => {
-                self.has_finalizer_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::HasFinalizer, CacheEvent::Miss) => {
-                self.has_finalizer_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Overrides, CacheEvent::Hit) => {
-                self.overrides_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::Overrides, CacheEvent::Miss) => {
-                self.overrides_cache_misses.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::MethodInfo, CacheEvent::Hit) => {
-                self.method_info_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::MethodInfo, CacheEvent::Miss) => {
-                self.method_info_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeTypes, CacheEvent::Hit) => {
-                self.shared_runtime_types_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeTypes, CacheEvent::Miss) => {
-                self.shared_runtime_types_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeMethods, CacheEvent::Hit) => {
-                self.shared_runtime_methods_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeMethods, CacheEvent::Miss) => {
-                self.shared_runtime_methods_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeFields, CacheEvent::Hit) => {
-                self.shared_runtime_fields_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            (CacheKind::SharedRuntimeFields, CacheEvent::Miss) => {
-                self.shared_runtime_fields_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        let counters = &self.cache_counters[kind.as_index()];
+        let counter = match event {
+            CacheEvent::Hit => &counters.hits,
+            CacheEvent::Miss => &counters.misses,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[inline]
-    pub fn record_layout_cache_hit(&self) {
-        self.record_cache(CacheKind::Layout, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_layout_cache_miss(&self) {
-        self.record_cache(CacheKind::Layout, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_intrinsic_cache_hit(&self) {
-        self.record_cache(CacheKind::Intrinsic, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_intrinsic_cache_miss(&self) {
-        self.record_cache(CacheKind::Intrinsic, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_intrinsic_field_cache_hit(&self) {
-        self.record_cache(CacheKind::IntrinsicField, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_intrinsic_field_cache_miss(&self) {
-        self.record_cache(CacheKind::IntrinsicField, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_hierarchy_cache_hit(&self) {
-        self.record_cache(CacheKind::Hierarchy, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_hierarchy_cache_miss(&self) {
-        self.record_cache(CacheKind::Hierarchy, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_vmt_cache_hit(&self) {
-        self.record_cache(CacheKind::Vmt, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_vmt_cache_miss(&self) {
-        self.record_cache(CacheKind::Vmt, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_static_field_layout_cache_hit(&self) {
-        self.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_static_field_layout_cache_miss(&self) {
-        self.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_instance_field_layout_cache_hit(&self) {
-        self.record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_instance_field_layout_cache_miss(&self) {
-        self.record_cache(CacheKind::InstanceFieldLayout, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_value_type_cache_hit(&self) {
-        self.record_cache(CacheKind::ValueType, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_value_type_cache_miss(&self) {
-        self.record_cache(CacheKind::ValueType, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_has_finalizer_cache_hit(&self) {
-        self.record_cache(CacheKind::HasFinalizer, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_has_finalizer_cache_miss(&self) {
-        self.record_cache(CacheKind::HasFinalizer, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_overrides_cache_hit(&self) {
-        self.record_cache(CacheKind::Overrides, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_overrides_cache_miss(&self) {
-        self.record_cache(CacheKind::Overrides, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_method_info_cache_hit(&self) {
-        self.record_cache(CacheKind::MethodInfo, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_method_info_cache_miss(&self) {
-        self.record_cache(CacheKind::MethodInfo, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_types_cache_hit(&self) {
-        self.record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_types_cache_miss(&self) {
-        self.record_cache(CacheKind::SharedRuntimeTypes, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_methods_cache_hit(&self) {
-        self.record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_methods_cache_miss(&self) {
-        self.record_cache(CacheKind::SharedRuntimeMethods, CacheEvent::Miss);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_fields_cache_hit(&self) {
-        self.record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Hit);
-    }
-
-    #[inline]
-    pub fn record_shared_runtime_fields_cache_miss(&self) {
-        self.record_cache(CacheKind::SharedRuntimeFields, CacheEvent::Miss);
+    /// Returns the current hit and miss counts for one cache kind.
+    pub fn cache_event_counts(&self, kind: CacheKind) -> (u64, u64) {
+        let counters = &self.cache_counters[kind.as_index()];
+        (
+            counters.hits.load(Ordering::Relaxed),
+            counters.misses.load(Ordering::Relaxed),
+        )
     }
 
     #[cfg(feature = "bench-instrumentation")]
@@ -849,160 +642,43 @@ impl RuntimeMetrics {
 
     #[cfg(feature = "bench-instrumentation")]
     #[inline]
-    pub fn record_method_info_key_clones(&self, count: u64) {
-        self.method_info_key_clones
-            .fetch_add(count, Ordering::Relaxed);
+    pub fn record_cache_key_clones(&self, kind: CacheKind, count: u64) {
+        self.cache_key_clones[kind.as_index()].fetch_add(count, Ordering::Relaxed);
     }
 
     #[cfg(not(feature = "bench-instrumentation"))]
     #[inline]
-    pub fn record_method_info_key_clones(&self, _count: u64) {}
+    pub fn record_cache_key_clones(&self, _kind: CacheKind, _count: u64) {}
 
     #[cfg(feature = "bench-instrumentation")]
     #[inline]
-    pub fn record_vmt_key_clones(&self, count: u64) {
-        self.vmt_key_clones.fetch_add(count, Ordering::Relaxed);
+    pub fn record_front_cache(&self, kind: CacheKind, event: CacheEvent) {
+        let counters = match event {
+            CacheEvent::Hit => &self.front_cache_hits,
+            CacheEvent::Miss => &self.front_cache_misses,
+        };
+        counters[kind.as_index()].fetch_add(1, Ordering::Relaxed);
     }
 
     #[cfg(not(feature = "bench-instrumentation"))]
     #[inline]
-    pub fn record_vmt_key_clones(&self, _count: u64) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_hierarchy_key_clones(&self, count: u64) {
-        self.hierarchy_key_clones
-            .fetch_add(count, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_hierarchy_key_clones(&self, _count: u64) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_method_info_front_cache_hit(&self) {
-        self.method_info_front_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_method_info_front_cache_hit(&self) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_method_info_front_cache_miss(&self) {
-        self.method_info_front_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_method_info_front_cache_miss(&self) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_vmt_front_cache_hit(&self) {
-        self.vmt_front_cache_hits.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_vmt_front_cache_hit(&self) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_vmt_front_cache_miss(&self) {
-        self.vmt_front_cache_misses.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_vmt_front_cache_miss(&self) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_hierarchy_front_cache_hit(&self) {
-        self.hierarchy_front_cache_hits
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_hierarchy_front_cache_hit(&self) {}
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_hierarchy_front_cache_miss(&self) {
-        self.hierarchy_front_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_hierarchy_front_cache_miss(&self) {}
+    pub fn record_front_cache(&self, _kind: CacheKind, _event: CacheEvent) {}
 
     pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
+        let caches = sizes.caches;
+        let cache_stat = |kind: CacheKind| self.cache_stat(kind, caches[kind.as_index()].entries);
         CacheStats {
-            layout: self.stat(
-                self.layout_cache_hits.load(Ordering::Relaxed),
-                self.layout_cache_misses.load(Ordering::Relaxed),
-                sizes.layout_size,
-            ),
-            vmt: self.stat(
-                self.vmt_cache_hits.load(Ordering::Relaxed),
-                self.vmt_cache_misses.load(Ordering::Relaxed),
-                sizes.vmt_size,
-            ),
-            intrinsic: self.stat(
-                self.intrinsic_cache_hits.load(Ordering::Relaxed),
-                self.intrinsic_cache_misses.load(Ordering::Relaxed),
-                sizes.intrinsic_size,
-            ),
-            intrinsic_field: self.stat(
-                self.intrinsic_field_cache_hits.load(Ordering::Relaxed),
-                self.intrinsic_field_cache_misses.load(Ordering::Relaxed),
-                sizes.intrinsic_field_size,
-            ),
-            hierarchy: self.stat(
-                self.hierarchy_cache_hits.load(Ordering::Relaxed),
-                self.hierarchy_cache_misses.load(Ordering::Relaxed),
-                sizes.hierarchy_size,
-            ),
-            static_field_layout: self.stat(
-                self.static_field_layout_cache_hits.load(Ordering::Relaxed),
-                self.static_field_layout_cache_misses
-                    .load(Ordering::Relaxed),
-                sizes.static_field_layout_size,
-            ),
-            instance_field_layout: self.stat(
-                self.instance_field_layout_cache_hits
-                    .load(Ordering::Relaxed),
-                self.instance_field_layout_cache_misses
-                    .load(Ordering::Relaxed),
-                sizes.instance_field_layout_size,
-            ),
-            value_type: self.stat(
-                self.value_type_cache_hits.load(Ordering::Relaxed),
-                self.value_type_cache_misses.load(Ordering::Relaxed),
-                sizes.value_type_size,
-            ),
-            has_finalizer: self.stat(
-                self.has_finalizer_cache_hits.load(Ordering::Relaxed),
-                self.has_finalizer_cache_misses.load(Ordering::Relaxed),
-                sizes.has_finalizer_size,
-            ),
-            overrides: self.stat(
-                self.overrides_cache_hits.load(Ordering::Relaxed),
-                self.overrides_cache_misses.load(Ordering::Relaxed),
-                sizes.overrides_size,
-            ),
-            method_info: self.stat(
-                self.method_info_cache_hits.load(Ordering::Relaxed),
-                self.method_info_cache_misses.load(Ordering::Relaxed),
-                sizes.method_info_size,
-            ),
+            layout: cache_stat(CacheKind::Layout),
+            vmt: cache_stat(CacheKind::Vmt),
+            intrinsic: cache_stat(CacheKind::Intrinsic),
+            intrinsic_field: cache_stat(CacheKind::IntrinsicField),
+            hierarchy: cache_stat(CacheKind::Hierarchy),
+            static_field_layout: cache_stat(CacheKind::StaticFieldLayout),
+            instance_field_layout: cache_stat(CacheKind::InstanceFieldLayout),
+            value_type: cache_stat(CacheKind::ValueType),
+            has_finalizer: cache_stat(CacheKind::HasFinalizer),
+            overrides: cache_stat(CacheKind::Overrides),
+            method_info: cache_stat(CacheKind::MethodInfo),
             assembly_type: self.stat(
                 sizes.assembly_type_info.0,
                 sizes.assembly_type_info.1,
@@ -1013,26 +689,9 @@ impl RuntimeMetrics {
                 sizes.assembly_method_info.1,
                 sizes.assembly_method_info.2,
             ),
-            shared_runtime_types: self.stat(
-                self.shared_runtime_types_cache_hits.load(Ordering::Relaxed),
-                self.shared_runtime_types_cache_misses
-                    .load(Ordering::Relaxed),
-                sizes.shared_runtime_types_size,
-            ),
-            shared_runtime_methods: self.stat(
-                self.shared_runtime_methods_cache_hits
-                    .load(Ordering::Relaxed),
-                self.shared_runtime_methods_cache_misses
-                    .load(Ordering::Relaxed),
-                sizes.shared_runtime_methods_size,
-            ),
-            shared_runtime_fields: self.stat(
-                self.shared_runtime_fields_cache_hits
-                    .load(Ordering::Relaxed),
-                self.shared_runtime_fields_cache_misses
-                    .load(Ordering::Relaxed),
-                sizes.shared_runtime_fields_size,
-            ),
+            shared_runtime_types: cache_stat(CacheKind::SharedRuntimeTypes),
+            shared_runtime_methods: cache_stat(CacheKind::SharedRuntimeMethods),
+            shared_runtime_fields: cache_stat(CacheKind::SharedRuntimeFields),
         }
     }
 
@@ -1174,77 +833,38 @@ impl RuntimeMetrics {
             .expect("layout scan timing lock poisoned")
             .clone();
         let mut cache_key_clones_by_cache = BTreeMap::new();
-        let method_info_key_clones = self.method_info_key_clones.load(Ordering::Relaxed);
-        cache_key_clones_by_cache.insert("method_info".to_string(), method_info_key_clones);
-        let vmt_key_clones = self.vmt_key_clones.load(Ordering::Relaxed);
-        cache_key_clones_by_cache.insert("vmt".to_string(), vmt_key_clones);
-        let hierarchy_key_clones = self.hierarchy_key_clones.load(Ordering::Relaxed);
-        cache_key_clones_by_cache.insert("hierarchy".to_string(), hierarchy_key_clones);
-        let cache_key_clone_total = method_info_key_clones + vmt_key_clones + hierarchy_key_clones;
+        let mut cache_key_clone_total = 0;
+        for kind in CacheKind::ALL {
+            let count = self.cache_key_clones[kind.as_index()].load(Ordering::Relaxed);
+            cache_key_clones_by_cache.insert(kind.as_key().to_string(), count);
+            cache_key_clone_total += count;
+        }
 
         let mut front_cache_hits_by_cache = BTreeMap::new();
-        front_cache_hits_by_cache.insert(
-            "method_info".to_string(),
-            self.method_info_front_cache_hits.load(Ordering::Relaxed),
-        );
-        front_cache_hits_by_cache.insert(
-            "vmt".to_string(),
-            self.vmt_front_cache_hits.load(Ordering::Relaxed),
-        );
-        front_cache_hits_by_cache.insert(
-            "hierarchy".to_string(),
-            self.hierarchy_front_cache_hits.load(Ordering::Relaxed),
-        );
-
         let mut front_cache_misses_by_cache = BTreeMap::new();
-        front_cache_misses_by_cache.insert(
-            "method_info".to_string(),
-            self.method_info_front_cache_misses.load(Ordering::Relaxed),
-        );
-        front_cache_misses_by_cache.insert(
-            "vmt".to_string(),
-            self.vmt_front_cache_misses.load(Ordering::Relaxed),
-        );
-        front_cache_misses_by_cache.insert(
-            "hierarchy".to_string(),
-            self.hierarchy_front_cache_misses.load(Ordering::Relaxed),
-        );
+        for kind in CacheKind::ALL
+            .into_iter()
+            .filter(|kind| kind.has_front_cache())
+        {
+            front_cache_hits_by_cache.insert(
+                kind.as_key().to_string(),
+                self.front_cache_hits[kind.as_index()].load(Ordering::Relaxed),
+            );
+            front_cache_misses_by_cache.insert(
+                kind.as_key().to_string(),
+                self.front_cache_misses[kind.as_index()].load(Ordering::Relaxed),
+            );
+        }
 
-        let mut cache_memory_bytes_by_cache = BTreeMap::new();
-        cache_memory_bytes_by_cache.insert("layout".to_string(), cache_sizes.layout_bytes);
-        cache_memory_bytes_by_cache.insert("vmt".to_string(), cache_sizes.vmt_bytes);
-        cache_memory_bytes_by_cache.insert("intrinsic".to_string(), cache_sizes.intrinsic_bytes);
-        cache_memory_bytes_by_cache.insert(
-            "intrinsic_field".to_string(),
-            cache_sizes.intrinsic_field_bytes,
-        );
-        cache_memory_bytes_by_cache.insert("hierarchy".to_string(), cache_sizes.hierarchy_bytes);
-        cache_memory_bytes_by_cache.insert(
-            "static_field_layout".to_string(),
-            cache_sizes.static_field_layout_bytes,
-        );
-        cache_memory_bytes_by_cache.insert(
-            "instance_field_layout".to_string(),
-            cache_sizes.instance_field_layout_bytes,
-        );
-        cache_memory_bytes_by_cache.insert("value_type".to_string(), cache_sizes.value_type_bytes);
-        cache_memory_bytes_by_cache
-            .insert("has_finalizer".to_string(), cache_sizes.has_finalizer_bytes);
-        cache_memory_bytes_by_cache.insert("overrides".to_string(), cache_sizes.overrides_bytes);
-        cache_memory_bytes_by_cache
-            .insert("method_info".to_string(), cache_sizes.method_info_bytes);
-        cache_memory_bytes_by_cache.insert(
-            "shared_runtime_types".to_string(),
-            cache_sizes.shared_runtime_types_bytes,
-        );
-        cache_memory_bytes_by_cache.insert(
-            "shared_runtime_methods".to_string(),
-            cache_sizes.shared_runtime_methods_bytes,
-        );
-        cache_memory_bytes_by_cache.insert(
-            "shared_runtime_fields".to_string(),
-            cache_sizes.shared_runtime_fields_bytes,
-        );
+        let cache_memory_bytes_by_cache = CacheKind::ALL
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind.as_key().to_string(),
+                    cache_sizes.caches[kind.as_index()].bytes,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let cache_memory_bytes_total = cache_memory_bytes_by_cache.values().copied().sum();
 
         BenchInstrumentationSnapshot {
@@ -1292,6 +912,11 @@ impl RuntimeMetrics {
             cache_memory_bytes_total,
             cache_memory_bytes_by_cache,
         }
+    }
+
+    fn cache_stat(&self, kind: CacheKind, size: usize) -> CacheStat {
+        let (hits, misses) = self.cache_event_counts(kind);
+        self.stat(hits, misses, size)
     }
 
     fn stat(&self, hits: u64, misses: u64, size: usize) -> CacheStat {
@@ -1453,37 +1078,78 @@ mod tests {
 
     fn empty_cache_sizes() -> CacheSizes {
         CacheSizes {
-            layout_size: 0,
-            layout_bytes: 0,
-            vmt_size: 0,
-            vmt_bytes: 0,
-            intrinsic_size: 0,
-            intrinsic_bytes: 0,
-            intrinsic_field_size: 0,
-            intrinsic_field_bytes: 0,
-            hierarchy_size: 0,
-            hierarchy_bytes: 0,
-            static_field_layout_size: 0,
-            static_field_layout_bytes: 0,
-            instance_field_layout_size: 0,
-            instance_field_layout_bytes: 0,
-            value_type_size: 0,
-            value_type_bytes: 0,
-            has_finalizer_size: 0,
-            has_finalizer_bytes: 0,
-            overrides_size: 0,
-            overrides_bytes: 0,
-            method_info_size: 0,
-            method_info_bytes: 0,
+            caches: [CacheSize::default(); CacheKind::COUNT],
             assembly_type_info: (0, 0, 0),
             assembly_method_info: (0, 0, 0),
-            shared_runtime_types_size: 0,
-            shared_runtime_types_bytes: 0,
-            shared_runtime_methods_size: 0,
-            shared_runtime_methods_bytes: 0,
-            shared_runtime_fields_size: 0,
-            shared_runtime_fields_bytes: 0,
         }
+    }
+
+    #[test]
+    fn cache_statistics_reads_sizes_by_cache_kind() {
+        let metrics = RuntimeMetrics::new();
+        let mut sizes = empty_cache_sizes();
+        for kind in CacheKind::ALL {
+            sizes.caches[kind.as_index()].entries = kind.as_index() + 1;
+        }
+
+        let stats = metrics.cache_statistics(sizes);
+
+        assert_eq!(
+            stats.layout.size,
+            sizes.caches[CacheKind::Layout.as_index()].entries
+        );
+        assert_eq!(
+            stats.vmt.size,
+            sizes.caches[CacheKind::Vmt.as_index()].entries
+        );
+        assert_eq!(
+            stats.intrinsic.size,
+            sizes.caches[CacheKind::Intrinsic.as_index()].entries
+        );
+        assert_eq!(
+            stats.intrinsic_field.size,
+            sizes.caches[CacheKind::IntrinsicField.as_index()].entries
+        );
+        assert_eq!(
+            stats.hierarchy.size,
+            sizes.caches[CacheKind::Hierarchy.as_index()].entries
+        );
+        assert_eq!(
+            stats.static_field_layout.size,
+            sizes.caches[CacheKind::StaticFieldLayout.as_index()].entries
+        );
+        assert_eq!(
+            stats.instance_field_layout.size,
+            sizes.caches[CacheKind::InstanceFieldLayout.as_index()].entries
+        );
+        assert_eq!(
+            stats.value_type.size,
+            sizes.caches[CacheKind::ValueType.as_index()].entries
+        );
+        assert_eq!(
+            stats.has_finalizer.size,
+            sizes.caches[CacheKind::HasFinalizer.as_index()].entries
+        );
+        assert_eq!(
+            stats.overrides.size,
+            sizes.caches[CacheKind::Overrides.as_index()].entries
+        );
+        assert_eq!(
+            stats.method_info.size,
+            sizes.caches[CacheKind::MethodInfo.as_index()].entries
+        );
+        assert_eq!(
+            stats.shared_runtime_types.size,
+            sizes.caches[CacheKind::SharedRuntimeTypes.as_index()].entries
+        );
+        assert_eq!(
+            stats.shared_runtime_methods.size,
+            sizes.caches[CacheKind::SharedRuntimeMethods.as_index()].entries
+        );
+        assert_eq!(
+            stats.shared_runtime_fields.size,
+            sizes.caches[CacheKind::SharedRuntimeFields.as_index()].entries
+        );
     }
 
     #[test]
@@ -1503,6 +1169,99 @@ mod tests {
         assert_eq!(stats.method_info.misses, 0);
         assert_eq!(stats.shared_runtime_fields.hits, 0);
         assert_eq!(stats.shared_runtime_fields.misses, 1);
+    }
+
+    #[test]
+    fn record_cache_indexes_every_declared_kind() {
+        let metrics = RuntimeMetrics::new();
+
+        for kind in CacheKind::ALL {
+            metrics.record_cache(kind, CacheEvent::Hit);
+            metrics.record_cache(kind, CacheEvent::Miss);
+            assert_eq!(metrics.cache_event_counts(kind), (1, 1));
+        }
+    }
+
+    #[test]
+    fn cache_kind_indices_and_keys_are_stable() {
+        let stable_keys = [
+            (CacheKind::Layout, "layout"),
+            (CacheKind::Intrinsic, "intrinsic"),
+            (CacheKind::IntrinsicField, "intrinsic_field"),
+            (CacheKind::Hierarchy, "hierarchy"),
+            (CacheKind::Vmt, "vmt"),
+            (CacheKind::StaticFieldLayout, "static_field_layout"),
+            (CacheKind::InstanceFieldLayout, "instance_field_layout"),
+            (CacheKind::ValueType, "value_type"),
+            (CacheKind::HasFinalizer, "has_finalizer"),
+            (CacheKind::Overrides, "overrides"),
+            (CacheKind::MethodInfo, "method_info"),
+            (CacheKind::SharedRuntimeTypes, "shared_runtime_types"),
+            (CacheKind::SharedRuntimeMethods, "shared_runtime_methods"),
+            (CacheKind::SharedRuntimeFields, "shared_runtime_fields"),
+        ];
+
+        for (kind, key) in stable_keys {
+            assert_eq!(kind.as_key(), key);
+        }
+
+        let mut keys = std::collections::BTreeSet::new();
+        for (index, kind) in CacheKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind.as_index(), index);
+            assert!(keys.insert(kind.as_key()));
+        }
+        assert_eq!(keys.len(), CacheKind::COUNT);
+    }
+
+    #[test]
+    fn global_kind_order_preserves_legacy_cache_stats_order() {
+        let legacy_order = [
+            CacheKind::Layout,
+            CacheKind::Vmt,
+            CacheKind::Intrinsic,
+            CacheKind::IntrinsicField,
+            CacheKind::Hierarchy,
+            CacheKind::StaticFieldLayout,
+            CacheKind::InstanceFieldLayout,
+            CacheKind::ValueType,
+            CacheKind::HasFinalizer,
+            CacheKind::Overrides,
+            CacheKind::MethodInfo,
+        ];
+
+        assert!(CacheKind::GLOBAL.starts_with(&legacy_order));
+    }
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[test]
+    fn generic_cache_instrumentation_uses_indexed_counters() {
+        let metrics = RuntimeMetrics::new();
+        metrics.record_cache_key_clones(CacheKind::MethodInfo, 2);
+        metrics.record_cache_key_clones(CacheKind::Vmt, 3);
+        metrics.record_cache_key_clones(CacheKind::Layout, 5);
+        metrics.record_front_cache(CacheKind::MethodInfo, CacheEvent::Hit);
+        metrics.record_front_cache(CacheKind::Vmt, CacheEvent::Miss);
+        metrics.record_front_cache(CacheKind::Layout, CacheEvent::Hit);
+
+        let snapshot = metrics.bench_snapshot(empty_cache_sizes());
+
+        assert_eq!(snapshot.cache_key_clone_total, 10);
+        assert_eq!(snapshot.cache_key_clones_by_cache.len(), CacheKind::COUNT);
+        assert_eq!(
+            snapshot.cache_key_clones_by_cache.get("method_info"),
+            Some(&2)
+        );
+        assert_eq!(snapshot.cache_key_clones_by_cache.get("vmt"), Some(&3));
+        assert_eq!(snapshot.cache_key_clones_by_cache.get("layout"), Some(&5));
+        assert_eq!(snapshot.front_cache_hits_by_cache.len(), 3);
+        assert_eq!(snapshot.front_cache_misses_by_cache.len(), 3);
+        assert_eq!(
+            snapshot.front_cache_hits_by_cache.get("method_info"),
+            Some(&1)
+        );
+        assert_eq!(snapshot.front_cache_misses_by_cache.get("vmt"), Some(&1));
+        assert!(!snapshot.front_cache_hits_by_cache.contains_key("layout"));
+        assert!(!snapshot.front_cache_misses_by_cache.contains_key("layout"));
     }
 
     #[test]

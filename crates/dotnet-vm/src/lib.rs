@@ -21,6 +21,7 @@ use std::sync::Arc;
 mod macros;
 
 pub(crate) mod branch_hint;
+pub(crate) mod cache;
 pub mod context;
 #[cfg(test)]
 mod conversion_regression_tests;

@@ -69,27 +69,89 @@ This is a recursive algorithm: computing a struct's layout requires `LayoutFacto
 
 ## Caching Architecture (`state.rs` → `GlobalCaches`)
 
-`GlobalCaches` holds several thread-safe caches. Most use `DashMap` for concurrent access; the intrinsic-method, intrinsic-field, value-type, and finalizer caches instead use `RwLock<HashMap<...>>`:
+`GlobalCaches` holds eleven instances of the `Cache<K, V, S>` primitive defined in
+`dotnet-vm/src/cache.rs`. The primitive owns its monomorphized storage backend,
+`CacheKind`, a direct `Arc<RuntimeMetrics>`, an optional capacity, and an optional
+front-cache policy. Its sealed `CacheStore<K, V>` contract returns owned values, so
+neither a `DashMap` shard guard nor an `RwLock` guard can escape a lookup. The
+storage type is a generic parameter rather than a trait object, preserving static
+dispatch on cache read paths.
 
-| Cache                       | Key                                                   | Value                                    | Purpose                                                      |
-|-----------------------------|-------------------------------------------------------|------------------------------------------|--------------------------------------------------------------|
-| Intrinsic method cache      | `MethodDescription`                                   | `bool`                                   | Is this method natively implemented?                         |
-| Intrinsic field cache       | `FieldDescription`                                    | `bool`                                   | Is this field natively implemented?                          |
-| Type layout cache           | `ConcreteType`                                        | `Arc<LayoutManager>`                     | Computed memory layout for complete types                    |
-| Instance field layout cache | `(TypeDescription, GenericLookup)`                    | `Arc<FieldLayoutManager>`                | Computed instance field layout                               |
-| Static field layout cache   | `(TypeDescription, GenericLookup)`                    | `Arc<FieldLayoutManager>`                | Computed static field layout                                 |
-| Virtual dispatch cache      | `(MethodDescription, TypeDescription, GenericLookup)` | `MethodDescription`                      | Resolved virtual target                                      |
-| Type hierarchy cache        | `(ConcreteType, ConcreteType)`                        | `bool`                                   | Cached result of `is_a` relationship                         |
-| Method info cache           | `(MethodDescription, GenericLookup)`                  | `Arc<MethodInfo<'static>>`               | Full resolved method info (instructions, exceptions, locals) |
-| Overrides cache             | `(TypeDescription, GenericLookup)`                    | `Arc<HashMap<MethodDescription, MethodDescription>>` | Resolved interface/virtual overrides for a type          |
-| Value type cache            | `TypeDescription`                                     | `bool`                                   | Is this type a value type?                                   |
-| Finalizer cache             | `TypeDescription`                                     | `bool`                                   | Does this type have a finalizer?                             |
+`ShardedStore` is `DashMap`-backed and is used where concurrent writes benefit
+from sharding. In particular, VMT and hierarchy entries are created for new
+runtime type combinations, while the other sharded caches carry compound keys or
+`Arc` values; sharding avoids one global write lock on those paths. `LockedStore`
+is `RwLock<HashMap<...>>`-backed for the four descriptor-to-`bool` properties.
+Those properties are immutable after resolution, read far more often than they
+are first computed, and are naturally bounded by the loaded metadata, so one
+read-write lock avoids per-shard overhead without requiring eviction.
+`ShardedCache` and `LockedCache` are the corresponding readable aliases of the
+generic primitive.
 
-**Eviction**: By default caches grow monotonically, bounded by the number of unique types/methods instantiated in loaded assemblies. Optional per-cache capacity limits (`DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, `DOTNET_CACHE_LIMIT_HIERARCHY`) enable bounded eviction when set.
+| Cache                       | Store          | Key                                                   | Value                                    | Purpose                                                      |
+|-----------------------------|----------------|-------------------------------------------------------|------------------------------------------|--------------------------------------------------------------|
+| Type layout cache           | `ShardedStore` | `ConcreteType`                                        | `Arc<LayoutManager>`                     | Computed memory layout for complete types                    |
+| Virtual dispatch cache      | `ShardedStore` | `(MethodDescription, TypeDescription, GenericLookup)` | `MethodDescription`                      | Resolved virtual target                                      |
+| Intrinsic method cache      | `LockedStore`  | `MethodDescription`                                   | `bool`                                   | Is this method natively implemented?                         |
+| Intrinsic field cache       | `LockedStore`  | `FieldDescription`                                    | `bool`                                   | Is this field natively implemented?                          |
+| Type hierarchy cache        | `ShardedStore` | `(ConcreteType, ConcreteType)`                        | `bool`                                   | Cached result of `is_a` relationship                         |
+| Static field layout cache   | `ShardedStore` | `(TypeDescription, GenericLookup)`                    | `Arc<FieldLayoutManager>`                | Computed static field layout                                 |
+| Instance field layout cache | `ShardedStore` | `(TypeDescription, GenericLookup)`                    | `Arc<FieldLayoutManager>`                | Computed instance field layout                               |
+| Value type cache            | `LockedStore`  | `TypeDescription`                                     | `bool`                                   | Is this type a value type?                                   |
+| Finalizer cache             | `LockedStore`  | `TypeDescription`                                     | `bool`                                   | Does this type have a finalizer?                             |
+| Overrides cache             | `ShardedStore` | `(TypeDescription, GenericLookup)`                    | `Arc<HashMap<MethodDescription, MethodDescription>>` | Resolved interface/virtual overrides for a type          |
+| Method info cache           | `ShardedStore` | `(MethodDescription, GenericLookup)`                  | `Arc<MethodInfo<'static>>`               | Full resolved method info (instructions, exceptions, locals) |
+
+### Global Cache Registry, Metrics, and Capacity
+
+`define_global_caches!` in `state.rs` is the single eleven-entry registry. From
+each entry it generates the `GlobalCaches` field, construction with its
+`CacheKind`/capacity/front policy, indexed size-report entry, and, where needed,
+a typed TLS companion. The current eleven-entry registry order matches
+`CacheKind::GLOBAL` and the fixed legacy `CacheStats` display order. This keeps
+declaration, construction, reporting, and front-cache configuration synchronized.
+`Cache::size_report()` returns its `CacheKind` with an estimated `CacheSize`;
+`SharedGlobalState` iterates those
+reports into the `CacheSizes` array using `CacheKind::as_index()`. The metric
+crate's cache-kind declaration generates stable keys, indexes, global membership,
+and front-tier membership, while `RuntimeMetrics` stores hit/miss and optional
+benchmark counters in `CacheKind`-indexed arrays. The cache primitive owns logical
+hit/miss, key-clone, and front-tier instrumentation through its shared metrics
+`Arc`, rather than making callers own metrics bookkeeping.
+
+The five cache environment-variable contracts are read once when `GlobalCaches` is
+constructed. `DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, and
+`DOTNET_CACHE_LIMIT_HIERARCHY` each set an optional positive bound for their named
+L2 cache; an unset, invalid, or zero value leaves that cache unbounded.
+`DOTNET_FRONT_CACHE_ENABLED` controls the three front-cache tiers and defaults to
+enabled (the usual `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` spellings are
+accepted). `DOTNET_FRONT_CACHE_CAPACITY` selects their positive capacity; an unset,
+invalid, or zero value uses the default capacity of 128. The three capacity limits,
+front enable switch, and front capacity therefore retain their behavior without a
+`CachePolicy` aggregate.
+
+**Eviction**: Caches are unbounded by default and otherwise remain bounded by their
+configured positive limit. An update to an existing key happens before eviction.
+For a new key at capacity, `Cache` removes arbitrary victims in the store's
+iteration order until there is room. In `ShardedStore`, that order is biased by
+shard/hash iteration; it is neither random nor LRU (and it is likewise not an LRU
+policy for `LockedStore`).
 
 ### Striped Locking and Concurrent Access
 
-Caches heavily utilize `dashmap::DashMap`, which internally uses sharded/striped read-write locks. This allows multiple threads to read and write to different shards of the cache concurrently without blocking each other. The shard index is computed from the key's hash (e.g., the hash of `ConcreteType` or `(MethodDescription, GenericLookup)`).
+`ShardedStore` uses `dashmap::DashMap`, which internally uses sharded/striped
+read-write locks. This allows multiple threads to read and write to different
+shards of the cache concurrently without blocking each other. The shard index is
+computed from the key's hash (for example, the hash of `ConcreteType` or
+`(MethodDescription, GenericLookup)`).
+
+The method-info, VMT, and hierarchy caches add an optional L1 tier in front of
+their sharded L2 store. `Cache` owns whether that tier is enabled, its capacity
+policy, and its metrics; each typed thread-local `FrontCache<K, V>` owns the actual
+per-thread LRU entries. A front-cache lookup records its tier result and, on a hit,
+also records the logical cache hit; an L1 miss falls through to the shared L2
+cache. Thus the front cache reduces shared-cache traffic without sharing LRU state
+between threads.
 
 Additionally, components like `StaticStorageManager` implement their own sharded locks using `[RwLock<HashMap<...>>; NUM_SHARDS]` to manage concurrent `.cctor` initialization without global bottlenecks.
 

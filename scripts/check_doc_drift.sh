@@ -85,6 +85,7 @@ CHECKS=(
 
   # --- TYPE_RESOLUTION_AND_CACHING.md ---
   "TYPE_RESOLUTION_AND_CACHING.md|GlobalCaches|*.rs"
+  "TYPE_RESOLUTION_AND_CACHING.md|CacheStore|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|ResolutionContext|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|GenericLookup|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|StaticStorageManager|*.rs"

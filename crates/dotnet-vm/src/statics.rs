@@ -2,7 +2,6 @@ use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::static_fields,
     threading::ThreadManagerOps,
 };
-use dotnet_metrics::{CacheEvent, CacheKind, RuntimeMetrics};
 use dotnet_types::{
     TypeDescription, error::TypeResolutionError, generics::GenericLookup,
     members::MethodDescription,
@@ -250,20 +249,13 @@ impl StaticStorageManager {
         &self,
         description: TypeDescription,
         context: &ResolutionContext,
-        metrics: Option<&RuntimeMetrics>,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
         let key = (description.clone(), context.generics.clone());
 
         if let Some(cached) = context.caches().static_field_layout_cache.get(&key) {
-            if let Some(m) = metrics {
-                m.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Hit);
-            }
-            return Ok(Arc::clone(&cached));
+            return Ok(cached);
         }
 
-        if let Some(m) = metrics {
-            m.record_cache(CacheKind::StaticFieldLayout, CacheEvent::Miss);
-        }
         let result = Arc::new(static_fields(description.clone(), context)?);
         context
             .caches()
@@ -331,7 +323,6 @@ impl StaticStorageManager {
         description: TypeDescription,
         context: &ResolutionContext,
         thread_id: dotnet_utils::ArenaId,
-        metrics: Option<&RuntimeMetrics>,
     ) -> Result<StaticInitResult, TypeResolutionError> {
         let key = (description.clone(), context.generics.clone());
         let shard_idx = self.get_shard_idx(&key);
@@ -346,7 +337,7 @@ impl StaticStorageManager {
             // Use the cached layout if available, or create and cache it.
             // DO NOT hold the shard lock while doing layout computation,
             // as it might be expensive or trigger recursive resolutions.
-            let layout = self.get_static_field_layout(description.clone(), context, metrics)?;
+            let layout = self.get_static_field_layout(description.clone(), context)?;
             let size = layout.size();
             let mut data = vec![0; size.as_usize()];
 

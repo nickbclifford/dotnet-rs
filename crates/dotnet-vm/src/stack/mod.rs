@@ -411,7 +411,9 @@ impl<'gc: 'gc> CallStack<'gc> {
             return;
         }
 
-        self.tracer().dump_runtime_metrics(&self.shared.metrics);
+        let stats = self.shared.get_cache_stats();
+        self.tracer()
+            .dump_runtime_metrics(&self.shared.metrics, stats);
     }
 
     /// Captures a complete snapshot of all runtime state to the tracer

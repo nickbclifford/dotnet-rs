@@ -4,7 +4,7 @@
 //! (`TRACER_CHANNEL_CAPACITY = 8_192`) for VM trace events. Configure via the
 //! `DOTNET_RS_TRACE` environment variable (e.g. `info`, `dotnet_vm=debug`).
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use dotnet_metrics::RuntimeMetrics;
+use dotnet_metrics::{CacheStats, RuntimeMetrics};
 use gc_arena::static_collect;
 use std::{
     env,
@@ -624,49 +624,13 @@ impl Tracer {
         ));
     }
 
-    pub fn dump_runtime_metrics(&self, metrics: &RuntimeMetrics) {
-        use dotnet_metrics::CacheSizes;
+    pub fn dump_runtime_metrics(&self, metrics: &RuntimeMetrics, stats: CacheStats) {
         use std::sync::atomic::Ordering;
 
         let gc_pause_total = metrics.gc_pause_total_us.load(Ordering::Relaxed);
         let gc_pause_count = metrics.gc_pause_count.load(Ordering::Relaxed);
         let lock_count = metrics.lock_contention_count.load(Ordering::Relaxed);
         let lock_total = metrics.lock_contention_total_us.load(Ordering::Relaxed);
-
-        // We need CacheSizes to get CacheStats. We'll use dummy sizes for now as the tracer doesn't have them easily.
-        // Actually, the original code had them.
-        let stats = metrics.cache_statistics(CacheSizes {
-            layout_size: 0,
-            layout_bytes: 0,
-            vmt_size: 0,
-            vmt_bytes: 0,
-            intrinsic_size: 0,
-            intrinsic_bytes: 0,
-            intrinsic_field_size: 0,
-            intrinsic_field_bytes: 0,
-            hierarchy_size: 0,
-            hierarchy_bytes: 0,
-            static_field_layout_size: 0,
-            static_field_layout_bytes: 0,
-            instance_field_layout_size: 0,
-            instance_field_layout_bytes: 0,
-            value_type_size: 0,
-            value_type_bytes: 0,
-            has_finalizer_size: 0,
-            has_finalizer_bytes: 0,
-            overrides_size: 0,
-            overrides_bytes: 0,
-            method_info_size: 0,
-            method_info_bytes: 0,
-            assembly_type_info: (0, 0, 0),
-            assembly_method_info: (0, 0, 0),
-            shared_runtime_types_size: 0,
-            shared_runtime_types_bytes: 0,
-            shared_runtime_methods_size: 0,
-            shared_runtime_methods_bytes: 0,
-            shared_runtime_fields_size: 0,
-            shared_runtime_fields_bytes: 0,
-        });
 
         self.send(LogEntry::DumpRuntimeMetrics(
             gc_pause_count,
@@ -819,6 +783,7 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotnet_metrics::{CacheKind, CacheSize, CacheSizes};
     use std::time::Duration;
 
     #[test]
@@ -886,6 +851,32 @@ mod tests {
 
         assert!(res.is_none());
         assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn runtime_metrics_dump_uses_supplied_cache_stats() {
+        let (sender, receiver) = bounded::<LogEntry>(1);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+        };
+        let metrics = RuntimeMetrics::new();
+        let mut sizes = CacheSizes::default();
+        sizes.caches[CacheKind::Layout.as_index()] = CacheSize {
+            entries: 37,
+            bytes: 128,
+        };
+        let stats = metrics.cache_statistics(sizes);
+
+        tracer.dump_runtime_metrics(&metrics, stats);
+
+        let entry = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .expect("runtime metrics dump should be emitted");
+        let LogEntry::DumpRuntimeMetrics(_, _, _, _, stats) = entry else {
+            panic!("runtime metrics dump emitted the wrong log entry");
+        };
+        assert_eq!(stats.layout.size, 37);
     }
 
     #[test]

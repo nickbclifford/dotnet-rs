@@ -571,12 +571,11 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
         // Use the type instantiation generics (not the calling frame's generics) so that
         // static field layouts for generic types like Task<T> resolve TypeGeneric(0) correctly.
         let context = self.with_generics(&type_generics);
-        let metrics = Some(&self.shared.metrics);
 
         match self
             .shared
             .statics
-            .init(description.clone(), &context, thread_id, metrics)
+            .init(description.clone(), &context, thread_id)
         {
             Ok(crate::statics::StaticInitResult::Execute(cctor)) => {
                 self.dispatch_method(cctor, type_generics)
