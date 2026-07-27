@@ -55,7 +55,7 @@ dotnet-vm-ops = { path = "crates/dotnet-vm-ops", default-features = false }
 dotnet-vm = { path = "crates/dotnet-vm", default-features = false }
 dotnet-exceptions = { path = "crates/dotnet-exceptions", default-features = false }
 dotnet-pinvoke = { path = "crates/dotnet-pinvoke", default-features = false }
-dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
+dotnetdll = "0.3.0"
 gc-arena = "0.6.0"
 rayon = "1"
 parking_lot = "0.12"

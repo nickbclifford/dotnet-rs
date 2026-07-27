@@ -12,5 +12,5 @@ name = "generate_structured_corpus"
 path = "generate_structured_corpus.rs"
 
 [dependencies]
-dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
+dotnetdll = "0.3.0"
 walkdir = "2.5"

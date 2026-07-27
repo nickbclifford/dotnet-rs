@@ -713,7 +713,8 @@ dependencies = [
 [[package]]
 name = "dotnetdll"
 version = "0.3.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#2771b9b7da88febaa6ad9fd4e1537d6ffd3a5ed2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cdca5161fdf81889efde8e0c6e6d2cbf51ba5fbaf7a1817814fd30b631d5a25"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -733,7 +734,8 @@ dependencies = [
 [[package]]
 name = "dotnetdll-macros"
 version = "0.2.0"
-source = "git+https://github.com/nickbclifford/dotnetdll#2771b9b7da88febaa6ad9fd4e1537d6ffd3a5ed2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d4f9554fffb529570823bf10b6c45ab4f95a7670811b622953f739eb379c44"
 dependencies = [
  "heck",
  "proc-macro2",
