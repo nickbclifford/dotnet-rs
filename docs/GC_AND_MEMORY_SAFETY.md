@@ -285,7 +285,7 @@ All types stored in the GC heap or referenced by the VES stack must implement `g
 
 ### `gc-arena`: Mutation Token and `'gc` Branding Guarantees
 
-**Source reference:** `gc-arena` (pinned rev `75671ae`), `src/arena.rs:163-187`.
+**Source reference:** `gc-arena` v0.6.0, `src/arena.rs:163-187`.
 
 `gc-arena` enforces memory safety through two complementary mechanisms that every contributor working near the GC boundary must understand:
 

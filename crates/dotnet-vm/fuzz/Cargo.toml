@@ -16,7 +16,7 @@ dotnet-utils = { path = "../../dotnet-utils", features = ["fuzzing"] }
 dotnet-types = { path = "../../dotnet-types", features = ["fuzzing"] }
 dotnet-assemblies = { path = "../../dotnet-assemblies" }
 dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
-gc-arena = "0.5"
+gc-arena = "0.6.0"
 
 # Prevent this from interfering with workspaces
 [workspace]

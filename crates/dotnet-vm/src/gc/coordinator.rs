@@ -272,15 +272,6 @@ impl GCCoordinator {
             .sum()
     }
 
-    /// Get the total external bytes tracked by GC-arena across all threads.
-    pub fn total_external_allocation(&self) -> usize {
-        let arenas = self.arenas.lock();
-        arenas
-            .values()
-            .map(|h| h.external_allocated_bytes().load(Ordering::Acquire))
-            .sum()
-    }
-
     /// Snapshot per-arena allocation-pressure metrics.
     pub fn arena_gc_pressure_snapshot(
         &self,

@@ -506,13 +506,8 @@ impl Executor {
             }
 
             {
-                let (gc_bytes, external_bytes) = match self.with_arena_ref(|arena| {
-                    let metrics = arena.metrics();
-                    (
-                        metrics.total_gc_allocation(),
-                        metrics.total_external_allocation(),
-                    )
-                }) {
+                let gc_bytes = match self.with_arena_ref(|arena| arena.metrics().total_gc_allocation())
+                {
                     Ok(v) => v,
                     Err(e) => break ExecutorResult::Error(e),
                 };
@@ -526,10 +521,6 @@ impl Executor {
                                 .arena
                                 .gc_allocated_bytes()
                                 .store(gc_bytes, Ordering::Relaxed);
-                            c.stack
-                                .arena
-                                .external_allocated_bytes()
-                                .store(external_bytes, Ordering::Relaxed);
                         })
                     }) {
                         break ExecutorResult::Error(e);
@@ -537,16 +528,11 @@ impl Executor {
 
                     // Update global metrics from aggregated values
                     let total_gc = self.shared.gc_coordinator.total_gc_allocation();
-                    let total_ext = self.shared.gc_coordinator.total_external_allocation();
-                    self.shared
-                        .metrics
-                        .update_gc_metrics(total_gc as u64, total_ext as u64);
+                    self.shared.metrics.update_gc_metrics(total_gc as u64);
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
-                    self.shared
-                        .metrics
-                        .update_gc_metrics(gc_bytes as u64, external_bytes as u64);
+                    self.shared.metrics.update_gc_metrics(gc_bytes as u64);
                 }
             }
         };

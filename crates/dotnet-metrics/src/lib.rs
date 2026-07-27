@@ -252,7 +252,6 @@ pub struct RuntimeMetricsSnapshot {
     pub lock_contention_count: u64,
     pub lock_contention_total_us: u64,
     pub current_gc_allocated: u64,
-    pub current_external_allocated: u64,
     pub gc_pressure_by_arena: BTreeMap<String, ArenaGcPressureSnapshot>,
     pub cache_stats: CacheStats,
     #[cfg(feature = "bench-instrumentation")]
@@ -321,8 +320,6 @@ pub struct RuntimeMetrics {
     pub lock_contention_total_us: AtomicU64,
     /// Current bytes managed by GC-arena across all threads
     pub current_gc_allocated: AtomicU64,
-    /// Current bytes allocated externally but tracked by GC-arena
-    pub current_external_allocated: AtomicU64,
     /// Snapshot of per-arena allocation-pressure counters
     arena_gc_pressure_by_arena: Mutex<BTreeMap<String, ArenaGcPressureSnapshot>>,
     /// Cache hit/miss counters indexed by [`CacheKind`].
@@ -423,10 +420,8 @@ impl RuntimeMetrics {
             .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
     }
 
-    pub fn update_gc_metrics(&self, gc_bytes: u64, external_bytes: u64) {
+    pub fn update_gc_metrics(&self, gc_bytes: u64) {
         self.current_gc_allocated.store(gc_bytes, Ordering::Relaxed);
-        self.current_external_allocated
-            .store(external_bytes, Ordering::Relaxed);
     }
 
     pub fn update_arena_gc_pressure_metrics(
@@ -720,7 +715,6 @@ impl RuntimeMetrics {
             lock_contention_count: self.lock_contention_count.load(Ordering::Relaxed),
             lock_contention_total_us: self.lock_contention_total_us.load(Ordering::Relaxed),
             current_gc_allocated: self.current_gc_allocated.load(Ordering::Relaxed),
-            current_external_allocated: self.current_external_allocated.load(Ordering::Relaxed),
             gc_pressure_by_arena,
             cache_stats,
             #[cfg(feature = "bench-instrumentation")]
