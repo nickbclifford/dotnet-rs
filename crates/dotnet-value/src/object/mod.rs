@@ -239,12 +239,13 @@ impl ObjectPtr {
         inner.storage.with_data_mut(f)
     }
 
-    pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'static>) -> T) -> T {
+    pub fn as_heap_storage<T>(&self, f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T) -> T {
         // SAFETY: `self.0` is a valid, non-null `ThreadSafeLock` pointer.
         // `as_ref()` is sound because the pointer is non-null and aligned.
         // `borrow()` acquires a shared read lock, preventing concurrent writes.
-        // The `'static` lifetime on `HeapStorage` is deliberately erased; the
-        // closure `f` must not let any returned reference escape.
+        // The HRTB hides the raw pointer's internal `'static` arena brand: `f`
+        // must accept every brand, so `T` cannot carry a storage-derived GC
+        // handle whose type depends on that brand.
         let inner = unsafe { self.0.as_ref().borrow() };
         inner.validate_magic();
         inner.validate_arena_id();
@@ -276,7 +277,9 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
 )]
 // SAFETY: A local handle is traced through its `Gc` implementation. During coordinated
 // multithreaded collection, a non-local handle is instead recorded as a cross-arena root so its
-// owning arena traces it; no reference-bearing variant is skipped.
+// owning arena traces it; no reference-bearing variant is skipped. The raw owner-ID read is the
+// accepted STW boundary documented under
+// `docs/GC_AND_MEMORY_SAFETY.md#accepted-risk-boundaries`.
 unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         if let Some(h) = self.0 {
@@ -285,9 +288,9 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                 // Check for cross-arena reference
                 if let Some(tracing_id) = get_currently_tracing() {
                     let lock_ptr: *const ThreadSafeLock<ObjectInner> = Gc::as_ptr(h);
-                    // DANGER: lock_ptr might be dangling if the arena exited.
-                    // But in STW, we assume it's either local or the other arena is also stopped.
-                    // All threads MUST be at a safepoint during finish_marking.
+                    // DANGER: `lock_ptr` may dangle if its owning arena exits. Coordinated STW
+                    // must keep every arena alive and every mutator stopped through this read; see the
+                    // accepted-risk boundary linked from the `Collect` SAFETY comment above.
                     // SAFETY: During STW all mutator threads are at safe points,
                     // so the owning arena cannot be freed.  `owner_id` is
                     // immutable after construction, so reading it without the

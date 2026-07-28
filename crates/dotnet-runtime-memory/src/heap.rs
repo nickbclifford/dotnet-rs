@@ -434,8 +434,11 @@ unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
         }
         #[cfg(feature = "multithreading")]
         for ptr in self.cross_arena_roots.borrow().iter() {
-            // SAFETY: Cross-arena roots store live GC pointers recorded by the thread manager;
-            // reconstructing the handle only traces that still-owned root.
+            // SAFETY: This is an accepted cross-arena boundary. Coordinated STW keeps every
+            // arena alive and all mutators stopped, so each recorded pointer remains valid while the
+            // temporary, rebranded handle is traced and cannot escape. `Gc::from_ptr` cannot
+            // encode the foreign ownership; see
+            // `docs/GC_AND_MEMORY_SAFETY.md#accepted-risk-boundaries`.
             unsafe {
                 Gc::from_ptr(ptr.as_ptr()).trace(cc);
             }

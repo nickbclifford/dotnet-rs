@@ -27,8 +27,11 @@ where it is relied on. Follow these rules when adding or changing unsafe code:
   intended traits.
 - An `unsafe impl Collect` must trace every contained `Gc<'gc, _>` handle. For
   types that are `'static` and contain no GC handles, use `static_collect!`.
-  For a non-`'static` type with no GC handles, write
-  `const NEEDS_TRACE: bool = false` in its `Collect` implementation.
+  For a lifetime-parameterized type, implement `Collect` only for the
+  instantiations whose borrows are valid in GC-rooted state (for example,
+  `MethodInfo<'static>`); do not leave the lifetime unconstrained merely
+  because the type has no GC handles. A `NEEDS_TRACE = false` proof must state
+  both the admitted lifetime and why no field requires tracing.
 - A layout transmute must have a co-located size assertion and a `SAFETY:`
   comment that explicitly explains the representation and validity reasoning.
 
@@ -74,11 +77,14 @@ cargo run -p xtask -- fixtures build
 
 ## Miri policy for `dotnet-vm` unsafe-gate signoff
 
-For `dotnet-vm` changes that add or modify `unsafe`, the accepted local signoff invocation is:
+For `dotnet-vm` changes that add or modify `unsafe`, the accepted local signoff invocations
+cover both the no-feature and `multithreading` configurations:
 
 ```bash
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
+cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
 Why this is the project-standard invocation right now:
@@ -88,9 +94,9 @@ Why this is the project-standard invocation right now:
 
 Until upstream dependency behavior changes, strict-provenance is treated as infeasible for `dotnet-vm` unsafe-gate signoff.
 The Miri-only nightly is pinned separately because `rust-toolchain.toml` selects
-stable by default. As recorded in [`docs/CI.md`](docs/CI.md), the targeted VM
-suite did not complete within the validation time box on this nightly, so the
-pin records the attempted toolchain rather than a known-passing Miri result.
+stable by default. As recorded in [`docs/CI.md`](docs/CI.md), neither targeted
+VM command completed within the local validation time box on this nightly, so
+the pin records the attempted toolchain rather than known-passing Miri results.
 
 ## Documentation drift check
 

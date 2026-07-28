@@ -218,17 +218,28 @@ The workflow runs per crate (`fail-fast: false`):
 |---------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------|
 | `dotnet-value`      | `-- --test-threads=1`                                                   | Full crate test suite under Miri                                |
 | `dotnet-assemblies` | `-- --test-threads=1`                                                   | Filesystem-dependent tests are conditionally skipped under Miri |
-| `dotnet-vm`         | `--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests` | Targeted VM unsafe-gate suite; avoids strict-provenance-infeasible dependency paths |
+| `dotnet-vm`         | `--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests` | Targeted VM unsafe-gate suite without multithreading            |
+| `dotnet-vm`         | `--no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests` | Same conservative VM unsafe-gate filters with multithreading paths enabled |
+
+The two `dotnet-vm` entries deliberately use the same `jmp_tests`, `tail_calls`, and
+`fault_tests` filter set. This keeps the Miri workload bounded while running the second entry
+with the VM's `multithreading` configuration enabled. That entry compiles the cross-arena and
+stop-the-world paths, but the filtered suite and local time box have not established that every
+such path is dynamically exercised. The filters are conservative because the transitive
+`parking_lot` stack has known Miri limitations; `dotnet-utils` remains outside this matrix for
+that reason.
 
 The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. Strict-provenance is currently infeasible for `dotnet-vm` because dependency-level integer-to-pointer casts are reached during assembly parsing before VM unsafe sites execute.
 
 The workflow pins `nightly-2026-05-27`, which locally reports
-`rustc 1.98.0-nightly (d1fc603d1 2026-05-26)`. The documented `dotnet-vm`
-unsafe-gate command was attempted with that toolchain, but did not complete
-within five minutes: it stalled during the second `fault_tests` test after
-the known dependency integer-to-pointer-cast warnings. Consequently, this
-pin records the attempted nightly; a passing result for the targeted suite
-has not yet been established. The non-blocking workflow remains intentional.
+`rustc 1.98.0-nightly (d1fc603d1 2026-05-26)`. Both documented `dotnet-vm`
+unsafe-gate commands were attempted with that toolchain. The multithreading
+command completed `fault_tests::tests::test_fault_handler_executed_on_exception`,
+but, like the no-feature command, did not complete within five minutes after
+starting the second `fault_tests` test and emitting the known dependency
+integer-to-pointer-cast warnings. Consequently, this pin records attempted
+coverage rather than an established passing result for either targeted suite.
+The matrix job therefore remains explicitly non-blocking with `continue-on-error: true`.
 
 Local commands:
 
@@ -242,6 +253,8 @@ MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-assemblies -- --test-threads=1
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
+cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
 ## `valgrind.yml` — Non-Blocking Leak/Uninit Checks

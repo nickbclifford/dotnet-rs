@@ -101,9 +101,9 @@ pub struct MethodInfo<'a> {
     pub is_cctor: bool,
 }
 
-// SAFETY: MethodInfo contains only metadata borrows, ordinary values, and Arc-owned
-// metadata; it contains no GC handles that need tracing.
-unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {
+// SAFETY: MethodInfo<'static> contains only 'static metadata borrows, ordinary
+// values, and Arc-owned metadata; it contains no GC handles that need tracing.
+unsafe impl<'gc> Collect<'gc> for MethodInfo<'static> {
     const NEEDS_TRACE: bool = false;
 }
 

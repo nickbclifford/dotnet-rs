@@ -303,4 +303,46 @@ Every `Gc<'gc, T>` handle is branded with the invariant `'gc` lifetime of the ar
 Rules:
 - **Cross-arena references cannot be expressed as `Gc<'gc, T>`.** They are represented as `ObjectPtr` (a raw pointer) paired with an `ArenaId` and a `GcLifetime<'gc>` token (see `MemoryOwner::CrossArena` in `crates/dotnet-runtime-memory/src/write_barrier.rs`). The `GcLifetime<'gc>` token can only be minted from a live `GCHandle<'gc>`, preserving the `'gc` branding invariant for cross-arena owners.
 - **`GcLifetime<'gc>` forgery is prohibited.** The token has a private constructor and is only issued by `GCHandle::lifetime()` (`crates/dotnet-utils/src/gc/mod.rs`). Any code that needs to construct a `MemoryOwner::CrossArena` must obtain a real `GCHandle<'gc>` first.
+- **Heap-storage access preserves the arena brand.** `ObjectPtr::as_heap_storage` and `MemoryOwner::as_heap_storage` require a `for<'a> FnOnce(&HeapStorage<'a>) -> T` closure. Because the closure must accept every arena brand, its return type cannot depend on the hidden brand or carry a storage-derived GC handle out as `'static`. The `ObjectRef::as_heap_storage` and `ObjectRef::try_as_heap_storage` siblings expose only their existing `'gc` brand.
 - **Unsafe cross-arena dereferences** must call `validate_magic()` and `validate_arena_id()` on `ObjectInner` before reading any fields (enforced in `ObjectPtr::as_heap_storage` and `ObjectRef::as_heap_storage`). These checks are always active in debug builds and selectively active under the `memory-validation` feature in release builds.
+
+## Accepted-Risk Boundaries
+
+The following boundaries cannot currently be expressed safely through `gc-arena`'s API. They
+are accepted operational risks rather than type-level guarantees.
+
+### Cross-arena root tracing (`HeapManager::trace`)
+
+**Source:** `crates/dotnet-runtime-memory/src/heap.rs:436-445`.
+
+- **Mechanism:** During cross-arena root tracing, `Gc::from_ptr` receives an
+  `ObjectPtr::as_ptr()` raw pointer and reconstructs a `Gc` branded with the tracing arena's
+  `'gc`, not the lifetime of the arena that owns the object. `gc-arena` has no API for tracing a
+  pointer owned by a different arena.
+- **Invariant relied upon:** Stop-the-world (STW) stops every mutator before marking begins and
+  prevents any arena from being freed during the marking window. Therefore each raw pointer in
+  `cross_arena_roots` remains valid for the duration of its `trace` call.
+- **Violation detection:** There is no type-level detection. If marking ran while an owning arena
+  exited, the raw-pointer access would be a use-after-free. The STW protocol—
+  `ThreadManager::request_stop_the_world` and `StopTheWorldGuard`—is the only guard; a panic
+  before ownership transfers to `StopTheWorldGuard` drops `ResumeOnPanic`, which resumes blocked
+  threads.
+- **Scope:** This path is compiled only with `cfg(feature = "multithreading")`; the
+  single-threaded configuration has no `cross_arena_roots`.
+
+### Cross-arena owner-ID read (`ObjectRef::trace`)
+
+**Source:** `crates/dotnet-value/src/object/mod.rs:289-298`.
+
+- **Mechanism:** When `get_currently_tracing()` identifies the tracing arena, `Gc::as_ptr(h)`
+  yields a raw pointer to the referenced arena's `ThreadSafeLock<ObjectInner>`. During `trace`,
+  the pointer is dereferenced without acquiring the lock to read the immutable `owner_id` field
+  and determine whether to record a cross-arena reference.
+- **Invariant relied upon:** Stop-the-world (STW) has stopped every mutator before `trace` runs,
+  so the owning arena is stopped and cannot be freed during this read. `ObjectInner::new` writes
+  `owner_id` once at construction; the field is immutable thereafter.
+- **Violation detection:** The `// DANGER:` comment at the dereference identifies the dangling
+  pointer window. There is no runtime assertion or lock acquisition that detects a violation; if
+  tracing ran while the owning arena exited, the read would be a use-after-free.
+- **Scope:** This path is compiled only with `cfg(feature = "multithreading")`; the
+  single-threaded configuration has no cross-arena tracing.

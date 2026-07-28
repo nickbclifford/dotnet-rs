@@ -506,11 +506,11 @@ impl Executor {
             }
 
             {
-                let gc_bytes = match self.with_arena_ref(|arena| arena.metrics().total_gc_allocation())
-                {
-                    Ok(v) => v,
-                    Err(e) => break ExecutorResult::Error(e),
-                };
+                let gc_bytes =
+                    match self.with_arena_ref(|arena| arena.metrics().total_gc_allocation()) {
+                        Ok(v) => v,
+                        Err(e) => break ExecutorResult::Error(e),
+                    };
 
                 #[cfg(feature = "multithreading")]
                 {

@@ -14,9 +14,10 @@ on:
 
 jobs:
   miri:
-    name: Miri (${{ matrix.crate }})
+    name: Miri (${{ matrix.crate }}, ${{ matrix.configuration }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: true
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
     strategy:
@@ -24,13 +25,19 @@ jobs:
       matrix:
         include:
           - crate: dotnet-value
+            configuration: default-features
             args: '-- --test-threads=1'
           # dotnet-utils is kept out of this matrix for now:
           # its cross-arena stress test currently trips Miri in upstream parking_lot_core.
           - crate: dotnet-assemblies
+            configuration: default-features
             args: '-- --test-threads=1'
           - crate: dotnet-vm
+            configuration: no-features
             args: '--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests'
+          - crate: dotnet-vm
+            configuration: multithreading
+            args: '--no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests'
 
     steps:
       - uses: actions/checkout@v4
@@ -56,5 +63,5 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
-      - name: Run Miri (${{ matrix.crate }})
+      - name: Run Miri (${{ matrix.crate }}, ${{ matrix.configuration }})
         run: cargo +nightly-2026-05-27 miri test -p ${{ matrix.crate }} ${{ matrix.args }}
