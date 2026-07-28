@@ -16,14 +16,14 @@ mod tests {
             type TestRoot = Rootable![()];
             let arena = Arena::<TestRoot>::new(|_mc| ());
             arena.mutate(|gc, _root| {
-                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(1))));
-                let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId(1));
+                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(1))));
+                let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId::new(1));
                 let obj = ObjectRef::new(
                     gc_handle,
                     HeapStorage::Str(crate::string::CLRString::from("test")),
                 );
                 obj.as_heap_storage(|_| ());
-                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(2))));
+                dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId::new(2))));
                 let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     obj.as_heap_storage(|_| ());
                 }));
@@ -36,7 +36,7 @@ mod tests {
     fn test_dangling_arena_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        let arena_id = ArenaId(100);
+        let arena_id = ArenaId::new(100);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
         // SAFETY: The local owner retains the ArenaHandleInner until after the
@@ -58,7 +58,7 @@ mod tests {
             );
             obj.as_heap_storage(|_| ());
             dotnet_utils::gc::unregister_arena(arena_id);
-            let other_id = ArenaId(200);
+            let other_id = ArenaId::new(200);
             dotnet_utils::gc::register_arena(other_id, stw_flag.clone());
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(other_id));
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -73,8 +73,8 @@ mod tests {
     fn test_uncoordinated_stw_access_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        let owner_id = ArenaId(101);
-        let current_id = ArenaId(102);
+        let owner_id = ArenaId::new(101);
+        let current_id = ArenaId::new(102);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let _owner_handle_owner = dotnet_utils::gc::ArenaHandle::new(owner_id);
         // SAFETY: The local owner retains the ArenaHandleInner until after the

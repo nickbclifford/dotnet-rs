@@ -197,7 +197,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
         element_type,
         false,
         Some(obj),
-        Some(ByteOffset(0)),
+        Some(ByteOffset::new(0)),
     );
     StepResult::Continue
 }

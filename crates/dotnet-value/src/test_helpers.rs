@@ -11,7 +11,7 @@ static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "multithreading")]
 fn next_test_arena_id() -> crate::ArenaId {
-    crate::ArenaId(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
+    crate::ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
 }
 
 #[cfg(feature = "memory-validation")]
@@ -70,7 +70,7 @@ pub(crate) fn with_test_gc_context<R>(
     #[cfg(feature = "multithreading")]
     let arena_id = next_test_arena_id();
     #[cfg(all(not(feature = "multithreading"), feature = "memory-validation"))]
-    let arena_id = crate::ArenaId(0);
+    let arena_id = crate::ArenaId::new(0);
 
     #[cfg(feature = "multithreading")]
     let _arena_registration = ArenaRegistrationGuard::register(arena_id);

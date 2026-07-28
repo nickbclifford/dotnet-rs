@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn record_allocation_tracks_peak_and_collection_trigger_count() {
-        let handle = ArenaHandle::new(crate::ArenaId(1));
+        let handle = ArenaHandle::new(crate::ArenaId::new(1));
 
         handle.record_allocation(*ALLOCATION_THRESHOLD - 16);
         assert_eq!(

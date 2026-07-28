@@ -280,7 +280,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
                     target_type,
                     o.0.map(|_| o),
                     false,
-                    Some(ByteOffset(0)),
+                    Some(ByteOffset::new(0)),
                 )
                 .into(),
             ));
@@ -291,7 +291,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
                 m,
                 target_type,
                 false,
-                Some(ByteOffset(m as usize)),
+                Some(ByteOffset::new(m as usize)),
             ));
         }
     }

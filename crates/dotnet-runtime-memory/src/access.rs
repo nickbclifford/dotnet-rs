@@ -91,7 +91,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // write_value_internal will copy the data.
             self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing to unmanaged null pointer",
@@ -129,15 +129,15 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data(|data| {
                 let base = data.as_ptr();
                 let len = data.len();
-                let ptr = base.wrapping_add(offset.0);
+                let ptr = base.wrapping_add(offset.as_usize());
                 validate_atomic_access(ptr, false);
 
                 // 1. Bounds Check
                 self.check_bounds_internal(ptr as *mut u8, base, len, layout.size().as_usize())?;
 
                 // 2. Read Safety Check
-                if offset.0 != 0 || src_layout.is_some() {
-                    check_read_safety(layout, src_layout.as_ref(), offset.0)?;
+                if offset.as_usize() != 0 || src_layout.is_some() {
+                    check_read_safety(layout, src_layout.as_ref(), offset.as_usize())?;
                 }
 
                 // 3. Perform Read
@@ -146,7 +146,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading from unmanaged null pointer",
@@ -188,7 +188,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 owner.with_data_mut(gc, |obj_data| {
                     let base = obj_data.as_mut_ptr();
                     let len = obj_data.len();
-                    let ptr = base.wrapping_add(offset.0);
+                    let ptr = base.wrapping_add(offset.as_usize());
                     validate_atomic_access(ptr as *const u8, false);
 
                     // Bounds Check
@@ -234,7 +234,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 })
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing bytes to unmanaged null pointer",
@@ -266,7 +266,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
             owner.with_data(|data| {
-                let start = offset.0;
+                let start = offset.as_usize();
                 let end = start + dest.len();
                 if end > data.len() {
                     return Err(MemoryAccessError::BoundsCheck {
@@ -279,7 +279,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(())
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.0);
+            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading bytes from unmanaged null pointer",
@@ -625,7 +625,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
-                let ptr = base.wrapping_add(offset.0);
+                let ptr = base.wrapping_add(offset.as_usize());
                 validate_atomic_access(ptr as *const u8, false);
 
                 self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
@@ -736,6 +736,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         owner_tid: ArenaId,
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
+        if recorder.arena_id == ArenaId::INVALID {
+            return;
+        }
+
         // SAFETY: The caller guarantees `ptr` points to `ManagedPtr::SIZE` readable bytes in a
         // live object; the resulting slice uses exactly that serialization width.
         let bytes = unsafe { std::slice::from_raw_parts(ptr, ManagedPtr::SIZE) };
@@ -770,7 +774,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut _recorder = WriteBarrierRecorder::new(
-                owner.map(|o| o.owner_id()).unwrap_or(ArenaId(0)),
+                // INVALID sentinel: unowned write; the recorder skips cross-arena tracking.
+                owner.map(|o| o.owner_id()).unwrap_or(ArenaId::INVALID),
                 &mut b,
             );
             // SAFETY: `ptr` is a valid, non-null pointer that was verified by
@@ -986,6 +991,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
+        if recorder.arena_id == ArenaId::INVALID {
+            return;
+        }
+
         if !layout.is_or_contains_refs() {
             return;
         }
@@ -1028,7 +1037,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 if flm.has_ref_fields {
                     // SAFETY: `visit_managed_ptrs` yields offsets that are within
                     // the field struct's backing storage; `ptr.add(offset)` is valid.
-                    flm.visit_managed_ptrs(ByteOffset(0), &mut |offset| {
+                    flm.visit_managed_ptrs(ByteOffset::new(0), &mut |offset| {
                         // SAFETY: The layout visitor yields offsets within this live field range.
                         let child = unsafe { ptr.add(offset.as_usize()) };
                         // SAFETY: `child` is the validated ManagedPtr slot derived above.
@@ -1388,7 +1397,7 @@ mod tests {
 
         // Seed the TLS buffer with a dummy entry so there is something to drain.
         WB_LOCAL_BUF.with(|buf| {
-            buf.borrow_mut().push((ArenaId(0), 0xDEAD_BEEF));
+            buf.borrow_mut().push((ArenaId::new(0), 0xDEAD_BEEF));
         });
 
         // Introduce a guard, then panic.  The guard's Drop must drain the buffer
@@ -1414,7 +1423,7 @@ mod tests {
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             b.clear();
-            b.push((ArenaId(0), 0xDEAD_BEEF));
+            b.push((ArenaId::new(0), 0xDEAD_BEEF));
         });
 
         {

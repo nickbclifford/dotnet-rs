@@ -143,13 +143,15 @@ pub fn get_current_thread_id() -> crate::ArenaId {
     }
     #[cfg(not(feature = "multithreading"))]
     {
+        // Single-threaded builds use 1 as their stable arena identity. INVALID remains reserved
+        // for an absent owner or an uninitialized multithreaded identity.
         #[cfg(feature = "memory-validation")]
         {
-            MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(crate::ArenaId(1)))
+            MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(crate::ArenaId::new(1)))
         }
         #[cfg(not(feature = "memory-validation"))]
         {
-            crate::ArenaId(1)
+            crate::ArenaId::new(1)
         }
     }
 }

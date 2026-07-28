@@ -331,8 +331,8 @@ mod tests {
     };
 
     // ArenaId constants for test threads
-    const THREAD_A: ArenaId = ArenaId(1);
-    const THREAD_B: ArenaId = ArenaId(2);
+    const THREAD_A: ArenaId = ArenaId::new(1);
+    const THREAD_B: ArenaId = ArenaId::new(2);
 
     // --- Minimal mock for ThreadManagerOps ---
 

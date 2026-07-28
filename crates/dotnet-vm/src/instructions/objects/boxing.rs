@@ -352,7 +352,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
                 target_type,
                 Some(boxed_nullable),
                 false,
-                Some(ByteOffset(0)),
+                Some(ByteOffset::new(0)),
             )
             .into(),
         ));
@@ -378,7 +378,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
             target_type,
             Some(obj),
             false,
-            Some(ByteOffset(0)),
+            Some(ByteOffset::new(0)),
         )
         .into(),
     ));

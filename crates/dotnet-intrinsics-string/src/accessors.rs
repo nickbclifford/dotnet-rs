@@ -86,7 +86,7 @@ pub fn intrinsic_string_get_raw_data<'gc, T: TypedStackOps<'gc> + ExceptionOps<'
         };
 
         if is_str {
-            ctx.push_ptr(ptr, char_type, false, Some(obj), Some(ByteOffset(0)));
+            ctx.push_ptr(ptr, char_type, false, Some(obj), Some(ByteOffset::new(0)));
             StepResult::Continue
         } else {
             let heap = handle.borrow();

@@ -31,6 +31,10 @@ rustup install nightly
 
 The `fuzzing` feature gate enables `Arbitrary` trait derivations on VM and value types. It propagates through the crate hierarchy:
 
+> **Newtype carve-out:** `Arbitrary` derives for `dotnet-utils` newtypes deliberately construct
+> unvalidated values. The derives expand in `newtypes.rs` and may access private tuple fields,
+> while external callers cannot, preserving the privatization boundary.
+
 ```
 dotnet-vm/fuzzing
 ├── dep:arbitrary

@@ -592,7 +592,7 @@ fn handle_pinvoke_return<'gc>(
                 (*type_desc).clone(),
                 None,
                 false,
-                Some(ByteOffset(0)),
+                Some(ByteOffset::new(0)),
             );
             let _ = ctx.pop_multiple(arg_count);
             ctx.push(StackValue::TypedRef(m.into(), type_desc));
@@ -1013,7 +1013,7 @@ mod tests {
     fn by_ref_write_back_propagates_managed_write_failures() {
         let temp_buffers = vec![TempBuffer::Bytes(vec![1, 2, 3, 4])];
         let write_backs = vec![(
-            WriteBackSource::Managed(PointerOrigin::Unmanaged, ByteOffset(0)),
+            WriteBackSource::Managed(PointerOrigin::Unmanaged, ByteOffset::new(0)),
             0usize,
             4usize,
         )];

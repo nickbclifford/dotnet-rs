@@ -73,7 +73,7 @@ impl<'gc> StackFrame<'gc> {
         pinned_locals: PinnedLocals,
     ) -> Self {
         Self {
-            stack_height: StackSlotIndex(0),
+            stack_height: StackSlotIndex::new(0),
             base: base_pointer,
             source_resolution: method.source.resolution(),
             state: MethodState::new(method),
@@ -93,7 +93,7 @@ impl<'gc> StackFrame<'gc> {
         generic_inst: GenericLookup,
         pinned_locals: PinnedLocals,
     ) {
-        self.stack_height = StackSlotIndex(0);
+        self.stack_height = StackSlotIndex::new(0);
         self.base = base_pointer;
         self.source_resolution = method.source.resolution();
         self.state = MethodState::new(method);
@@ -106,7 +106,7 @@ impl<'gc> StackFrame<'gc> {
     }
 
     pub fn prepare_for_pool(&mut self) {
-        self.stack_height = StackSlotIndex(0);
+        self.stack_height = StackSlotIndex::new(0);
         self.base = BasePointer::default();
         self.exception_stack.clear();
         self.pinned_locals.clear();
@@ -237,7 +237,7 @@ impl<'gc> EvaluationStack<'gc> {
             StackValue::ValueType(obj) => {
                 let layout = obj.instance_storage.layout().clone();
                 obj.instance_storage.with_data_mut(|data| {
-                    layout.visit_managed_ptrs(ByteOffset(0), &mut |offset: ByteOffset| {
+                    layout.visit_managed_ptrs(ByteOffset::new(0), &mut |offset: ByteOffset| {
                         if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
                             let offset_val = offset.as_usize();
                             let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
@@ -412,7 +412,7 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     pub fn top_of_stack(&self) -> StackSlotIndex {
-        StackSlotIndex(self.stack.len())
+        StackSlotIndex::new(self.stack.len())
     }
 
     pub fn get_slot(&self, index: StackSlotIndex) -> StackValue<'gc> {
@@ -507,7 +507,7 @@ mod tests {
         let stack = int_stack(&[10, 20, 30, 40, 50]);
         let mut out = Vec::new();
 
-        stack.copy_slots_into(StackSlotIndex(1), 3, &mut out);
+        stack.copy_slots_into(StackSlotIndex::new(1), 3, &mut out);
 
         assert_eq!(as_i32_values(&out), vec![20, 30, 40]);
     }
@@ -532,17 +532,17 @@ mod tests {
         stack.pop_multiple_into(2, &mut out);
         assert_eq!(out.capacity(), initial_capacity);
 
-        stack.copy_slots_into(StackSlotIndex(0), 2, &mut out);
+        stack.copy_slots_into(StackSlotIndex::new(0), 2, &mut out);
         assert_eq!(out.capacity(), initial_capacity);
     }
 
     #[test]
     fn stack_pointer_fixup_updates_cached_ptr_on_reallocation() {
         let mut stack = int_stack(&[11, 22]);
-        let slot0_ptr = stack.get_slot_address(StackSlotIndex(0)).as_ptr();
+        let slot0_ptr = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
         stack.push(StackValue::managed_stack_ptr(
-            StackSlotIndex(0),
-            ByteOffset(0),
+            StackSlotIndex::new(0),
+            ByteOffset::new(0),
             slot0_ptr,
             TypeDescription::NULL,
             false,
@@ -550,7 +550,7 @@ mod tests {
 
         stack.reserve_slots(512);
 
-        let expected_ptr = stack.get_slot_address(StackSlotIndex(0)).as_ptr();
+        let expected_ptr = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
         let actual_ptr = stack.peek_stack().as_ptr();
         assert_eq!(actual_ptr, expected_ptr);
     }
@@ -558,22 +558,22 @@ mod tests {
     #[test]
     fn stack_pointer_fixup_tracks_suspended_slots() {
         let mut stack = int_stack(&[1, 2]);
-        let slot1_ptr = stack.get_slot_address(StackSlotIndex(1)).as_ptr();
+        let slot1_ptr = stack.get_slot_address(StackSlotIndex::new(1)).as_ptr();
         stack.push(StackValue::managed_stack_ptr(
-            StackSlotIndex(1),
-            ByteOffset(0),
+            StackSlotIndex::new(1),
+            ByteOffset::new(0),
             slot1_ptr,
             TypeDescription::NULL,
             false,
         ));
 
-        stack.suspend_above(StackSlotIndex(1));
+        stack.suspend_above(StackSlotIndex::new(1));
         let expected_suspended_ptr = stack.suspended_stack[0].data_location().as_ptr();
         let actual_suspended_ptr = stack.suspended_stack[1].as_ptr();
         assert_eq!(actual_suspended_ptr, expected_suspended_ptr);
 
         stack.restore_suspended();
-        let expected_restored_ptr = stack.get_slot_address(StackSlotIndex(1)).as_ptr();
+        let expected_restored_ptr = stack.get_slot_address(StackSlotIndex::new(1)).as_ptr();
         let actual_restored_ptr = stack.peek_stack().as_ptr();
         assert_eq!(actual_restored_ptr, expected_restored_ptr);
     }

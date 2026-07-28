@@ -391,7 +391,7 @@ pub struct FieldLayoutManager {
 
 impl HasLayout for FieldLayoutManager {
     fn size(&self) -> crate::ByteOffset {
-        crate::ByteOffset(self.total_size)
+        crate::ByteOffset::new(self.total_size)
     }
 }
 
@@ -416,7 +416,7 @@ impl FieldLayoutManager {
         // We use visit_managed_ptrs to correctly find all ManagedPtrs, even in nested structs,
         // which avoids the previous bug where only top-level ManagedPtrs were traced.
         if self.has_ref_fields {
-            self.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| {
+            self.visit_managed_ptrs(crate::ByteOffset::new(0), &mut |offset| {
                 let off = offset.as_usize();
                 if off + ManagedPtr::SIZE <= storage.len() {
                     // SAFETY: layout creation ensures these offsets contain valid ManagedPtrs.
@@ -514,7 +514,7 @@ pub enum Scalar {
 
 impl HasLayout for Scalar {
     fn size(&self) -> crate::ByteOffset {
-        crate::ByteOffset(self.size_const())
+        crate::ByteOffset::new(self.size_const())
     }
 }
 
@@ -662,7 +662,7 @@ mod tests {
                         name: "i".to_string(),
                     },
                     FieldLayout {
-                        position: crate::ByteOffset(0),
+                        position: crate::ByteOffset::new(0),
                         layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
                     },
                 );
@@ -672,7 +672,7 @@ mod tests {
                         name: "r".to_string(),
                     },
                     FieldLayout {
-                        position: crate::ByteOffset(8),
+                        position: crate::ByteOffset::new(8),
                         layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
                     },
                 );
@@ -694,7 +694,7 @@ mod tests {
                         name: "inner".to_string(),
                     },
                     FieldLayout {
-                        position: crate::ByteOffset(8),
+                        position: crate::ByteOffset::new(8),
                         layout: Arc::new(LayoutManager::Field((*inner_layout).clone())),
                     },
                 );
@@ -708,7 +708,7 @@ mod tests {
 
         // 1. Verify visit_managed_ptrs() finds the correct recursive logic
         let mut found_offsets = Vec::new();
-        outer_layout.visit_managed_ptrs(crate::ByteOffset(0), &mut |off| {
+        outer_layout.visit_managed_ptrs(crate::ByteOffset::new(0), &mut |off| {
             found_offsets.push(off.as_usize())
         });
 

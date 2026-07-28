@@ -36,20 +36,20 @@ pub(crate) fn get_ptr_info<'gc, T: ExceptionOps<'gc>>(
             o.0.map_or(PointerOrigin::Unmanaged, |h| {
                 PointerOrigin::Heap(ObjectRef(Some(h)))
             }),
-            dotnet_utils::ByteOffset(0),
+            dotnet_utils::ByteOffset::new(0),
         )),
         StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => Ok((
             PointerOrigin::Unmanaged,
-            dotnet_utils::ByteOffset(p.as_ptr() as usize),
+            dotnet_utils::ByteOffset::new(p.as_ptr() as usize),
         )),
         StackValue::NativeInt(p) => Ok((
             PointerOrigin::Unmanaged,
-            dotnet_utils::ByteOffset(*p as usize),
+            dotnet_utils::ByteOffset::new(*p as usize),
         )),
         StackValue::ValueType(obj) => Ok((
             PointerOrigin::new_transient(obj.clone()),
-            dotnet_utils::ByteOffset(0),
+            dotnet_utils::ByteOffset::new(0),
         )),
         _ => {
             Err(ctx
@@ -217,7 +217,9 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(method.parent.clone()));
 
                 ctx.push_value_type(instance);
-                let this_slot = ctx.top_of_stack() - 1;
+                let this_slot = ctx.top_of_stack().checked_sub(1).expect(
+                    "value-type constructor receiver was not pushed: VM invariant violated",
+                );
                 let this_ptr_slot = this_slot + 1;
 
                 // Push placeholder ManagedPtr
@@ -244,7 +246,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 // thinking it's an Unmanaged pointer.
                 let mut this_ptr_val = this_ptr_val
                     .into_inner()
-                    .with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
+                    .with_stack_origin(this_slot, dotnet_utils::ByteOffset::new(0));
                 this_ptr_val.update_cached_ptr(real_addr);
                 ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val.into()));
 
@@ -300,7 +302,7 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
 
     if matches!(&*layout, LayoutManager::Scalar(Scalar::ObjectRef))
-        && offset == dotnet_utils::ByteOffset(0)
+        && offset == dotnet_utils::ByteOffset::new(0)
         && let PointerOrigin::Stack(idx) = origin.clone()
     {
         match ctx.get_slot_ref(idx).clone() {

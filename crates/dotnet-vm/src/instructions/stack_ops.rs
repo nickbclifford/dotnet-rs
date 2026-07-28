@@ -76,12 +76,12 @@ pub fn ldarga<
 ) -> StepResult {
     let frame = ctx.current_frame();
     let abs_idx = frame.base.arguments + index as usize;
-    let arg = ctx.get_argument(ArgumentIndex(index as usize));
+    let arg = ctx.get_argument(ArgumentIndex::new(index as usize));
     let live_type = dotnet_vm_ops::vm_try!(ctx.stack_value_type(&arg));
     ctx.push(StackValue::managed_stack_ptr(
         abs_idx,
-        ByteOffset(0),
-        ctx.get_argument_address(ArgumentIndex(index as usize))
+        ByteOffset::new(0),
+        ctx.get_argument_address(ArgumentIndex::new(index as usize))
             .as_ptr() as *mut _,
         live_type,
         true,
@@ -109,14 +109,14 @@ pub fn ldloca<'gc, T: VmStackOps<'gc> + LocalOps<'gc> + ResolutionOps<'gc> + Eva
 ) -> StepResult {
     let frame = ctx.current_frame();
     let abs_idx = frame.base.locals + index as usize;
-    let local = ctx.get_local(LocalIndex(index as usize));
+    let local = ctx.get_local(LocalIndex::new(index as usize));
     let live_type = dotnet_vm_ops::vm_try!(ctx.stack_value_type(&local));
 
-    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(LocalIndex(index as usize));
+    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(LocalIndex::new(index as usize));
 
     ctx.push(StackValue::managed_stack_ptr(
         abs_idx,
-        ByteOffset(0),
+        ByteOffset::new(0),
         ptr.as_ptr() as *mut _,
         live_type,
         pinned,

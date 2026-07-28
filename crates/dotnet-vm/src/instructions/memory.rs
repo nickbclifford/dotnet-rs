@@ -153,7 +153,7 @@ pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     match unsafe { ctx.write_unaligned(origin.clone(), offset, val, &layout) } {
         Ok(_) => {}
         Err(_) => {
-            if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
+            if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
@@ -203,7 +203,7 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     let val = match unsafe { ctx.read_unaligned(origin.clone(), offset, &layout, None) } {
         Ok(v) => v,
         Err(_) => {
-            if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
+            if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
@@ -241,11 +241,12 @@ fn resolve_indirect_origin_and_offset<'gc, T: ExceptionOps<'gc>>(
     }
 
     match addr_val {
-        StackValue::NativeInt(p) => Ok((PointerOrigin::Unmanaged, ByteOffset(p as usize))),
+        StackValue::NativeInt(p) => Ok((PointerOrigin::Unmanaged, ByteOffset::new(p as usize))),
         StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
-        StackValue::UnmanagedPtr(u) => {
-            Ok((PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)))
-        }
+        StackValue::UnmanagedPtr(u) => Ok((
+            PointerOrigin::Unmanaged,
+            ByteOffset::new(u.0.as_ptr() as usize),
+        )),
         _ => {
             Err(ctx
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG))

@@ -140,7 +140,7 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     } {
         Ok(v) => v,
         Err(_) => {
-            if offset.0 == 0 {
+            if offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
@@ -199,7 +199,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
         Ok(_) => {}
         Err(_) => {
-            if offset.0 == 0 {
+            if offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
@@ -336,7 +336,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                         target_type,
                         Some(ObjectRef(Some(*h))),
                         false,
-                        Some(ByteOffset(0)),
+                        Some(ByteOffset::new(0)),
                     )
                     .into(),
                 ));
@@ -361,13 +361,13 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                     let target_type =
                         dotnet_vm_ops::vm_try!(ctx.current_context().get_field_desc(field.clone()));
                     let offset = if field.field().name == "Data" {
-                        ByteOffset(0)
+                        ByteOffset::new(0)
                     } else {
                         // Length is at the beginning of the ObjectInner? No, Vector struct.
                         // Actually, Length field in RawArrayData is special.
                         // If it's not the data, we should probably still calculate offset correctly if we want it to be stable.
                         // But RawArrayData is a hack anyway.
-                        ByteOffset(
+                        ByteOffset::new(
                             (ptr as usize)
                                 // SAFETY: `data` is still immutably borrowed and matched as vector
                                 // storage, so its backing allocation remains stable for this offset.

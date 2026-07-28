@@ -53,9 +53,7 @@ pub mod threading;
 
 pub use dotnet_metrics::RuntimeMetricsSnapshot;
 pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-pub use dotnet_utils::{
-    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
-};
+pub use dotnet_utils::{ArenaId, ArgumentIndex, ByteOffset, LocalIndex, StackSlotIndex};
 pub use dotnet_vm_data::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
 pub use executor::{Executor, ExecutorResult};
 pub use stack::{

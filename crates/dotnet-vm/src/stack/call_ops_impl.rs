@@ -41,16 +41,6 @@ vm_cold_panic!(
         "Expected boxed value type in unbox canonicalization"
 );
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
-vm_cold_panic!(
-    fn panic_stack_height_underflow_for_call(
-        frame_height: crate::StackSlotIndex,
-        num_args: usize,
-        source: &MethodDescription
-    ) =>
-        "Not enough values on stack for call: height={}, args={} in {:?}",
-        frame_height, num_args, source
-);
-// invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(fn panic_tail_call_requires_current_frame() => "tail call requires a current frame");
 // invariant: VM internal state is inconsistent; continuing would be unsafe.
 vm_cold_panic!(fn panic_jmp_requires_current_frame() => "jmp requires a current frame");
@@ -314,11 +304,14 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 
         if desc.is_value_type(&self.current_context())? {
             self.push(value);
-            let index = self.evaluation_stack.top_of_stack() - 1;
+            let index =
+                self.evaluation_stack.top_of_stack().checked_sub(1).expect(
+                    "value-type constructor receiver was not pushed: VM invariant violated",
+                );
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
             self.push(StackValue::managed_stack_ptr(
                 index,
-                ByteOffset(0),
+                ByteOffset::new(0),
                 ptr,
                 desc,
                 false,
@@ -383,7 +376,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
                         td,
                         Some(obj),
                         false,
-                        Some(ByteOffset(0)),
+                        Some(ByteOffset::new(0)),
                     );
                     self.evaluation_stack
                         .set_slot_at(argument_base, StackValue::ManagedPtr(managed_ptr.into()));
@@ -392,14 +385,9 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         }
 
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height < crate::StackSlotIndex(num_args) {
-                panic_stack_height_underflow_for_call(
-                    frame.stack_height,
-                    num_args,
-                    &frame.state.info_handle.source,
-                );
-            }
-            frame.stack_height -= num_args;
+            frame.stack_height = frame.stack_height.checked_sub(num_args).expect(
+                "call argument consumption exceeded current frame stack height: VM invariant violated",
+            );
         }
 
         self.frame_stack.push_frame(
@@ -914,7 +902,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         // ECMA-335: stack must be empty except for the call arguments.
-        if frame.stack_height != crate::StackSlotIndex(arg_count) {
+        if frame.stack_height != crate::StackSlotIndex::new(arg_count) {
             return false;
         }
 
@@ -992,7 +980,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack
-                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+                .set_slot(crate::StackSlotIndex::new(i), StackValue::null());
         }
         self.evaluation_stack.truncate(clear_from);
 
@@ -1026,7 +1014,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             let frame = self.frame_stack.current_frame();
 
             // ECMA-335: evaluation stack shall be empty.
-            if frame.stack_height != crate::StackSlotIndex(0) {
+            if frame.stack_height != crate::StackSlotIndex::new(0) {
                 return StepResult::Error(crate::error::VmError::Execution(
                     crate::error::ExecutionError::Aborted(
                         "jmp requires empty evaluation stack".into(),
@@ -1096,7 +1084,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack
-                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+                .set_slot(crate::StackSlotIndex::new(i), StackValue::null());
         }
         self.evaluation_stack.truncate(clear_from);
 

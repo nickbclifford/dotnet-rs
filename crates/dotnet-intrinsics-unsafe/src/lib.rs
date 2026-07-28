@@ -79,20 +79,20 @@ pub(crate) fn ptr_info<'gc, T: dotnet_vm_ops::ops::ExceptionOps<'gc>>(
             o.0.map_or(PointerOrigin::Unmanaged, |h| {
                 PointerOrigin::Heap(dotnet_value::object::ObjectRef(Some(h)))
             }),
-            dotnet_utils::ByteOffset(0),
+            dotnet_utils::ByteOffset::new(0),
         )),
         dotnet_value::StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
         dotnet_value::StackValue::UnmanagedPtr(dotnet_value::pointer::UnmanagedPtr(p)) => Ok((
             PointerOrigin::Unmanaged,
-            dotnet_utils::ByteOffset(p.as_ptr() as usize),
+            dotnet_utils::ByteOffset::new(p.as_ptr() as usize),
         )),
         dotnet_value::StackValue::NativeInt(p) => Ok((
             PointerOrigin::Unmanaged,
-            dotnet_utils::ByteOffset(*p as usize),
+            dotnet_utils::ByteOffset::new(*p as usize),
         )),
         dotnet_value::StackValue::ValueType(obj) => Ok((
             PointerOrigin::new_transient(obj.clone()),
-            dotnet_utils::ByteOffset(0),
+            dotnet_utils::ByteOffset::new(0),
         )),
         _ => Err(ctx.throw_by_name_with_message(
             "System.InvalidProgramException",

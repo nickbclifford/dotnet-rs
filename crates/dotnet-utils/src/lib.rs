@@ -11,8 +11,8 @@
 //!   "GC-ready" precondition for operations that must run outside nested
 //!   borrow scopes.
 //! - **Strongly-typed runtime indices:** [`ArenaId`], [`LocalIndex`], and
-//!   [`FieldIndex`] (plus related wrappers in [`newtypes`]) keep arena IDs,
-//!   local slots, and field offsets type-safe across crate boundaries.
+//!   related wrappers in [`newtypes`] keep arena IDs and local slots type-safe
+//!   across crate boundaries.
 //! - **Feature-gated synchronization aliases:** [`sync::Mutex`] and
 //!   [`sync::RwLock`] unify single-threaded (`RefCell`-backed) and
 //!   multithreaded (`parking_lot`-backed) lock behavior behind one API.
@@ -33,7 +33,7 @@ pub mod newtypes;
 pub mod sync;
 
 pub use newtypes::{
-    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, ManagedByteOffset, StackSlotIndex,
+    ArenaId, ArgumentIndex, ByteOffset, LocalIndex, ManagedByteOffset, StackSlotIndex,
 };
 
 pub struct DebugStr(pub String);

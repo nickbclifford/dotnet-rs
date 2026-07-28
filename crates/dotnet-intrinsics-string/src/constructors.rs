@@ -168,7 +168,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     StepResult::Continue
 }
 
-/// System.String::.ctor(System.ReadOnlySpan<char>)
+/// `System.String::.ctor(System.ReadOnlySpan<char>)`
 #[dotnet_intrinsic("void System.String::.ctor(System.ReadOnlySpan<char>)")]
 pub fn intrinsic_string_ctor_readonly_span_char<'gc, T: IntrinsicStringHost<'gc>>(
     ctx: &mut T,

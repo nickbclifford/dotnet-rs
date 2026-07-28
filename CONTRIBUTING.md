@@ -59,6 +59,27 @@ Managed `.NET` exceptions (`ManagedException`, `ExceptionState`, SEH search/unwi
 
 Keep this distinction intact: host errors are not managed exceptions. The `.cctor` wrapping path (host error -> managed `System.TypeInitializationException`) is a bridge between layers, not a reason to merge the two models.
 
+## Runtime offset/index newtype policy
+
+The offset and index wrappers exported by `dotnet-utils` have private fields for encapsulation and
+API evolution; they do not claim that every representable value is valid in every runtime context.
+Their `new` constructors and existing infallible `From` implementations intentionally perform no
+range validation; `Default`, where implemented, is only a zero-valued convenience. Validate bounds
+against the relevant layout, stack, or arena at the use site; `ManagedByteOffset::try_from(usize)`
+is the narrowing exception that enforces its `u32` range.
+Under the `fuzzing` feature, module-local `Arbitrary` derives may bypass the public construction
+surface to generate unvalidated values deliberately (see [`docs/FUZZING.md`](docs/FUZZING.md)).
+
+Do not add raw `Sub` or `SubAssign` implementations to `ByteOffset`, `LocalIndex`,
+`ArgumentIndex`, or `StackSlotIndex`. Use an available checked/saturating helper, or apply checked
+arithmetic to the accessor value and reconstruct the wrapper, then classify underflow under the
+panic-vs-Result policy above. Compiler rejection of raw subtraction is the regression guard;
+release overflow checks remain enabled as a backstop for other arithmetic.
+
+Keep the heterogeneous newtype implementations explicit rather than adding general newtype code
+generation to `dotnet-macros-core`, whose charter is build-time .NET metadata parsing. Consider a
+local `macro_rules!` only if the surviving behavior becomes genuinely uniform.
+
 ## Run the project checks
 
 For the standard local validation pass used by contributors, run:

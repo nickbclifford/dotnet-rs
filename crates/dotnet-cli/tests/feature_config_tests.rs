@@ -21,7 +21,7 @@ fn test_single_threaded_stub_thread_manager() {
     // Thread manager should provide a consistent thread ID (always 1)
     assert_eq!(
         dotnet_utils::sync::get_current_thread_id(),
-        dotnet_utils::ArenaId(1)
+        dotnet_utils::ArenaId::new(1)
     );
 }
 
@@ -79,13 +79,13 @@ fn test_multithreading_arena_handle() {
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId(1));
+    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId::new(1));
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());
     shared
         .gc_coordinator
-        .unregister_arena(dotnet_utils::ArenaId(1));
+        .unregister_arena(dotnet_utils::ArenaId::new(1));
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn test_multithreading_cross_arena_value() {
     // SAFETY: This compile-only test never dereferences the ObjectPtr; `0x1000` is nonzero and
     // has the pointer-sized representation required by the transparent non-null pointer wrapper.
     let ptr = unsafe { std::mem::transmute::<usize, dotnet_value::object::ObjectPtr>(0x1000) };
-    let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId(1));
+    let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId::new(1));
     // If this compiles, the variant exists and works
 }
 

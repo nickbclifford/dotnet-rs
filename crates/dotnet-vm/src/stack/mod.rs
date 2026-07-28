@@ -190,7 +190,7 @@ impl<'gc> CallStack<'gc> {
                 exception_mode: ExceptionState::None,
                 current_intrinsic: None,
                 original_ip: 0,
-                original_stack_height: dotnet_utils::StackSlotIndex(0),
+                original_stack_height: dotnet_utils::StackSlotIndex::new(0),
                 continuation: dotnet_vm_data::VmContinuation::None,
                 call_args_buffer: Vec::new(),
             },

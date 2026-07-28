@@ -440,7 +440,7 @@ impl ExceptionHandlingSystem {
 
                             let frame = &mut ctx.frame_stack_mut().frames[frame_index];
                             frame.state.ip = *clause_offset;
-                            frame.stack_height = StackSlotIndex(0);
+                            frame.stack_height = StackSlotIndex::new(0);
                             frame.exception_stack.push(exception);
                             ctx.push_obj(exception);
 
@@ -647,7 +647,7 @@ impl ExceptionHandlingSystem {
 
                         let frame = &mut ctx.frame_stack_mut().frames[frame_index];
                         frame.state.ip = handler_start_ip;
-                        frame.stack_height = StackSlotIndex(0);
+                        frame.stack_height = StackSlotIndex::new(0);
 
                         return StepResult::Exception;
                     }
@@ -700,7 +700,7 @@ impl ExceptionHandlingSystem {
 
                 let frame = &mut ctx.frame_stack_mut().frames[target_h.frame_index];
                 frame.state.ip = handler_start_ip;
-                frame.stack_height = StackSlotIndex(0);
+                frame.stack_height = StackSlotIndex::new(0);
 
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
@@ -717,7 +717,7 @@ impl ExceptionHandlingSystem {
 
                 let frame = &mut ctx.frame_stack_mut().frames[target_frame];
                 frame.state.ip = target_ip;
-                frame.stack_height = StackSlotIndex(0);
+                frame.stack_height = StackSlotIndex::new(0);
 
                 StepResult::Exception
             }

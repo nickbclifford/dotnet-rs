@@ -189,7 +189,7 @@ const UNREGISTER_LEASE_WARN_INTERVAL: Duration = Duration::from_millis(100);
 /// the [`ArenaState`] so that [`is_stw_in_progress`] and [`try_acquire_lease`]
 /// can read it without requiring the original owner to be present.
 pub fn register_arena(thread_id: ArenaId, stw_in_progress: Arc<AtomicBool>) {
-    let id = thread_id.0;
+    let id = thread_id.as_u64();
     if id < 64 {
         VALID_ARENAS_FAST.fetch_or(1 << id, Ordering::Release);
     }
@@ -208,7 +208,7 @@ pub fn register_arena(thread_id: ArenaId, stw_in_progress: Arc<AtomicBool>) {
 /// In practice leases are held only for the duration of a single pointer
 /// dereference (nanoseconds), so the spin terminates almost immediately.
 pub fn unregister_arena(thread_id: ArenaId) {
-    let id = thread_id.0;
+    let id = thread_id.as_u64();
     if id < 64 {
         VALID_ARENAS_FAST.fetch_and(!(1 << id), Ordering::Release);
     }
@@ -248,7 +248,7 @@ pub fn unregister_arena(thread_id: ArenaId) {
             if elapsed >= next_warn_at {
                 let active_leases = state.active_leases.load(AtomicOrdering::Acquire);
                 tracing::warn!(
-                    arena_id = thread_id.0,
+                    arena_id = thread_id.as_u64(),
                     active_leases,
                     waited_millis = elapsed.as_millis() as u64,
                     yield_count,
@@ -284,7 +284,7 @@ pub fn unregister_arena(thread_id: ArenaId) {
 /// lock) will observe `active_leases > 0` and spin.
 pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
     // Fast path: if the arena is definitely absent, skip the lock entirely.
-    let id = target_id.0;
+    let id = target_id.as_u64();
     if id < 64 && (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) == 0 {
         return None;
     }
@@ -314,7 +314,7 @@ pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
 /// between this call and any subsequent dereference.  Prefer
 /// [`try_acquire_lease`] for dereference-guarded access.
 pub fn is_valid_cross_arena_ref(target_thread_id: ArenaId) -> bool {
-    let id = target_thread_id.0;
+    let id = target_thread_id.as_u64();
     if id < 64 {
         (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
     } else {
@@ -421,7 +421,7 @@ pub fn record_cross_arena_ref(target_thread_id: ArenaId, ptr: usize) -> bool {
     if CURRENTLY_TRACING_THREAD_ID.with(|id| id.get().is_some()) {
         let tracing_under_stw = CURRENTLY_TRACING_UNDER_STW.with(|flag| flag.get());
         if tracing_under_stw {
-            let id = target_thread_id.0;
+            let id = target_thread_id.as_u64();
             let valid = if id < 64 {
                 (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
             } else {
@@ -502,7 +502,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_on_unregistered_arena_returns_none() {
-        let id = ArenaId(10_000);
+        let id = ArenaId::new(10_000);
         // ensure it is not in the registry
         unregister_arena(id);
         assert!(try_acquire_lease(id).is_none());
@@ -513,7 +513,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_on_registered_arena_returns_some() {
-        let id = ArenaId(10_001);
+        let id = ArenaId::new(10_001);
         register_arena(id, stw_flag());
         let lease = try_acquire_lease(id);
         assert!(lease.is_some());
@@ -527,7 +527,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_drop_does_not_unregister_arena() {
-        let id = ArenaId(10_002);
+        let id = ArenaId::new(10_002);
         register_arena(id, stw_flag());
         {
             let _lease = try_acquire_lease(id).expect("should get lease");
@@ -544,7 +544,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_after_unregister_returns_none() {
-        let id = ArenaId(10_003);
+        let id = ArenaId::new(10_003);
         register_arena(id, stw_flag());
         unregister_arena(id);
         assert!(try_acquire_lease(id).is_none());
@@ -555,7 +555,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn multiple_leases_track_borrow_count() {
-        let id = ArenaId(10_004);
+        let id = ArenaId::new(10_004);
         register_arena(id, stw_flag());
 
         let l1 = try_acquire_lease(id).unwrap();
@@ -586,7 +586,7 @@ mod lease_tests {
         use std::sync::Arc as StdArc;
         use std::sync::atomic::AtomicBool as StdAtomicBool;
 
-        let id = ArenaId(10_005);
+        let id = ArenaId::new(10_005);
         register_arena(id, stw_flag());
 
         let lease = try_acquire_lease(id).expect("should acquire lease");
@@ -635,7 +635,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_reflects_stw_flag() {
-        let id = ArenaId(10_006);
+        let id = ArenaId::new(10_006);
         let flag = stw_flag();
         register_arena(id, flag.clone());
 
@@ -657,7 +657,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_works_for_low_arena_id() {
-        let id = ArenaId(7); // < 64, uses fast-path bitset
+        let id = ArenaId::new(7); // < 64, uses fast-path bitset
         register_arena(id, stw_flag());
         let lease = try_acquire_lease(id);
         assert!(lease.is_some());
@@ -670,7 +670,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn is_valid_cross_arena_ref_reflects_registration_state() {
-        let id = ArenaId(10_007);
+        let id = ArenaId::new(10_007);
         assert!(!is_valid_cross_arena_ref(id));
         register_arena(id, stw_flag());
         assert!(is_valid_cross_arena_ref(id));
@@ -683,7 +683,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn each_registration_has_a_unique_increasing_generation() {
-        let id = ArenaId(10_008);
+        let id = ArenaId::new(10_008);
 
         register_arena(id, stw_flag());
         let gen1 = try_acquire_lease(id).unwrap().generation();
@@ -706,7 +706,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_generation_matches_arena_state_generation() {
-        let id = ArenaId(10_009);
+        let id = ArenaId::new(10_009);
         register_arena(id, stw_flag());
 
         let lease = try_acquire_lease(id).unwrap();
@@ -722,7 +722,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn lease_is_valid_while_arena_alive() {
-        let id = ArenaId(10_010);
+        let id = ArenaId::new(10_010);
         register_arena(id, stw_flag());
         let lease = try_acquire_lease(id).unwrap();
         assert!(
@@ -738,7 +738,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn reregistered_arena_has_different_generation_than_old_lease() {
-        let id = ArenaId(10_011);
+        let id = ArenaId::new(10_011);
 
         register_arena(id, stw_flag());
         let old_gen = try_acquire_lease(id).unwrap().generation();
@@ -761,7 +761,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn record_cross_arena_ref_stores_generation() {
-        let id = ArenaId(10_012);
+        let id = ArenaId::new(10_012);
         register_arena(id, stw_flag());
 
         let expected_gen = try_acquire_lease(id).unwrap().generation();
@@ -791,7 +791,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn record_cross_arena_ref_stw_tracing_uses_sentinel_generation() {
-        let id = ArenaId(10_013);
+        let id = ArenaId::new(10_013);
         register_arena(id, stw_flag());
 
         set_currently_tracing_with_stw(Some(id), true);
@@ -815,7 +815,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn record_cross_arena_ref_outside_tracing_returns_validity() {
-        let id = ArenaId(10_014);
+        let id = ArenaId::new(10_014);
         // Not registered yet.
         assert!(!record_cross_arena_ref(id, 0x1));
 
@@ -854,7 +854,7 @@ mod lease_tests {
             let h = thread::spawn(move || {
                 barrier.wait();
                 for i in 0..num_iterations {
-                    let id = ArenaId(base_id + (i % num_ids));
+                    let id = ArenaId::new(base_id + (i % num_ids));
                     match t % 3 {
                         0 => {
                             // Registrator: cyclically registers and unregisters
@@ -913,7 +913,7 @@ mod lease_tests {
 
         // Final cleanup
         for i in 0..num_ids {
-            unregister_arena(ArenaId(base_id + i));
+            unregister_arena(ArenaId::new(base_id + i));
         }
     }
 
@@ -946,7 +946,7 @@ mod lease_tests {
             handles.push(thread::spawn(move || {
                 barrier.wait();
                 for i in 0..ITERATIONS {
-                    let id = ArenaId(BASE_ID + (i as u64 % NUM_IDS));
+                    let id = ArenaId::new(BASE_ID + (i as u64 % NUM_IDS));
                     match t % 5 {
                         0 => {
                             // Registrator/unregistrator
@@ -1063,7 +1063,7 @@ mod lease_tests {
         // Cleanup any arenas that may have been left registered by a
         // thread that was interrupted between register and unregister.
         for i in 0..NUM_IDS {
-            unregister_arena(ArenaId(BASE_ID + i));
+            unregister_arena(ArenaId::new(BASE_ID + i));
         }
     }
 
@@ -1073,7 +1073,7 @@ mod lease_tests {
     // ------------------------------------------------------------------
     #[test]
     fn record_and_harvest_race_with_reregistration() {
-        let id = ArenaId(40_000);
+        let id = ArenaId::new(40_000);
 
         // 1. Register and record
         register_arena(id, stw_flag());

@@ -169,7 +169,7 @@ mod tests {
     use std::sync::Arc as StdArc;
     use std::sync::atomic::AtomicBool;
 
-    const THREAD_A: ArenaId = ArenaId(1);
+    const THREAD_A: ArenaId = ArenaId::new(1);
 
     struct MockSTWGuard;
     impl crate::threading::STWGuardOps for MockSTWGuard {

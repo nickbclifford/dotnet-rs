@@ -52,8 +52,8 @@ impl<'gc> ManagedPtr<'gc> {
                     let off = word0 >> 33;
                     return ManagedPtrStackInfo {
                         address: nonnull_from_exposed_addr(word1),
-                        offset: ByteOffset(off),
-                        origin: PointerOrigin::Stack(StackSlotIndex(idx)),
+                        offset: ByteOffset::new(off),
+                        origin: PointerOrigin::Stack(StackSlotIndex::new(idx)),
                     };
                 }
                 7 if ((word0 >> 3) & 7) == 2 => {
@@ -61,7 +61,7 @@ impl<'gc> ManagedPtr<'gc> {
                     let off = word0 >> 6;
                     return ManagedPtrStackInfo {
                         address: nonnull_from_exposed_addr(word1),
-                        offset: ByteOffset(off),
+                        offset: ByteOffset::new(off),
                         origin: PointerOrigin::Unmanaged, // Can't recover Object without GCHandle
                     };
                 }
@@ -74,7 +74,7 @@ impl<'gc> ManagedPtr<'gc> {
         // for stack info purposes.
         ManagedPtrStackInfo {
             address: nonnull_from_exposed_addr(word1),
-            offset: ByteOffset(word1),
+            offset: ByteOffset::new(word1),
             origin: PointerOrigin::Unmanaged,
         }
     }
@@ -140,8 +140,8 @@ impl<'gc> ManagedPtr<'gc> {
                     let raw_ptr = nonnull_from_exposed_addr(word1);
                     Ok(ManagedPtrInfo {
                         address: raw_ptr,
-                        origin: PointerOrigin::Stack(StackSlotIndex(slot_idx)),
-                        offset: ByteOffset(slot_offset),
+                        origin: PointerOrigin::Stack(StackSlotIndex::new(slot_idx)),
+                        offset: ByteOffset::new(slot_offset),
                     })
                 }
                 5 => {
@@ -200,7 +200,7 @@ impl<'gc> ManagedPtr<'gc> {
                                 nonnull_from_exposed_addr(base_addr + offset_val)
                             },
                             origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
-                            offset: ByteOffset(offset_val),
+                            offset: ByteOffset::new(offset_val),
                         })
                     }
                     #[cfg(not(feature = "multithreading"))]
@@ -226,7 +226,7 @@ impl<'gc> ManagedPtr<'gc> {
                                 Ok(ManagedPtrInfo {
                                     address: raw_ptr,
                                     origin: PointerOrigin::Static(meta.clone()),
-                                    offset: ByteOffset(slot_offset),
+                                    offset: ByteOffset::new(slot_offset),
                                 })
                             } else {
                                 Err(PointerDeserializationError::InvalidStaticId(id))
@@ -256,7 +256,7 @@ impl<'gc> ManagedPtr<'gc> {
             let owner = unsafe { ObjectRef::read_unchecked(&source[0..ptr_size]) };
 
             // Read Offset (Offset 8)
-            let offset = ByteOffset(word1);
+            let offset = ByteOffset::new(word1);
 
             // Compute pointer from owner's data + offset
             let ptr = if let Some(handle) = owner.0 {

@@ -225,7 +225,7 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         // element offset remains within the source span's backing allocation.
         unsafe { base_ptr.add(byte_start) }
     };
-    offset += ByteOffset(byte_start);
+    offset += ByteOffset::new(byte_start);
     let len = actual_length;
 
     let span_type_concrete = match &method.signature().return_type.1 {
@@ -669,7 +669,7 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
                 element_type_desc,
                 Some(array_ref),
                 false,
-                Some(ByteOffset(offset)),
+                Some(ByteOffset::new(offset)),
             );
             ctx.push_managed_ptr(managed);
         } else {

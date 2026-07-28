@@ -101,6 +101,8 @@ impl<'gc> ObjectInner<'gc> {
         #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
         return self.owner_id;
         #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
+        // This build stores and validates no owner ID. Use a stable valid stand-in rather than the
+        // canonical INVALID sentinel, which means that an owner is genuinely absent.
         return ArenaId::new(1);
     }
 

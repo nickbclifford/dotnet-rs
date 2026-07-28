@@ -104,6 +104,10 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
     }
 
     pub fn record_ref(&mut self, target: ObjectRef<'gc>) {
+        if self.arena_id == ArenaId::INVALID {
+            return;
+        }
+
         if let Some(h) = target.0 {
             // SAFETY: `h` is a live GC handle, so extracting its raw pointer preserves a valid
             // reference to the object for this synchronous recorder operation.
@@ -120,6 +124,10 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
     }
 
     pub fn record_managed_ptr(&mut self, target: &ManagedPtr<'gc>) {
+        if self.arena_id == ArenaId::INVALID {
+            return;
+        }
+
         match target.origin() {
             PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
                 self.buffer.push((*ref_tid, p.as_ptr().expose_provenance()));
@@ -159,7 +167,8 @@ impl<'gc> MemoryOwner<'gc> {
                     // neither moves nor mutates its object.
                     unsafe { (*ptr).owner_id() }
                 })
-                .unwrap_or(ArenaId(0))
+                // INVALID sentinel: unowned write; the recorder skips cross-arena tracking.
+                .unwrap_or(ArenaId::INVALID)
             }
             #[cfg(feature = "multithreading")]
             Self::CrossArena(_, tid, _) => *tid,
@@ -187,6 +196,51 @@ impl<'gc> MemoryOwner<'gc> {
             Self::Local(r) => r.as_heap_storage(f),
             #[cfg(feature = "multithreading")]
             Self::CrossArena(p, _, _) => p.as_heap_storage(f),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "multithreading"))]
+mod tests {
+    use super::*;
+    use dotnet_types::TypeDescription;
+    use dotnet_utils::{ByteOffset, gc::ThreadSafeLock};
+    use dotnet_value::{CLRString, object::ObjectInner};
+
+    #[test]
+    fn invalid_recorder_skips_cross_arena_managed_ptrs() {
+        let target_id = ArenaId::new(900_001);
+        let lock = Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(CLRString::from("invalid-recorder-target")),
+            target_id,
+        )));
+        let raw: *mut ThreadSafeLock<ObjectInner<'static>> = Box::into_raw(lock);
+        // SAFETY: `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
+        // managed pointer and recorder have been dropped below.
+        let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("boxed object pointer is non-null");
+        let managed = ManagedPtr::new_cross_arena(
+            None,
+            TypeDescription::NULL,
+            ptr,
+            target_id,
+            ByteOffset::ZERO,
+        );
+        let mut buffer = Vec::new();
+
+        {
+            let mut recorder = WriteBarrierRecorder::new(ArenaId::INVALID, &mut buffer);
+            recorder.record_managed_ptr(&managed);
+        }
+
+        assert!(
+            buffer.is_empty(),
+            "an unowned recorder must skip every cross-arena reference kind"
+        );
+        drop(managed);
+        // SAFETY: `raw` was produced by `Box::into_raw` above, no aliases are used after this
+        // point, and reconstructing the box releases the allocation exactly once.
+        unsafe {
+            drop(Box::from_raw(raw));
         }
     }
 }

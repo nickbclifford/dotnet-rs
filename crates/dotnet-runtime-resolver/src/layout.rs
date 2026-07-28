@@ -147,7 +147,7 @@ impl LayoutFactory {
                     name: name.to_string(),
                 },
                 FieldLayout {
-                    position: ByteOffset(aligned_offset),
+                    position: ByteOffset::new(aligned_offset),
                     layout: layout.clone(),
                 },
             );
@@ -265,7 +265,7 @@ impl LayoutFactory {
                                     name: name.to_string(),
                                 },
                                 FieldLayout {
-                                    position: ByteOffset(actual_offset),
+                                    position: ByteOffset::new(actual_offset),
                                     layout: layout.clone(),
                                 },
                             );

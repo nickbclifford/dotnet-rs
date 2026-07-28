@@ -137,7 +137,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), MemoryAccessError> {
         if let PointerOrigin::Stack(idx) = origin.clone()
-            && offset == ByteOffset(0)
+            && offset == ByteOffset::new(0)
             && matches!(layout, LayoutManager::Scalar(Scalar::ObjectRef))
             && matches!(
                 self.evaluation_stack.get_slot_ref(idx),
@@ -188,7 +188,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
-                let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.0);
+                let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
                 // SAFETY: The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
             }
@@ -315,7 +315,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.write_bytes(
                         self.gc,
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         data,
                     )
                 }
@@ -376,7 +376,11 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
-                    memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_provenance()), dest)
+                    memory.read_bytes(
+                        None,
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
+                        dest,
+                    )
                 }
             }
             PointerOrigin::Static(metadata) => {
@@ -462,7 +466,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         expected,
                         new,
                         size,
@@ -479,7 +483,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         expected,
                         new,
                         size,
@@ -498,7 +502,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         expected,
                         new,
                         size,
@@ -578,7 +582,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -593,7 +597,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -610,7 +614,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -682,7 +686,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -697,7 +701,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -714,7 +718,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -777,7 +781,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.load_atomic(
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         size,
                         ordering,
                     )
@@ -790,7 +794,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.load_atomic(
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         size,
                         ordering,
                     )
@@ -805,7 +809,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.load_atomic(
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         size,
                         ordering,
                     )
@@ -874,7 +878,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -889,7 +893,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        ByteOffset(ptr.as_ptr().expose_provenance()),
+                        ByteOffset::new(ptr.as_ptr().expose_provenance()),
                         value,
                         size,
                         ordering,
@@ -906,7 +910,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        ByteOffset(abs_ptr.expose_provenance()),
+                        ByteOffset::new(abs_ptr.expose_provenance()),
                         value,
                         size,
                         ordering,

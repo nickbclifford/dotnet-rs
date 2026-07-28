@@ -246,7 +246,7 @@ fn ldelema_internal<
             target_type,
             Some(obj),
             readonly,
-            Some(ByteOffset(element_offset)),
+            Some(ByteOffset::new(element_offset)),
         )
         .into(),
     ));

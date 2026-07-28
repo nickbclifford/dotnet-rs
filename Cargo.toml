@@ -73,6 +73,11 @@ serde_json = "1"
 undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"
 
+# Keep release arithmetic checked as a correctness backstop. The dispatch benchmark evidence is
+# recorded in docs/BENCHMARK_WORKFLOW.md under "Release Overflow-Checks Policy".
+[profile.release]
+overflow-checks = true
+
 # Benchmark profile guidance:
 # - Use `bench-thin` for fast benchmark iteration.
 # - Use `bench-fat` for baseline comparison and final validation.

@@ -79,7 +79,7 @@ pub fn intrinsic_monitor_exit<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
 fn find_success_flag_index(success_ptr: &ManagedPtr) -> Option<usize> {
     if let PointerOrigin::Stack(idx) = &success_ptr.origin() {
-        return Some(idx.0);
+        return Some(idx.as_usize());
     }
     None
 }
@@ -151,7 +151,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
 
         if let Some(index) = success_flag_index {
-            ctx.threading_set_stack_slot(StackSlotIndex(index), StackValue::Int32(1));
+            ctx.threading_set_stack_slot(StackSlotIndex::new(index), StackValue::Int32(1));
         } else {
             // SAFETY: `success_ptr` was validated as writable before monitor entry and denotes
             // the native `lockTaken` out parameter, which is one byte wide.
@@ -244,7 +244,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
 
         if let Some(index) = success_flag_index {
             ctx.threading_set_stack_slot(
-                StackSlotIndex(index),
+                StackSlotIndex::new(index),
                 StackValue::Int32(if success { 1 } else { 0 }),
             );
         } else {

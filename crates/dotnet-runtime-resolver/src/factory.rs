@@ -343,7 +343,7 @@ where
                         inner_type,
                         None,
                         false,
-                        Some(ByteOffset(ptr)),
+                        Some(ByteOffset::new(ptr)),
                     ))))
                 }
             },
@@ -541,7 +541,7 @@ where
                         inner_type,
                         None,
                         false,
-                        Some(ByteOffset(ptr)),
+                        Some(ByteOffset::new(ptr)),
                     ))))
                 }
             }
@@ -624,7 +624,7 @@ where
                         (*type_desc).clone(),
                         None,
                         false,
-                        Some(ByteOffset(0)),
+                        Some(ByteOffset::new(0)),
                     );
                     return Ok(CTSValue::Value(TypedRef(m, type_desc)));
                 }

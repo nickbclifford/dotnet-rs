@@ -104,12 +104,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     #[inline]
     pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height == crate::StackSlotIndex(0) {
-                return Err(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::StackUnderflow,
-                ));
-            }
-            frame.stack_height -= 1usize;
+            frame.stack_height =
+                frame
+                    .stack_height
+                    .checked_sub(1usize)
+                    .ok_or(crate::error::VmError::Execution(
+                        crate::error::ExecutionError::StackUnderflow,
+                    ))?;
         }
         Ok(())
     }
@@ -251,7 +252,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     fn clear_evaluation_stack_from(&mut self, start: crate::StackSlotIndex) {
         for i in start.as_usize()..self.evaluation_stack.top_of_stack().as_usize() {
             self.evaluation_stack
-                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+                .set_slot(crate::StackSlotIndex::new(i), StackValue::null());
         }
         self.evaluation_stack.truncate(start);
     }
@@ -280,7 +281,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         let signature = frame.state.info_handle.signature;
         let return_value = if let ReturnType(_, Some(_)) = &signature.return_type {
-            let return_slot_index = frame.base.stack + frame.stack_height - 1usize;
+            let return_slot_index = (frame.base.stack + frame.stack_height)
+                .checked_sub(1)
+                .expect(
+                    "non-void return frame lacks a return-value stack slot: VM invariant violated",
+                );
             Some(self.evaluation_stack.get_slot(return_slot_index))
         } else {
             None

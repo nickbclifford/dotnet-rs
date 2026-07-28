@@ -15,6 +15,19 @@ Recommended quick validation command:
 cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sample-size 10
 ```
 
+### Release Overflow-Checks Policy
+
+The root `[profile.release]` enables `overflow-checks = true` as a correctness backstop; the
+setting also reaches `bench-fat` through Cargo's bench/release profile inheritance. A 30-sample
+`dispatch` measurement compared this policy with Cargo's unchecked release default. The unchecked
+baseline median was **392.09 ms** (95% CI **390.86–393.41 ms**) and the checked median was
+**387.87 ms** (95% CI **386.94–388.84 ms**). Criterion reported
+`[-0.4271% +0.0373% +0.5034%]` with `p = 0.88`, so it detected no performance change in this
+workload. This result supports the checked-release policy; it is a recorded workload-specific
+measurement, not a claim that overflow checks are universally free.
+
+The related newtype arithmetic and underflow policy is documented in `CONTRIBUTING.md`.
+
 ## Metadata-Load Parallelism (`RAYON_NUM_THREADS`)
 
 dotnetdll uses rayon to parallelize per-assembly metadata decoding. On many-core machines the

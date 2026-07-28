@@ -809,7 +809,7 @@ mod tests {
     fn test_coordinator_registration() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
-        let handle = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        let handle = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
 
         handle.allocation_counter().store(100, Ordering::Release);
 
@@ -825,7 +825,7 @@ mod tests {
         assert!(!coordinator.should_collect());
         assert!(!handle.needs_collection().load(Ordering::Acquire));
 
-        coordinator.unregister_arena(dotnet_utils::ArenaId(1));
+        coordinator.unregister_arena(dotnet_utils::ArenaId::new(1));
         assert_eq!(coordinator.total_allocated(), 0);
     }
 
@@ -833,7 +833,7 @@ mod tests {
     fn test_allocation_pressure_trigger() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
-        let handle = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        let handle = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
 
         coordinator.register_arena(handle.clone());
 
@@ -863,7 +863,7 @@ mod tests {
     fn test_arena_gc_pressure_snapshot_reports_per_arena_metrics() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
-        let handle = ArenaHandle::new(dotnet_utils::ArenaId(7));
+        let handle = ArenaHandle::new(dotnet_utils::ArenaId::new(7));
 
         coordinator.register_arena(handle.clone());
 
@@ -874,7 +874,7 @@ mod tests {
         let snapshot = coordinator.arena_gc_pressure_snapshot();
         let (_, metrics) = snapshot
             .into_iter()
-            .find(|(thread_id, _)| *thread_id == dotnet_utils::ArenaId(7))
+            .find(|(thread_id, _)| *thread_id == dotnet_utils::ArenaId::new(7))
             .expect("expected registered arena in snapshot");
 
         assert_eq!(metrics.collection_trigger_count, 1);
@@ -889,8 +889,8 @@ mod tests {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = Arc::new(GCCoordinator::new(stw_flag));
 
-        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
-        let handle2 = ArenaHandle::new(dotnet_utils::ArenaId(2));
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
+        let handle2 = ArenaHandle::new(dotnet_utils::ArenaId::new(2));
 
         coordinator.register_arena(handle1);
         coordinator.register_arena(handle2.clone());
@@ -909,7 +909,7 @@ mod tests {
 
                 if has_cmd {
                     // Command received! Now call command_finished.
-                    coordinator_clone.command_finished(dotnet_utils::ArenaId(2));
+                    coordinator_clone.command_finished(dotnet_utils::ArenaId::new(2));
                 } else {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -920,7 +920,7 @@ mod tests {
         // This used to deadlock because wait_on_other_arenas held the arenas lock
         // while waiting for command_finished, which also needed the arenas lock.
         let session = coordinator.begin_collection().unwrap();
-        session.collect_all_arenas(dotnet_utils::ArenaId(1));
+        session.collect_all_arenas(dotnet_utils::ArenaId::new(1));
         session.finish();
 
         done.store(true, Ordering::Relaxed);
@@ -935,8 +935,8 @@ mod tests {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = Arc::new(GCCoordinator::new(stw_flag));
 
-        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
-        let handle2 = ArenaHandle::new(dotnet_utils::ArenaId(2));
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
+        let handle2 = ArenaHandle::new(dotnet_utils::ArenaId::new(2));
 
         coordinator.register_arena(handle1);
         coordinator.register_arena(handle2.clone());
@@ -955,14 +955,14 @@ mod tests {
             }
 
             // Instead of finishing the command, unregister the arena!
-            coordinator_clone.unregister_arena(dotnet_utils::ArenaId(2));
+            coordinator_clone.unregister_arena(dotnet_utils::ArenaId::new(2));
         });
 
         // Initiator (Thread 1) calls collect_all_arenas.
         // It will send a command to Thread 2 and wait for it.
         // If unregister_arena doesn't notify, this will hang.
         let session = coordinator.begin_collection().unwrap();
-        session.collect_all_arenas(dotnet_utils::ArenaId(1));
+        session.collect_all_arenas(dotnet_utils::ArenaId::new(1));
         session.finish();
 
         t.join().unwrap();
@@ -973,13 +973,13 @@ mod tests {
     fn test_collect_all_arenas_requires_registered_initiator() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
-        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
         coordinator.register_arena(handle1);
 
         let session = coordinator
             .begin_collection()
             .expect("collection should start");
-        session.collect_all_arenas(dotnet_utils::ArenaId(2));
+        session.collect_all_arenas(dotnet_utils::ArenaId::new(2));
     }
 
     #[test]
@@ -987,11 +987,11 @@ mod tests {
     fn test_command_finished_requires_pending_command() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
-        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId::new(1));
         coordinator.register_arena(handle1);
         let _session = coordinator.begin_collection().unwrap();
 
-        coordinator.command_finished(dotnet_utils::ArenaId(1));
+        coordinator.command_finished(dotnet_utils::ArenaId::new(1));
     }
 
     // ------------------------------------------------------------------
@@ -1026,7 +1026,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 barrier.wait();
                 for i in 0..ITERATIONS {
-                    let id = dotnet_utils::ArenaId(BASE_ID + (t * ITERATIONS + i) as u64);
+                    let id = dotnet_utils::ArenaId::new(BASE_ID + (t * ITERATIONS + i) as u64);
                     let handle = ArenaHandle::new(id);
                     coordinator.register_arena(handle.clone());
                     // Simulate some allocation pressure so the coordinator
@@ -1085,7 +1085,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 barrier.wait();
                 for round in 0..ROUNDS {
-                    let id = dotnet_utils::ArenaId(BASE_ID + (t * ROUNDS + round) as u64);
+                    let id = dotnet_utils::ArenaId::new(BASE_ID + (t * ROUNDS + round) as u64);
                     let handle = ArenaHandle::new(id);
 
                     coordinator.register_arena(handle.clone());
@@ -1104,7 +1104,7 @@ mod tests {
         barrier.wait();
         // GC initiator: register a stable arena representing "this thread" so
         // collect_all_arenas can be invoked (it requires an initiating_thread_id).
-        let initiator_id = dotnet_utils::ArenaId(BASE_ID - 1);
+        let initiator_id = dotnet_utils::ArenaId::new(BASE_ID - 1);
         coordinator.register_arena(ArenaHandle::new(initiator_id));
 
         for _ in 0..ROUNDS {
@@ -1268,8 +1268,8 @@ mod tests {
         use std::panic;
 
         // Use arena IDs unlikely to collide with other tests.
-        let initiator_id = dotnet_utils::ArenaId(800_001);
-        let worker_id = dotnet_utils::ArenaId(800_002);
+        let initiator_id = dotnet_utils::ArenaId::new(800_001);
+        let worker_id = dotnet_utils::ArenaId::new(800_002);
 
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = Arc::new(GCCoordinator::new(stw_flag));

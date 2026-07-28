@@ -112,7 +112,7 @@ macro_rules! load_var {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps, VariableOps};
-            let val = ctx.$get_method($crate::$index_type(index as usize));
+            let val = ctx.$get_method($crate::$index_type::new(index as usize));
             ctx.push(val);
             StepResult::Continue
         }
@@ -129,7 +129,7 @@ macro_rules! store_var {
             #[allow(unused_imports)]
             use $crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps, VariableOps};
             let val = vm_pop!(ctx);
-            ctx.$set_method($crate::$index_type(index as usize), val);
+            ctx.$set_method($crate::$index_type::new(index as usize), val);
             StepResult::Continue
         }
     };

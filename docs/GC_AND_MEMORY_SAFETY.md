@@ -341,6 +341,13 @@ are accepted operational risks rather than type-level guarantees.
 - **Invariant relied upon:** Stop-the-world (STW) has stopped every mutator before `trace` runs,
   so the owning arena is stopped and cannot be freed during this read. `ObjectInner::new` writes
   `owner_id` once at construction; the field is immutable thereafter.
+- **Unowned-write sentinel:** The former `ArenaId(0)` fallbacks in
+  `dotnet-runtime-memory/src/write_barrier.rs` (`MemoryOwner::owner_id`) and
+  `dotnet-runtime-memory/src/access.rs` (`RawMemoryAccess::write_value_internal`) now use the
+  canonical `ArenaId::INVALID` sentinel. It denotes a write with no GC-managed owner;
+  `WriteBarrierRecorder` skips object-reference and managed-pointer tracking for an `INVALID`
+  recorder. The sentinel is recorder-local and is never stored in an object's `owner_id`, so the
+  construction and immutability invariant above remains accurate.
 - **Violation detection:** The `// DANGER:` comment at the dereference identifies the dangling
   pointer window. There is no runtime assertion or lock acquisition that detects a violation; if
   tracing ran while the owning arena exited, the read would be a use-after-free.

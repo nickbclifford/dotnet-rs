@@ -20,7 +20,7 @@ fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc>
         TypeDescription::NULL,
         Some(obj),
         false,
-        Some(ByteOffset(0)),
+        Some(ByteOffset::new(0)),
     )
 }
 
@@ -85,16 +85,16 @@ fn test_managed_ptr_serialization_roundtrip() {
         assert_eq!(info.offset.as_usize(), unmanaged_addr);
 
         // 2. Stack
-        let stack_slot = StackSlotIndex(123);
+        let stack_slot = StackSlotIndex::new(123);
         let stack_addr = 0x1000usize;
         let ptr_stack = ManagedPtr::new(
             nonnull_from_exposed_addr(stack_addr),
             TypeDescription::NULL,
             None,
             false,
-            Some(ByteOffset(456)),
+            Some(ByteOffset::new(456)),
         )
-        .with_stack_origin(stack_slot, ByteOffset(0));
+        .with_stack_origin(stack_slot, ByteOffset::new(0));
 
         ptr_stack.write(&mut buf);
         // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
@@ -113,7 +113,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             TypeDescription::NULL,
             Some(obj),
             false,
-            Some(ByteOffset(offset)),
+            Some(ByteOffset::new(offset)),
         );
 
         ptr_heap.write(&mut buf);
@@ -134,7 +134,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             type_desc.clone(),
             generics.clone(),
             false,
-            ByteOffset(static_offset),
+            ByteOffset::new(static_offset),
         );
 
         ptr_static.write(&mut buf);
@@ -169,7 +169,7 @@ fn test_managed_ptr_serialization_roundtrip() {
                 TypeDescription::NULL,
                 ptr,
                 arena_id,
-                ByteOffset(cross_offset),
+                ByteOffset::new(cross_offset),
             );
 
             ptr_cross.write(&mut buf);
@@ -224,7 +224,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
             nonnull_from_exposed_addr(transient_addr),
             TypeDescription::NULL,
             obj.clone(),
-            ByteOffset(123), // Use a non-zero offset
+            ByteOffset::new(123), // Use a non-zero offset
         );
 
         ptr_transient.write(&mut buf);
@@ -259,7 +259,7 @@ fn test_static_registry_deduplication() {
         type_desc.clone(),
         generics.clone(),
         false,
-        ByteOffset(0),
+        ByteOffset::new(0),
     );
 
     let ptr2 = ManagedPtr::new_static(
@@ -268,7 +268,7 @@ fn test_static_registry_deduplication() {
         type_desc,
         generics.clone(),
         false,
-        ByteOffset(0),
+        ByteOffset::new(0),
     );
 
     ptr1.write(&mut buf1);
@@ -290,7 +290,7 @@ fn test_static_registry_deduplication() {
 #[test]
 fn test_read_stack_info_miri() {
     let mut buf = [0u8; ManagedPtr::SIZE];
-    let slot_idx = StackSlotIndex(42);
+    let slot_idx = StackSlotIndex::new(42);
     let offset = 8;
     let addr = 0x12345678usize;
 

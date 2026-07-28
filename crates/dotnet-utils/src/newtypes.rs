@@ -1,16 +1,19 @@
 use gc_arena::Collect;
 use std::{
     fmt::{self, Display, Formatter},
-    ops::{Add, AddAssign, Mul, Sub, SubAssign},
+    ops::{Add, AddAssign, Mul},
 };
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
 
+// Fuzz targets intentionally construct unvalidated newtypes. These derives expand in this module
+// and retain access to private fields, while callers outside it remain restricted to the public
+// API.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct ByteOffset(pub usize);
+pub struct ByteOffset(usize);
 
 impl Display for ByteOffset {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -39,8 +42,8 @@ impl Default for ByteOffset {
 impl ByteOffset {
     pub const ZERO: Self = ByteOffset(0);
 
-    pub fn new(offset: usize) -> Self {
-        ByteOffset(offset)
+    pub const fn new(offset: usize) -> Self {
+        Self(offset)
     }
 
     pub fn checked_add(self, other: impl Into<usize>) -> Option<Self> {
@@ -74,20 +77,6 @@ impl Add<ByteOffset> for ByteOffset {
     }
 }
 
-impl Sub<usize> for ByteOffset {
-    type Output = Self;
-    fn sub(self, rhs: usize) -> Self {
-        ByteOffset(self.0 - rhs)
-    }
-}
-
-impl Sub<ByteOffset> for ByteOffset {
-    type Output = Self;
-    fn sub(self, rhs: ByteOffset) -> Self {
-        ByteOffset(self.0 - rhs.0)
-    }
-}
-
 impl Mul<usize> for ByteOffset {
     type Output = Self;
     fn mul(self, rhs: usize) -> Self {
@@ -107,22 +96,10 @@ impl AddAssign<ByteOffset> for ByteOffset {
     }
 }
 
-impl SubAssign<usize> for ByteOffset {
-    fn sub_assign(&mut self, rhs: usize) {
-        self.0 -= rhs;
-    }
-}
-
-impl SubAssign<ByteOffset> for ByteOffset {
-    fn sub_assign(&mut self, rhs: ByteOffset) {
-        self.0 -= rhs.0;
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct ManagedByteOffset(pub u32);
+pub struct ManagedByteOffset(u32);
 
 impl ManagedByteOffset {
     pub const ZERO: Self = ManagedByteOffset(0);
@@ -159,40 +136,7 @@ impl Default for ManagedByteOffset {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct FieldIndex(pub usize);
-
-impl Display for FieldIndex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<usize> for FieldIndex {
-    fn from(index: usize) -> Self {
-        FieldIndex(index)
-    }
-}
-
-impl From<FieldIndex> for usize {
-    fn from(index: FieldIndex) -> Self {
-        index.0
-    }
-}
-
-impl FieldIndex {
-    pub fn new(index: usize) -> Self {
-        FieldIndex(index)
-    }
-
-    pub fn as_usize(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
-#[collect(require_static)]
-#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct ArenaId(pub u64);
+pub struct ArenaId(u64);
 
 impl Display for ArenaId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -215,8 +159,8 @@ impl From<ArenaId> for u64 {
 impl ArenaId {
     pub const INVALID: Self = ArenaId(u64::MAX);
 
-    pub fn new(id: u64) -> Self {
-        ArenaId(id)
+    pub const fn new(id: u64) -> Self {
+        Self(id)
     }
 
     pub fn as_u64(self) -> u64 {
@@ -227,9 +171,19 @@ impl ArenaId {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct LocalIndex(pub usize);
+pub struct LocalIndex(usize);
+
+impl Display for LocalIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl LocalIndex {
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
     pub fn as_usize(self) -> usize {
         self.0
     }
@@ -255,20 +209,6 @@ impl Add<Self> for LocalIndex {
     }
 }
 
-impl Sub<usize> for LocalIndex {
-    type Output = Self;
-    fn sub(self, rhs: usize) -> Self {
-        LocalIndex(self.0 - rhs)
-    }
-}
-
-impl Sub<Self> for LocalIndex {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self {
-        LocalIndex(self.0 - rhs.0)
-    }
-}
-
 impl AddAssign<usize> for LocalIndex {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
@@ -281,24 +221,22 @@ impl AddAssign<Self> for LocalIndex {
     }
 }
 
-impl SubAssign<usize> for LocalIndex {
-    fn sub_assign(&mut self, rhs: usize) {
-        self.0 -= rhs;
-    }
-}
-
-impl SubAssign<Self> for LocalIndex {
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
 #[collect(require_static)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct ArgumentIndex(pub usize);
+pub struct ArgumentIndex(usize);
+
+impl Display for ArgumentIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl ArgumentIndex {
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
     pub fn as_usize(self) -> usize {
         self.0
     }
@@ -324,20 +262,6 @@ impl Add<Self> for ArgumentIndex {
     }
 }
 
-impl Sub<usize> for ArgumentIndex {
-    type Output = Self;
-    fn sub(self, rhs: usize) -> Self {
-        ArgumentIndex(self.0 - rhs)
-    }
-}
-
-impl Sub<Self> for ArgumentIndex {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self {
-        ArgumentIndex(self.0 - rhs.0)
-    }
-}
-
 impl AddAssign<usize> for ArgumentIndex {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
@@ -350,29 +274,10 @@ impl AddAssign<Self> for ArgumentIndex {
     }
 }
 
-impl SubAssign<usize> for ArgumentIndex {
-    fn sub_assign(&mut self, rhs: usize) {
-        self.0 -= rhs;
-    }
-}
-
-impl SubAssign<Self> for ArgumentIndex {
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-    }
-}
-
-impl Display for LocalIndex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Display for ArgumentIndex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
+#[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub struct StackSlotIndex(usize);
 
 impl Display for StackSlotIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -380,12 +285,11 @@ impl Display for StackSlotIndex {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Collect)]
-#[collect(require_static)]
-#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
-pub struct StackSlotIndex(pub usize);
-
 impl StackSlotIndex {
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
     pub fn as_usize(self) -> usize {
         self.0
     }
@@ -437,28 +341,8 @@ impl Add<StackSlotIndex> for StackSlotIndex {
     }
 }
 
-impl Sub<usize> for StackSlotIndex {
-    type Output = Self;
-    fn sub(self, rhs: usize) -> Self {
-        StackSlotIndex(self.0 - rhs)
-    }
-}
-
-impl Sub<StackSlotIndex> for StackSlotIndex {
-    type Output = Self;
-    fn sub(self, rhs: StackSlotIndex) -> Self {
-        StackSlotIndex(self.0 - rhs.0)
-    }
-}
-
 impl AddAssign<usize> for StackSlotIndex {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
-    }
-}
-
-impl SubAssign<usize> for StackSlotIndex {
-    fn sub_assign(&mut self, rhs: usize) {
-        self.0 -= rhs;
     }
 }

@@ -265,12 +265,12 @@ impl<'gc> ManagedPtr<'gc> {
     fn unpack_offset(&self) -> ByteOffset {
         if matches!(self.origin, PointerOrigin::Unmanaged) {
             if self.has_unmanaged_inline_offset() {
-                ByteOffset(self.offset.as_usize())
+                ByteOffset::new(self.offset.as_usize())
             } else {
-                ByteOffset(self._value.map_or(0, |p| p.as_ptr().expose_provenance()))
+                ByteOffset::new(self._value.map_or(0, |p| p.as_ptr().expose_provenance()))
             }
         } else {
-            ByteOffset(self.offset.as_usize())
+            ByteOffset::new(self.offset.as_usize())
         }
     }
 
@@ -366,9 +366,9 @@ impl<'gc> ManagedPtr<'gc> {
         };
         let offset = offset.unwrap_or_else(|| {
             if let PointerOrigin::Unmanaged = origin {
-                ByteOffset(value.map_or(0, |p| p.as_ptr() as usize))
+                ByteOffset::new(value.map_or(0, |p| p.as_ptr() as usize))
             } else {
-                ByteOffset(0)
+                ByteOffset::new(0)
             }
         });
         let packed_offset = Self::pack_offset(&origin, value, offset);
@@ -568,7 +568,7 @@ impl<'gc> ManagedPtr<'gc> {
             );
         }
 
-        let new_offset = ByteOffset(new_offset_isize as usize);
+        let new_offset = ByteOffset::new(new_offset_isize as usize);
         let packed_offset = Self::pack_offset(&m.origin, m._value, new_offset);
         m.flags = Self::with_unmanaged_inline_offset_flag(
             m.flags,
