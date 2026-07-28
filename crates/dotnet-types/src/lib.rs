@@ -42,9 +42,13 @@ pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
     // SAFETY: `dotnetdll`'s `basic_index!` macro currently defines `TypeIndex` as
     // `pub struct TypeIndex(pub(crate) usize)`. Its sole field accepts every `usize`
     // bit pattern, so `index` is valid for `TypeIndex`; the const assertion above
-    // confirms that the two types currently have equal sizes. `TypeIndex` lacks a
-    // transparent representation or public constructor. The owner-confirmed upstream
-    // follow-up is `pub const fn TypeIndex::new(usize) -> TypeIndex`.
+    // confirms that the two types currently have equal sizes. `TypeIndex` intentionally
+    // lacks a public constructor: dotnetdll's checked constructors (e.g.
+    // `Resolution::type_definition_index`) bounds-check against a live `Resolution`,
+    // which by design has no counterpart here — this helper only ever produces the
+    // compile-time null sentinel below, where no `Resolution` exists to check against
+    // and the resulting index is never used to index one (see `TypeDescription::is_null`).
+    // This transmute is the permanent approach for that sentinel, not a stopgap.
     unsafe { std::mem::transmute::<usize, TypeIndex>(index) }
 }
 
