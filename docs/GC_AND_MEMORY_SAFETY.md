@@ -105,8 +105,12 @@ sequenceDiagram
 
 ## Canonical GC/Threading Lock Order
 
-This GC document uses the same canonical lock contract as
-[Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md). The GC-critical chain is:
+This GC-focused table mirrors the authoritative `define_lock_order_dag!` invocation in
+[`crates/dotnet-utils/src/sync/lock_order.rs`](../crates/dotnet-utils/src/sync/lock_order.rs)
+and the broader contract in
+[Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md). It presents one valid
+topological listing of the GC-critical levels; adjacent rows from different branches are not
+necessarily `AcquireAfter` edges.
 
 | Order | Lock | Primary path |
 |------|------|--------------|
@@ -122,6 +126,10 @@ Forbidden inversions (must never be introduced):
 - Never hold `ThreadManager::threads` while trying to acquire `ThreadManager::gc_coordination`.
 - Never hold `ArenaHandle::current_command` while entering code that acquires `GCCoordinator::arenas`.
 - Never acquire `GCCoordinator::collection_lock` from a path already holding `GCCoordinator::arenas` or `ArenaHandle::current_command`.
+
+These trait-level inversions are guarded by negative compile-time `AcquireAfter` assertions next
+to the authoritative DAG. Operational sequencing and lifetime rules that cannot be represented
+as trait edges are documented in the broader threading contract.
 
 ## Cross-Arena Reference Tracking
 

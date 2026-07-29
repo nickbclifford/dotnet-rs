@@ -217,8 +217,18 @@ Monitor locks are keyed by a lazily allocated sync block index stored in the obj
 
 ## Canonical Lock Order (Multithreading)
 
-The lock order below is the canonical runtime contract for `feature = "multithreading"`.
-Acquire locks only in the listed direction. Any reverse acquisition is a lock-order bug.
+The authoritative typed lock DAG is the `define_lock_order_dag!` invocation in
+[`crates/dotnet-utils/src/sync/lock_order.rs`](../crates/dotnet-utils/src/sync/lock_order.rs).
+The table below is its human-readable view of the observed runtime chains for
+`feature = "multithreading"`; the source `roots` and `edges` declarations determine which
+`AcquireAfter` implementations exist. Acquire locks only in the listed direction. Any reverse
+acquisition is a lock-order bug.
+
+`Unlocked` is a sentinel, not an acquirable lock. Of the concrete lock levels, only
+`SyncBlockManager::next_index` is omitted from `roots`: its unqualified `.lock()` does not
+compile and it must be acquired with `.lock_after()` while `SyncBlockManager::blocks` is held.
+The other levels remain root-acquirable for legitimate top-level paths, so callers must not use
+an unqualified acquisition merely because another guard happens to be in scope.
 
 | Chain | Ordered locks | Observed call path(s) |
 |-------|---------------|-----------------------|
@@ -241,6 +251,13 @@ Acquire locks only in the listed direction. Any reverse acquisition is a lock-or
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
 - Callers of `SyncBlockManager::get_or_create_sync_block` must publish the returned sync-block index only after the call returns (after `blocks` is released).
 - `SyncBlock::state` must be dropped before any safe-point check (`is_gc_stop_requested` / `check_gc_safe_point`) to avoid blocking STW progress while waiting on monitor ownership.
+
+The trait-level inversion rules above are guarded by negative compile-time `AcquireAfter`
+assertions beside the DAG, including a separate assertion that
+`SyncBlockManager::next_index` is not root-acquirable. The `WaitGraphEdgeGuard` cleanup,
+sync-block-index publication, and `SyncBlock::state` safe-point rules are sequencing/lifetime
+invariants that are not expressible as trait edges; they remain enforced by the implementation
+structure and code review.
 
 ## Subsystem Details
 

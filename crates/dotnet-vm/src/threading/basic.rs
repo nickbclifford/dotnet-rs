@@ -197,7 +197,10 @@ pub struct ThreadManager {
     gc_coordination: OrderedMutex<levels::GcCoordination, ()>,
     /// Flag indicating if a stop-the-world pause is in progress
     stw_in_progress: Arc<AtomicBool>,
-    /// Reference to the GC coordinator for resume signaling
+    /// Weak GC-coordinator back-reference used for resume signaling.
+    ///
+    /// This infrastructure mutex is exempt from the ordered-lock DAG: it is
+    /// acquired only at the root and released before any domain lock.
     coordinator: Mutex<Option<Weak<GCCoordinator>>>,
     #[cfg(feature = "deadlock-diagnostics")]
     _deadlock_reporter: DeadlockReporter,

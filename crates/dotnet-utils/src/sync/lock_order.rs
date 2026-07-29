@@ -2,12 +2,14 @@
 //!
 //! These wrappers are additive over `dotnet_utils::sync::{Mutex, RwLock}` and are
 //! intended for runtime-owned locks where we want explicit lock-level metadata.
+//! The `define_lock_order_dag!` invocation below is authoritative for levels,
+//! root acquisitions, and permitted nested-acquisition edges.
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-/// Marker trait for a lock level in the canonical runtime lock-order table.
+/// Marker trait for a level in the authoritative runtime lock-order DAG.
 pub trait LockLevel {
     const NAME: &'static str;
 }
@@ -21,6 +23,9 @@ macro_rules! define_lock_order_dag {
             $(
                 $level:ident => $label:literal
             ),+ $(,)?
+        }
+        roots {
+            $($root:ident),* $(,)?
         }
         edges {
             $(
@@ -42,8 +47,10 @@ macro_rules! define_lock_order_dag {
             )+
         }
 
-        // Any lock level may be acquired from the unlocked/root state.
-        impl<L: LockLevel> AcquireAfter<levels::Unlocked> for L {}
+        // Keep root acquisition explicit: omission from `roots` is an enforced constraint.
+        $(
+            impl AcquireAfter<levels::Unlocked> for levels::$root {}
+        )*
 
         $(
             impl AcquireAfter<levels::$prev> for levels::$next {}
@@ -66,6 +73,21 @@ define_lock_order_dag! {
         SyncNextIndex => "SyncBlockManager::next_index",
         SyncState => "SyncBlock::state"
     }
+    // Only these levels implement `AcquireAfter<Unlocked>`, enabling the unqualified
+    // `lock`/`read`/`write` entry points. `Unlocked` is a sentinel; `SyncNextIndex` is
+    // deliberately omitted and must be acquired after `SyncBlocks`.
+    roots {
+        CollectionLock,
+        GcCoordination,
+        ThreadRegistry,
+        CoordinatorArenas,
+        ArenaCurrentCommand,
+        CrossArenaRefs,
+        StaticInitMutex,
+        StaticWaitGraph,
+        SyncBlocks,
+        SyncState,
+    }
     edges {
         GcCoordination after CollectionLock,
         ThreadRegistry after GcCoordination,
@@ -79,12 +101,12 @@ define_lock_order_dag! {
         // - SyncBlock::state is acquired only inside `sync/threaded.rs` SyncBlock methods.
         // - SyncBlockManager acquires `SyncBlocks`/`SyncNextIndex` only while allocating/looking up
         //   Arc<SyncBlock>, and those guards are dropped before any SyncBlock method can run.
-        // Therefore `SyncBlock::state` is root-acquired (`AcquireAfter<Unlocked>`) today.
+        // Therefore `SyncState` is explicitly root-acquirable and intentionally has no in-edge.
     }
 }
 
 /// Token proving a given lock level is currently held.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct HeldLockLevel<L: LockLevel> {
     _marker: PhantomData<fn() -> L>,
 }
@@ -386,7 +408,20 @@ impl<L: LockLevel, T> DerefMut for OrderedRwLockWriteGuard<'_, L, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OrderedMutex, OrderedRwLock, levels};
+    use super::{AcquireAfter, LockLevel, OrderedMutex, OrderedRwLock, levels};
+    use static_assertions::assert_not_impl_all;
+
+    // Guard the trait-level forbidden inversions documented in
+    // `docs/THREADING_AND_SYNCHRONIZATION.md`.
+    assert_not_impl_all!(levels::CollectionLock: AcquireAfter<levels::GcCoordination>);
+    assert_not_impl_all!(levels::GcCoordination: AcquireAfter<levels::ThreadRegistry>);
+    assert_not_impl_all!(levels::CollectionLock: AcquireAfter<levels::CoordinatorArenas>);
+    assert_not_impl_all!(levels::CollectionLock: AcquireAfter<levels::ArenaCurrentCommand>);
+    assert_not_impl_all!(levels::CoordinatorArenas: AcquireAfter<levels::ArenaCurrentCommand>);
+    assert_not_impl_all!(levels::StaticInitMutex: AcquireAfter<levels::StaticWaitGraph>);
+    assert_not_impl_all!(levels::SyncBlocks: AcquireAfter<levels::SyncNextIndex>);
+    // `SyncNextIndex` is the sole concrete lock level intentionally excluded from `roots`.
+    assert_not_impl_all!(levels::SyncNextIndex: AcquireAfter<levels::Unlocked>);
 
     fn assert_can_acquire_after<L, P>()
     where
@@ -397,9 +432,44 @@ mod tests {
     }
 
     #[test]
+    fn level_names_match_canonical_lock_order_table() {
+        assert_eq!(
+            [
+                levels::Unlocked::NAME,
+                levels::CollectionLock::NAME,
+                levels::GcCoordination::NAME,
+                levels::ThreadRegistry::NAME,
+                levels::CoordinatorArenas::NAME,
+                levels::ArenaCurrentCommand::NAME,
+                levels::CrossArenaRefs::NAME,
+                levels::StaticInitMutex::NAME,
+                levels::StaticWaitGraph::NAME,
+                levels::SyncBlocks::NAME,
+                levels::SyncNextIndex::NAME,
+                levels::SyncState::NAME,
+            ],
+            [
+                "Unlocked",
+                "GCCoordinator::collection_lock",
+                "ThreadManager::gc_coordination",
+                "ThreadManager::threads",
+                "GCCoordinator::arenas",
+                "ArenaHandle::current_command",
+                "GCCoordinator::cross_arena_refs",
+                "StaticStorage::init_mutex",
+                "StaticStorageManager::wait_graph",
+                "SyncBlockManager::blocks",
+                "SyncBlockManager::next_index",
+                "SyncBlock::state",
+            ],
+        );
+    }
+
+    #[test]
     fn lock_level_edges_cover_runtime_chains() {
         assert_can_acquire_after::<levels::GcCoordination, levels::CollectionLock>();
         assert_can_acquire_after::<levels::ThreadRegistry, levels::GcCoordination>();
+        assert_can_acquire_after::<levels::ThreadRegistry, levels::CollectionLock>();
         assert_can_acquire_after::<levels::CoordinatorArenas, levels::CollectionLock>();
         assert_can_acquire_after::<levels::ArenaCurrentCommand, levels::CoordinatorArenas>();
         assert_can_acquire_after::<levels::CrossArenaRefs, levels::CollectionLock>();
