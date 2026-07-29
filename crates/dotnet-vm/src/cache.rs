@@ -2,7 +2,10 @@ use dashmap::DashMap;
 use dotnet_metrics::{CacheEvent, CacheKind, CacheSize, RuntimeMetrics};
 use dotnet_utils::sync::RwLock;
 use lru::LruCache;
-use std::{collections::HashMap, hash::Hash, mem::size_of, num::NonZeroUsize, sync::Arc};
+use std::{
+    cell::RefCell, collections::HashMap, hash::Hash, mem::size_of, num::NonZeroUsize, sync::Arc,
+    thread::LocalKey,
+};
 
 pub(crate) const DEFAULT_CAPACITY: usize = 128;
 
@@ -106,6 +109,11 @@ where
 
     /// Looks up an owned value and records the logical cache result.
     ///
+    /// Misses intentionally do not coordinate a build: callers build outside cache guards, so
+    /// concurrent misses may duplicate work and race to fill the cache. A later insert can replace
+    /// an earlier equivalent result. Holding a `DashMap::entry` or the single-threaded `RefCell`
+    /// borrow across a build would instead risk re-entrant deadlocks or borrow panics.
+    ///
     /// The store returns a clone, so a `DashMap` shard guard or `RwLock` guard
     /// cannot escape this method.
     #[inline]
@@ -164,9 +172,80 @@ where
             self.kind,
             CacheSize {
                 entries,
-                bytes: (entries as u64).saturating_mul((size_of::<K>() + size_of::<V>()) as u64),
+                pointer_bytes: (entries as u64)
+                    .saturating_mul((size_of::<K>() + size_of::<V>()) as u64),
             },
         )
+    }
+}
+
+impl<K, V, S> Cache<K, V, S>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+    S: CacheStore<K, V> + Default,
+{
+    /// Looks up a value through an optional per-thread front cache and promotes L2 hits.
+    ///
+    /// When the front cache is disabled, this delegates directly to the L2 lookup without
+    /// touching TLS.
+    ///
+    /// The TLS borrow is contained within each `with` closure so it cannot overlap the L2 lookup
+    /// or a later front-cache promotion in the single-threaded configuration.
+    #[inline]
+    pub(crate) fn try_get_with_front(
+        &self,
+        key: &K,
+        tls: &'static LocalKey<RefCell<FrontCache<K, V>>>,
+    ) -> Option<V> {
+        if !self.front_cache_enabled() {
+            return self.get(key);
+        }
+
+        let front_cached = tls.with(|cache| cache.borrow_mut().get(key));
+        if let Some(front_cached) = front_cached {
+            self.record_front_cache(CacheEvent::Hit);
+            self.record_hit();
+            return Some(front_cached);
+        }
+        self.record_front_cache(CacheEvent::Miss);
+
+        let cached = self.get(key)?;
+        let capacity = self
+            .front_cache_capacity()
+            .expect("enabled front cache must have a configured capacity");
+        tls.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert(key.clone(), cached.clone(), capacity);
+        });
+        Some(cached)
+    }
+
+    /// Inserts into L2 and, when enabled, the per-thread front cache.
+    ///
+    /// When the front cache is disabled, the key and value move directly into L2 without being
+    /// cloned.
+    ///
+    /// The TLS borrow is contained within the `with` closure so it cannot overlap the L2 insert
+    /// in the single-threaded configuration.
+    #[inline]
+    pub(crate) fn insert_with_front(
+        &self,
+        key: K,
+        value: V,
+        tls: &'static LocalKey<RefCell<FrontCache<K, V>>>,
+    ) {
+        if !self.front_cache_enabled() {
+            self.insert(key, value);
+            return;
+        }
+
+        let capacity = self
+            .front_cache_capacity()
+            .expect("enabled front cache must have a configured capacity");
+        self.insert(key.clone(), value.clone());
+        tls.with(|cache| cache.borrow_mut().insert(key, value, capacity));
     }
 }
 
@@ -178,7 +257,10 @@ where
     /// Inserts a value, updating an existing key before considering eviction.
     ///
     /// Bounded caches evict arbitrary store-order victims until they are below
-    /// their limit. The victim selection is neither random nor LRU.
+    /// their limit. The victim selection is neither random nor LRU. Bounded
+    /// capacity is an operator-only escape hatch: the finite metadata universe
+    /// makes unbounded caches the correct default, so this eviction loop is not
+    /// reached in default runs.
     #[inline]
     pub(crate) fn insert(&self, key: K, value: V) {
         let Some(max_entries) = self.capacity else {
@@ -186,6 +268,9 @@ where
             return;
         };
 
+        // This lookup distinguishes an update, which needs no eviction, from a new key. Using
+        // `DashMap::entry` instead would hold its shard write guard across `evict_arbitrary`,
+        // which can deadlock when it visits the same shard.
         if self.store.contains_key(&key) {
             self.store.insert(key, value);
             return;
@@ -385,7 +470,23 @@ mod tests {
         ShardedStore,
     };
     use dotnet_metrics::{CacheEvent, CacheKind, RuntimeMetrics};
-    use std::{mem::size_of, sync::Arc};
+    use std::{cell::RefCell, mem::size_of, sync::Arc};
+
+    #[derive(Eq, Hash, PartialEq)]
+    struct CloneForbidden(u8);
+
+    impl Clone for CloneForbidden {
+        fn clone(&self) -> Self {
+            panic!("disabled front-cache insertion must not clone its key or value")
+        }
+    }
+
+    thread_local! {
+        static TEST_FRONT_CACHE: RefCell<FrontCache<u8, &'static str>> =
+            RefCell::new(FrontCache::default());
+        static CLONE_FORBIDDEN_FRONT_CACHE: RefCell<FrontCache<CloneForbidden, CloneForbidden>> =
+            RefCell::new(FrontCache::default());
+    }
 
     fn sharded_cache(
         capacity: Option<usize>,
@@ -463,7 +564,7 @@ mod tests {
         assert_eq!(kind, CacheKind::Layout);
         assert_eq!(size.entries, 2);
         assert_eq!(
-            size.bytes,
+            size.pointer_bytes,
             2 * (size_of::<u8>() + size_of::<&'static str>()) as u64
         );
     }
@@ -496,6 +597,93 @@ mod tests {
         assert_eq!(locked.front_cache_capacity(), None);
         locked.insert(1, "one");
         assert_eq!(locked.get(&1), Some("one"));
+    }
+
+    #[test]
+    fn try_get_with_front_hits_l1_promotes_l2_hits_and_records_l2_misses() {
+        let (cache, metrics) = sharded_cache(None, Some(FrontCachePolicy::new(true, 2)));
+        TEST_FRONT_CACHE.with(|front_cache| *front_cache.borrow_mut() = FrontCache::default());
+
+        cache.insert(1, "l2 value");
+        TEST_FRONT_CACHE.with(|front_cache| {
+            front_cache.borrow_mut().insert(1, "l1 value", 2);
+        });
+        assert_eq!(
+            cache.try_get_with_front(&1, &TEST_FRONT_CACHE),
+            Some("l1 value")
+        );
+        assert_eq!(metrics.cache_event_counts(CacheKind::Layout), (1, 0));
+
+        cache.insert(2, "l2 value");
+        assert_eq!(
+            cache.try_get_with_front(&2, &TEST_FRONT_CACHE),
+            Some("l2 value")
+        );
+        TEST_FRONT_CACHE.with(|front_cache| {
+            assert_eq!(front_cache.borrow_mut().get(&2), Some("l2 value"));
+        });
+        assert_eq!(metrics.cache_event_counts(CacheKind::Layout), (2, 0));
+
+        assert_eq!(cache.try_get_with_front(&3, &TEST_FRONT_CACHE), None);
+        assert_eq!(metrics.cache_event_counts(CacheKind::Layout), (2, 1));
+    }
+
+    #[test]
+    fn try_get_with_front_bypasses_a_disabled_front_cache() {
+        let (cache, metrics) = sharded_cache(None, Some(FrontCachePolicy::new(false, 2)));
+        TEST_FRONT_CACHE.with(|front_cache| {
+            *front_cache.borrow_mut() = FrontCache::default();
+            front_cache.borrow_mut().insert(1, "l1 value", 2);
+        });
+        cache.insert(1, "l2 value");
+
+        assert_eq!(
+            cache.try_get_with_front(&1, &TEST_FRONT_CACHE),
+            Some("l2 value")
+        );
+        assert_eq!(cache.try_get_with_front(&2, &TEST_FRONT_CACHE), None);
+        assert_eq!(metrics.cache_event_counts(CacheKind::Layout), (1, 1));
+        TEST_FRONT_CACHE.with(|front_cache| {
+            assert_eq!(front_cache.borrow_mut().get(&1), Some("l1 value"));
+        });
+    }
+
+    #[test]
+    fn insert_with_front_updates_l2_and_only_enabled_front_caches() {
+        TEST_FRONT_CACHE.with(|front_cache| *front_cache.borrow_mut() = FrontCache::default());
+
+        let (enabled_cache, _) = sharded_cache(None, Some(FrontCachePolicy::new(true, 2)));
+        enabled_cache.insert_with_front(1, "enabled", &TEST_FRONT_CACHE);
+        assert_eq!(enabled_cache.get(&1), Some("enabled"));
+        TEST_FRONT_CACHE.with(|front_cache| {
+            assert_eq!(front_cache.borrow_mut().get(&1), Some("enabled"));
+        });
+
+        TEST_FRONT_CACHE.with(|front_cache| *front_cache.borrow_mut() = FrontCache::default());
+        let (disabled_cache, _) = sharded_cache(None, Some(FrontCachePolicy::new(false, 2)));
+        disabled_cache.insert_with_front(2, "disabled", &TEST_FRONT_CACHE);
+        assert_eq!(disabled_cache.get(&2), Some("disabled"));
+        TEST_FRONT_CACHE.with(|front_cache| {
+            assert_eq!(front_cache.borrow_mut().get(&2), None);
+        });
+    }
+
+    #[test]
+    fn insert_with_front_does_not_clone_when_the_front_cache_is_disabled() {
+        let metrics = Arc::new(RuntimeMetrics::new());
+        let cache = ShardedCache::new(
+            CacheKind::Layout,
+            metrics,
+            None,
+            Some(FrontCachePolicy::new(false, 2)),
+        );
+
+        cache.insert_with_front(
+            CloneForbidden(1),
+            CloneForbidden(2),
+            &CLONE_FORBIDDEN_FRONT_CACHE,
+        );
+        assert_eq!(cache.size_report().1.entries, 1);
     }
 
     #[test]

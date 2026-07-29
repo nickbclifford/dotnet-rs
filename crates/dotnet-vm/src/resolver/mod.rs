@@ -6,7 +6,6 @@ use crate::{
     sync::Arc,
 };
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_metrics::CacheEvent;
 use dotnet_runtime_resolver::{
     IntrinsicCacheAdapter, ResolverLayoutAdapter, TypePropertyCacheAdapter, VmtCacheAdapter,
 };
@@ -108,6 +107,10 @@ impl IntrinsicCacheAdapter for VmResolverCaches {
     }
 }
 
+// VMT and hierarchy caching intentionally retain split get/set adapter methods. Their builds run
+// in the `dotnet-runtime-resolver` consumer crate (for example, `resolve_virtual_method`), so a
+// closure-based entry point here would invert that boundary and carry resolver error types into
+// the adapter. Consolidation is therefore limited to their L1/L2 cache boilerplate.
 impl VmtCacheAdapter for VmResolverCaches {
     fn get_vmt_cached(
         &self,
@@ -115,37 +118,11 @@ impl VmtCacheAdapter for VmResolverCaches {
         this_type: &TypeDescription,
         generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        if self.caches.vmt_cache.front_cache_enabled() {
-            let front_key = (base_method.clone(), this_type.clone(), generics.clone());
-            if let Some(front_cached) =
-                VMT_FRONT_CACHE.with(|cache| cache.borrow_mut().get(&front_key))
-            {
-                self.caches.vmt_cache.record_front_cache(CacheEvent::Hit);
-                self.caches.vmt_cache.record_hit();
-                return Some(front_cached);
-            }
-            self.caches.vmt_cache.record_front_cache(CacheEvent::Miss);
-        }
-
         self.caches.vmt_cache.record_key_clones(3);
         let key = (base_method.clone(), this_type.clone(), generics.clone());
-        if let Some(cached) = self.caches.vmt_cache.get(&key) {
-            if self.caches.vmt_cache.front_cache_enabled() {
-                VMT_FRONT_CACHE.with(|cache| {
-                    cache.borrow_mut().insert(
-                        key,
-                        cached.clone(),
-                        self.caches
-                            .vmt_cache
-                            .front_cache_capacity()
-                            .expect("vmt front cache must have a configured capacity"),
-                    );
-                });
-            }
-            Some(cached)
-        } else {
-            None
-        }
+        self.caches
+            .vmt_cache
+            .try_get_with_front(&key, &VMT_FRONT_CACHE)
     }
 
     fn set_vmt_cached(
@@ -155,22 +132,11 @@ impl VmtCacheAdapter for VmResolverCaches {
         generics: GenericLookup,
         method: MethodDescription,
     ) {
-        if self.caches.vmt_cache.front_cache_enabled() {
-            VMT_FRONT_CACHE.with(|cache| {
-                cache.borrow_mut().insert(
-                    (base_method.clone(), this_type.clone(), generics.clone()),
-                    method.clone(),
-                    self.caches
-                        .vmt_cache
-                        .front_cache_capacity()
-                        .expect("vmt front cache must have a configured capacity"),
-                );
-            });
-        }
-
-        self.caches
-            .vmt_cache
-            .insert((base_method, this_type, generics), method);
+        self.caches.vmt_cache.insert_with_front(
+            (base_method, this_type, generics),
+            method,
+            &VMT_FRONT_CACHE,
+        );
     }
 
     fn record_vmt_key_clones(&self, count: u64) {
@@ -195,60 +161,19 @@ impl VmtCacheAdapter for VmResolverCaches {
 
 impl TypePropertyCacheAdapter for VmResolverCaches {
     fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool> {
-        if self.caches.hierarchy_cache.front_cache_enabled() {
-            let key = (child.clone(), parent.clone());
-            if let Some(front_cached) =
-                HIERARCHY_FRONT_CACHE.with(|cache| cache.borrow_mut().get(&key))
-            {
-                self.caches
-                    .hierarchy_cache
-                    .record_front_cache(CacheEvent::Hit);
-                self.caches.hierarchy_cache.record_hit();
-                return Some(front_cached);
-            }
-            self.caches
-                .hierarchy_cache
-                .record_front_cache(CacheEvent::Miss);
-        }
-
         self.caches.hierarchy_cache.record_key_clones(2);
         let key = (child.clone(), parent.clone());
-        if let Some(cached_value) = self.caches.hierarchy_cache.get(&key) {
-            if self.caches.hierarchy_cache.front_cache_enabled() {
-                HIERARCHY_FRONT_CACHE.with(|cache| {
-                    cache.borrow_mut().insert(
-                        key,
-                        cached_value,
-                        self.caches
-                            .hierarchy_cache
-                            .front_cache_capacity()
-                            .expect("hierarchy front cache must have a configured capacity"),
-                    );
-                });
-            }
-            Some(cached_value)
-        } else {
-            None
-        }
+        self.caches
+            .hierarchy_cache
+            .try_get_with_front(&key, &HIERARCHY_FRONT_CACHE)
     }
 
     fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool) {
-        if self.caches.hierarchy_cache.front_cache_enabled() {
-            HIERARCHY_FRONT_CACHE.with(|cache| {
-                cache.borrow_mut().insert(
-                    (child.clone(), parent.clone()),
-                    is_match,
-                    self.caches
-                        .hierarchy_cache
-                        .front_cache_capacity()
-                        .expect("hierarchy front cache must have a configured capacity"),
-                );
-            });
-        }
-
-        self.caches
-            .hierarchy_cache
-            .insert((child, parent), is_match);
+        self.caches.hierarchy_cache.insert_with_front(
+            (child, parent),
+            is_match,
+            &HIERARCHY_FRONT_CACHE,
+        );
     }
 
     fn record_hierarchy_key_clones(&self, count: u64) {

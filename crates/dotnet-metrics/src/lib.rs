@@ -88,7 +88,9 @@ impl std::fmt::Display for CacheStat {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CacheSize {
     pub entries: usize,
-    pub bytes: u64,
+    /// Estimated inline size of stored key/value pairs; excludes backing-store overhead and
+    /// heap-allocated content behind `Arc` or `Box`.
+    pub pointer_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -855,7 +857,7 @@ impl RuntimeMetrics {
             .map(|kind| {
                 (
                     kind.as_key().to_string(),
-                    cache_sizes.caches[kind.as_index()].bytes,
+                    cache_sizes.caches[kind.as_index()].pointer_bytes,
                 )
             })
             .collect::<BTreeMap<_, _>>();

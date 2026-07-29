@@ -111,13 +111,19 @@ a typed TLS companion. The current eleven-entry registry order matches
 `CacheKind::GLOBAL` and the fixed legacy `CacheStats` display order. This keeps
 declaration, construction, reporting, and front-cache configuration synchronized.
 `Cache::size_report()` returns its `CacheKind` with an estimated `CacheSize`;
-`SharedGlobalState` iterates those
-reports into the `CacheSizes` array using `CacheKind::as_index()`. The metric
-crate's cache-kind declaration generates stable keys, indexes, global membership,
-and front-tier membership, while `RuntimeMetrics` stores hit/miss and optional
-benchmark counters in `CacheKind`-indexed arrays. The cache primitive owns logical
-hit/miss, key-clone, and front-tier instrumentation through its shared metrics
-`Arc`, rather than making callers own metrics bookkeeping.
+its `pointer_bytes` value is the entry count multiplied by the inline
+`size_of::<K>() + size_of::<V>()` payload. It excludes backing-store overhead and
+heap-allocated content behind `Arc` or `Box`. The shared reflection registry's
+three reports use the same inline key/value formula. `SharedGlobalState` collects
+these reports into the `CacheSizes` array using `CacheKind::as_index()`. For
+serialized benchmark compatibility, `BenchInstrumentationSnapshot` retains the
+historical `cache_memory_bytes_total` and `cache_memory_bytes_by_cache` field
+names; their values are this pointer-footprint estimate, not deep cache memory.
+The metric crate's cache-kind declaration generates stable keys, indexes, global
+membership, and front-tier membership, while `RuntimeMetrics` stores hit/miss and
+optional benchmark counters in `CacheKind`-indexed arrays. The cache primitive
+owns logical hit/miss, key-clone, and front-tier instrumentation through its shared
+metrics `Arc`, rather than making callers own metrics bookkeeping.
 
 The five cache environment-variable contracts are read once when `GlobalCaches` is
 constructed. `DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, and
@@ -130,12 +136,17 @@ invalid, or zero value uses the default capacity of 128. The three capacity limi
 front enable switch, and front capacity therefore retain their behavior without a
 `CachePolicy` aggregate.
 
-**Eviction**: Caches are unbounded by default and otherwise remain bounded by their
-configured positive limit. An update to an existing key happens before eviction.
-For a new key at capacity, `Cache` removes arbitrary victims in the store's
-iteration order until there is room. In `ShardedStore`, that order is biased by
-shard/hash iteration; it is neither random nor LRU (and it is likewise not an LRU
-policy for `LockedStore`).
+**Eviction**: All shared L2 stores are unbounded by default, so eviction is not
+triggered in default runs. `DOTNET_CACHE_LIMIT_METHOD_INFO`,
+`DOTNET_CACHE_LIMIT_VMT`, and `DOTNET_CACHE_LIMIT_HIERARCHY` enable bounded L2
+caches only as an operator-controlled capacity-management escape hatch. An update
+to an existing key happens before eviction; for a new key at capacity, `Cache`
+removes victims in the store's iteration order until there is room. That selection
+is neither random nor LRU. `ShardedStore` is biased by shard/hash iteration, and
+`LockedStore` is not LRU either. A true LRU L2 would require
+`lru::LruCache::get(&mut self)`, which
+would write-lock each `callvirt` hot-path lookup; that cost outweighs its benefit
+for the bounded universe of loaded-metadata keys.
 
 ### Striped Locking and Concurrent Access
 

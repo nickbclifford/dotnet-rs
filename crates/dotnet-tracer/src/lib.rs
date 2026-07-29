@@ -864,7 +864,7 @@ mod tests {
         let mut sizes = CacheSizes::default();
         sizes.caches[CacheKind::Layout.as_index()] = CacheSize {
             entries: 37,
-            bytes: 128,
+            pointer_bytes: 128,
         };
         let stats = metrics.cache_statistics(sizes);
 

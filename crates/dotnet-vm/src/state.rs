@@ -13,8 +13,7 @@ use dotnet_assemblies::AssemblyLoader;
 #[cfg(feature = "multithreading")]
 use dotnet_metrics::ArenaGcPressureSnapshot;
 use dotnet_metrics::{
-    CacheEvent, CacheKind, CacheSize, CacheSizes, CacheStats, RuntimeMetrics,
-    RuntimeMetricsSnapshot,
+    CacheKind, CacheSize, CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot,
 };
 use dotnet_pinvoke::NativeLibraries;
 use dotnet_runtime_memory::HeapManager;
@@ -295,7 +294,7 @@ impl SharedReflectionRegistry {
                 CacheKind::SharedRuntimeTypes,
                 CacheSize {
                     entries: runtime_types_entries,
-                    bytes: (runtime_types_entries as u64)
+                    pointer_bytes: (runtime_types_entries as u64)
                         .saturating_mul((size_of::<RuntimeType>() + size_of::<usize>()) as u64),
                 },
             ),
@@ -303,7 +302,7 @@ impl SharedReflectionRegistry {
                 CacheKind::SharedRuntimeMethods,
                 CacheSize {
                     entries: runtime_methods_entries,
-                    bytes: (runtime_methods_entries as u64).saturating_mul(
+                    pointer_bytes: (runtime_methods_entries as u64).saturating_mul(
                         (size_of::<(MethodDescription, GenericLookup)>() + size_of::<usize>())
                             as u64,
                     ),
@@ -313,7 +312,7 @@ impl SharedReflectionRegistry {
                 CacheKind::SharedRuntimeFields,
                 CacheSize {
                     entries: runtime_fields_entries,
-                    bytes: (runtime_fields_entries as u64).saturating_mul(
+                    pointer_bytes: (runtime_fields_entries as u64).saturating_mul(
                         (size_of::<(FieldDescription, GenericLookup)>() + size_of::<usize>())
                             as u64,
                     ),
@@ -369,50 +368,23 @@ impl GlobalCaches {
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
     ) -> Result<MethodInfo<'static>, TypeResolutionError> {
-        if self.method_info_cache.front_cache_enabled() {
-            let front_key = (method.clone(), generics.clone());
-            if let Some(front_cached) =
-                METHOD_INFO_FRONT_CACHE.with(|cache| cache.borrow_mut().get(&front_key))
-            {
-                self.method_info_cache.record_front_cache(CacheEvent::Hit);
-                self.method_info_cache.record_hit();
-                return Ok((*front_cached).clone());
-            }
-            self.method_info_cache.record_front_cache(CacheEvent::Miss);
-        }
-
         self.method_info_cache.record_key_clones(2);
         let key = (method.clone(), generics.clone());
-        if let Some(cached) = self.method_info_cache.get(&key) {
-            if self.method_info_cache.front_cache_enabled() {
-                METHOD_INFO_FRONT_CACHE.with(|cache| {
-                    cache.borrow_mut().insert(
-                        key,
-                        Arc::clone(&cached),
-                        self.method_info_cache
-                            .front_cache_capacity()
-                            .expect("method-info front cache must have a configured capacity"),
-                    );
-                });
-            }
+        if let Some(cached) = self
+            .method_info_cache
+            .try_get_with_front(&key, &METHOD_INFO_FRONT_CACHE)
+        {
             return Ok((*cached).clone());
         }
         let built = crate::build_method_info(method, generics, shared.clone())?;
         let built_arc = Arc::new(built.clone());
-        self.method_info_cache
-            .insert(key.clone(), Arc::clone(&built_arc));
         if self.method_info_cache.front_cache_enabled() {
+            // Retaining the compound key for the L1 fill makes the L2 insertion clone both key
+            // components; the disabled path moves the key directly into L2.
             self.method_info_cache.record_key_clones(2);
-            METHOD_INFO_FRONT_CACHE.with(|cache| {
-                cache.borrow_mut().insert(
-                    key,
-                    Arc::clone(&built_arc),
-                    self.method_info_cache
-                        .front_cache_capacity()
-                        .expect("method-info front cache must have a configured capacity"),
-                );
-            });
         }
+        self.method_info_cache
+            .insert_with_front(key, built_arc, &METHOD_INFO_FRONT_CACHE);
         Ok(built)
     }
 }
@@ -783,7 +755,7 @@ mod global_cache_registry_tests {
         assert!(
             reports
                 .iter()
-                .all(|(_, size)| size.entries == 0 && size.bytes == 0)
+                .all(|(_, size)| size.entries == 0 && size.pointer_bytes == 0)
         );
 
         assert_eq!(caches.layout_cache.front_cache_capacity(), None);
