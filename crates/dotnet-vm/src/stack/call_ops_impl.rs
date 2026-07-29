@@ -521,7 +521,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             GenericLookup::default()
         };
         if receiver_lookup.type_generics.len() > lookup.type_generics.len() {
-            lookup.type_generics = receiver_lookup.type_generics;
+            lookup.set_type_generics(receiver_lookup.type_generics);
         }
         // Rebind to the resolved declaring-type arity, mirroring rebind_lookup_to_resolved_method.
         self.rebind_lookup_to_resolved_method(lookup, resolved);
@@ -820,25 +820,26 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     ) {
         let parent_arity = final_method.parent.definition().generic_parameters.len();
         if parent_arity == 0 {
-            lookup.type_generics = Vec::new().into();
+            lookup.set_type_generics(Vec::new().into());
             return;
         }
 
         if final_method.parent_generics.type_generics.len() == parent_arity {
-            lookup.type_generics = final_method.parent_generics.type_generics.clone();
+            lookup.set_type_generics(final_method.parent_generics.type_generics.clone());
             return;
         }
 
         // Fallback for edge cases where virtual resolution returns the right method but
         // an incomplete declaring-type lookup. Preserve receiver-instantiated generics,
         // trimmed to the declaring type's arity.
-        lookup.type_generics = lookup
+        let type_generics = lookup
             .type_generics
             .iter()
             .take(parent_arity)
             .cloned()
             .collect::<Vec<_>>()
             .into();
+        lookup.set_type_generics(type_generics);
     }
 
     fn merge_receiver_lookup_for_virtual_dispatch(
@@ -869,7 +870,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             // Preserve them even when the caller already has same-arity type generics from an
             // unrelated generic context (e.g. Expression<TDelegate>), otherwise `typeof(!0)` in
             // the callee can resolve against the caller and leak incorrect runtime types.
-            lookup.type_generics = receiver_lookup.type_generics.clone();
+            lookup.set_type_generics(receiver_lookup.type_generics.clone());
         }
     }
 

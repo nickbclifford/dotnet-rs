@@ -647,7 +647,10 @@ mod tests {
     #[test]
     #[allow(
         clippy::mutable_key_type,
-        reason = "FieldKey descriptor keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     fn test_field_layout_manager_recursion() {
         // Inner struct: { int i; ref int r; }

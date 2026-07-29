@@ -18,9 +18,10 @@ struct LayoutExpectations {
 
 #[cfg(target_pointer_width = "64")]
 const STACK_VALUE_SIZE_MATRIX: [(bool, usize); 2] = [
+    // ConcreteType's memoized u64 hash adds 8 bytes through ValueType(Object).
     // (has_validation_tag, expected_size)
-    (false, 104),
-    (true, 112),
+    (false, 112),
+    (true, 120),
 ];
 
 #[cfg(target_pointer_width = "64")]

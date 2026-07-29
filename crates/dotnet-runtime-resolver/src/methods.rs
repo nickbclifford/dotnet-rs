@@ -76,7 +76,7 @@ where
                     .iter()
                     .map(|t| self.make_concrete(ctx.resolution().clone(), ctx.generics(), t))
                     .collect::<Result<Vec<_>, _>>()?;
-                new_lookup.method_generics = params.into();
+                new_lookup.set_method_generics(params.into());
                 g.base
             }
         };
@@ -97,9 +97,9 @@ where
                 .generic_parameters
                 .len();
             if parent_arity == 0 {
-                new_lookup.type_generics = Arc::new([]);
+                new_lookup.set_type_generics(Arc::new([]));
             } else if !parent_lookup.type_generics.is_empty() {
-                new_lookup.type_generics = parent_lookup.type_generics;
+                new_lookup.set_type_generics(parent_lookup.type_generics);
             }
             parent_type = Some(parent);
         }
@@ -133,15 +133,22 @@ where
             && method_for_lookup.parent_generics.type_generics.len() == generics.type_generics.len()
             && method_for_lookup.parent_generics.type_generics != generics.type_generics
         {
-            method_for_lookup.parent_generics.type_generics = generics.type_generics.clone();
+            method_for_lookup
+                .parent_generics
+                .set_type_generics(generics.type_generics.clone());
         }
-        method_for_lookup.parent_generics.method_generics = generics.method_generics.clone();
+        method_for_lookup
+            .parent_generics
+            .set_method_generics(generics.method_generics.clone());
         method_for_lookup
     }
 
     #[allow(
         clippy::mutable_key_type,
-        reason = "MethodDescription override keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     fn find_override_implementation(
         &self,
@@ -230,7 +237,10 @@ where
 
     #[allow(
         clippy::mutable_key_type,
-        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     fn enqueue_interface_type(
         &self,
@@ -253,7 +263,10 @@ where
 
     #[allow(
         clippy::mutable_key_type,
-        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     fn find_interface_override_for_receiver(
         &self,
@@ -278,7 +291,7 @@ where
         while let Some(interface_type) = queue.pop_front() {
             let interface_desc = self.loader.find_concrete_type(interface_type.clone())?;
             let mut interface_lookup = interface_type.make_lookup();
-            interface_lookup.method_generics = dispatch_generics.method_generics.clone();
+            interface_lookup.set_method_generics(dispatch_generics.method_generics.clone());
 
             if let Some(interface_method) = self.find_override_implementation(
                 interface_desc.clone(),
@@ -322,10 +335,10 @@ where
         let method_generic_arity = base_method.method().generic_parameters.len();
         let trimmed_generics;
         let generics = if generics.method_generics.len() > method_generic_arity {
-            trimmed_generics = GenericLookup {
-                type_generics: generics.type_generics.clone(),
-                method_generics: generics.method_generics[..method_generic_arity].into(),
-            };
+            trimmed_generics = GenericLookup::from_arcs(
+                generics.type_generics.clone(),
+                generics.method_generics[..method_generic_arity].into(),
+            );
             &trimmed_generics
         } else {
             generics
@@ -437,10 +450,10 @@ where
                     .iter()
                     .map(|t| self.make_concrete(parent.resolution.clone(), &ancestor_lookup, *t))
                     .collect::<Result<Vec<_>, _>>()?;
-                ancestor_lookup = GenericLookup {
-                    type_generics: next_type_generics.into(),
-                    method_generics: generics.method_generics.clone(),
-                };
+                ancestor_lookup = GenericLookup::from_arcs(
+                    next_type_generics.into(),
+                    generics.method_generics.clone(),
+                );
             }
         }
 
@@ -494,12 +507,9 @@ where
         };
 
         let mut signature_lookup = base_method.parent_generics.clone();
-        signature_lookup.method_generics = generics.method_generics.clone();
+        signature_lookup.set_method_generics(generics.method_generics.clone());
 
-        let helper_generics = GenericLookup {
-            type_generics: vec![element_type].into(),
-            method_generics: vec![].into(),
-        };
+        let helper_generics = GenericLookup::from_arcs(vec![element_type].into(), vec![].into());
 
         let helper_type = self.loader.corlib_wkt(WellKnown::SupportSZArrayHelper1)?;
 

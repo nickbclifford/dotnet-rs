@@ -35,8 +35,21 @@ Descriptors are owner-tied and index-based:
 - `TypeDescription` stores a `TypeIndex` into the owning resolution.
 - `MethodDescription` stores a `MethodMemberIndex` (supports ordinary methods plus property/event accessors) rather than raw pointer identity.
 - `FieldDescription` stores a field index into the owning type.
+- `ConcreteType` stores its resolution source, specialized base type, and an eagerly memoized `u64` hash. Its `Hash` implementation uses that cached value, so hashing a complete type does not revisit its type tree. Its identity compares the source and base type but excludes `BaseType::Type::value_kind`, which is a cached class/value-type annotation rather than type identity.
+- `GenericLookup` stores type and method generic arguments plus an eagerly memoized `u64` hash, so generic-instantiation keys hash without revisiting their argument slices.
 
 This keeps metadata lifetime explicit while preserving stable, hashable descriptor keys for caches.
+
+Every metadata-backed `ConcreteType` retains a non-null `ResolutionS`, whose `Arc<MetadataArena>`
+pins the metadata that the descriptor can dereference. A future compact or interned identifier
+therefore cannot replace that ownership with a bare ID unless an equally long-lived owner retains
+the corresponding arena.
+This refactor does not intern descriptors, so the existing arena-pinning model is unchanged.
+
+`ConcreteType`, `GenericLookup`, `ResolutionS`, `MethodDescription`, and `FieldDescription` use
+`static_collect!`: they may own ordinary Rust values such as `Arc` and the memoized `u64`, but must
+not contain `gc_arena::Gc`/`GcCell` pointers. They can consequently be carried across collections
+without adding GC tracing edges.
 
 ### Type Resolution (`dotnet-runtime-resolver/src/types.rs`)
 
@@ -76,6 +89,10 @@ front-cache policy. Its sealed `CacheStore<K, V>` contract returns owned values,
 neither a `DashMap` shard guard nor an `RwLock` guard can escape a lookup. The
 storage type is a generic parameter rather than a trait object, preserving static
 dispatch on cache read paths.
+
+Many cache keys embed `ConcreteType` and `GenericLookup`. Their memoized hashes
+make hashing those key components O(1) after descriptor construction, avoiding a
+walk of specialized type trees or generic-argument slices on cache lookup.
 
 `ShardedStore` is `DashMap`-backed and is used where concurrent writes benefit
 from sharding. In particular, VMT and hierarchy entries are created for new
@@ -124,6 +141,14 @@ membership, and front-tier membership, while `RuntimeMetrics` stores hit/miss an
 optional benchmark counters in `CacheKind`-indexed arrays. The cache primitive
 owns logical hit/miss, key-clone, and front-tier instrumentation through its shared
 metrics `Arc`, rather than making callers own metrics bookkeeping.
+
+Under `bench-instrumentation`, `cache_key_clone_total` counts the explicit logical
+key-component clones recorded by cache callers (principally descriptor and `Arc`
+clone work). It deliberately does not measure deep hash traversal. Therefore the
+same benchmark workload and cache paths can retain the same count after descriptor
+hash memoization; use benchmark time and the hash implementation to evaluate that
+optimization, while retaining the counter as a regression guard for key-construction
+work.
 
 The five cache environment-variable contracts are read once when `GlobalCaches` is
 constructed. `DOTNET_CACHE_LIMIT_METHOD_INFO`, `DOTNET_CACHE_LIMIT_VMT`, and
@@ -183,13 +208,29 @@ Provides a scoped view of the resolution state:
 - Method-level generics (`Foo<M>` → `Foo<string>`)
 - Nested generics (e.g., `Dictionary<K, List<V>>`)
 
-`GenericLookup` contains two arrays: `type_generics` and `method_generics` (both `Arc<[ConcreteType]>`). Runtime call sites should use the bounded accessors (`type_arg`, `method_arg`, and cloned variants) when an index comes from metadata or intrinsic binding; missing slots become `TypeResolutionError::GenericIndexOutOfBounds` instead of unchecked slice panics. When `GenericLookup::make_concrete()` is called with a `MethodType` (e.g., a generic type parameter `!!0`), it indexes into the appropriate array to substitute the parameter with its concrete instantiation and reports the same bounded error for malformed slots. If the input is a base type (e.g., an array of `!0`), it recursively substitutes the inner types to produce a new `ConcreteType`.
+`GenericLookup` contains two argument arrays, `type_generics` and `method_generics` (both
+`Arc<[ConcreteType]>`), plus a private hash computed eagerly from both arrays. Construct lookups
+through `new`, `from_type_arc`, or `from_arcs`. Replace an argument array only through
+`set_type_generics` or `set_method_generics`, which recompute the hash; direct assignment to the
+public fields would desynchronize the cache key. The fields remain public for read compatibility.
+
+Runtime call sites should use the bounded accessors (`type_arg`, `method_arg`, and cloned variants)
+when an index comes from metadata or intrinsic binding; missing slots become
+`TypeResolutionError::GenericIndexOutOfBounds` instead of unchecked slice panics. When
+`GenericLookup::make_concrete()` is called with a `MethodType` (e.g., a generic type parameter
+`!!0`), it indexes into the appropriate array to substitute the parameter with its concrete
+instantiation and reports the same bounded error for malformed slots. If the input is a base type
+(e.g., an array of `!0`), it recursively substitutes the inner types to produce a new
+`ConcreteType`.
 
 ### Interaction with Layout
 Generic type instantiation affects layout because different type arguments may have different sizes and GC descriptors. Layout computation must be done per-concrete-instantiation.
 
 ### Interaction with Caching
-Cache keys include `GenericLookup` to distinguish between different instantiations of the same generic type/method.
+Cache keys include `GenericLookup` to distinguish between different instantiations of the same
+generic type or method. Its `Hash` implementation writes only the memoized `u64`, so lookup-time
+hashing is O(1); equality still compares both argument arrays to preserve structural identity in
+the event of a hash collision.
 
 ### Finite instantiation closure (no expanding-cycle detection)
 

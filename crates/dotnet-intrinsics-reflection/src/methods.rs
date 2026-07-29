@@ -322,10 +322,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 );
             }
 
-            let definition_lookup = GenericLookup {
-                type_generics: lookup.type_generics,
-                method_generics: Vec::new().into(),
-            };
+            let definition_lookup =
+                GenericLookup::from_arcs(lookup.type_generics, Vec::new().into());
             let method_obj = crate::common::get_runtime_method_obj(ctx, method, definition_lookup);
             ctx.push_obj(method_obj);
             Some(StepResult::Continue)
@@ -444,7 +442,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 method_generics.push(runtime_type.to_concrete(ctx.loader().as_ref()));
             }
 
-            lookup.method_generics = method_generics.into();
+            lookup.set_method_generics(method_generics.into());
 
             let method_obj = crate::common::get_runtime_method_obj(ctx, method, lookup);
             ctx.push_obj(method_obj);
@@ -618,10 +616,10 @@ fn trim_method_lookup(lookup: &GenericLookup, method: &MethodDescription) -> Gen
         return lookup.clone();
     }
 
-    GenericLookup {
-        type_generics: lookup.type_generics.clone(),
-        method_generics: lookup.method_generics[..method_generic_arity].into(),
-    }
+    GenericLookup::from_arcs(
+        lookup.type_generics.clone(),
+        lookup.method_generics[..method_generic_arity].into(),
+    )
 }
 
 fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -642,7 +640,7 @@ fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 
     let mut signature_lookup = method.parent_generics.clone();
-    signature_lookup.method_generics = trimmed_lookup.method_generics.clone();
+    signature_lookup.set_method_generics(trimmed_lookup.method_generics.clone());
 
     let ancestors: Vec<_> = ctx.loader().ancestors(method.parent.clone()).collect();
     if ancestors.len() <= 1 {
@@ -668,10 +666,10 @@ fn resolve_base_method_definition<'gc, T: ReflectionIntrinsicHost<'gc>>(
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let parent_lookup = GenericLookup {
-            type_generics: next_type_generics.into(),
-            method_generics: trimmed_lookup.method_generics.clone(),
-        };
+        let parent_lookup = GenericLookup::from_arcs(
+            next_type_generics.into(),
+            trimmed_lookup.method_generics.clone(),
+        );
 
         if let Some(parent_method) = ctx.loader().find_method_in_type_internal(
             parent_type.clone(),

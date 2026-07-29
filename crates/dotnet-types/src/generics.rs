@@ -7,8 +7,9 @@ use gc_arena::static_collect;
 use lru::LruCache;
 use std::{
     cell::RefCell,
-    collections::HashSet,
+    collections::{HashSet, hash_map::DefaultHasher},
     fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
     num::NonZeroUsize,
     sync::Arc,
 };
@@ -30,10 +31,16 @@ thread_local! {
         ));
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+/// A fully specialized runtime type with immutable structural identity.
+///
+/// The structural hash is computed eagerly and excludes `BaseType::Type::value_kind`, which is a
+/// derived class/value-type annotation. The source and base representation remain immutable so
+/// the memoized hash cannot be invalidated after construction.
+#[derive(Clone)]
 pub struct ConcreteType {
     source: ResolutionS,
     base: Arc<BaseType<Self>>,
+    hash: u64,
 }
 
 #[cfg(feature = "fuzzing")]
@@ -60,19 +67,21 @@ impl From<TypeDescription> for ConcreteType {
 }
 
 impl ConcreteType {
+    /// Constructs a descriptor and eagerly computes its structural hash.
     pub fn new(source: ResolutionS, base: BaseType<Self>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        hash_base_type_without_value_kind(&base, &mut hasher);
+
         ConcreteType {
             source,
             base: Arc::new(base),
+            hash: hasher.finish(),
         }
     }
 
     pub fn get(&self) -> &BaseType<Self> {
         &self.base
-    }
-
-    pub fn get_mut(&mut self) -> &mut BaseType<Self> {
-        Arc::make_mut(&mut self.base)
     }
 
     pub fn is_class(&self, loader: &impl TypeResolver) -> bool {
@@ -89,10 +98,6 @@ impl ConcreteType {
         )
     }
 
-    #[allow(
-        clippy::mutable_key_type,
-        reason = "ConcreteType descriptor keys are intentional pending supervised/new-cache-primitive interning"
-    )]
     pub fn is_value_type(&self, loader: &impl TypeResolver) -> bool {
         match self.base.as_ref() {
             BaseType::Type {
@@ -115,8 +120,8 @@ impl ConcreteType {
             | BaseType::UIntPtr => true,
             BaseType::Type { .. } => {
                 let mut curr = self.clone();
-                let mut seen = HashSet::new();
-                while seen.insert(curr.clone()) {
+                let mut seen: HashSet<*const BaseType<ConcreteType>> = HashSet::new();
+                while seen.insert(Arc::as_ptr(&curr.base)) {
                     let Ok(td) = loader.find_concrete_type(curr.clone()) else {
                         break;
                     };
@@ -216,6 +221,108 @@ impl ConcreteType {
     }
 }
 
+impl PartialEq for ConcreteType {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && (Arc::ptr_eq(&self.base, &other.base)
+                || base_type_eq_without_value_kind(self.base.as_ref(), other.base.as_ref()))
+    }
+}
+
+impl Eq for ConcreteType {}
+
+impl Hash for ConcreteType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+fn base_type_eq_without_value_kind(
+    left: &BaseType<ConcreteType>,
+    right: &BaseType<ConcreteType>,
+) -> bool {
+    use BaseType::*;
+
+    match (left, right) {
+        (Type { source: left, .. }, Type { source: right, .. }) => left == right,
+        (Boolean, Boolean)
+        | (Char, Char)
+        | (Int8, Int8)
+        | (UInt8, UInt8)
+        | (Int16, Int16)
+        | (UInt16, UInt16)
+        | (Int32, Int32)
+        | (UInt32, UInt32)
+        | (Int64, Int64)
+        | (UInt64, UInt64)
+        | (Float32, Float32)
+        | (Float64, Float64)
+        | (IntPtr, IntPtr)
+        | (UIntPtr, UIntPtr)
+        | (Object, Object)
+        | (String, String) => true,
+        (Vector(left_modifiers, left_type), Vector(right_modifiers, right_type)) => {
+            left_modifiers == right_modifiers && left_type == right_type
+        }
+        (Array(left_type, left_shape), Array(right_type, right_shape)) => {
+            left_type == right_type && left_shape == right_shape
+        }
+        (ValuePointer(left_modifiers, left_type), ValuePointer(right_modifiers, right_type)) => {
+            left_modifiers == right_modifiers && left_type == right_type
+        }
+        (FunctionPointer(left_signature), FunctionPointer(right_signature)) => {
+            left_signature == right_signature
+        }
+        _ => false,
+    }
+}
+
+fn hash_base_type_without_value_kind<H: Hasher>(base: &BaseType<ConcreteType>, state: &mut H) {
+    use BaseType::*;
+
+    match base {
+        Type { source, .. } => {
+            0u8.hash(state);
+            source.hash(state);
+        }
+        Boolean => 1u8.hash(state),
+        Char => 2u8.hash(state),
+        Int8 => 3u8.hash(state),
+        UInt8 => 4u8.hash(state),
+        Int16 => 5u8.hash(state),
+        UInt16 => 6u8.hash(state),
+        Int32 => 7u8.hash(state),
+        UInt32 => 8u8.hash(state),
+        Int64 => 9u8.hash(state),
+        UInt64 => 10u8.hash(state),
+        Float32 => 11u8.hash(state),
+        Float64 => 12u8.hash(state),
+        IntPtr => 13u8.hash(state),
+        UIntPtr => 14u8.hash(state),
+        Object => 15u8.hash(state),
+        String => 16u8.hash(state),
+        Vector(modifiers, inner) => {
+            17u8.hash(state);
+            modifiers.hash(state);
+            inner.hash(state);
+        }
+        Array(inner, shape) => {
+            18u8.hash(state);
+            inner.hash(state);
+            shape.hash(state);
+        }
+        ValuePointer(modifiers, inner) => {
+            19u8.hash(state);
+            modifiers.hash(state);
+            inner.hash(state);
+        }
+        FunctionPointer(signature) => {
+            20u8.hash(state);
+            signature.hash(state);
+        }
+    }
+}
+
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.source.is_null() {
@@ -248,10 +355,38 @@ pub fn member_to_method_type(src: &TypeSource<dotnetdll::prelude::MemberType>) -
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+/// Type and method arguments used when specializing metadata descriptors.
+///
+/// The argument slices remain public for read compatibility, but their values form the input to
+/// a private memoized hash. Replace them only through [`Self::set_type_generics`] and
+/// [`Self::set_method_generics`]; direct field assignment would leave that hash stale.
+#[derive(Clone)]
 pub struct GenericLookup {
+    /// Type-level generic arguments. Use [`Self::set_type_generics`] to replace this slice.
     pub type_generics: Arc<[ConcreteType]>,
+    /// Method-level generic arguments. Use [`Self::set_method_generics`] to replace this slice.
     pub method_generics: Arc<[ConcreteType]>,
+    hash: u64,
+}
+
+impl Default for GenericLookup {
+    fn default() -> Self {
+        Self::from_arcs(Arc::new([]), Arc::new([]))
+    }
+}
+
+impl PartialEq for GenericLookup {
+    fn eq(&self, other: &Self) -> bool {
+        self.type_generics == other.type_generics && self.method_generics == other.method_generics
+    }
+}
+
+impl Eq for GenericLookup {}
+
+impl Hash for GenericLookup {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
 }
 
 #[cfg(feature = "fuzzing")]
@@ -259,10 +394,10 @@ impl<'a> Arbitrary<'a> for GenericLookup {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let type_generics: Vec<ConcreteType> = u.arbitrary()?;
         let method_generics: Vec<ConcreteType> = u.arbitrary()?;
-        Ok(Self {
-            type_generics: type_generics.into(),
-            method_generics: method_generics.into(),
-        })
+        Ok(Self::from_arcs(
+            type_generics.into(),
+            method_generics.into(),
+        ))
     }
 }
 
@@ -270,19 +405,51 @@ static_collect!(GenericLookup);
 
 impl GenericLookup {
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {
-        Self {
-            type_generics: type_generics.into(),
-            method_generics: Arc::new([]),
-        }
+        Self::from_type_arc(type_generics.into())
     }
 
     /// Construct a lookup from an already-owned `Arc<[ConcreteType]>`, avoiding the
-    /// `Vec → Arc` allocation that `new` incurs.
+    /// `Vec → Arc` allocation that `new` incurs. Method arguments are empty.
     pub fn from_type_arc(type_generics: Arc<[ConcreteType]>) -> Self {
+        Self::from_arcs(type_generics, Arc::new([]))
+    }
+
+    /// Constructs a lookup from already-owned type and method argument slices.
+    ///
+    /// The memoized hash is computed eagerly from both slices.
+    pub fn from_arcs(
+        type_generics: Arc<[ConcreteType]>,
+        method_generics: Arc<[ConcreteType]>,
+    ) -> Self {
+        let hash = Self::compute_hash(&type_generics, &method_generics);
         Self {
             type_generics,
-            method_generics: Arc::new([]),
+            method_generics,
+            hash,
         }
+    }
+
+    /// Replaces the type-level arguments and refreshes the memoized hash.
+    ///
+    /// Use this instead of assigning to [`Self::type_generics`] directly.
+    pub fn set_type_generics(&mut self, type_generics: Arc<[ConcreteType]>) {
+        self.hash = Self::compute_hash(&type_generics, &self.method_generics);
+        self.type_generics = type_generics;
+    }
+
+    /// Replaces the method-level arguments and refreshes the memoized hash.
+    ///
+    /// Use this instead of assigning to [`Self::method_generics`] directly.
+    pub fn set_method_generics(&mut self, method_generics: Arc<[ConcreteType]>) {
+        self.hash = Self::compute_hash(&self.type_generics, &method_generics);
+        self.method_generics = method_generics;
+    }
+
+    fn compute_hash(type_generics: &[ConcreteType], method_generics: &[ConcreteType]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        type_generics.hash(&mut hasher);
+        method_generics.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Returns a bounded reference to a type generic argument.
@@ -397,10 +564,7 @@ impl GenericLookup {
                             }
 
                             let td = _loader.locate_type(res.clone(), base)?;
-                            let lookup = GenericLookup {
-                                type_generics: parameters.into(),
-                                method_generics: Arc::new([]),
-                            };
+                            let lookup = GenericLookup::from_arcs(parameters.into(), Arc::new([]));
                             let generic_parameters = &td.definition().generic_parameters;
 
                             // A zero-arity definition has nothing to validate; this occurs on
@@ -1073,10 +1237,7 @@ mod generic_lookup_arg_tests {
     #[test]
     fn type_arg_returns_requested_slot() {
         let ty = sample_type();
-        let lookup = GenericLookup {
-            type_generics: vec![ty.clone()].into(),
-            method_generics: Arc::new([]),
-        };
+        let lookup = GenericLookup::from_arcs(vec![ty.clone()].into(), Arc::new([]));
 
         assert_eq!(lookup.type_arg(0), Ok(&ty));
         assert_eq!(lookup.cloned_type_arg(0), Ok(ty));
@@ -1085,13 +1246,33 @@ mod generic_lookup_arg_tests {
     #[test]
     fn method_arg_returns_requested_slot() {
         let ty = sample_method_type();
-        let lookup = GenericLookup {
-            type_generics: Arc::new([]),
-            method_generics: vec![ty.clone()].into(),
-        };
+        let lookup = GenericLookup::from_arcs(Arc::new([]), vec![ty.clone()].into());
 
         assert_eq!(lookup.method_arg(0), Ok(&ty));
         assert_eq!(lookup.cloned_method_arg(0), Ok(ty));
+    }
+
+    fn lookup_hash(lookup: &GenericLookup) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        lookup.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn setters_recompute_the_memoized_hash() {
+        let type_generic = sample_type();
+        let method_generic = sample_method_type();
+        let expected = GenericLookup::from_arcs(
+            vec![type_generic.clone()].into(),
+            vec![method_generic.clone()].into(),
+        );
+
+        let mut lookup = GenericLookup::default();
+        lookup.set_type_generics(vec![type_generic].into());
+        lookup.set_method_generics(vec![method_generic].into());
+
+        assert_eq!(lookup, expected);
+        assert_eq!(lookup_hash(&lookup), lookup_hash(&expected));
     }
 
     #[test]
@@ -1111,6 +1292,43 @@ mod generic_lookup_arg_tests {
                 index: 1,
                 length: 0,
             })
+        );
+    }
+}
+
+#[cfg(test)]
+mod concrete_type_identity_tests {
+    use super::*;
+    use dotnetdll::prelude::ValueKind;
+
+    fn type_with_value_kind(value_kind: Option<ValueKind>) -> ConcreteType {
+        ConcreteType::new(
+            ResolutionS::NULL,
+            BaseType::Type {
+                source: TypeSource::User(UserType::Definition(crate::type_index_from_usize(0))),
+                value_kind,
+            },
+        )
+    }
+
+    fn concrete_type_hash(ty: &ConcreteType) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        ty.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn value_kind_does_not_affect_identity_or_hashing() {
+        let unspecified = type_with_value_kind(None);
+        let class = type_with_value_kind(Some(ValueKind::Class));
+        let value_type = type_with_value_kind(Some(ValueKind::ValueType));
+
+        assert_eq!(unspecified, class);
+        assert_eq!(unspecified, value_type);
+        assert_eq!(concrete_type_hash(&unspecified), concrete_type_hash(&class));
+        assert_eq!(
+            concrete_type_hash(&unspecified),
+            concrete_type_hash(&value_type)
         );
     }
 }

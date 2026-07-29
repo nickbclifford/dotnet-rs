@@ -828,7 +828,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     #[allow(
         clippy::mutable_key_type,
-        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     pub fn is_subclass_of(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut curr = source.clone();
@@ -861,7 +864,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
     #[allow(
         clippy::mutable_key_type,
-        reason = "ConcreteType traversal keys are intentional pending supervised/new-cache-primitive interning"
+        reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+                  its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+                  by pointer. Copy-id interning would close this lint but is deferred to \
+                  preserve descriptor-owned arena lifetimes."
     )]
     pub fn implements_interface(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut queue = VecDeque::new();

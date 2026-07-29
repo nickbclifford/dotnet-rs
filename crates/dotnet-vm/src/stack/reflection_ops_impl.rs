@@ -253,17 +253,18 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
 
                 let parent_arity = dispatch_method.parent.definition().generic_parameters.len();
                 if parent_arity == 0 {
-                    lookup.type_generics = Vec::new().into();
+                    lookup.set_type_generics(Vec::new().into());
                 } else if dispatch_method.parent_generics.type_generics.len() == parent_arity {
-                    lookup.type_generics = dispatch_method.parent_generics.type_generics.clone();
+                    lookup.set_type_generics(dispatch_method.parent_generics.type_generics.clone());
                 } else {
-                    lookup.type_generics = lookup
+                    let type_generics = lookup
                         .type_generics
                         .iter()
                         .take(parent_arity)
                         .cloned()
                         .collect::<Vec<_>>()
                         .into();
+                    lookup.set_type_generics(type_generics);
                 }
             }
         }

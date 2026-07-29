@@ -618,8 +618,8 @@ impl AssemblyLoader {
                     return Ok(stub_method);
                 }
                 let parent_arity = parent_type.definition().generic_parameters.len();
-                let parent_lookup = GenericLookup {
-                    type_generics: if parent_arity == 0 {
+                let parent_lookup = GenericLookup::from_arcs(
+                    if parent_arity == 0 {
                         Vec::new().into()
                     } else {
                         generic_inst
@@ -633,8 +633,8 @@ impl AssemblyLoader {
                     // Method generic arguments belong to call-site lookup, not declaring-type
                     // identity. Keep parent lookup method-generics empty so definition-token and
                     // member-ref paths resolve to the same method identity.
-                    method_generics: Vec::new().into(),
-                };
+                    Vec::new().into(),
+                );
 
                 Ok(MethodDescription::new(
                     parent_type,
@@ -679,8 +679,8 @@ impl AssemblyLoader {
                             self.find_concrete_type(concrete.clone())?;
                         let parent_generics = concrete.make_lookup();
                         let mut lookup_for_substitution = parent_generics.clone();
-                        lookup_for_substitution.method_generics =
-                            generic_inst.method_generics.clone();
+                        lookup_for_substitution
+                            .set_method_generics(generic_inst.method_generics.clone());
                         let ref_sig =
                             resolution
                                 .definition()

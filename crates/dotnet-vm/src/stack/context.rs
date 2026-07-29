@@ -166,7 +166,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                             let desc = self.loader().find_concrete_type(concrete_local.clone())?;
                             if desc.is_value_type(&ctx)? {
                                 let mut new_lookup = concrete_local.make_lookup();
-                                new_lookup.method_generics = generics.method_generics.clone();
+                                new_lookup.set_method_generics(generics.method_generics.clone());
                                 let new_ctx = ctx.with_generics(&new_lookup);
                                 let instance = new_ctx.new_object(desc)?;
                                 StackValue::ValueType(instance)

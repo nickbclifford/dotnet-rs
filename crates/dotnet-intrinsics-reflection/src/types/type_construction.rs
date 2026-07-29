@@ -116,7 +116,7 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
             ..
         } = target_ct.get()
         {
-            new_lookup.type_generics = parameters.clone().into();
+            new_lookup.set_type_generics(parameters.clone().into());
         }
 
         if let Some(desc) = crate::common::find_parameterless_ctor(&target_td, &new_lookup) {

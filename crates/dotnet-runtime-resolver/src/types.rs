@@ -18,7 +18,7 @@ where
     C: crate::ResolverCacheAdapter,
     L: crate::ResolverLayoutAdapter,
 {
-    pub fn normalize_type(&self, mut t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
+    pub fn normalize_type(&self, t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
         let (ut, res) = match t.get() {
             BaseType::Type { source, .. } => (
                 decompose_type_source::<ConcreteType>(source).0,
@@ -51,13 +51,21 @@ where
         if let Some(base) = base {
             Ok(ConcreteType::new(res, base))
         } else {
-            if let BaseType::Type { source, value_kind } = t.get_mut()
-                && value_kind.is_none()
+            if let BaseType::Type {
+                source,
+                value_kind: None,
+            } = t.get()
             {
                 let (ut, _) = decompose_type_source::<ConcreteType>(source);
-                let td = self.loader.locate_type(res, ut)?;
+                let td = self.loader.locate_type(res.clone(), ut)?;
                 if self.is_value_type(td)? {
-                    *value_kind = Some(ValueKind::ValueType);
+                    return Ok(ConcreteType::new(
+                        res,
+                        BaseType::Type {
+                            source: source.clone(),
+                            value_kind: Some(ValueKind::ValueType),
+                        },
+                    ));
                 }
             }
             Ok(t)

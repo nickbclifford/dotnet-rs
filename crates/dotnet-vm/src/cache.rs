@@ -142,7 +142,10 @@ where
         self.metrics.record_cache(self.kind, CacheEvent::Miss);
     }
 
-    /// Records key cloning performed by a cache caller.
+    /// Records logical key-component clones performed by a cache caller.
+    ///
+    /// This benchmark-only metric counts descriptor/`Arc` clone work used to construct a key;
+    /// it intentionally does not measure the cost of hashing that key.
     #[inline]
     pub(crate) fn record_key_clones(&self, count: u64) {
         self.metrics.record_cache_key_clones(self.kind, count);

@@ -70,7 +70,10 @@ enum InterfaceTraversalControl {
 
 #[allow(
     clippy::mutable_key_type,
-    reason = "RuntimeType traversal keys are intentional pending supervised/new-cache-primitive interning"
+    reason = "ConcreteType reaches Arc<MetadataArena> which has Mutex fields, but \
+              its Hash/Eq never inspect arena state; ResolutionS identifies metadata \
+              by pointer. Copy-id interning would close this lint but is deferred to \
+              preserve descriptor-owned arena lifetimes."
 )]
 fn traverse_interfaces_and_base_types<'gc, T, F>(
     ctx: &mut T,

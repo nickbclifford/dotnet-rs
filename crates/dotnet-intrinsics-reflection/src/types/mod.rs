@@ -243,11 +243,12 @@ pub(crate) fn build_generic_lookup_from_runtime_type<T: LoaderOps>(
 ) -> GenericLookup {
     let mut lookup = GenericLookup::default();
     if let RuntimeType::Generic(_, args) = target_type {
-        lookup.type_generics = args
-            .iter()
-            .map(|a| a.to_concrete(ctx.loader().as_ref()))
-            .collect::<Vec<_>>()
-            .into();
+        lookup.set_type_generics(
+            args.iter()
+                .map(|a| a.to_concrete(ctx.loader().as_ref()))
+                .collect::<Vec<_>>()
+                .into(),
+        );
     }
     lookup
 }

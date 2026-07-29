@@ -25,7 +25,7 @@ fn merge_receiver_type_generics_into_lookup(
         let receiver_lookup = receiver_object_generics(receiver);
 
         if !receiver_lookup.type_generics.is_empty() {
-            merged.type_generics = receiver_lookup.type_generics;
+            merged.set_type_generics(receiver_lookup.type_generics);
         }
     }
 
@@ -186,7 +186,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     // method generics (e.g. a generic interface method) are preserved from the call.
     let constraint_lookup = {
         let mut l = constraint_type_source.make_lookup();
-        l.method_generics = lookup.method_generics.clone();
+        l.set_method_generics(lookup.method_generics.clone());
         l
     };
 
