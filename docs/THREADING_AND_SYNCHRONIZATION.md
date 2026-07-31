@@ -180,7 +180,7 @@ Current multithreaded call path:
 `StaticStorageManager::wait_for_init` takes both a `ThreadManagerOps` and a `GCCoordinator`. While waiting for another thread's `.cctor`, the waiting thread must:
 1. Check for GC safe point requests (so it doesn't block STW)
 2. Check if the initializing thread has completed
-This creates a three-way dependency: statics ↔ threading ↔ GC.
+This creates a three-way dependency: statics ↔ threading ↔ GC. This wait path exists only with `multithreading`: a single-threaded build cannot produce `StaticInitResult::Waiting`, so `wait_for_init` has no valid caller there and its wait arm panics if that invariant is violated.
 
 #### Wait-graph lifecycle invariant (`StaticStorageManager::wait_graph`)
 
@@ -285,6 +285,7 @@ The concrete `ThreadManager` (implementing `ThreadManagerOps`) is instantiated o
 The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` to abstract locking:
 - **With `multithreading`**: Aliases point to `parking_lot::Mutex` and `parking_lot::RwLock`.
 - **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely).
+  In this configuration, `compat::Mutex<T>` and `compat::RwLock<T>` implement `Sync` where `T: Send`; this is sound because the build configuration prevents creation of a second thread.
 *(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
 
 ## Asynchronous Exceptions (Thread.Abort and Thread.Interrupt)

@@ -9,6 +9,10 @@ pub mod compat {
     use std::ops::{Deref, DerefMut};
     #[derive(Debug, Default)]
     pub struct Mutex<T>(RefCell<T>);
+    // SAFETY: Single-threaded builds cannot create a second thread, so the
+    // `RefCell` is never accessed concurrently. The `T: Send` bound matches
+    // the synchronization primitive contract used in multithreaded builds.
+    unsafe impl<T: Send> Sync for Mutex<T> {}
     impl<T> Mutex<T> {
         pub fn new(t: T) -> Self {
             Self(RefCell::new(t))
@@ -37,6 +41,10 @@ pub mod compat {
     }
     #[derive(Debug, Default)]
     pub struct RwLock<T>(RefCell<T>);
+    // SAFETY: Single-threaded builds cannot create a second thread, so the
+    // `RefCell` is never accessed concurrently. The `T: Send` bound matches
+    // the synchronization primitive contract used in multithreaded builds.
+    unsafe impl<T: Send> Sync for RwLock<T> {}
     impl<T> RwLock<T> {
         pub fn new(t: T) -> Self {
             Self(RefCell::new(t))
@@ -101,6 +109,11 @@ pub mod compat {
             RefMut::map(this.0, f)
         }
     }
+    /// Single-threaded condition-variable stub.
+    ///
+    /// Notifications are harmless no-ops. [`Condvar::wait`] panics because
+    /// waiting for another thread in this build configuration is a runtime
+    /// invariant violation.
     #[derive(Debug, Default)]
     pub struct Condvar(());
     impl Condvar {
@@ -109,7 +122,9 @@ pub mod compat {
         }
         pub fn notify_one(&self) {}
         pub fn notify_all(&self) {}
-        pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
+        pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {
+            unreachable!("compat::Condvar::wait cannot be used in a single-threaded build")
+        }
     }
     pub type MappedRwLockReadGuard<'a, T> = Ref<'a, T>;
     pub type MappedRwLockWriteGuard<'a, T> = RefMut<'a, T>;
@@ -174,10 +189,10 @@ mod sync_send_sync_tests {
     use super::compat::{Condvar, Mutex, RwLock};
     use static_assertions::{assert_impl_all, assert_not_impl_all};
 
-    // ── compile-time: Sync must NOT be implemented ──────────────────────────
-    // `RefCell<T>` is unconditionally `!Sync`; wrapping it must not change that.
-    assert_not_impl_all!(Mutex<i32>: Sync);
-    assert_not_impl_all!(RwLock<i32>: Sync);
+    // ── compile-time: locks are Sync when their contents are Send ────────────
+    // The single-threaded configuration cannot create another thread.
+    assert_impl_all!(Mutex<i32>: Sync);
+    assert_impl_all!(RwLock<i32>: Sync);
     // Guards borrow from the RefCell, so they must also be !Sync.
     assert_not_impl_all!(super::compat::MutexGuard<'static, i32>: Sync);
     assert_not_impl_all!(super::compat::RwLockReadGuard<'static, i32>: Sync);
@@ -187,9 +202,11 @@ mod sync_send_sync_tests {
     // When T: Send, the wrapper must be Send.
     assert_impl_all!(Mutex<i32>: Send);
     assert_impl_all!(RwLock<i32>: Send);
-    // When T: !Send (raw pointer), the wrapper must NOT be Send.
+    // When T: !Send (raw pointer), the wrapper must be neither Send nor Sync.
     assert_not_impl_all!(Mutex<*mut i32>: Send);
     assert_not_impl_all!(RwLock<*mut i32>: Send);
+    assert_not_impl_all!(Mutex<*mut i32>: Sync);
+    assert_not_impl_all!(RwLock<*mut i32>: Sync);
 
     // ── runtime: basic lock/unlock round-trips ────────────────────────────────
     #[test]
@@ -236,14 +253,37 @@ mod sync_send_sync_tests {
         let _g2 = m.lock(); // RefCell: already mutably borrowed → panic
     }
 
-    // ── runtime: Condvar no-ops must not panic ────────────────────────────────
+    // ── runtime: RwLock enforces RefCell aliasing rules ───────────────────────
     #[test]
-    fn compat_condvar_noop_methods_do_not_panic() {
+    #[should_panic]
+    fn compat_rwlock_write_while_reading_panics() {
+        let rw = RwLock::new(0i32);
+        let _reader = rw.read();
+        let _writer = rw.write();
+    }
+
+    #[test]
+    #[should_panic]
+    fn compat_rwlock_read_while_writing_panics() {
+        let rw = RwLock::new(0i32);
+        let _writer = rw.write();
+        let _reader = rw.read();
+    }
+
+    // ── runtime: Condvar notifications are harmless no-ops ──────────────────
+    #[test]
+    fn compat_condvar_notifications_do_not_panic() {
         let cv = Condvar::new();
         cv.notify_one();
         cv.notify_all();
+    }
+
+    #[test]
+    #[should_panic(expected = "compat::Condvar::wait cannot be used")]
+    fn compat_condvar_wait_panics() {
+        let cv = Condvar::new();
         let m = Mutex::new(());
-        let mut g = m.lock();
-        cv.wait(&mut g); // single-threaded stub: immediate return
+        let mut guard = m.lock();
+        cv.wait(&mut guard);
     }
 }

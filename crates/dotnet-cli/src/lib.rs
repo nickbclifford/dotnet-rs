@@ -140,10 +140,6 @@ pub fn run_cli() -> ExitCode {
         }
     };
 
-    #[allow(
-        clippy::arc_with_non_send_sync,
-        reason = "SharedGlobalState uses Arc uniformly and has a configuration-specific single-threaded safety proof"
-    )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 

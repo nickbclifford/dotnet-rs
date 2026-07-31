@@ -66,22 +66,17 @@ pub struct ObjectInner<'gc> {
     /// - `memory-validation` arena-consistency checks
     ///
     /// Invariant: immutable after construction and safe for lock-free reads.
-    #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     owner_id: ArenaId,
 }
 
 impl<'gc> ObjectInner<'gc> {
     #[inline]
     pub fn new(storage: HeapStorage<'gc>, owner_id: ArenaId) -> Self {
-        #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
-        let _ = owner_id;
-
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
             magic: ValidationTag::new(OBJECT_MAGIC),
             storage,
             sync_block_index: 0,
-            #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
             owner_id,
         }
     }
@@ -98,12 +93,7 @@ impl<'gc> ObjectInner<'gc> {
 
     #[inline(always)]
     pub fn owner_id(&self) -> ArenaId {
-        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
-        return self.owner_id;
-        #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
-        // This build stores and validates no owner ID. Use a stable valid stand-in rather than the
-        // canonical INVALID sentinel, which means that an owner is genuinely absent.
-        return ArenaId::new(1);
+        self.owner_id
     }
 
     pub fn validate_arena_id(&self) {

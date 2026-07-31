@@ -360,10 +360,6 @@ impl StaticStorageManager {
             }
 
             let mut shard = self.shards[shard_idx].write();
-            #[allow(
-                clippy::arc_with_non_send_sync,
-                reason = "StaticStorage is shard-confined in single-threaded builds while Arc preserves one ownership model"
-            )]
             shard.entry(key.clone()).or_insert_with(|| {
                 Arc::new(StaticStorage {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
@@ -463,6 +459,10 @@ impl StaticStorageManager {
     ///
     /// Wait-graph invariant: the caller's `thread_id` edge must be removed before any return
     /// from this method, including early return paths (such as a GC-yield request).
+    ///
+    /// This method is only valid after [`StaticInitResult::Waiting`] is returned. A
+    /// single-threaded build cannot produce that result, so it has no valid caller
+    /// there; reaching the wait arm in that configuration panics.
     pub fn wait_for_init(
         &self,
         description: TypeDescription,
@@ -475,6 +475,10 @@ impl StaticStorageManager {
         let mut should_yield = false;
         let edge_guard = WaitGraphEdgeGuard::new(&self.wait_graph, thread_id.as_u64());
 
+        #[allow(
+            clippy::never_loop,
+            reason = "single-threaded builds can reach this loop only through an invariant violation"
+        )]
         loop {
             // Check state before acquiring lock
             let state = storage.init_state.load(Ordering::Acquire);
@@ -493,6 +497,7 @@ impl StaticStorageManager {
             }
 
             // Try to wait with a timeout
+            #[cfg(feature = "multithreading")]
             {
                 let mut lock = storage.init_mutex.lock();
                 if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
@@ -500,18 +505,16 @@ impl StaticStorageManager {
                 }
 
                 // Wait for a short duration to allow periodic safe point checks
-                #[cfg(feature = "multithreading")]
-                {
-                    use std::time::Duration;
-                    let _ = storage
-                        .init_cond
-                        .wait_for(lock.raw_mut(), Duration::from_millis(10));
-                }
-                #[cfg(not(feature = "multithreading"))]
-                {
-                    // In single-threaded mode, just wait normally
-                    storage.init_cond.wait(lock.raw_mut());
-                }
+                use std::time::Duration;
+                let _ = storage
+                    .init_cond
+                    .wait_for(lock.raw_mut(), Duration::from_millis(10));
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                unreachable!(
+                    "wait_for_init is unreachable in single-threaded builds: StaticInitResult::Waiting cannot be produced when only one thread exists"
+                );
             }
         }
 

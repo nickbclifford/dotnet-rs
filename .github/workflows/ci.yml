@@ -16,10 +16,12 @@ env:
 
 jobs:
   doc-lint:
-    name: Documentation Drift Check
+    name: Documentation and Source Policy Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check multithreading cfg budget
+        run: bash scripts/check_mt_cfg_ceiling.sh
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links

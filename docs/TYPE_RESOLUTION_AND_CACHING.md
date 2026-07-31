@@ -249,7 +249,7 @@ ECMA-335 requires that each generic type definition generates a **finite instant
 - **Sharded storage**: Uses an array of `RwLock<HashMap>` shards indexed by the hash of `(TypeDescription, GenericLookup)`.
 - **Init states**: Stored in an `AtomicU8`. States include `INIT_STATE_UNINITIALIZED`, `INIT_STATE_INITIALIZING`, `INIT_STATE_INITIALIZED`, and `INIT_STATE_FAILED`.
 - **Initialization Protocol**: `init()` checks the state and returns a `StaticInitResult` — one of `Execute(cctor_method)`, `Initialized`, `Recursive`, `Failed`, or `Waiting`. If uninitialized, it atomically transitions to `INITIALIZING` and returns `StaticInitResult::Execute(cctor_method)`. The calling thread is now responsible for running the `.cctor`. Once done, it calls `mark_initialized()`.
-- **Cross-thread coordination**: If another thread calls `init()` while the state is `INITIALIZING`, it returns `StaticInitResult::Waiting`. The thread then calls `wait_for_init()`, which uses a `Condvar` and `Mutex` to block until the initializing thread finishes and broadcasts a notification.
+- **Cross-thread coordination**: With `multithreading`, if another thread calls `init()` while the state is `INITIALIZING`, it returns `StaticInitResult::Waiting`. The thread then calls `wait_for_init()`, which uses a `Condvar` and `Mutex` to block until the initializing thread finishes and broadcasts a notification. A single-threaded build cannot produce `Waiting`, so `wait_for_init()` has no valid caller there and its wait arm panics if that invariant is violated.
 
 ### Non-Obvious: `.cctor` and GC Interaction
 While waiting for another thread's `.cctor` to complete, the waiting thread must remain responsive to GC safe point requests. `wait_for_init` integrates with the GC coordinator for this.

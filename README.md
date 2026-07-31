@@ -46,7 +46,7 @@ For a subsystem-level overview, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.m
 ## CI
 
 CI workflows live in [`.github/workflows/`](.github/workflows).
-Documentation changes are validated by [`scripts/check_doc_drift.sh`](scripts/check_doc_drift.sh) and a `cargo doc` intra-doc-link pass with `DOTNET_SKIP_BUILD=1`.
+Documentation changes are validated by [`scripts/check_doc_drift.sh`](scripts/check_doc_drift.sh) and a `cargo doc` intra-doc-link pass with `DOTNET_SKIP_BUILD=1`. The same blocking job enforces the ratcheted multithreading cfg-occurrence budget through [`scripts/check_mt_cfg_ceiling.sh`](scripts/check_mt_cfg_ceiling.sh).
 
 ## Design documentation
 

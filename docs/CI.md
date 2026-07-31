@@ -10,7 +10,7 @@ Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuz
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable    | Yes                      | push/PR to `main`/`master`     | Format, clippy, and test gates       |
+| `.github/workflows/ci.yml`       | stable    | Yes                      | push/PR to `main`/`master`     | Source policy, format, clippy, and test gates |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -21,7 +21,7 @@ Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuz
 
 Jobs:
 
-1. `doc-lint` (Documentation Drift Check): runs `scripts/check_doc_drift.sh` (doc-to-code drift detector) and a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`, runs `scripts/check_doc_drift.sh` (doc-to-code drift detector), and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
 3. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
 4. `clippy`: feature matrix resolved from `xtask`
@@ -208,6 +208,16 @@ Run locally with:
 bash scripts/check_doc_drift.sh
 DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
   cargo doc --no-deps --no-default-features
+```
+
+### Multithreading cfg-Occurrence Budget
+
+The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling lives in the script and is lowered whenever the canonical count drops.
+
+Run it locally with:
+
+```bash
+bash scripts/check_mt_cfg_ceiling.sh
 ```
 
 ## `miri.yml` — Non-Blocking UB Checks

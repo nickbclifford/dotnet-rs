@@ -34,12 +34,10 @@ const MANAGED_PTR_SIZE_MATRIX: [((bool, bool), usize); 4] = [
 ];
 
 #[cfg(target_pointer_width = "64")]
-const OBJECT_INNER_OVERHEAD_MATRIX: [((bool, bool), usize); 4] = [
-    // ((has_validation_tag, has_owner_id), expected_overhead)
-    ((false, false), 8),
-    ((false, true), 16),
-    ((true, false), 16),
-    ((true, true), 24),
+const OBJECT_INNER_OVERHEAD_MATRIX: [(bool, usize); 2] = [
+    // (has_validation_tag, expected_overhead); owner_id is always present.
+    (false, 16),
+    (true, 24),
 ];
 
 #[cfg(target_pointer_width = "64")]
@@ -98,10 +96,6 @@ const fn lookup_bool(matrix: &[(bool, usize)], key: bool, fallback: usize) -> us
 const fn expected_layouts() -> LayoutExpectations {
     let has_validation_tag = cfg!(any(debug_assertions, feature = "memory-validation"));
     let multithreading = cfg!(feature = "multithreading");
-    let has_owner_id = cfg!(any(
-        feature = "multithreading",
-        feature = "memory-validation"
-    ));
 
     LayoutExpectations {
         stack_value_size: lookup_bool(STACK_VALUE_SIZE_MATRIX.as_slice(), has_validation_tag, 0),
@@ -112,10 +106,9 @@ const fn expected_layouts() -> LayoutExpectations {
             0,
         ),
         pointer_origin_size: lookup_bool(POINTER_ORIGIN_SIZE_MATRIX.as_slice(), multithreading, 0),
-        object_inner_overhead: lookup_bool2(
+        object_inner_overhead: lookup_bool(
             OBJECT_INNER_OVERHEAD_MATRIX.as_slice(),
             has_validation_tag,
-            has_owner_id,
             0,
         ),
         object_ref_size: lookup_bool(OBJECT_REF_SIZE_MATRIX.as_slice(), multithreading, 0),

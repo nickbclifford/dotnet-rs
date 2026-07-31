@@ -68,10 +68,6 @@ pub struct ResolutionContext<'a> {
 }
 
 impl<'a> ResolutionContext<'a> {
-    #[allow(
-        clippy::arc_with_non_send_sync,
-        reason = "ResolutionShared uses Arc uniformly and is thread-confined in the single-threaded configuration"
-    )]
     pub fn new(
         generics: &'a GenericLookup,
         loader: Arc<AssemblyLoader>,
@@ -88,10 +84,6 @@ impl<'a> ResolutionContext<'a> {
         }
     }
 
-    #[allow(
-        clippy::arc_with_non_send_sync,
-        reason = "ResolutionShared uses Arc uniformly and is thread-confined in the single-threaded configuration"
-    )]
     pub fn for_method(
         method: MethodDescription,
         loader: Arc<AssemblyLoader>,

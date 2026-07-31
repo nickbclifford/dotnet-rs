@@ -269,7 +269,7 @@ A critical abstraction providing memory safety over unsafe heap storage. The cor
 ## FieldStorage (`dotnet-value/src/storage.rs`)
 
 Provides atomic-capable raw byte storage for object fields:
-- Backed by `Vec<u8>`.
+- Backed uniformly by `dotnet_utils::sync::RwLock<Vec<u8>>` in every build configuration. The synchronization boundary selects `parking_lot::RwLock` with `multithreading` and the `RefCell`-based compatibility lock otherwise.
 - Supports synchronised/atomic field access (`get_field_atomic`, `set_field_atomic`) under various memory ordering models.
 - Provides `raw_data_ptr()` returning `*mut u8` for low-level or STW-GC tracing access.
 
@@ -277,7 +277,7 @@ Provides atomic-capable raw byte storage for object fields:
 
 Heap objects are represented via several layers of abstraction, split across `mod.rs`, `heap_storage.rs`, and `types.rs`:
 - **`HeapStorage`**: Enum holding distinct memory models: `Vec(Box<Vector>)`, `Obj(Box<Object>)`, `Str(CLRString)`, `Boxed(Box<Object>)` (the non-string variants are boxed).
-- **`ObjectInner`**: Wraps `HeapStorage`. Under `cfg(any(feature = "multithreading", feature = "memory-validation"))` it also carries `owner_id: ArenaId`, and under `cfg(any(feature = "memory-validation", debug_assertions))` (i.e. also in all debug builds) it embeds a `magic` number (`0x5AFE_0B1E_C700_0000`).
+- **`ObjectInner`**: Wraps `HeapStorage` and unconditionally carries `owner_id: ArenaId` in all build configurations. Under `cfg(any(feature = "memory-validation", debug_assertions))` (i.e. also in all debug builds) it embeds a `magic` number (`0x5AFE_0B1E_C700_0000`).
 - **`ObjectPtr`**: A transparent, Send/Sync wrapper over a raw pointer to a `ThreadSafeLock<ObjectInner>`. Used primarily for cross-arena references.
 - **`ObjectRef`**: A GC-managed handle wrapping the `ThreadSafeLock`. Implements `PointerLike` and `Collect`.
 - Header layout delegates to `LayoutManager` logic but inherently stores the synchronization block index and type description pointer in the .NET-compliant object header.

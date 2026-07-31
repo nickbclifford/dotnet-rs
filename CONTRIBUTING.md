@@ -88,6 +88,12 @@ For the standard local validation pass used by contributors, run:
 bash check.sh
 ```
 
+`check.sh` includes the ratcheted multithreading cfg-occurrence budget. When changing feature gates, run its focused check directly as well:
+
+```bash
+bash scripts/check_mt_cfg_ceiling.sh
+```
+
 ## Build test fixtures
 
 Some test paths rely on managed fixtures. Build them with:
