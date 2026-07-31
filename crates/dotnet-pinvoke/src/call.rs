@@ -365,7 +365,7 @@ fn narrow_and_push<'gc, T>(
         Err(e) => return e,
     };
 
-    let _ = ctx.pop_multiple(arg_count);
+    ctx.drop_top(arg_count);
     ctx.push(value);
     StepResult::Continue
 }
@@ -381,7 +381,7 @@ fn handle_pinvoke_return<'gc>(
             if let Err(e) = invoke_ffi_call_with_write_backs(ctx, call_data, std::ptr::null_mut()) {
                 return e;
             }
-            let _ = ctx.pop_multiple(arg_count);
+            ctx.drop_top(arg_count);
         }
         Some(ParameterType::Value(t)) => {
             let t = match ctx.make_concrete(t) {
@@ -544,7 +544,7 @@ fn handle_pinvoke_return<'gc>(
                     Err(e) => return e,
                 },
             };
-            let _ = ctx.pop_multiple(arg_count);
+            ctx.drop_top(arg_count);
             ctx.push(v);
         }
         Some(ParameterType::Ref(t)) => {
@@ -560,7 +560,7 @@ fn handle_pinvoke_return<'gc>(
                 .loader()
                 .find_concrete_type(concrete)
                 .expect("failed to resolve return type");
-            let _ = ctx.pop_multiple(arg_count);
+            ctx.drop_top(arg_count);
             ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
         }
         Some(ParameterType::TypedReference) => {
@@ -594,7 +594,7 @@ fn handle_pinvoke_return<'gc>(
                 false,
                 Some(ByteOffset::new(0)),
             );
-            let _ = ctx.pop_multiple(arg_count);
+            ctx.drop_top(arg_count);
             ctx.push(StackValue::TypedRef(m.into(), type_desc));
         }
     }
@@ -617,7 +617,13 @@ fn external_call_impl<'gc>(
     let mut cross_arena_guards = Vec::new();
 
     let arg_count = method.signature().parameters.len();
-    let stack_values = ctx.peek_multiple(arg_count);
+    // The former `peek_multiple(arg_count)` validated the complete range here,
+    // before library resolution or marshaling. Preserve that eager underflow
+    // behavior now that arguments are read individually below.
+    assert!(
+        ctx.top_of_stack().as_usize() >= arg_count,
+        "Evaluation stack underflow"
+    );
 
     let res = method.resolution();
     let module = if !res.is_null() {
@@ -669,7 +675,7 @@ fn external_call_impl<'gc>(
 
             let res = ctx.throw_by_name_with_message(exc_name, msg.as_str());
             if res == StepResult::Exception {
-                let _ = ctx.pop_multiple(arg_count);
+                ctx.drop_top(arg_count);
             }
             return res;
         }
@@ -694,19 +700,17 @@ fn external_call_impl<'gc>(
     };
     let mut temp_buffers: Vec<TempBuffer> = vec![];
     let mut write_backs: Vec<(WriteBackSource<'gc>, usize, usize)> = vec![];
-    let mut arg_buffer_map: Vec<Option<usize>> = vec![None; stack_values.len()];
-    let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); stack_values.len()];
+    let mut arg_buffer_map: Vec<Option<usize>> = vec![None; arg_count];
+    let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); arg_count];
 
     // Pass 1: Prepare buffers
-    for (i, (v, Parameter(_, p_type))) in stack_values
-        .iter()
-        .zip(&method.signature().parameters)
-        .enumerate()
-    {
+    for (i, Parameter(_, p_type)) in method.signature().parameters.iter().enumerate() {
+        let v = ctx.peek_stack_at(arg_count - 1 - i);
+
         // SAFETY: `args` contains libffi Type values constructed for every signature parameter;
         // their raw pointers remain valid for the duration of this marshaling loop.
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
-        match v {
+        match &v {
             StackValue::Int32(val) => {
                 if let Err(e) = marshal_integer_arg(
                     IntegerArgValue::Int32(*val),

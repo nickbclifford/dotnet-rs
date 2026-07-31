@@ -68,7 +68,7 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
             // Preserve previous callvirt semantics: arguments are consumed before an early throw.
-            let _ = ctx.pop_multiple(num_args);
+            ctx.drop_top(num_args);
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => {
@@ -76,7 +76,7 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
         }
         StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
-            let _ = ctx.pop_multiple(num_args);
+            ctx.drop_top(num_args);
             return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
         }
     };

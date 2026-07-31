@@ -784,7 +784,7 @@ pub fn intrinsic_debugger_log_internal<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    ctx.pop_multiple(3);
+    ctx.drop_top(3);
     StepResult::Continue
 }
 
@@ -809,7 +809,7 @@ pub fn intrinsic_environment_failfast<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    ctx.pop_multiple(4);
+    ctx.drop_top(4);
     StepResult::Continue
 }
 
@@ -822,7 +822,7 @@ pub fn intrinsic_eventsource_disabled<'gc, T: TypedStackOps<'gc>>(
 ) -> StepResult {
     if !_method.signature().parameters.is_empty() {
         // Instance overloads consume `this` plus explicit parameters.
-        ctx.pop_multiple(1 + _method.signature().parameters.len());
+        ctx.drop_top(1 + _method.signature().parameters.len());
     } else if _method.signature().instance {
         ctx.pop();
     }

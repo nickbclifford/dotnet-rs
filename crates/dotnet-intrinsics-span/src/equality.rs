@@ -91,7 +91,7 @@ fn read_span_length_or_push_value_equality<'gc, T: SpanIntrinsicHost<'gc>>(
     match read_span_length(span) {
         Ok(length) => Ok(length),
         Err(_) => {
-            ctx.pop_multiple(2);
+            ctx.drop_top(2);
             ctx.push_i32(fallback_equal);
             Err(StepResult::Continue)
         }
@@ -113,7 +113,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         // Some runtime packs call SequenceEqualSlowPath with already-projected values
         // instead of ReadOnlySpan<T>. In that case, compare the values directly.
         _ => {
-            ctx.pop_multiple(2);
+            ctx.drop_top(2);
             ctx.push_i32((a_val == b_val) as i32);
             return StepResult::Continue;
         }
@@ -133,13 +133,13 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
     };
 
     if a_len != b_len {
-        ctx.pop_multiple(2);
+        ctx.drop_top(2);
         ctx.push_i32(0);
         return StepResult::Continue;
     }
 
     if a_len == 0 {
-        ctx.pop_multiple(2);
+        ctx.drop_top(2);
         ctx.push_i32(1);
         return StepResult::Continue;
     }
@@ -181,7 +181,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
             Err(step) => return step,
         };
 
-        ctx.pop_multiple(2);
+        ctx.drop_top(2);
         ctx.push_i32(equal as i32);
         StepResult::Continue
     } else {

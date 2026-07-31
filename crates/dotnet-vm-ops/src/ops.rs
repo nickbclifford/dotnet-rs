@@ -46,19 +46,26 @@ pub trait EvalStackOps<'gc> {
     /// instead of panicking.
     fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError>;
 
+    /// Removes and discards `count` values from the top of the evaluation stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics if fewer than `count` values are available. Values are removed one
+    /// at a time, so values already removed before an underflow are not restored.
+    fn drop_top(&mut self, count: usize) {
+        for _ in 0..count {
+            self.pop();
+        }
+    }
+
     /// Removes `count` values from the stack and returns them in stack order.
     ///
     /// # Panics
     ///
-    /// Panics if fewer than `count` values are available.
+    /// Panics if fewer than `count` values are available. Values are removed one
+    /// at a time, so values already removed before an underflow are not restored.
+    #[must_use = "use drop_top to discard; pop_multiple is for consuming sites"]
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
-
-    /// Returns the top `count` values without removing them.
-    ///
-    /// # Panics
-    ///
-    /// Panics if fewer than `count` values are available.
-    fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
 
     /// Returns the top value if present, or `None` if the stack is empty.
     fn peek(&self) -> Option<StackValue<'gc>>;
@@ -531,7 +538,7 @@ crate::trait_alias! {
     /// Host contract for string intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
-    /// - stack reads/writes (`push`, `pop`, `peek_stack_at`)
+    /// - stack reads/writes (`push`, `pop`, `drop_top`, `peek_stack_at`)
     /// - exception throws (`throw_by_name_with_message`)
     /// - raw/string memory access (`read_unaligned`, `write_unaligned`, `check_gc_safe_point`)
     /// - allocation/boxing helpers (`new_object`, `new_vector`, `box_value`)
@@ -553,7 +560,7 @@ crate::trait_alias! {
     /// Host contract for delegate intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
-    /// - delegate argument stack handling (`pop_multiple`, `push`)
+    /// - delegate argument stack handling (`pop_multiple`, `drop_top`, `push`)
     /// - exception throws for unsupported paths
     /// - runtime method lookup/dispatch (`dispatch_method`, `lookup_method_by_index`)
     /// - runtime state access for multicast frames (`frame_stack_mut`)
@@ -567,7 +574,7 @@ crate::trait_alias! {
     /// Host contract for span intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
-    /// - stack and local access (`peek_stack`, `get_local`, `set_local`)
+    /// - stack and local access (`peek_stack`, `drop_top`, `get_local`, `set_local`)
     /// - pointer/data reads and writes (`read_unaligned`, `write_unaligned`)
     /// - allocation and reflection helpers (`new_object`, `get_heap_description`)
     /// - element type/layout resolution (`make_concrete`, `instance_field_layout`)
@@ -609,7 +616,7 @@ crate::trait_alias! {
     /// Host contract for reflection intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
-    /// - runtime type/member stack plumbing (`push_obj`, `pop_obj`, `pop_multiple`)
+    /// - runtime type/member stack plumbing (`push_obj`, `pop_obj`)
     /// - reflection lookup and resolution (`get_heap_description`, `make_concrete`, `is_a`)
     /// - method construction/invocation (`return_frame`, frame state via `VesInternals`)
     /// - static storage initialization for constructed generic types

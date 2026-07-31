@@ -325,3 +325,41 @@ Skip the PGO-use test build step:
 - `scripts/bench_pgo.sh` expects toolchain-matched `llvm-profdata` from `llvm-tools-preview`.
 - The script stores generated/merged artifacts under the selected `--target-dir` and rewrites stale profile files for repeatable runs.
 - Keep this PGO path optional; ordinary timing comparisons still use standard `bench-thin`/`bench-fat` commands.
+
+## `drop_top` comparison (2026-07-31)
+
+After replacing discard-only `EvalStackOps::pop_multiple` calls with `drop_top`, removing
+`peek_multiple`, and making `pop_args` allocation-free, the full `end_to_end` target was compared
+with the `before-drop-top` Criterion baseline:
+
+```bash
+cargo run -p xtask -- fixtures build
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- --baseline before-drop-top --sample-size 10
+```
+
+Both the saved baseline and comparison use Criterion's minimum 10-sample configuration. The table
+records Criterion's 95% confidence interval for relative time change; negative values are faster.
+
+| case | relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `json` | −2.2948% to −1.9736% | improved |
+| `arithmetic` | −1.3363% to −0.7045% | within noise threshold |
+| `gc` | −0.6922% to +0.4698% | no change detected |
+| `alloc_throughput` | +4.8959% to +11.842% | regressed |
+| `gc_cross_arena` | −4.1923% to +1.5019% | no change detected |
+| `dispatch` | −0.7660% to +0.0199% | no change detected |
+| `generics` | −1.2225% to +0.6136% | no change detected |
+| `stack` | −1.3225% to −0.6865% | within noise threshold |
+| `span` | −2.2999% to −1.6383% | improved |
+| `span_equality` | −4.5346% to −2.7866% | improved |
+| `memory` | −5.0361% to −2.0085% | improved |
+| `unsafe_buffer` | −4.7595% to −2.0134% | improved |
+| `string` | +2.4821% to +3.6921% | regressed |
+| `reflection` | −3.0075% to −1.9820% | improved |
+
+This low-sample end-to-end measurement is not a direct count of the eliminated Rust `Vec`
+allocations and must not be treated as a causal explanation for individual workload deltas. The
+comparison completes successfully across every benchmark case; it reports mixed workload-level
+timing changes, including regressions for `alloc_throughput` and `string` that should be repeated
+under a controlled environment before drawing a performance conclusion.

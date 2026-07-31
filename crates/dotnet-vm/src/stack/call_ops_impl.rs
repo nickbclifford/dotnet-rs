@@ -677,7 +677,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let this_value = self.peek_stack_at(num_args - 1);
         let this_type = match this_value {
             StackValue::ObjectRef(ObjectRef(None)) => {
-                let _ = self.pop_multiple(num_args);
+                self.drop_top(num_args);
                 return Some(
                     self.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG),
                 );
@@ -690,7 +690,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             }
             StackValue::ManagedPtr(m) => m.inner_type(),
             rest => {
-                let _ = self.pop_multiple(num_args);
+                self.drop_top(num_args);
                 return Some(StepResult::type_error(
                     "ObjectRef or ManagedPtr",
                     format!("{:?}", rest),

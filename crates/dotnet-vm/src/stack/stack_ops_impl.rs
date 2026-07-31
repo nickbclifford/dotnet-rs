@@ -44,11 +44,6 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
-        self.evaluation_stack.peek_multiple(count)
-    }
-
-    #[inline]
     fn peek(&self) -> Option<StackValue<'gc>> {
         self.evaluation_stack.stack.last().cloned()
     }

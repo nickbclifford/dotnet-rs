@@ -161,7 +161,7 @@ pub fn intrinsic_string_equals<'gc, T: TypedStackOps<'gc> + RawMemoryOps<'gc>>(
         _ => false,
     };
 
-    ctx.pop_multiple(2);
+    ctx.drop_top(2);
     ctx.push_i32(if res { 1 } else { 0 });
     StepResult::Continue
 }
@@ -444,7 +444,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, T: IntrinsicStringHost<'gc>>(
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
-    ctx.pop_multiple(3);
+    ctx.drop_top(3);
     ctx.push_string(value);
     StepResult::Continue
 }

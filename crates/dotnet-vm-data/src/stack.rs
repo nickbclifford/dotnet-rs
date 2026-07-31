@@ -363,12 +363,6 @@ impl<'gc> EvaluationStack<'gc> {
         ));
     }
 
-    pub fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>> {
-        let mut values = Vec::with_capacity(count);
-        self.pop_multiple_into(count, &mut values);
-        values
-    }
-
     pub fn pop_multiple_into(&mut self, count: usize, out: &mut Vec<StackValue<'gc>>) {
         out.clear();
         out.reserve(count);

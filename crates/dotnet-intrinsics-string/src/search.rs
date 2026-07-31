@@ -154,7 +154,7 @@ pub fn intrinsic_string_substring<
         Err(e) => return StepResult::internal_error(e),
     };
 
-    ctx.pop_multiple(if length.is_some() { 3 } else { 2 });
+    ctx.drop_top(if length.is_some() { 3 } else { 2 });
     ctx.push_string(CLRString::new(value));
     StepResult::Continue
 }
