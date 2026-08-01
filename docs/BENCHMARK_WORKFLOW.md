@@ -329,8 +329,9 @@ Skip the PGO-use test build step:
 ## `drop_top` comparison (2026-07-31)
 
 After replacing discard-only `EvalStackOps::pop_multiple` calls with `drop_top`, removing
-`peek_multiple`, and making `pop_args` allocation-free, the full `end_to_end` target was compared
-with the `before-drop-top` Criterion baseline:
+`peek_multiple`, and making `pop_args` allocation-free (the unused helper was subsequently deleted
+in the `supervised/pop-args` goal), the full `end_to_end` target was compared with the
+`before-drop-top` Criterion baseline:
 
 ```bash
 cargo run -p xtask -- fixtures build

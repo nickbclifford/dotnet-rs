@@ -165,12 +165,10 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
             }
         };
 
-        // Pop arguments now that we're done with things that might trigger GC or reallocation
-        let _ = ctx.pop(); // success_ptr
-        let _ = ctx.pop(); // obj_ref
+        // Pop success_ptr, then obj_ref after all work that may yield or trigger GC.
+        ctx.drop_top(2);
     } else {
-        let _ = ctx.pop();
-        let _ = ctx.pop();
+        ctx.drop_top(2);
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
@@ -260,14 +258,10 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
             }
         };
 
-        // Pop arguments now that we're done
-        let _ = ctx.pop(); // success_ptr
-        let _ = ctx.pop(); // timeout_ms
-        let _ = ctx.pop(); // obj_ref
+        // Pop success_ptr, timeout_ms, then obj_ref after all work that may yield or trigger GC.
+        ctx.drop_top(3);
     } else {
-        let _ = ctx.pop();
-        let _ = ctx.pop();
-        let _ = ctx.pop();
+        ctx.drop_top(3);
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
@@ -308,12 +302,11 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, T: ThreadingIntrinsicHost<'gc>>(
             MonitorLockResult::Yield => return StepResult::Yield,
         };
 
-        let _ = ctx.pop(); // timeout_ms
-        let _ = ctx.pop(); // obj_ref
+        // Pop timeout_ms, then obj_ref after all work that may yield or trigger GC.
+        ctx.drop_top(2);
         ctx.push_i32(if success { 1 } else { 0 });
     } else {
-        let _ = ctx.pop();
-        let _ = ctx.pop();
+        ctx.drop_top(2);
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
