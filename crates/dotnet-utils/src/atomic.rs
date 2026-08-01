@@ -143,16 +143,15 @@ pub struct StandardAtomicAccess;
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, ordering: Ordering) -> u64 {
         validate_atomic_access(ptr, true);
-        crate::validate_alignment(ptr, size);
         validate_ordering(ordering, true);
         match size {
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             1 => unsafe { AtomicU8::from_ptr(ptr as *mut u8) }.load(ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.load(ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.load(ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.load(ordering),
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -163,16 +162,15 @@ impl AtomicAccess for StandardAtomicAccess {
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) {
         validate_atomic_access(ptr as *const u8, true);
-        crate::validate_alignment(ptr as *const u8, size);
         validate_ordering(ordering, false);
         match size {
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             1 => unsafe { AtomicU8::from_ptr(ptr) }.store(value as u8, ordering),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.store(value as u16, ordering),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.store(value as u32, ordering),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.store(value, ordering),
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -189,24 +187,23 @@ impl AtomicAccess for StandardAtomicAccess {
         success: Ordering,
         failure: Ordering,
     ) -> Result<u64, u64> {
-        crate::validate_alignment(ptr as *const u8, size);
         match size {
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             1 => unsafe { AtomicU8::from_ptr(ptr) }
                 .compare_exchange(expected as u8, new as u8, success, failure)
                 .map(|x| x as u64)
                 .map_err(|x| x as u64),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }
                 .compare_exchange(expected as u16, new as u16, success, failure)
                 .map(|x| x as u64)
                 .map_err(|x| x as u64),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }
                 .compare_exchange(expected as u32, new as u32, success, failure)
                 .map(|x| x as u64)
                 .map_err(|x| x as u64),
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }
                 .compare_exchange(expected, new, success, failure),
             _ => {
@@ -217,15 +214,14 @@ impl AtomicAccess for StandardAtomicAccess {
     }
 
     unsafe fn exchange_atomic(ptr: *mut u8, size: usize, new: u64, ordering: Ordering) -> u64 {
-        crate::validate_alignment(ptr as *const u8, size);
         match size {
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             1 => unsafe { AtomicU8::from_ptr(ptr) }.swap(new as u8, ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.swap(new as u16, ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.swap(new as u32, ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.swap(new, ordering),
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -240,17 +236,16 @@ impl AtomicAccess for StandardAtomicAccess {
         value: u64,
         ordering: Ordering,
     ) -> u64 {
-        crate::validate_alignment(ptr as *const u8, size);
         match size {
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             1 => unsafe { AtomicU8::from_ptr(ptr) }.fetch_add(value as u8, ordering) as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.fetch_add(value as u16, ordering)
                 as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.fetch_add(value as u32, ordering)
                 as u64,
-            // SAFETY: The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: The caller guarantees `ptr` is valid and aligned for the selected atomic width.
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.fetch_add(value, ordering),
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -264,7 +259,6 @@ impl AtomicAccess for StandardAtomicAccess {
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, _ordering: Ordering) -> u64 {
         validate_atomic_access(ptr, true);
-        crate::validate_alignment(ptr, size);
         // In single-threaded mode, we can use simple reads.
         // Although the trait requires alignment, we use unaligned reads
         // during the transition period to avoid UB if alignment is missed.
@@ -286,7 +280,6 @@ impl AtomicAccess for StandardAtomicAccess {
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, _ordering: Ordering) {
         validate_atomic_access(ptr as *const u8, true);
-        crate::validate_alignment(ptr as *const u8, size);
         // In single-threaded mode, we can use simple writes.
         // Although the trait requires alignment, we use unaligned writes
         // during the transition period to avoid UB if alignment is missed.
@@ -527,16 +520,11 @@ mod tests {
     #[test]
     #[cfg(feature = "memory-validation")]
     #[should_panic(expected = "Alignment violation")]
-    fn test_misaligned_atomic() {
+    fn test_validate_alignment_rejects_misaligned_pointer() {
         let data = [0u8; 16];
-        let ptr = data.as_ptr();
-        // Use a pointer offset of 1 to ensure it's misaligned for 4 and 8 byte ops
-        // SAFETY: Offset one remains within the test's sixteen-byte backing allocation.
-        let misaligned_ptr = unsafe { ptr.add(1) };
-        // SAFETY: `misaligned_ptr` still points into the live test allocation.
-        unsafe {
-            StandardAtomicAccess::load_atomic(misaligned_ptr, 4, Ordering::SeqCst);
-        }
+        // SAFETY: Offset one remains within the live sixteen-byte allocation.
+        let misaligned_ptr = unsafe { data.as_ptr().add(1) };
+        crate::validate_alignment(misaligned_ptr, 4);
     }
 
     #[test]

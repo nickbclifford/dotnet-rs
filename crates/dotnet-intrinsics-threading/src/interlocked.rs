@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
-    error::{CompareExchangeError, ExecutionError, VmError},
+    error::{CompareExchangeError, ExecutionError, MemoryAccessError, VmError},
     generics::GenericLookup,
     members::MethodDescription,
 };
@@ -14,6 +14,19 @@ use dotnet_utils::sync::Ordering;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
+
+const DATA_MISALIGNED_MESSAGE: &str = "Object accessed by unaligned reference.";
+
+fn handle_interlocked_memory_access_error<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    error: MemoryAccessError,
+) -> StepResult {
+    match error {
+        MemoryAccessError::UnalignedAccess(_) => ctx
+            .throw_by_name_with_message("System.DataMisalignedException", DATA_MISALIGNED_MESSAGE),
+        error => StepResult::Error(VmError::from(error)),
+    }
+}
 
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,
@@ -63,8 +76,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as u8,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -94,8 +107,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as u16,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -125,8 +138,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as i32,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -152,8 +165,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as i64,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -180,8 +193,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as isize,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -222,8 +235,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
                 )
             } {
                 Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as usize,
-                Err(CompareExchangeError::Bounds(e)) => {
-                    return StepResult::Error(VmError::from(e));
+                Err(CompareExchangeError::Bounds(error)) => {
+                    return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
 
@@ -267,7 +280,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width exchange.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -276,8 +289,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     1,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as u8;
+            } {
+                Ok(prev) => prev as u8,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             if is_signed {
                 ctx.push_i32((prev as i8) as i32);
@@ -291,7 +306,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit exchange.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -300,8 +315,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     2,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as u16;
+            } {
+                Ok(prev) => prev as u16,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             if is_signed {
                 ctx.push_i32((prev as i16) as i32);
@@ -314,7 +331,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -323,8 +340,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     4,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as i32;
+            } {
+                Ok(prev) => prev as i32,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             ctx.push_i32(prev);
         }
@@ -333,7 +352,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -342,8 +361,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     8,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as i64;
+            } {
+                Ok(prev) => prev as i64,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             ctx.push_i64(prev);
         }
@@ -353,7 +374,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
             let size = ObjectRef::SIZE;
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches pointer width.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -362,8 +383,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     size,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as isize;
+            } {
+                Ok(prev) => prev as isize,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             ctx.push_isize(prev);
         }
@@ -393,7 +416,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let size = ObjectRef::SIZE;
             // SAFETY: `target_ptr` is the managed `ref T` argument and `val_raw`
             // uses the VM tagged object representation.
-            let prev_raw = unsafe {
+            let prev_raw = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -402,8 +425,10 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     size,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.Exchange failed")
-            } as usize;
+            } {
+                Ok(prev) => prev as usize,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             // SAFETY: `prev_raw` came from VM-managed object slot bytes and `gc`
             // brands the returned reference to the current arena lifetime.
@@ -443,7 +468,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_add_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -452,8 +477,10 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     4,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.ExchangeAdd failed")
-            } as i32;
+            } {
+                Ok(prev) => prev as i32,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd")
             {
@@ -467,7 +494,7 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
-            let prev = unsafe {
+            let prev = match unsafe {
                 RawMemoryOps::exchange_add_atomic(
                     ctx,
                     target_ptr.origin().clone(),
@@ -476,8 +503,10 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     8,
                     Ordering::SeqCst,
                 )
-                .expect("Interlocked.ExchangeAdd failed")
-            } as i64;
+            } {
+                Ok(prev) => prev as i64,
+                Err(error) => return handle_interlocked_memory_access_error(ctx, error),
+            };
 
             if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd")
             {

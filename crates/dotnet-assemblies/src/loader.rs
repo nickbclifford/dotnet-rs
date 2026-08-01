@@ -142,11 +142,7 @@ pub fn default_read_options() -> ReadOptions {
 }
 static_collect!(AssemblyLoader);
 
-// AssemblyLoader is !Sync / !Send when multithreading is disabled because it contains
-// compat::RwLock (which uses RefCell internally). This is sound as long as the runtime
-// remains single-threaded. However, to prevent unsound use in statics (e.g., in tests),
-// we do NOT provide manual Sync/Send implementations here unless multithreading is enabled
-// (at which point the fields themselves will be Sync/Send).
+// Keep auto-traits field-derived because no-MT compat locks are deliberately not thread-safe.
 
 impl AssemblyLoader {
     #[inline]

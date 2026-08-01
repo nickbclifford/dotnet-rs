@@ -9,10 +9,6 @@ pub mod compat {
     use std::ops::{Deref, DerefMut};
     #[derive(Debug, Default)]
     pub struct Mutex<T>(RefCell<T>);
-    // SAFETY: Single-threaded builds cannot create a second thread, so the
-    // `RefCell` is never accessed concurrently. The `T: Send` bound matches
-    // the synchronization primitive contract used in multithreaded builds.
-    unsafe impl<T: Send> Sync for Mutex<T> {}
     impl<T> Mutex<T> {
         pub fn new(t: T) -> Self {
             Self(RefCell::new(t))
@@ -41,10 +37,6 @@ pub mod compat {
     }
     #[derive(Debug, Default)]
     pub struct RwLock<T>(RefCell<T>);
-    // SAFETY: Single-threaded builds cannot create a second thread, so the
-    // `RefCell` is never accessed concurrently. The `T: Send` bound matches
-    // the synchronization primitive contract used in multithreaded builds.
-    unsafe impl<T: Send> Sync for RwLock<T> {}
     impl<T> RwLock<T> {
         pub fn new(t: T) -> Self {
             Self(RefCell::new(t))
@@ -189,10 +181,8 @@ mod sync_send_sync_tests {
     use super::compat::{Condvar, Mutex, RwLock};
     use static_assertions::{assert_impl_all, assert_not_impl_all};
 
-    // ── compile-time: locks are Sync when their contents are Send ────────────
-    // The single-threaded configuration cannot create another thread.
-    assert_impl_all!(Mutex<i32>: Sync);
-    assert_impl_all!(RwLock<i32>: Sync);
+    assert_not_impl_all!(Mutex<i32>: Sync);
+    assert_not_impl_all!(RwLock<i32>: Sync);
     // Guards borrow from the RefCell, so they must also be !Sync.
     assert_not_impl_all!(super::compat::MutexGuard<'static, i32>: Sync);
     assert_not_impl_all!(super::compat::RwLockReadGuard<'static, i32>: Sync);

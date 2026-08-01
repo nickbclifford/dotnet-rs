@@ -262,6 +262,11 @@ A critical abstraction providing memory safety over unsafe heap storage. The cor
 - **Unaligned reads/writes**: Validates reads/writes matching the `unaligned.` CIL prefix against `LayoutManager` invariants.
 - **Atomic operations**: Compare-exchange, exchange, load, store. Respects .NET memory models (`Ordering` abstractions).
 - **Bounds checking**: `check_bounds_internal` validates pointer arithmetic against `base` and `len`.
+- **Interlocked alignment guards**: `compare_exchange_atomic`, `exchange_atomic`, and
+  `exchange_add_atomic` check owned and unmanaged addresses before invoking atomic APIs.
+  Misaligned Interlocked operations surface to managed code as `DataMisalignedException`.
+  `load_atomic` and `store_atomic` instead retain the lock-guarded memcpy fallback required for
+  valid misaligned volatile locations.
 - **Reference integrity**: `validate_ref_integrity` ensures GC reference slots aren't partially overwritten (e.g. by overlapping struct copies).
 - **Cross-arena tracking**: Checks all reference stores.
 - **`MemoryOwner`** (defined in `dotnet-runtime-memory/src/write_barrier.rs`): Enum over `Local(ObjectRef<'gc>)` and `CrossArena(ObjectPtr, ArenaId, GcLifetime<'gc>)` — dynamically routes read/writes through `gc-arena` mutations or thread-safe atomic views. The `GcLifetime<'gc>` token in `CrossArena` ties the owner to a real GC context, preventing weaker-lifetime construction.

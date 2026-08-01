@@ -10,8 +10,6 @@ use crate::{
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
-#[cfg(feature = "multithreading")]
-use dotnet_metrics::ArenaGcPressureSnapshot;
 use dotnet_metrics::{
     CacheKind, CacheSize, CacheSizes, CacheStats, RuntimeMetrics, RuntimeMetricsSnapshot,
 };
@@ -32,14 +30,14 @@ use dotnet_value::{
     string::parse_env_bool,
 };
 use gc_arena::{Collect, collect::Trace};
-#[cfg(feature = "multithreading")]
-use std::mem::size_of;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::HashMap,
     env,
     sync::OnceLock,
 };
+#[cfg(feature = "multithreading")]
+use {dotnet_metrics::ArenaGcPressureSnapshot, std::mem::size_of};
 
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::AtomicUsize;
@@ -345,6 +343,17 @@ pub struct SharedGlobalState {
     pub app_context_switches: DashMap<String, bool>,
 }
 
+#[cfg(not(feature = "multithreading"))]
+mod compat_auto_traits {
+    use super::SharedGlobalState;
+
+    // SAFETY: The no-MT harness moves VM state to its sole executor; only `abort_requested` remains shared.
+    unsafe impl Send for SharedGlobalState {}
+
+    // SAFETY: The executor alone accesses VM state; the timeout waiter touches only `abort_requested`.
+    unsafe impl Sync for SharedGlobalState {}
+}
+
 #[cfg(test)]
 static_assertions::assert_impl_all!(SharedGlobalState: Send, Sync);
 
@@ -380,11 +389,26 @@ impl SharedGlobalState {
     pub fn new(loader: Arc<AssemblyLoader>) -> Self {
         let tracer = Tracer::new();
         let metrics = Arc::new(RuntimeMetrics::new());
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT global caches are executor-confined; Arc preserves feature-neutral ownership"
+        )]
         let caches = Arc::new(GlobalCaches::new(&loader, &tracer, Arc::clone(&metrics)));
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 
         let stw_in_progress = Arc::new(AtomicBool::new(false));
+
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT static storage is executor-confined; Arc preserves feature-neutral ownership"
+        )]
+        let statics = Arc::new(StaticStorageManager::new());
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT instruction history is executor-confined; Arc preserves feature-neutral ownership"
+        )]
+        let last_instructions = Arc::new(Mutex::new(InstructionRingBuffer::new()));
 
         let state = Self {
             pinvoke: {
@@ -402,8 +426,8 @@ impl SharedGlobalState {
             tracer_enabled,
             empty_generics: GenericLookup::default(),
             caches,
-            statics: Arc::new(StaticStorageManager::new()),
-            last_instructions: Arc::new(Mutex::new(InstructionRingBuffer::new())),
+            statics,
+            last_instructions,
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
             #[cfg(feature = "multithreading")]
@@ -487,11 +511,16 @@ impl SharedGlobalState {
     pub fn resolution_shared(self: &Arc<Self>) -> Arc<crate::context::ResolutionShared> {
         self.resolution_shared_cache
             .get_or_init(|| {
-                Arc::new(crate::context::ResolutionShared::new(
+                #[allow(
+                    clippy::arc_with_non_send_sync,
+                    reason = "no-MT resolver state is executor-confined; Arc preserves feature-neutral ownership"
+                )]
+                let shared = Arc::new(crate::context::ResolutionShared::new(
                     self.loader.clone(),
                     self.caches.clone(),
                     Some(Arc::downgrade(self)),
-                ))
+                ));
+                shared
             })
             .clone()
     }

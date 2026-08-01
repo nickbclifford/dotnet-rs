@@ -15,6 +15,19 @@ The following table describes the available validation features and which crates
 | `validation-all` | Meta-feature enabling all the above validation features. | `dotnet-cli`, `dotnet-vm` |
 | `fuzzing` | Enables `Arbitrary` implementations and fuzzing-specific instrumentation. | `dotnet-cli`, `dotnet-vm`, `dotnet-pinvoke`, `dotnet-utils`, `dotnet-value`, `dotnet-types` |
 
+## Atomic Alignment
+
+Alignment validation for Interlocked read-modify-write operations is always enabled:
+`RawMemoryAccess::compare_exchange_atomic`, `exchange_atomic`, and
+`exchange_add_atomic` reject misaligned addresses before invoking Rust atomic APIs. This is a
+safety guard rather than a `memory-validation` diagnostic, and an Interlocked caller receives a
+managed `DataMisalignedException`. Misaligned volatile loads and stores remain valid and use a
+lock-guarded memcpy fallback instead of throwing.
+
+When `memory-validation` is enabled, `dotnet_utils::validate_alignment` remains a secondary debug
+check for field and storage paths outside `RawMemoryAccess`; the low-level atomic implementation
+relies on its unsafe caller contract instead of using that feature-gated diagnostic as a guard.
+
 ## Recommended Local Commands
 
 Depending on what you are debugging, use the following feature flags with `cargo test`.

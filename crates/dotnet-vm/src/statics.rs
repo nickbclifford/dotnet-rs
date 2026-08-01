@@ -361,13 +361,23 @@ impl StaticStorageManager {
 
             let mut shard = self.shards[shard_idx].write();
             shard.entry(key.clone()).or_insert_with(|| {
-                Arc::new(StaticStorage {
+                #[allow(
+                    clippy::arc_with_non_send_sync,
+                    reason = "no-MT initialization state is executor-confined; Arc preserves feature-neutral ownership"
+                )]
+                let init_mutex = Arc::new(OrderedMutex::new(()));
+                #[allow(
+                    clippy::arc_with_non_send_sync,
+                    reason = "no-MT static storage is executor-confined; Arc preserves feature-neutral ownership"
+                )]
+                let storage = Arc::new(StaticStorage {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
                     initializing_thread: AtomicU64::new(0),
                     storage: FieldStorage::new(layout, data),
                     init_cond: Arc::new(Condvar::new()),
-                    init_mutex: Arc::new(OrderedMutex::new(())),
-                })
+                    init_mutex,
+                });
+                storage
             });
         }
 

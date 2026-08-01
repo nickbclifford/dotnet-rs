@@ -38,6 +38,10 @@ impl Deref for VmResolverService {
 
 impl VmResolverService {
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT resolver caches are executor-confined; Arc preserves feature-neutral ownership"
+        )]
         let caches = Arc::new(VmResolverCaches::new(shared.caches.clone()));
         let layout = VmResolverLayout::new(shared.caches.clone());
         let inner = dotnet_runtime_resolver::ResolverService::from_parts(
@@ -49,6 +53,10 @@ impl VmResolverService {
     }
 
     pub fn from_parts(loader: Arc<AssemblyLoader>, caches: Arc<GlobalCaches>) -> Self {
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT resolver caches are executor-confined; Arc preserves feature-neutral ownership"
+        )]
         let adapter = Arc::new(VmResolverCaches::new(caches.clone()));
         let layout = VmResolverLayout::new(caches);
         let inner = dotnet_runtime_resolver::ResolverService::from_parts(loader, adapter, layout);

@@ -5,7 +5,11 @@ use dotnet_types::{
     generics::GenericLookup,
     resolution::ResolutionS,
 };
-use dotnet_utils::{ArenaId, ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
+use dotnet_utils::{
+    ArenaId, ByteOffset,
+    atomic::{Atomic, AtomicAccess, StandardAtomicAccess, validate_atomic_access},
+    gc::GCHandle,
+};
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
@@ -51,6 +55,68 @@ fn check_bounds(
         }
     }
     Ok(())
+}
+
+unsafe fn load_atomic_with_unaligned_fallback(
+    ptr: *const u8,
+    size: usize,
+    ordering: dotnet_utils::sync::Ordering,
+) -> u64 {
+    if !matches!(size, 1 | 2 | 4 | 8) {
+        panic!("Unsupported atomic size: {size}");
+    }
+
+    if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
+        // SAFETY: The caller guarantees validity, and the branch proves alignment for `size`.
+        return unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
+    }
+
+    // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
+    let bytes = unsafe { Atomic::load_field(ptr, size, ordering) };
+    match size {
+        1 => u8::from_ne_bytes(bytes.try_into().expect("size 1 produces one byte")) as u64,
+        2 => u16::from_ne_bytes(bytes.try_into().expect("size 2 produces two bytes")) as u64,
+        4 => u32::from_ne_bytes(bytes.try_into().expect("size 4 produces four bytes")) as u64,
+        8 => u64::from_ne_bytes(bytes.try_into().expect("size 8 produces eight bytes")),
+        _ => unreachable!(),
+    }
+}
+
+unsafe fn store_atomic_with_unaligned_fallback(
+    ptr: *mut u8,
+    size: usize,
+    value: u64,
+    ordering: dotnet_utils::sync::Ordering,
+) {
+    if !matches!(size, 1 | 2 | 4 | 8) {
+        panic!("Unsupported atomic size: {size}");
+    }
+
+    if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
+        // SAFETY: The caller guarantees validity, and the branch proves alignment for `size`.
+        unsafe { StandardAtomicAccess::store_atomic(ptr, size, value, ordering) };
+        return;
+    }
+
+    match size {
+        1 => {
+            // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
+            unsafe { Atomic::store_field(ptr, &(value as u8).to_ne_bytes(), ordering) };
+        }
+        2 => {
+            // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
+            unsafe { Atomic::store_field(ptr, &(value as u16).to_ne_bytes(), ordering) };
+        }
+        4 => {
+            // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
+            unsafe { Atomic::store_field(ptr, &(value as u32).to_ne_bytes(), ordering) };
+        }
+        8 => {
+            // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
+            unsafe { Atomic::store_field(ptr, &value.to_ne_bytes(), ordering) };
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn field_layout_contains_heap_refs(layout: &FieldLayoutManager) -> bool {
@@ -310,8 +376,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
     ) -> Result<u64, CompareExchangeError> {
-        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
-
         if let Some(owner) = owner {
             let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
@@ -326,9 +390,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, size)
                     .map_err(CompareExchangeError::Bounds)?;
 
-                // SAFETY: Bounds are verified above. `ptr` is a valid, aligned
-                // pointer into `data` for `size` bytes, as guaranteed by
-                // `check_bounds_internal`.
+                if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                    return Err(CompareExchangeError::Bounds(
+                        MemoryAccessError::UnalignedAccess(ptr as usize),
+                    ));
+                }
+
+                // SAFETY: The preceding checks prove `ptr` is in bounds and aligned for `size`.
                 unsafe {
                     StandardAtomicAccess::compare_exchange_atomic(
                         ptr, size, expected, new, success, failure,
@@ -346,8 +414,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             result
         } else {
             let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
-            // SAFETY: Caller guarantees `offset` encodes a valid unmanaged address
-            // when `owner` is None.
+            if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                return Err(CompareExchangeError::Bounds(
+                    MemoryAccessError::UnalignedAccess(ptr as usize),
+                ));
+            }
+            // SAFETY: The caller guarantees validity, and the preceding check proves alignment.
             unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     ptr, size, expected, new, success, failure,
@@ -370,8 +442,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
-
         if let Some(owner) = owner {
             let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
@@ -382,8 +452,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
-                // SAFETY: `ptr` is within the object's backing storage (just
-                // bounds-checked).  `size` bytes at `ptr` support atomic exchange.
+                if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                    return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                }
+
+                // SAFETY: The preceding checks prove `ptr` is in bounds and aligned for `size`.
                 Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
             });
 
@@ -399,8 +472,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: exchange_atomic to unmanaged null pointer",
                 ));
             }
-            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
-            // guaranteed by the caller (unsafe fn contract).
+            if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+            }
+            // SAFETY: The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
         }
     }
@@ -418,8 +493,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
-
         if let Some(owner) = owner {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
@@ -430,9 +503,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
+                if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                    return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                }
+
                 Ok(
-                    // SAFETY: `ptr` is within the object's backing storage (just
-                    // bounds-checked).  `size` bytes at `ptr` support atomic add.
+                    // SAFETY: The preceding checks prove `ptr` is in bounds and aligned for `size`.
                     unsafe {
                         StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering)
                     },
@@ -445,16 +521,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: exchange_add_atomic to unmanaged null pointer",
                 ));
             }
-            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
-            // guaranteed by the caller (unsafe fn contract).
+            if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+            }
+            // SAFETY: The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
         }
     }
 
-    /// Atomically loads a value from memory.
+    /// Loads a value atomically when aligned, with synchronized memcpy for misaligned storage.
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn load_atomic(
         &self,
         owner: Option<MemoryOwner<'gc>>,
@@ -462,7 +541,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
         if let Some(owner) = owner {
             owner.with_data(|data| {
                 let base = data.as_ptr();
@@ -471,10 +549,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // (immutable borrow).  Bounds are checked immediately after.
                 let ptr = unsafe { base.add(offset.as_usize()) };
                 self.check_bounds_internal(ptr, base, len, size)?;
-                // SAFETY: `ptr` is within the object's backing storage (just
-                // bounds-checked).  The shared borrow prevents concurrent
-                // mutation through safe Rust.
-                Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
+                // SAFETY: Bounds and the storage guard provide valid synchronized access.
+                Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
             })
         } else {
             let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
@@ -483,16 +559,16 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: load_atomic from unmanaged null pointer",
                 ));
             }
-            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
-            // guaranteed by the caller (unsafe fn contract).
-            Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
+            // SAFETY: The caller guarantees valid synchronized unmanaged access.
+            Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
         }
     }
 
-    /// Atomically stores a value to memory.
+    /// Stores a value atomically when aligned, with synchronized memcpy for misaligned storage.
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn store_atomic(
         &mut self,
         gc: GCHandle<'gc>,
@@ -502,7 +578,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), MemoryAccessError> {
-        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
         if let Some(owner) = owner {
             let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
@@ -511,11 +586,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // Bounds are checked immediately after by `check_bounds_internal`.
                 let ptr = unsafe { base.add(offset.as_usize()) };
                 self.check_bounds_internal(ptr, base, len, size)?;
-                // SAFETY: `ptr` is within the object's backing storage (just
-                // bounds-checked).  `size` bytes at `ptr` support atomic store.
-                unsafe {
-                    StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
-                }
+                // SAFETY: Bounds and the storage guard provide valid synchronized access.
+                unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
                 Ok(())
             });
 
@@ -531,11 +603,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: store_atomic to unmanaged null pointer",
                 ));
             }
-            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
-            // guaranteed by the caller (unsafe fn contract).
-            unsafe {
-                StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
-            }
+            // SAFETY: The caller guarantees valid synchronized unmanaged access.
+            unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
             Ok(())
         }
     }
@@ -1258,6 +1327,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 mod tests {
     use super::{
         WB_LOCAL_BUF, WriteBarrierPanicFlushGuard, check_bounds, field_layout_contains_heap_refs,
+        load_atomic_with_unaligned_fallback, store_atomic_with_unaligned_fallback,
     };
     use dotnet_types::error::{CompareExchangeError, MemoryAccessError};
     use dotnet_utils::ArenaId;
@@ -1311,6 +1381,28 @@ mod tests {
                 len: 8,
             })
         );
+    }
+
+    #[test]
+    fn atomic_value_access_uses_unaligned_fallback() {
+        let mut backing = [0u64; 2];
+        // SAFETY: Offset one remains within the live, eight-byte-aligned backing allocation.
+        let ptr = unsafe { backing.as_mut_ptr().cast::<u8>().add(1) };
+
+        // SAFETY: `ptr` has four live bytes and this test provides exclusive access.
+        unsafe {
+            store_atomic_with_unaligned_fallback(
+                ptr,
+                4,
+                0xDEAD_BEEF,
+                dotnet_utils::sync::Ordering::SeqCst,
+            );
+        }
+        // SAFETY: `ptr` has four initialized live bytes and this test provides exclusive access.
+        let loaded = unsafe {
+            load_atomic_with_unaligned_fallback(ptr, 4, dotnet_utils::sync::Ordering::SeqCst)
+        };
+        assert_eq!(loaded, 0xDEAD_BEEF);
     }
 
     #[test]

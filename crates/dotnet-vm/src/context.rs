@@ -75,9 +75,14 @@ impl<'a> ResolutionContext<'a> {
         caches: Arc<GlobalCaches>,
         shared: Option<Weak<SharedGlobalState>>,
     ) -> Self {
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT resolver state is executor-confined; Arc preserves feature-neutral ownership"
+        )]
+        let state = Arc::new(ResolutionShared::new(loader, caches, shared));
         Self {
             generics,
-            state: Arc::new(ResolutionShared::new(loader, caches, shared)),
+            state,
             resolution,
             type_owner: None,
             method_owner: None,
@@ -91,9 +96,14 @@ impl<'a> ResolutionContext<'a> {
         caches: Arc<GlobalCaches>,
         shared: Option<Weak<SharedGlobalState>>,
     ) -> Self {
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT resolver state is executor-confined; Arc preserves feature-neutral ownership"
+        )]
+        let state = Arc::new(ResolutionShared::new(loader, caches, shared));
         Self {
             generics,
-            state: Arc::new(ResolutionShared::new(loader, caches, shared)),
+            state,
             resolution: method.resolution(),
             type_owner: Some(method.parent.clone()),
             method_owner: Some(method),

@@ -11,6 +11,9 @@ Threading is feature-gated with **two parallel implementations** that share a co
 | (none)           | `threading/stub.rs`      | `sync/single_threaded.rs`     | No-op thread ops, no locking                            |
 | `multithreading` | `threading/basic.rs`     | `sync/threaded.rs`            | Real OS threads, monitor locks, and STW GC coordination |
 
+The feature controls managed VM concurrency, not whether host code may create OS threads; the
+CLI's Rayon pool, tracer, and integration-test timeout harness can do so in either configuration.
+
 ## Thread Lifecycle (`threading/`)
 
 ### `ThreadManagerOps` Trait (`threading/mod.rs`)
@@ -89,7 +92,7 @@ sequenceDiagram
 - All operations are no-ops or return fixed values
 - `is_gc_stop_requested` always returns `false`
 - `safe_point` does nothing
-- Compiles out all threading overhead for single-threaded mode
+- Compiles out managed-thread coordination overhead for single-threaded mode
 
 ## Safe Points
 
@@ -284,8 +287,10 @@ The concrete `ThreadManager` (implementing `ThreadManagerOps`) is instantiated o
 ### Utility Locks (`dotnet_utils::sync`)
 The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` to abstract locking:
 - **With `multithreading`**: Aliases point to `parking_lot::Mutex` and `parking_lot::RwLock`.
-- **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely).
-  In this configuration, `compat::Mutex<T>` and `compat::RwLock<T>` implement `Sync` where `T: Send`; this is sound because the build configuration prevents creation of a second thread.
+- **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely). These wrappers intentionally do not implement `Sync`.
+  In this configuration, `SharedGlobalState` has narrow `Send`/`Sync` implementations for the
+  integration-test timeout harness: only the executor accesses VM state, while the waiting thread
+  accesses the atomic abort flag. This does not make compat locks generally safe to share.
 *(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
 
 ## Asynchronous Exceptions (Thread.Abort and Thread.Interrupt)
