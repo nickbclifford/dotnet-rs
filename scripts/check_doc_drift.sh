@@ -54,6 +54,8 @@ CHECKS=(
   "GC_AND_MEMORY_SAFETY.md|GCCoordinator::arenas|*.rs"
   "GC_AND_MEMORY_SAFETY.md|ArenaHandle::current_command|*.rs"
   "GC_AND_MEMORY_SAFETY.md|GCCoordinator::cross_arena_refs|*.rs"
+  "GC_AND_MEMORY_SAFETY.md|get_field_atomic|*.rs"
+  "GC_AND_MEMORY_SAFETY.md|set_field_atomic|*.rs"
 
   # --- THREADING_AND_SYNCHRONIZATION.md ---
   "THREADING_AND_SYNCHRONIZATION.md|StopTheWorldGuard|*.rs"

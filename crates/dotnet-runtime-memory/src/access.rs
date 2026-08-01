@@ -71,13 +71,15 @@ unsafe fn load_atomic_with_unaligned_fallback(
         return unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
     }
 
+    validate_atomic_access(ptr, false);
+    let mut buf = [0u8; 8];
     // SAFETY: The caller guarantees valid storage and synchronization for the memcpy fallback.
-    let bytes = unsafe { Atomic::load_field(ptr, size, ordering) };
+    unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
     match size {
-        1 => u8::from_ne_bytes(bytes.try_into().expect("size 1 produces one byte")) as u64,
-        2 => u16::from_ne_bytes(bytes.try_into().expect("size 2 produces two bytes")) as u64,
-        4 => u32::from_ne_bytes(bytes.try_into().expect("size 4 produces four bytes")) as u64,
-        8 => u64::from_ne_bytes(bytes.try_into().expect("size 8 produces eight bytes")),
+        1 => buf[0] as u64,
+        2 => u16::from_ne_bytes(buf[..2].try_into().expect("buffer prefix is two bytes")) as u64,
+        4 => u32::from_ne_bytes(buf[..4].try_into().expect("buffer prefix is four bytes")) as u64,
+        8 => u64::from_ne_bytes(buf),
         _ => unreachable!(),
     }
 }

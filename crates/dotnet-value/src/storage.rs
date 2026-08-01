@@ -201,13 +201,14 @@ impl FieldStorage {
     /// For .NET volatile loads, `Ordering::Acquire` or `Ordering::SeqCst` should be used.
     /// Using `Ordering::Relaxed` will trigger a validation warning.
     pub fn get_field_atomic(&self, owner: TypeDescription, name: &str, ord: Ordering) -> Vec<u8> {
-        let field = self
-            .layout
-            .get_field(owner.clone(), name)
-            .expect("Field not found");
+        // Resolve the layout before taking the data lock to avoid borrow re-entry.
+        let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
         let size = field.layout.size();
-        let guard = self.get_field_local(owner, name);
+
+        self.validate_magic();
+        let range = field.as_range();
+        let guard = RwLockReadGuard::map(self.data.read(), |v| &v[range]);
         let field_ptr = guard.as_ptr();
         validate_alignment(field_ptr, alignment);
         // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
@@ -229,13 +230,13 @@ impl FieldStorage {
         value: &[u8],
         ord: Ordering,
     ) {
-        let field = self
-            .layout
-            .get_field(owner.clone(), name)
-            .expect("Field not found");
+        // Resolve the layout before taking the data lock to avoid borrow re-entry.
+        let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
-        // Let's just use get_mut() to be safe and consistent with synchronized.
-        let mut guard = self.get_field_mut_local(owner, name);
+
+        self.validate_magic();
+        let range = field.as_range();
+        let mut guard = RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
         let field_ptr = guard.as_mut_ptr();
         validate_alignment(field_ptr, alignment);
         // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.

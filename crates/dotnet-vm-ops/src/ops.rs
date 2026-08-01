@@ -60,6 +60,9 @@ pub trait EvalStackOps<'gc> {
 
     /// Removes `count` values from the stack and returns them in stack order.
     ///
+    /// Implementations must call `pop()` per element rather than bulk-draining to
+    /// propagate `on_pop_safe` frame-height accounting and `trace_pop` tracer events.
+    ///
     /// # Panics
     ///
     /// Panics if fewer than `count` values are available. Values are removed one

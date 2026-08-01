@@ -363,3 +363,44 @@ allocations and must not be treated as a causal explanation for individual workl
 comparison completes successfully across every benchmark case; it reports mixed workload-level
 timing changes, including regressions for `alloc_throughput` and `string` that should be repeated
 under a controlled environment before drawing a performance conclusion.
+
+## `before-dead-api-sweep` comparison (2026-08-01)
+
+After the dead-API consolidation and atomic allocation-sweep work, the full `end_to_end` target
+was compared with the `before-dead-api-sweep` Criterion baseline:
+
+```bash
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- --baseline before-dead-api-sweep --sample-size 10
+```
+
+Both the saved baseline and comparison use Criterion's minimum 10-sample configuration. The table
+records Criterion's 95% confidence interval for relative time change; positive values are slower.
+
+| case | relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `json` | +9.7828% to +11.142% | regressed |
+| `arithmetic` | +27.452% to +28.421% | regressed |
+| `gc` | +10.746% to +11.401% | regressed |
+| `alloc_throughput` | +7.9997% to +9.1688% | regressed |
+| `gc_cross_arena` | +10.234% to +15.987% | regressed |
+| `dispatch` | +13.712% to +15.766% | regressed |
+| `generics` | +7.5938% to +8.7815% | regressed |
+| `stack` | +20.003% to +20.690% | regressed |
+| `span` | +13.270% to +13.599% | regressed |
+| `span_equality` | +10.393% to +11.985% | regressed |
+| `memory` | +4.9911% to +8.0939% | regressed |
+| `unsafe_buffer` | +10.246% to +10.771% | regressed |
+| `string` | +16.590% to +17.399% | regressed |
+| `reflection` | +8.5142% to +9.1745% | regressed |
+
+Criterion reported a statistically significant regression for every case in this run; it reported
+no improved, within-noise-threshold, or no-change result. That uniform direction includes workloads
+unrelated to the changed evaluation-stack and atomic-field paths, and does not match the localized
+signal expected from this refactor. The pattern therefore points to a systematic run-to-run
+environmental or build-configuration difference rather than supporting attribution to these code
+changes.
+
+These low-sample end-to-end timing deltas are workload-level observations, not a direct count of
+allocations or proof that any specific change caused a result. A controlled-environment repeat is
+required before drawing a causal performance conclusion.

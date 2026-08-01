@@ -35,6 +35,7 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>> {
+        // Pop per element to preserve frame-height accounting and tracer events.
         let mut results = Vec::with_capacity(count);
         for _ in 0..count {
             results.push(self.pop());

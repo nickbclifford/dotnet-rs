@@ -363,14 +363,6 @@ impl<'gc> EvaluationStack<'gc> {
         ));
     }
 
-    pub fn pop_multiple_into(&mut self, count: usize, out: &mut Vec<StackValue<'gc>>) {
-        out.clear();
-        out.reserve(count);
-        let len = self.stack.len();
-        let split_at = len.checked_sub(count).expect("Evaluation stack underflow");
-        out.extend(self.stack.drain(split_at..));
-    }
-
     pub fn copy_slots_into(
         &self,
         start: StackSlotIndex,
@@ -386,12 +378,6 @@ impl<'gc> EvaluationStack<'gc> {
             .expect("Stack slot range out of bounds");
         out.reserve(count);
         out.extend_from_slice(slice);
-    }
-
-    pub fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
-        let len = self.stack.len();
-        let start = len.checked_sub(count).expect("Evaluation stack underflow");
-        self.stack[start..].to_vec()
     }
 
     pub fn peek_stack(&self) -> StackValue<'gc> {
@@ -485,18 +471,6 @@ mod tests {
     }
 
     #[test]
-    fn pop_multiple_into_keeps_original_order() {
-        let mut stack = int_stack(&[1, 2, 3, 4, 5]);
-        let mut out = vec![StackValue::Int32(99)];
-
-        stack.pop_multiple_into(3, &mut out);
-
-        assert_eq!(as_i32_values(&out), vec![3, 4, 5]);
-        assert_eq!(stack.stack.len(), 2);
-        assert_eq!(stack.peek_stack().as_i32(), 2);
-    }
-
-    #[test]
     fn copy_slots_into_copies_requested_slice() {
         let stack = int_stack(&[10, 20, 30, 40, 50]);
         let mut out = Vec::new();
@@ -504,30 +478,6 @@ mod tests {
         stack.copy_slots_into(StackSlotIndex::new(1), 3, &mut out);
 
         assert_eq!(as_i32_values(&out), vec![20, 30, 40]);
-    }
-
-    #[test]
-    fn peek_multiple_returns_top_segment_in_stack_order() {
-        let stack = int_stack(&[5, 6, 7, 8]);
-
-        let values = stack.peek_multiple(2);
-
-        assert_eq!(as_i32_values(&values), vec![7, 8]);
-        assert_eq!(stack.top_of_stack().as_usize(), 4);
-    }
-
-    #[test]
-    fn multi_value_ops_reuse_output_allocation() {
-        let mut stack = int_stack(&[1, 2, 3, 4]);
-        let mut out = Vec::with_capacity(8);
-        out.push(StackValue::Int32(-1));
-        let initial_capacity = out.capacity();
-
-        stack.pop_multiple_into(2, &mut out);
-        assert_eq!(out.capacity(), initial_capacity);
-
-        stack.copy_slots_into(StackSlotIndex::new(0), 2, &mut out);
-        assert_eq!(out.capacity(), initial_capacity);
     }
 
     #[test]
