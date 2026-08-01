@@ -34,8 +34,16 @@ The three lanes now have explicit workspace reservations. See
 it records which sibling repository owns each package and which parts remain
 design-only.
 
+Revision 5 records that Phase 0 (§9) is complete: commit `208a6c8b` in
+`dotnet-rs` fixed both soundness defects from §2.3, promoted one Miri leg
+and one fuzz target to blocking CI gates, and expanded the differential
+harness from one fixture to seven. The `ves-proof` and `ves-proof-lean`
+skeletons (WP-3) are unchanged and still pure scaffolds — no crate or
+package has logic beyond a marker constant, and no Lean toolchain is
+pinned yet. Phase 1, starting with `ves-syntax`, is the next action.
+
 The study is grounded in a survey of the repository at HEAD `97e8f658`
 (2026-07-31): 581 unsafe blocks, 620 SAFETY comments, the invariant-family
-taxonomy in §3, and the two then-live soundness defects discussed in §2.3.
-If those numbers drift far from the current tree, re-survey before quoting
-them.
+taxonomy in §3, and the two then-live soundness defects discussed in §2.3
+(both fixed as of `208a6c8b`, 2026-08-01 — see §2.3 and §9). If those
+numbers drift far from the current tree, re-survey before quoting them.

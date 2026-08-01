@@ -34,14 +34,21 @@ deliverable is a proof rather than the token layer and the model
 (\cref{sec:risks-tcb}: untethered proofs decay into documentation).
 
 \paragraph{Immediate actions, independent of any spin-off decision.}
-Phase 0 is due diligence, not verification: fix the two live defects,
-promote at least one Miri leg to blocking, and expand the differential
-harness past its single test. Phase 1 (the embedded layer) is the
-cheapest experiment that tests the whole thesis on real ground ---
-and, uniquely among the phases, it yields value even with no Lean
-involvement: ghost tokens make premise citations compile-checked in
-every feature configuration, which would already have made defect (a)
-unwritable.
+Phase 0 is due diligence, not verification, and as of this revision it
+is complete (\code{208a6c8b}): the two live defects are fixed, one
+Miri leg and one fuzz target are blocking CI gates, and the
+differential harness covers seven fixtures rather than one. The
+sibling repositories \path{ves-proof} and \path{ves-proof-lean} are
+also seeded (WP-3) with their reserved package layout, but every
+crate and package is still an inert scaffold --- no toolchain is
+pinned in \path{ves-proof-lean}, and none of the five Rust crates has
+logic beyond a marker constant. Phase 1 (the embedded layer,
+starting with \code{ves-syntax}) is therefore the next and now the
+only blocking action, and remains the cheapest experiment that tests
+the whole thesis on real ground: uniquely among the phases, it yields
+value even with no Lean involvement, since ghost tokens make premise
+citations compile-checked in every feature configuration --- the
+discipline that would already have made defect (a) unwritable.
 
 \paragraph{Two genuinely open decisions.} First, how far to trust
 the $\mathcal{M}_{\mathrm{Rust}}$ axiomatization before reaching for

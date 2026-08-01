@@ -31,7 +31,11 @@ Six findings carry the argument:
   the ghost-token design the first is not expressible --- citing a
   \code{cfg}-excluded guard is a compile error --- and the proof layer
   addresses the class (\cref{sec:system-defects},
-  \cref{sec:dsl-example-fail}).
+  \cref{sec:dsl-example-fail}). Both defects, and the rest of Phase 0,
+  have since been closed by ordinary review (\code{208a6c8b}); the
+  premise is unweakened by that fix landing without a proof layer ---
+  it argues for the class of catch this proposal targets, not for any
+  particular open instance of it.
 \item \textbf{Each component has substantial precedent; the
   composition does not.} Machine-checked proofs of real \code{unsafe}
   Rust exist (RefinedRust, VeriFast, Verus); machine-readable safety

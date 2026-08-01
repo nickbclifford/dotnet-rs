@@ -11,7 +11,8 @@ Phases, each independently
 valuable and abandonable without stranding the previous:
 
 \begin{description}
-\item[Phase 0 --- Hygiene (days).] Fix the two live defects
+\item[Phase 0 --- Hygiene (days).] \textbf{Complete} (commit
+  \code{208a6c8b}, 2026-08-01). Fix the two live defects
   (\cref{sec:system-defects}): real alignment guards (or caller
   contracts) on \code{StackValue::load\_atomic}/\code{store\_atomic},
   and either a checked discipline or a narrower structure for the
@@ -19,7 +20,21 @@ valuable and abandonable without stranding the previous:
   gates can be promoted from \code{continue-on-error} to blocking (even
   a single Miri leg on \crate{dotnet-value} would be the first
   \emph{enforced} UB gate). None of this needs the DSL; all of it
-  raises the floor the DSL builds on.
+  raises the floor the DSL builds on. All three line items landed in
+  one commit: caller-contract alignment checks via \code{debug\_assert!}
+  replace the vacuous hook; \code{SharedGlobalState} is now \code{!Send}
+  by ordinary auto-trait inference instead of an asserted manual impl,
+  with a minimal \code{AbortSignal} carrying the one fact that
+  legitimately crosses the executor/waiter boundary; \code{miri-value}
+  and \code{fuzz-raw-memory-access} are blocking CI legs (the broader
+  Miri matrix and the other three fuzz targets remain
+  \code{continue-on-error}, now in separate scheduled workflows); and
+  the differential harness grew from one fixture
+  (\code{expression\_compile\_42}) to seven, with a documented list of
+  rejected candidates where \dotnetrs{} and real .NET diverge for
+  reasons unrelated to this study (exit-code semantics for unhandled
+  exceptions, an intentional alignment deviation, GC-timing-sensitive
+  output). Phase 1 is now the critical path.
 \item[Phase 1 --- The embedded layer (4--7 weeks).] In order:
   in \path{ves-proof/crates/}, \code{ves-syntax} and the declarative
   vocabulary v0 (the F1--F9

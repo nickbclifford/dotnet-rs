@@ -160,3 +160,29 @@ nor could they have --- the relevant gates are non-blocking and the
 defective paths lie outside their coverage. This is the study's
 empirical premise: the project has exhausted what convention, lints,
 and runtime assertions can deliver.
+
+\paragraph{Both defects have since been fixed.} Commit
+\code{208a6c8b} (2026-08-01, after this survey's HEAD but before this
+revision) closes both. For (a),
+\code{StackValue::load\_atomic}/\code{store\_atomic} and
+\code{FieldStorage} now call \code{debug\_assert!} directly at the
+unsafe call site instead of citing the feature-gated
+\code{validate\_alignment} hook; the safety contract is restated as a
+documented unsafe precondition (checked in debug builds, upheld by
+callers in release, matching this codebase's existing convention for
+unchecked hot paths) rather than a witness that could silently
+disappear under a \code{cfg}. For (b), \code{SharedGlobalState} drops
+the manual \code{unsafe impl Send/Sync} entirely: a new
+\code{AbortSignal} type (a bare \code{Arc<AtomicBool>} wrapper) is the
+only thing the timeout-waiter thread touches, so \code{SharedGlobalState}
+itself is \code{!Send} in no-multithreading builds by ordinary
+auto-trait inference --- enforced by \code{assert\_not\_impl\_all!}
+rather than asserted by a now-removed \code{assert\_impl\_all!}. The
+same commit promotes \code{miri-value} and \code{fuzz-raw-memory-access}
+to blocking CI gates and expands the differential harness from one
+fixture to seven (\cref{sec:roadmap}), closing all three Phase~0 line
+items (\cref{sec:recommendation}). The empirical argument above is
+unaffected by the fix landing --- ordinary review caught these defects
+only because a human happened to look, which is exactly the gap the
+proposal targets --- but as of this revision neither defect is live,
+and Phase 0 is complete.

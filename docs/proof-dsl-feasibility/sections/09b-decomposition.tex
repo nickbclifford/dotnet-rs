@@ -73,17 +73,24 @@ Lanes: \textbf{A} = \dotnetrs{}, \textbf{B} =
 strict; across lanes, an entry lists its cross-lane prerequisites.
 
 \begin{enumerate}[leftmargin=2.2em, itemsep=0.35em]
-\item \textbf{[A] Atomic-path soundness.} Close the unguarded
+\item \textbf{[A] Atomic-path soundness. \textbf{Done}
+  (\code{208a6c8b}).} Close the unguarded
   \code{StackValue::load\_atomic} and \code{store\_atomic} paths and
   restructure the \code{SharedGlobalState} auto-trait overrides
   behind a checked discipline.
   \emph{(S; \code{deep}; high signal --- Miri leg + existing atomic
   tests.)}
-\item \textbf{[A] Dynamic-gate promotion.} Promote the stable Miri and
+\item \textbf{[A] Dynamic-gate promotion. \textbf{Done}
+  (\code{208a6c8b}, same commit as WP-1).} Promote the stable Miri and
   fuzz legs from \code{continue-on-error} to blocking and extend the
   differential harness beyond its single fixture.
   \emph{(S; \code{standard}; high signal --- CI is its own oracle.)}
-\item \textbf{[B/C] Repository seeds (scaffolded).} Initialize the
+  Landed as \code{miri-value} and \code{fuzz-raw-memory-access} in
+  \code{ci.yml}; the harness grew to seven fixtures. Phase 0 is
+  therefore complete (\cref{sec:roadmap}) and lane A is unblocked up
+  to WP-9, which still waits on lane B.
+\item \textbf{[B/C] Repository seeds (scaffolded). \textbf{Done.}}
+  Initialize the
   \code{ves-proof} Rust workspace and its five crate skeletons under
   \code{crates/}; initialize the five independent Lake package
   skeletons under \path{ves-proof-lean/packages/}; reserve the two
@@ -91,6 +98,14 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   exist; CI and implementation work remain governed by the later
   packages.
   \emph{(S; \code{standard}; done once, largely mechanical.)}
+  Verified current: both sibling repositories exist with exactly the
+  reserved package layout, each source file is an inert
+  \code{scaffoldOnly}/\code{SCAFFOLD\_ONLY} marker with no logic, the
+  two JSON Schema drafts under \path{ves-proof/schemas/} are the only
+  substantive artifacts, and no Lean toolchain is pinned yet (no
+  \code{lean-toolchain}, no \code{lake-manifest.json} ---
+  deliberately, per \path{ves-proof-lean/AGENTS.md}). WP-4
+  (\code{ves-syntax}) has not started.
 \item \textbf{[B] \code{ves-syntax}.} Implement the script grammar,
   AST, canonical serializer, and statement/subject hashing against a
   golden corpus of scripts.
