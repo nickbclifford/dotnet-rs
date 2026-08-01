@@ -14,8 +14,8 @@ use dotnet_utils::{
     ByteOffset, StackSlotIndex,
     atomic::{AtomicAccess, StandardAtomicAccess},
     gc::GCHandle,
+    is_ptr_aligned_to_field,
     sync::Ordering as AtomicOrdering,
-    validate_alignment,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Gc, collect::Trace};
@@ -737,13 +737,20 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
+    /// Debug builds enforce this contract with `is_ptr_aligned_to_field`; release-build callers
+    /// must uphold it. Managed-code instruction paths through `RawMemoryAccess` validate
+    /// alignment before reaching this low-level operation.
     /// Loads a value from a raw pointer using atomic operations.
     /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
-        let alignment = load_type_alignment(t);
-        validate_alignment(ptr, alignment);
+        debug_assert!(
+            is_ptr_aligned_to_field(ptr, load_type_alignment(t)),
+            "Alignment violation: StackValue::load_atomic: ptr {:p} is not aligned to {} bytes",
+            ptr,
+            load_type_alignment(t)
+        );
 
         let size = match t {
             LoadType::Int8 | LoadType::UInt8 => 1,
@@ -771,13 +778,20 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
+    /// Debug builds enforce this contract with `is_ptr_aligned_to_field`; release-build callers
+    /// must uphold it. Managed-code instruction paths through `RawMemoryAccess` validate
+    /// alignment before reaching this low-level operation.
     /// Stores a value to a raw pointer using atomic operations.
     /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
-        let alignment = store_type_alignment(t);
-        validate_alignment(ptr, alignment);
+        debug_assert!(
+            is_ptr_aligned_to_field(ptr, store_type_alignment(t)),
+            "Alignment violation: StackValue::store_atomic: ptr {:p} is not aligned to {} bytes",
+            ptr,
+            store_type_alignment(t)
+        );
 
         let (val, size) = match t {
             StoreType::Int8 => (self.as_i32() as u64, 1),

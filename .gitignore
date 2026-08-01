@@ -14,6 +14,7 @@ obj/
 crates/*/target
 **/fuzz/target/
 **/fuzz/corpus/
+!crates/dotnet-value/fuzz/corpus/
 **/fuzz/artifacts/
 *.profraw
 

@@ -24,9 +24,11 @@ safety guard rather than a `memory-validation` diagnostic, and an Interlocked ca
 managed `DataMisalignedException`. Misaligned volatile loads and stores remain valid and use a
 lock-guarded memcpy fallback instead of throwing.
 
-When `memory-validation` is enabled, `dotnet_utils::validate_alignment` remains a secondary debug
-check for field and storage paths outside `RawMemoryAccess`; the low-level atomic implementation
-relies on its unsafe caller contract instead of using that feature-gated diagnostic as a guard.
+`dotnet_utils::validate_alignment` remains available as an opt-in validation-mode hook and is a
+no-op outside `memory-validation`; it is not a shipping guard. Low-level `StackValue` atomic
+operations enforce their unsafe alignment contracts in debug builds, while managed instruction
+paths perform unconditional checks in `RawMemoryAccess`. `FieldStorage` also checks its layout
+invariant in debug builds and retains the atomic layer's lock-guarded fallback as defense in depth.
 
 ## Recommended Local Commands
 

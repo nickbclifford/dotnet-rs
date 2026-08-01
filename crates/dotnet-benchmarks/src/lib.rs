@@ -241,6 +241,10 @@ impl BenchHarness {
             .load_resolution_from_file(dll_path)
             .expect("failed to load benchmark fixture assembly");
 
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT benchmark executor confines shared state to its run thread"
+        )]
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
         let mut executor = vm::Executor::new(shared);
 

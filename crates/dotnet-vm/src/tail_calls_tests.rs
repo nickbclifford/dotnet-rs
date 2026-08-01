@@ -74,6 +74,10 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
 
 fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> usize {
     let loader = get_mock_loader();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT tail-call test keeps shared state on its sole executor"
+    )]
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));
 
     // Build a minimal Resolution with one type, an entrypoint, and a chain of methods.

@@ -9,7 +9,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::{gc::GCHandle, sync::Ordering};
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_ops::prepared_call::PreparedCall;
 use dotnetdll::prelude::*;
@@ -210,7 +210,7 @@ impl<'gc> ExecutionEngine<'gc> {
         }
 
         loop {
-            if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
+            if self.stack.shared.is_abort_requested() {
                 // Final snapshot before aborting to ensures correct dump in test harness
                 *self.stack.shared.last_instructions.lock() = self.ring_buffer.clone();
                 return StepResult::Yield;
@@ -249,7 +249,7 @@ impl<'gc> ExecutionEngine<'gc> {
                         since_poll += consumed;
                         // Check abort/safe-point every N instructions within a batch.
                         if since_poll >= poll_interval {
-                            if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
+                            if self.stack.shared.is_abort_requested() {
                                 last_res = StepResult::Yield;
                                 break;
                             }

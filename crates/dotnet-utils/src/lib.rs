@@ -55,7 +55,9 @@ pub fn is_ptr_aligned_to_field(ptr: *const u8, field_size: usize) -> bool {
     }
 }
 
-/// Asserts that `ptr` is aligned to `align` bytes when `memory-validation` is enabled.
+/// Validation-mode hook that asserts `ptr` is aligned to `align` bytes.
+///
+/// This is not a shipping alignment guard: it is a no-op unless `memory-validation` is enabled.
 #[cfg(feature = "memory-validation")]
 pub fn validate_alignment(ptr: *const u8, align: usize) {
     if !(ptr as usize).is_multiple_of(align) {

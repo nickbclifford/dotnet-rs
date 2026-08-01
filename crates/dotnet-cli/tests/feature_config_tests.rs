@@ -16,6 +16,10 @@ use std::sync::Arc;
 fn test_single_threaded_stub_thread_manager() {
     // In single-threaded mode, thread manager should exist but be a stub
     let loader = create_test_loader();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT test keeps shared state on its sole executor"
+    )]
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
@@ -30,6 +34,10 @@ fn test_single_threaded_stub_thread_manager() {
 fn test_single_threaded_sync_block_manager() {
     // In single-threaded mode, sync blocks should work but without actual locking
     let loader = create_test_loader();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT test keeps shared state on its sole executor"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Sync block manager should exist and be usable
@@ -109,6 +117,10 @@ fn test_multithreading_cross_arena_value() {
 fn test_basic_functionality_exists() {
     // This test should pass in all configurations
     let loader = create_test_loader();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT test keeps shared state on its sole executor"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Basic shared state should always be available

@@ -4,13 +4,13 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Design Principle
 
-Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuzzing, Miri, Valgrind) are informative and non-blocking.
+Deterministic correctness checks are blocking, including the `dotnet-value` Miri leg and the `fuzz_raw_memory_access` corpus replay. Other instrumentation-heavy checks (the remaining fuzzing and Miri legs, and Valgrind) are informative and non-blocking.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable    | Yes                      | push/PR to `main`/`master`     | Source policy, format, clippy, and test gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, `miri-value`, and `fuzz-raw-memory-access` gates |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -29,8 +29,9 @@ Jobs:
    - CI sets `DOTNET_SKIP_BUILD=1` for this job as an explicit analysis-only guardrail
 5. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
 6. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
-7. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`)
-8. `hang-probe integration tests`: run only on the `multithreading` test leg
+7. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
+8. `miri-value`: pinned-nightly, blocking Miri test suite for `dotnet-value`
+9. `fuzz-raw-memory-access`: pinned-nightly, blocking replay of the committed `fuzz_raw_memory_access` corpus (`-runs=0`) with `cargo-fuzz` 0.13.1
 
 Hang probes use tighter timeouts and run these filters individually:
 
@@ -220,13 +221,31 @@ Run it locally with:
 bash scripts/check_mt_cfg_ceiling.sh
 ```
 
+The blocking `miri-value` and `fuzz-raw-memory-access` jobs above are also available as local commands in their respective sections below. The latter replays the committed corpus only; exploratory fuzzing remains advisory in `fuzz.yml`.
+
+## `fuzz-raw-memory-access` — Blocking Corpus Replay
+
+The gate pins `nightly-2026-05-27` and `cargo-fuzz` 0.13.1, then replays the tracked
+`crates/dotnet-value/fuzz/corpus/fuzz_raw_memory_access` inputs without generating new cases:
+
+```bash
+cd crates/dotnet-value
+cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+```
+
+The duration-based targets in `fuzz.yml`, including a second exploratory run of
+`fuzz_raw_memory_access`, remain advisory.
+
 ## `miri.yml` — Non-Blocking UB Checks
+
+`miri.yml` remains an advisory matrix. Its `dotnet-value` entry provides additional scheduled coverage; the required `dotnet-value` Miri gate is the separate `miri-value` job in `ci.yml`.
 
 The workflow runs per crate (`fail-fast: false`):
 
 | Crate               | Args                                                                    | Notes                                                           |
 |---------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------|
 | `dotnet-value`      | `-- --test-threads=1`                                                   | Full crate test suite under Miri                                |
+| `dotnet-utils`      | `--no-default-features -- --test-threads=1`                             | Utility tests without default features                          |
 | `dotnet-assemblies` | `-- --test-threads=1`                                                   | Filesystem-dependent tests are conditionally skipped under Miri |
 | `dotnet-vm`         | `--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests` | Targeted VM unsafe-gate suite without multithreading            |
 | `dotnet-vm`         | `--no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests` | Same conservative VM unsafe-gate filters with multithreading paths enabled |
@@ -236,8 +255,8 @@ The two `dotnet-vm` entries deliberately use the same `jmp_tests`, `tail_calls`,
 with the VM's `multithreading` configuration enabled. That entry compiles the cross-arena and
 stop-the-world paths, but the filtered suite and local time box have not established that every
 such path is dynamically exercised. The filters are conservative because the transitive
-`parking_lot` stack has known Miri limitations; `dotnet-utils` remains outside this matrix for
-that reason.
+`parking_lot` stack has known Miri limitations. The separate `dotnet-utils` matrix leg remains
+advisory along with the other entries.
 
 The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. Strict-provenance is currently infeasible for `dotnet-vm` because dependency-level integer-to-pointer casts are reached during assembly parsing before VM unsafe sites execute.
 

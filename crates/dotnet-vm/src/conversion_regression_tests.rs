@@ -136,6 +136,10 @@ mod tests {
     #[test]
     fn static_fields_preserve_small_integer_sign_and_zero_extension() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT regression test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
 
         let (mut res, _, type_idx) = make_test_assembly!(
@@ -241,6 +245,10 @@ mod tests {
     #[test]
     fn static_fields_round_trip_object_references() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT regression test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
 
         let (mut res, _, type_idx) = make_test_assembly!(

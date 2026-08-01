@@ -103,6 +103,33 @@ Fuzzes the `ManagedPtr` write/read serialization roundtrip. Creates a `ManagedPt
 
 Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, sizes (1/2/4/8 bytes), values, and memory orderings. Validates that a store followed by a load returns the correctly masked value.
 
+## Known Target Failures
+
+The following `dotnet-value` targets have live crash artifacts and remain
+advisory while their underlying issues are investigated:
+
+- `fuzz_managed_ptr_roundtrip` reaches `UnknownSubtag(7)` during serde recovery
+  at `pointer/serde.rs:359`. Promotion is deferred pending a fix for the serde
+  error handling.
+- `fuzz_managed_ptr_offset` can trigger an AddressSanitizer SEGV in panic
+  handling at `pointer/mod.rs:255`. Its `Arbitrary` implementation for
+  `ManagedPtr` synthesizes fuzz-crafted GC pointers, and panic formatting
+  dereferences one of those pointers. Promotion is deferred pending a fuzz
+  harness fix.
+
+## Blocking Corpus Regression
+
+The committed `fuzz_raw_memory_access` corpus is a blocking `ci.yml` gate. CI pins
+`nightly-2026-05-27` and `cargo-fuzz` 0.13.1 and replays those inputs without generating new
+ones:
+
+```bash
+cd crates/dotnet-value
+cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+```
+
+The duration-based jobs in `fuzz.yml` remain advisory and may generate new local inputs.
+
 ## Seed Corpus & Dictionary
 
 ### Seed Corpus
@@ -123,7 +150,9 @@ Pre-built seed inputs live in `crates/dotnet-vm/fuzz/corpus/fuzz_executor/` and 
 | `seed_stack_dup`             | Duplicate + arithmetic             |
 | `seed_stack_underflow`       | Pop from empty stack               |
 
-The `dotnet-value` targets also have pre-existing corpus directories under `crates/dotnet-value/fuzz/corpus/`.
+The `fuzz_raw_memory_access` inputs under `crates/dotnet-value/fuzz/corpus/` are tracked for the
+blocking replay. Corpora generated for the other `dotnet-value` targets remain ignored local
+artifacts.
 
 ### Corpus Generation Tools
 
@@ -235,9 +264,10 @@ To reproduce a crash:
 cargo +nightly fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
 ```
 
-Both fuzz crates' `.gitignore` files ignore `corpus/` and `artifacts/`, so crashes and corpus
-inputs are local-only and are not committed. The structured seed corpus is regenerated on demand
-via `corpus-tools` (as the `fuzz.yml` CI job does before each executor run). To keep a crash as a
+Both fuzz crates ignore crash artifacts and generated corpus inputs. The
+`fuzz_raw_memory_access` corpus is the narrow exception: it is committed for the blocking replay
+described above. The structured executor seed corpus is regenerated on demand via `corpus-tools`
+(as the `fuzz.yml` CI job does before each executor run). To keep a crash as a
 persistent regression input, add it to a Miri-compatible unit test in
 `crates/dotnet-vm/src/fuzzing.rs` (see "Miri-Compatible Unit Tests" below).
 

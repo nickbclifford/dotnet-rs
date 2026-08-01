@@ -102,9 +102,18 @@ Some test paths rely on managed fixtures. Build them with:
 cargo run -p xtask -- fixtures build
 ```
 
-## Miri policy for `dotnet-vm` unsafe-gate signoff
+## Miri policy
 
-For `dotnet-vm` changes that add or modify `unsafe`, the accepted local signoff invocations
+The pinned-nightly `dotnet-value` suite is a blocking CI gate. Run it locally when changing its unsafe or atomic-memory code:
+
+```bash
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
+cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
+```
+
+### `dotnet-vm` unsafe-gate advisory signoff
+
+For `dotnet-vm` changes that add or modify `unsafe`, the accepted local advisory invocations
 cover both the no-feature and `multithreading` configurations:
 
 ```bash
@@ -124,6 +133,19 @@ The Miri-only nightly is pinned separately because `rust-toolchain.toml` selects
 stable by default. As recorded in [`docs/CI.md`](docs/CI.md), neither targeted
 VM command completed within the local validation time box on this nightly, so
 the pin records the attempted toolchain rather than known-passing Miri results.
+
+## Blocking fuzz corpus replay
+
+Changes to atomic-memory code should also replay the tracked `fuzz_raw_memory_access` corpus with
+the CI-pinned toolchain:
+
+```bash
+cd crates/dotnet-value
+cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+```
+
+The other fuzz targets remain advisory; their known failures are documented in
+[`docs/FUZZING.md`](docs/FUZZING.md).
 
 ## Documentation drift check
 

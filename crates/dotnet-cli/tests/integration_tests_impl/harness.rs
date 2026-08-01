@@ -6,7 +6,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
     time::Duration,
 };
 
@@ -144,6 +144,10 @@ impl TestHarness {
 
     pub fn run_with_timeout(&self, dll_path: &Path, timeout: Duration) -> ExecutionResult {
         let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT harness keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
         self.run_with_shared_timeout(resolution, shared, timeout)
     }
@@ -154,89 +158,32 @@ impl TestHarness {
         shared: Arc<state::SharedGlobalState>,
         timeout: Duration,
     ) -> ExecutionResult {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let shared_clone = Arc::clone(&shared);
-        let handle = std::thread::spawn(move || {
-            let mut executor = vm::Executor::new(shared_clone.clone());
-            let entry_method = match resolution.entry_point {
-                Some(EntryPoint::Method(m)) => m,
-                Some(EntryPoint::File(f)) => {
-                    todo!("find entry point in file {}", resolution[f].name)
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let abort_signal = shared.abort_signal();
+        let timeout_waiter =
+            std::thread::spawn(move || match completion_rx.recv_timeout(timeout) {
+                Ok(()) => false,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    abort_signal.request_abort();
+                    true
                 }
-                None => {
-                    panic!("expected input module to have an entry point, received one without")
-                }
-            };
-            let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
-            let method_index = td
-                .definition()
-                .methods
-                .iter()
-                .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
-                .unwrap();
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => false,
+            });
 
-            let method = MethodDescription::new(
-                td,
-                vm::GenericLookup::default(),
-                resolution,
-                MethodMemberIndex::Method(method_index),
-            );
-            if let Err(e) = executor.entrypoint(method) {
-                let msg = format!("Entrypoint setup error: {:?}", e);
-                eprintln!("{}", msg);
-                let _ = tx.send(ExecutionResult {
-                    exit_code: 255,
-                    stderr: Some(msg),
-                });
-                return;
-            }
-
-            let result = match executor.run() {
-                vm::ExecutorResult::Exited(code) => ExecutionResult {
-                    exit_code: code,
-                    stderr: None,
-                },
-                vm::ExecutorResult::Threw(e) => {
-                    let msg = format!("Execution threw: {:?}", e);
-                    eprintln!("{}", msg);
-                    ExecutionResult {
-                        exit_code: 1,
-                        stderr: Some(msg),
-                    }
-                }
-                vm::ExecutorResult::Error(e) => {
-                    let msg = format!("Execution error: {:?}", e);
-                    eprintln!("{}", msg);
-                    ExecutionResult {
-                        exit_code: 255,
-                        stderr: Some(msg),
-                    }
-                }
-            };
-
-            let _ = tx.send(result);
-        });
-
-        match rx.recv_timeout(timeout) {
-            Ok(result) => {
-                handle.join().expect("Executor thread panicked");
-                result
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                shared.abort_requested.store(true, Ordering::Relaxed);
-                let _ = handle.join();
-                panic!("Execution timed out after {:?}", timeout);
-            }
-            Err(e) => {
-                shared.abort_requested.store(true, Ordering::Relaxed);
-                let _ = handle.join();
-                panic!("Execution failed: {:?}", e);
-            }
+        let result = self.run_with_shared_internal(resolution, shared, |_| {});
+        let _ = completion_tx.send(());
+        if timeout_waiter.join().expect("Timeout waiter panicked") {
+            panic!("Execution timed out after {:?}", timeout);
         }
+        result
     }
 
     pub fn run(&self, dll_path: &Path) -> u8 {
         let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT harness keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
         self.run_with_shared(resolution, shared).exit_code
     }
@@ -442,7 +389,7 @@ impl TestHarness {
             let shared = Arc::clone(&shared);
             let release_gate = Arc::clone(&release_gate);
             let resolution = resolution.clone();
-            abort_flags.push(Arc::clone(&shared.abort_requested));
+            abort_flags.push(shared.abort_signal());
 
             let handle = thread::spawn(move || {
                 let tx_ok = tx.clone();
@@ -481,7 +428,7 @@ impl TestHarness {
                 }
                 Ok(Err(panic_info)) => {
                     for flag in &abort_flags {
-                        flag.store(true, Ordering::Relaxed);
+                        flag.request_abort();
                     }
                     {
                         let (lock, condvar) = &*release_gate;
@@ -497,7 +444,7 @@ impl TestHarness {
                 }
                 Err(_) => {
                     for flag in &abort_flags {
-                        flag.store(true, Ordering::Relaxed);
+                        flag.request_abort();
                     }
                     test_error = Some(format!("TIMEOUT in {}", test_name));
                     break;
@@ -507,7 +454,7 @@ impl TestHarness {
 
         if let Some(err) = test_error {
             for flag in &abort_flags {
-                flag.store(true, Ordering::Relaxed);
+                flag.request_abort();
             }
             {
                 let (lock, condvar) = &*release_gate;

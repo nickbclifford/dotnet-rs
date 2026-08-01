@@ -1,4 +1,6 @@
 target/
-corpus/
+corpus/*
+!corpus/fuzz_raw_memory_access/
+!corpus/fuzz_raw_memory_access/**
 artifacts/
 *.profraw

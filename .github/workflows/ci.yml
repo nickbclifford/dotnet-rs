@@ -262,3 +262,50 @@ jobs:
               -- --test-threads=1 --nocapture || FAIL=1
           done
           exit $FAIL
+
+  miri-value:
+    name: Miri (dotnet-value)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - uses: Swatinem/rust-cache@v2.8.2
+      - run: cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
+
+  fuzz-raw-memory-access:
+    name: Fuzz Raw Memory Access Corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_FUZZ_VERSION: "0.13.1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          workspaces: |
+            .
+            crates/dotnet-value/fuzz
+      - name: Cache cargo-fuzz
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: ${{ runner.os }}-cargo-fuzz-${{ env.CARGO_FUZZ_VERSION }}
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo +nightly-2026-05-27 install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+      - name: Replay fuzz_raw_memory_access corpus
+        run: |
+          test -n "$(find fuzz/corpus/fuzz_raw_memory_access -type f -print -quit)"
+          cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+        working-directory: crates/dotnet-value

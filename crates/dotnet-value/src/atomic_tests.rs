@@ -166,18 +166,33 @@ mod tests {
         });
     }
     #[test]
-    #[cfg(feature = "memory-validation")]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "Alignment violation")]
-    fn test_misaligned_load() {
-        let data = [0u8; 16];
-        // SAFETY: Offset one remains within this test's sixteen-byte backing allocation.
-        let ptr = unsafe { data.as_ptr().add(1) };
+    fn test_misaligned_atomic_load_is_rejected() {
+        let data = Aligned8([0u8; 8]);
+        // SAFETY: Offset one remains within the test's eight-byte backing allocation.
+        let ptr = unsafe { data.0.as_ptr().add(1) };
         // SAFETY: `ptr` points into the live test allocation; the checked operation is
         // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
         }
     }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Alignment violation")]
+    fn test_misaligned_atomic_store_is_rejected() {
+        let mut data = Aligned8([0u8; 8]);
+        // SAFETY: Offset one remains within the test's eight-byte backing allocation.
+        let ptr = unsafe { data.0.as_mut_ptr().add(1) };
+        // SAFETY: `ptr` points into the live test allocation; the checked operation is
+        // expected to reject its deliberately invalid alignment.
+        unsafe {
+            StackValue::Int32(42).store_atomic(ptr, StoreType::Int32, AtomicOrdering::Relaxed);
+        }
+    }
+
     #[repr(align(8))]
     struct ThreadSafeBox([u8; 8]);
 }

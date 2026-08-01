@@ -1,3 +1,7 @@
+// Intentional non-differential fixture: dotnet-rs returns 1 after throwing
+// DataMisalignedException for misaligned Interlocked operations, while real .NET
+// on x86-64 returns 42 because the hardware permits the accesses. ECMA-335 does
+// not define misaligned Interlocked behavior; this tests dotnet-rs conformance.
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;

@@ -171,6 +171,10 @@ mod tests {
     #[test]
     fn test_fault_handler_skipped_on_normal_exit() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT fault test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, _, type_idx) =
             make_test_assembly!("FaultTest.dll", "FaultTestAssembly", "FaultType");
@@ -227,6 +231,10 @@ mod tests {
     #[test]
     fn test_fault_handler_executed_on_exception() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT fault test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, system_runtime, type_idx) =
             make_test_assembly!("FaultTestExc.dll", "FaultTestExcAssembly", "FaultTypeExc");

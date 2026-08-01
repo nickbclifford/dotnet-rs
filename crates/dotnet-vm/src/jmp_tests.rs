@@ -112,6 +112,10 @@ mod tests {
     #[test]
     fn test_jmp_instruction() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT jmp test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, _, type_idx) =
             make_test_assembly!("JmpTest.dll", "JmpTestAssembly", "JmpType");
@@ -226,6 +230,10 @@ mod tests {
     #[test]
     fn test_jmp_invalid_stack() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT jmp test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, _, type_idx) =
             make_test_assembly!("JmpInvalid.dll", "JmpInvalidAssembly", "JmpInvalidType");
@@ -294,6 +302,10 @@ mod tests {
     #[test]
     fn test_jmp_inside_try() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT jmp test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, _, type_idx) =
             make_test_assembly!("JmpTry.dll", "JmpTryAssembly", "JmpTryType");
@@ -373,6 +385,10 @@ mod tests {
     #[test]
     fn test_jmp_signature_mismatch() {
         let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT jmp test keeps shared state on its sole executor"
+        )]
         let shared = Arc::new(SharedGlobalState::new(loader.clone()));
         let (mut res, _, type_idx) =
             make_test_assembly!("JmpSig.dll", "JmpSigAssembly", "JmpSigType");

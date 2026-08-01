@@ -354,7 +354,7 @@ impl Executor {
         #[cfg(feature = "bench-instrumentation")]
         let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
         let result = loop {
-            if self.shared.abort_requested.load(Ordering::Relaxed) {
+            if self.shared.is_abort_requested() {
                 break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(
                     "Requested by user/timeout".into(),
                 )));
@@ -600,7 +600,7 @@ impl Executor {
             let start_time = Instant::now();
             vm_trace_gc_collection_start!(self, 0, "allocation pressure");
 
-            if !self.shared.abort_requested.load(Ordering::Relaxed) {
+            if !self.shared.is_abort_requested() {
                 // Perform full collection with finalization (mimics multithreading behavior)
                 self.with_arena(|arena| {
                     // Try to mark all remaining objects. If finish_marking() returns None,

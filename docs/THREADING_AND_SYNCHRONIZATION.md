@@ -288,9 +288,9 @@ The concrete `ThreadManager` (implementing `ThreadManagerOps`) is instantiated o
 The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` to abstract locking:
 - **With `multithreading`**: Aliases point to `parking_lot::Mutex` and `parking_lot::RwLock`.
 - **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely). These wrappers intentionally do not implement `Sync`.
-  In this configuration, `SharedGlobalState` has narrow `Send`/`Sync` implementations for the
-  integration-test timeout harness: only the executor accesses VM state, while the waiting thread
-  accesses the atomic abort flag. This does not make compat locks generally safe to share.
+  In this configuration, `SharedGlobalState` is deliberately `!Send` and executor-confined. The
+  integration-test timeout waiter receives only an `AbortSignal`, whose private state is an
+  `Arc<AtomicBool>`; it cannot access the VM state or compat locks.
 *(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
 
 ## Asynchronous Exceptions (Thread.Abort and Thread.Interrupt)

@@ -320,8 +320,24 @@ impl SharedReflectionRegistry {
     }
 }
 
-/// Thread-safe shared state that does not contain any GC-managed pointers.
-/// This state is shared across all execution threads and arenas.
+/// A clonable handle used to request executor abortion without sharing VM state.
+#[derive(Clone, Debug)]
+pub struct AbortSignal(Arc<AtomicBool>);
+
+impl AbortSignal {
+    /// Requests that the associated executor stop at its next abort check.
+    pub fn request_abort(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+static_assertions::assert_impl_all!(AbortSignal: Send, Sync);
+
+/// Global VM state that does not contain any GC-managed pointers.
+///
+/// Multithreaded builds share this state across execution threads and arenas. In no-MT builds it
+/// is deliberately `!Send` and executor-confined; only an [`AbortSignal`] may cross threads.
 pub struct SharedGlobalState {
     pub loader: Arc<AssemblyLoader>,
     pub pinvoke: NativeLibraries,
@@ -335,7 +351,7 @@ pub struct SharedGlobalState {
     pub caches: Arc<GlobalCaches>,
     pub statics: Arc<StaticStorageManager>,
     pub last_instructions: Arc<Mutex<InstructionRingBuffer>>,
-    pub abort_requested: Arc<AtomicBool>,
+    abort_requested: Arc<AtomicBool>,
     pub gc_coordinator: Arc<GCCoordinator>,
     #[cfg(feature = "multithreading")]
     pub reflection_registry: SharedReflectionRegistry,
@@ -343,19 +359,8 @@ pub struct SharedGlobalState {
     pub app_context_switches: DashMap<String, bool>,
 }
 
-#[cfg(not(feature = "multithreading"))]
-mod compat_auto_traits {
-    use super::SharedGlobalState;
-
-    // SAFETY: The no-MT harness moves VM state to its sole executor; only `abort_requested` remains shared.
-    unsafe impl Send for SharedGlobalState {}
-
-    // SAFETY: The executor alone accesses VM state; the timeout waiter touches only `abort_requested`.
-    unsafe impl Sync for SharedGlobalState {}
-}
-
-#[cfg(test)]
-static_assertions::assert_impl_all!(SharedGlobalState: Send, Sync);
+#[cfg(all(test, not(feature = "multithreading")))]
+static_assertions::assert_not_impl_all!(SharedGlobalState: Send);
 
 impl GlobalCaches {
     pub fn get_method_info(
@@ -449,6 +454,16 @@ impl SharedGlobalState {
             .set_coordinator(Arc::downgrade(&state.gc_coordinator));
 
         state
+    }
+
+    /// Returns the narrow thread-safe handle for requesting executor cancellation.
+    pub fn abort_signal(&self) -> AbortSignal {
+        AbortSignal(Arc::clone(&self.abort_requested))
+    }
+
+    /// Returns whether an abort has been requested for this executor.
+    pub(crate) fn is_abort_requested(&self) -> bool {
+        self.abort_requested.load(Ordering::Relaxed)
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {
@@ -742,6 +757,21 @@ impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
         &self,
     ) -> RefMut<'a, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
         self.local.runtime_property_objs.borrow_mut()
+    }
+}
+
+#[cfg(test)]
+mod abort_signal_tests {
+    use super::*;
+
+    #[test]
+    fn cloned_signal_requests_abort_on_shared_flag() {
+        let requested = Arc::new(AtomicBool::new(false));
+        let signal = AbortSignal(Arc::clone(&requested));
+
+        signal.clone().request_abort();
+
+        assert!(requested.load(Ordering::Relaxed));
     }
 }
 

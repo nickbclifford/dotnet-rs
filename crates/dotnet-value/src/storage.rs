@@ -8,8 +8,8 @@ use dotnet_utils::sync::{
 };
 use dotnet_utils::{
     atomic::{Atomic, remove_atomic_locations_in_range},
+    is_ptr_aligned_to_field,
     sync::{Arc, Ordering},
-    validate_alignment,
 };
 use gc_arena::{Collect, collect::Trace};
 use std::{
@@ -173,7 +173,12 @@ impl FieldStorage {
         let range = field.as_range();
 
         let guard = RwLockReadGuard::map(self.data.read(), |v| &v[range]);
-        validate_alignment(guard.as_ptr(), alignment);
+        debug_assert!(
+            is_ptr_aligned_to_field(guard.as_ptr(), alignment),
+            "Alignment violation: FieldStorage::get_field_local: ptr {:p} is not aligned to {} bytes",
+            guard.as_ptr(),
+            alignment
+        );
         guard
     }
 
@@ -188,7 +193,12 @@ impl FieldStorage {
         let range = field.as_range();
 
         let guard = RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
-        validate_alignment(guard.as_ptr(), alignment);
+        debug_assert!(
+            is_ptr_aligned_to_field(guard.as_ptr(), alignment),
+            "Alignment violation: FieldStorage::get_field_mut_local: ptr {:p} is not aligned to {} bytes",
+            guard.as_ptr(),
+            alignment
+        );
         guard
     }
 
@@ -210,8 +220,15 @@ impl FieldStorage {
         let range = field.as_range();
         let guard = RwLockReadGuard::map(self.data.read(), |v| &v[range]);
         let field_ptr = guard.as_ptr();
-        validate_alignment(field_ptr, alignment);
-        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
+        debug_assert!(
+            is_ptr_aligned_to_field(field_ptr, alignment),
+            "Alignment violation: FieldStorage::get_field_atomic: ptr {:p} is not aligned to {} bytes",
+            field_ptr,
+            alignment
+        );
+        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw
+        // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
+        // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
     }
 
@@ -238,8 +255,15 @@ impl FieldStorage {
         let range = field.as_range();
         let mut guard = RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
         let field_ptr = guard.as_mut_ptr();
-        validate_alignment(field_ptr, alignment);
-        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
+        debug_assert!(
+            is_ptr_aligned_to_field(field_ptr, alignment),
+            "Alignment violation: FieldStorage::set_field_atomic: ptr {:p} is not aligned to {} bytes",
+            field_ptr,
+            alignment
+        );
+        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw
+        // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
+        // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::store_field(field_ptr, value, ord) }
     }
 
@@ -314,5 +338,76 @@ impl Debug for FieldStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let len = self.with_data(|data| data.len());
         write!(f, "FieldStorage({} bytes)", len)
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod alignment_tests {
+    use super::*;
+    use crate::layout::{FieldKey, FieldLayout, GcDesc, LayoutManager, Scalar};
+    use dotnet_types::TypeDescription;
+
+    const FIELD_NAME: &str = "misaligned";
+
+    fn misaligned_int32_storage() -> FieldStorage {
+        let data = vec![0; 8];
+        let offset = (0..4)
+            .find(|offset| {
+                !is_ptr_aligned_to_field(data.as_ptr().wrapping_add(*offset), align_of::<i32>())
+            })
+            .expect("one of four consecutive byte addresses must be misaligned for i32");
+        let layout = Arc::new(FieldLayoutManager {
+            fields: [(
+                FieldKey {
+                    owner: TypeDescription::NULL,
+                    name: FIELD_NAME.to_string(),
+                },
+                FieldLayout {
+                    position: crate::ByteOffset::new(offset),
+                    layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            total_size: data.len(),
+            alignment: align_of::<i32>(),
+            gc_desc: GcDesc::default(),
+            has_ref_fields: false,
+        });
+
+        FieldStorage::new(layout, data)
+    }
+
+    #[test]
+    #[should_panic(expected = "Alignment violation: FieldStorage::get_field_local")]
+    fn get_field_local_rejects_misaligned_storage() {
+        let storage = misaligned_int32_storage();
+        let _guard = storage.get_field_local(TypeDescription::NULL, FIELD_NAME);
+    }
+
+    #[test]
+    #[should_panic(expected = "Alignment violation: FieldStorage::get_field_mut_local")]
+    fn get_field_mut_local_rejects_misaligned_storage() {
+        let storage = misaligned_int32_storage();
+        let _guard = storage.get_field_mut_local(TypeDescription::NULL, FIELD_NAME);
+    }
+
+    #[test]
+    #[should_panic(expected = "Alignment violation: FieldStorage::get_field_atomic")]
+    fn get_field_atomic_rejects_misaligned_storage() {
+        let storage = misaligned_int32_storage();
+        let _ = storage.get_field_atomic(TypeDescription::NULL, FIELD_NAME, Ordering::Acquire);
+    }
+
+    #[test]
+    #[should_panic(expected = "Alignment violation: FieldStorage::set_field_atomic")]
+    fn set_field_atomic_rejects_misaligned_storage() {
+        let storage = misaligned_int32_storage();
+        storage.set_field_atomic(
+            TypeDescription::NULL,
+            FIELD_NAME,
+            &[0; size_of::<i32>()],
+            Ordering::Release,
+        );
     }
 }

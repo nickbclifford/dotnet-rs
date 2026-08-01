@@ -140,6 +140,10 @@ pub fn run_cli() -> ExitCode {
         }
     };
 
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT CLI executor confines shared state to its run thread"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 
