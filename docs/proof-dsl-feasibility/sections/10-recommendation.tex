@@ -1,0 +1,72 @@
+\section{Recommendation}
+\label{sec:recommendation}
+
+Proceed --- in the reshaped form this study argues for, and in the
+phased order that front-loads standalone value.
+
+\paragraph{Adopt.} An embedded, tactic-oriented proof-script DSL in
+the lineage of \code{dotnetdll}'s \code{asm!}~\cite{dotnetdll}:
+block-shaped \code{ves::proof!} scripts wrapping each \code{unsafe}
+site, premises acquired as zero-sized ghost tokens whose existence,
+\code{cfg}-liveness, and dataflow rustc itself checks, goals drawn
+from (or inferred against) a single declarative vocabulary that
+generates both the Rust tokens and the Lean declarations. Scripts
+elaborate deterministically to Lean~4 statements; proofs are ordinary
+Lean terms driven by reusable domain tactics that are untrusted
+metaprograms; the kernel is Lean's; Curry--Howard is inherited, not
+reimplemented. The whole verifier lives in a separately versioned
+repository whose only contact with \dotnetrs{} is two tiny Rust
+dependencies and two hashed manifest artifacts
+(\cref{sec:design-compart}) --- the VM's build never touches Lean.
+Surface conventions stay aligned with RFC 3842 safety
+tags~\cite{rfc3842} so the project tracks, and can eventually
+contribute to, the community convention.
+
+\paragraph{Reject.} A bespoke proof kernel and solver
+(\cref{sec:design-custom}: unauditable TCB, automation cost dwarfs the
+kernel, forfeits the agent ecosystem) --- including its subtle
+reappearance as a ``smart'' checker that evaluates tactics outside
+Lean; wholesale adoption of any existing verifier as the whole answer
+(\cref{sec:design-adopt}: none reaches the ECMA-335 layer); attribute
+or comment syntax as the primary carrier for multi-step proofs (kept
+only as the degenerate single-lemma form); and any plan whose first
+deliverable is a proof rather than the token layer and the model
+(\cref{sec:risks-tcb}: untethered proofs decay into documentation).
+
+\paragraph{Immediate actions, independent of any spin-off decision.}
+Phase 0 is due diligence, not verification: fix the two live defects,
+promote at least one Miri leg to blocking, and expand the differential
+harness past its single test. Phase 1 (the embedded layer) is the
+cheapest experiment that tests the whole thesis on real ground ---
+and, uniquely among the phases, it yields value even with no Lean
+involvement: ghost tokens make premise citations compile-checked in
+every feature configuration, which would already have made defect (a)
+unwritable.
+
+\paragraph{Two genuinely open decisions.} First, how far to trust
+the $\mathcal{M}_{\mathrm{Rust}}$ axiomatization before reaching for
+Rocq foundations --- this study says: cap it at $\sim$30
+Miri-falsifiable axioms and revisit after the critical sites are proved.
+Second, whether the VES model targets the standard's semantics or
+\dotnetrs{}'s documented deviations (single load context, non-moving
+GC, STW-only collection) --- this study says: model the standard, and
+register each deviation as a named trust grant, because the deviations
+are exactly the things most likely to change and the grant registry is
+what makes changing them safe.
+
+\medskip
+
+\noindent The strongest reason to proceed is internal to the
+project. \dotnetrs{} has pushed Rust-native assurance --- branded
+lifetimes, capability tokens, compile-time lock DAGs, validation
+magics, a written proof charter --- about as far as it goes, and the
+residue is a well-defined, finite set of obligations that are theorems
+or they are nothing. The project's own documentation already writes
+them as theorems in prose (``STW keeps every arena alive and every
+mutator stopped through this read''); its own metadata layer already
+demonstrates the embedding idiom the proof language should use. The
+proposal, correctly scoped, is not adding a formal layer to an
+informal project; it is giving a project that already reasons formally
+a checker for the reasoning it already does --- and producing, along
+the way, the first mechanized model of the specification it
+implements.

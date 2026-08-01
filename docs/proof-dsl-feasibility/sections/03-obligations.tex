@@ -1,0 +1,186 @@
+\section{A taxonomy of the proof obligations}
+\label{sec:obligations}
+
+Formalizing 620 comments individually would be neither tractable nor
+useful. The corpus factors: roughly nine invariant \emph{families}
+cover $\sim$95\% of the sites, and each family is a single predicate (or
+small theory) stated once and instantiated per site. This section
+catalogs the families, gives a representative site for the hard ones,
+and records --- for each --- which facts are Rust-level, which are
+VES-level, and why Rust's type system alone cannot close the gap. The
+family structure is the raw material for the DSL of \cref{sec:dsl}.
+
+\subsection{The families}
+
+\begin{obligationbox}[F1 --- Rooting / STW liveness ($\sim$70 sites)]
+``This allocation cannot be freed (or moved) during this access.''
+\emph{Rust facts:} a \code{Gc<'gc>} handle or lock guard in scope; an
+\code{Arc} refcount. \emph{VES facts:} the STW protocol has parked every
+mutator; \code{unregister\_arena} waits for \code{active\_leases == 0};
+arena generation stamps match; the GC is non-moving. \emph{Gap:} the
+temporal premise is a global protocol state, invisible to types; the
+non-moving assumption is an unstated global axiom.
+\end{obligationbox}
+
+\begin{obligationbox}[F2 --- Layout faithfulness ($\sim$60 sites)]
+``The layout descriptor says offset $k$ holds type $X$, so reading these
+bytes as $X$ is valid.'' \emph{Rust facts:} slice bounds; bytes written
+by the matching serializer. \emph{VES facts:}
+\code{FieldLayoutManager}/\code{GcDesc} faithfully model ECMA-335 field
+layout (\ecma{II.10.7}, \ecma{I.8.5}) for the concrete generic
+instantiation; the reference-overlap prohibition holds. \emph{Gap:} the
+premise is a correspondence between computed Rust data and the
+standard's layout rules --- exactly the representation relation
+$\mathcal{R}$ of \cref{sec:design-model}. This family is uniquely
+consequential: \code{LayoutManager::trace} derives GC reachability
+from the same descriptor, so a layout defect is simultaneously a type
+confusion and a GC reachability error.
+\end{obligationbox}
+
+\begin{obligationbox}[F3 --- Evaluation-stack slot typing ($\sim$20 sites)]
+``This slot was pushed as $X$; this raw view of it is valid, and
+recorded interior pointers survive \code{Vec} reallocation.''
+\emph{Rust facts:} enum discriminants, \code{Vec} growth semantics.
+\emph{VES facts:} eval-stack typing (\ecma{I.12.3.2.1});
+\code{PointerOrigin::Stack(StackSlotIndex)} indexes the live stack;
+every growth is followed by \code{apply\_reallocation\_fixup()}.
+\emph{Gap:} a history-indexed (ghost) fact --- ``\code{off} was recorded
+from that slot when the pointer was created'' --- plus a
+whole-structure re-establishment obligation after every reallocation.
+The most amenable family to dependent indexing
+($\mathsf{Slot}\,\tau$), and the one closest to Gordon--Syme's
+stack-typing judgments~\cite{gordonsyme2001}.
+\end{obligationbox}
+
+\begin{obligationbox}[F4 --- Atomic access width/alignment ($\sim$40 sites)]
+``The pointer is valid and aligned for the selected atomic width, and no
+concurrent non-atomic access races it.'' \emph{Rust facts:}
+\code{align\_of}, guard exclusion. \emph{VES facts:} \ecma{I.12.6.2}
+alignment, \ecma{I.12.6.6} atomicity guarantees, the \code{unaligned.}
+prefix, and .NET's asymmetric policy (misaligned \code{Interlocked}
+$\Rightarrow$ \code{DataMisalignedException}; misaligned volatile
+$\Rightarrow$ lock-guarded fallback). \emph{Gap:} three discharge
+mechanisms coexist (an always-on guard, a feature-gated no-op, an
+internal re-check) and the prose does not say which one it is citing ---
+the direct cause of defect (a) in \cref{sec:system-defects}.
+\end{obligationbox}
+
+\begin{obligationbox}[F5 --- Tracing completeness (22 \code{unsafe impl Collect})]
+``This \code{trace} visits every contained GC reference.'' \emph{Rust
+facts:} match exhaustiveness, field enumeration. \emph{VES facts:} the
+root set (\code{ExecutionEngine} $\to$ \code{CallStack} $\to$
+\code{ThreadContext} $\to$ \code{StackFrame}) is complete; continuation
+state (\code{VmContinuation}) covers all cross-safe-point values;
+cross-arena references are recorded rather than traced. \emph{Gap:} a
+\emph{completeness} (universally quantified, structure-directed)
+property --- the classic GC obligation of the verified-collector
+literature~\cite{hawblitzelpetrank2009}, here on the mutator side.
+Mechanically checkable by reflection over type structure; a derive-style
+audit already gets most of it, but the manual impls are exactly the
+risky ones.
+\end{obligationbox}
+
+\begin{obligationbox}[F6 --- \gcarena{} brand and token discipline ($\sim$10 sites)]
+``This \code{'gc}-branded value cannot escape its arena / this token
+witnesses a mutation context.'' \emph{Rust facts:} invariant lifetimes,
+private constructors, \code{for<'a>} closure confinement. \emph{VES
+facts:} \code{CallStack} lives in the arena root; cross-arena
+references never carry a brand. \emph{Gap:} largely closed by Rust ---
+this family is the clearest demonstration of what lifetime branding
+achieves --- except for one deliberate violation: cross-arena tracing
+mints \code{Gc::from\_ptr} with the \emph{wrong arena's} brand
+(\code{heap.rs:436--445}), justified by STW liveness together with
+non-escape. This is the most instructive single target for the DSL
+(\cref{sec:dsl-example-rebrand}).
+\end{obligationbox}
+
+\begin{obligationbox}[F7 --- Immutable-field publication ($\sim$8 sites)]
+``\code{owner\_id} is written once at construction, so this lock-free
+read is race-free.'' \emph{Gap:} needs immutability \emph{plus} a
+happens-before edge publishing the initializing write; the prose
+supplies the former and leaves the latter implicit. A standard
+release/acquire obligation over the STW handshake.
+\end{obligationbox}
+
+\begin{obligationbox}[F8 --- Lock order and safepoint discipline]
+Partially mechanized already --- the \code{define\_lock\_order\_dag!}
+macro with negative compile-time assertions; the unmechanized residue is the four
+\code{GcScopeGuard} conventions (never poll a safepoint or allocate
+while holding a heap borrow, \dots). \emph{Gap:} a rely-guarantee
+protocol; violations become false premises for F1/F5 rather than
+independent UB.
+\end{obligationbox}
+
+\begin{obligationbox}[F9 --- Leaked-\code{Box} metadata lifetime ($\sim$14 sites)]
+``The \code{MetadataArena} solely owns these leaked allocations and
+outlives every descriptor into them.'' Conventional ownership reasoning;
+fully expressible in existing separation logics; low risk, low novelty.
+\end{obligationbox}
+
+\subsection{Two irreducibly untrusted premise classes}
+\label{sec:obligations-untrusted}
+
+Two families of premise cannot be proved, only isolated, and the DSL
+must mark them with a distinguished trust class rather than obscure
+the distinction:
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{The managed program as adversary.} For \code{cpblk},
+  \code{initblk}, \code{Unsafe.*} and friends, ECMA-335 itself says
+  behavior is undefined if the (unverifiable) IL supplies invalid
+  operands (e.g.\ \ecma{III}'s \code{cpblk} contract). The VM's SAFETY
+  comments correctly cite the spec contract as premise
+  (\code{instructions/\allowbreak memory.rs:44--51}). Formally these become
+  \emph{conditional} theorems: \emph{if} the input IL is verifiable (in
+  the \ecma{III.1.8} sense) or the host accepts the unverifiable-code
+  trust boundary, \emph{then} the implementation is safe. A mechanized
+  CIL verifier for the executed fragment would discharge the condition
+  for verifiable inputs --- a natural but strictly-later extension.
+\item \textbf{The FFI boundary.} P/Invoke ABI agreement between a
+  libffi CIF and an arbitrary native library is not provable in any
+  model that stops at the process boundary. The pinning and
+  liveness-across-the-call obligations \emph{around} the FFI call are
+  provable (F1); the call itself is an axiom per imported function.
+\end{itemize}
+
+\subsection{Limits of Rust-level typing}
+\label{sec:obligations-whyrust}
+
+The corpus confirms the intuition behind the proposal. Rust-level
+typing already carries what it can: branded lifetimes confine arena
+handles
+(F6), private-constructor tokens witness capabilities, the lock DAG is
+compile-time, newtype indices name their domains. What remains is
+precisely what an ML-family type system without dependent types,
+quantified invariants, or ghost state cannot say:
+
+\begin{itemize}[leftmargin=1.4em]
+\item \emph{Value-dependent facts}: ``$\mathit{offset} + \mathit{size}
+  \le \mathit{len}$,'' ``aligned to \code{align\_of::<u32>()}'' ---
+  refinement-type territory (the project's own newtype policy
+  explicitly declines to carry bounds, pushing every range obligation
+  to the use site).
+\item \emph{Temporal/protocol facts}: ``all mutators are parked for the
+  duration of this read'' --- a statement about \emph{other threads'}
+  continuations, requiring ghost protocol state (Iris-style) or a
+  global LTS refinement.
+\item \emph{History facts}: ``this offset was recorded from that slot
+  at pointer-creation time'' --- ghost variables over execution history.
+\item \emph{Correspondence facts}: ``\code{GcDesc} agrees with
+  \ecma{II.10.7} layout for this instantiated type'' --- a relation
+  between runtime data and a specification-level function, i.e.\ a
+  theorem about two models at once.
+\item \emph{Completeness facts}: ``every GC reference in this structure
+  is visited'' --- universally quantified over a type's recursive
+  structure.
+\end{itemize}
+
+Encoding any one of these in stable Rust's traits-and-lifetimes
+fragment is the ``many layers of complex type logic'' the proposal
+anticipates: achievable in isolated cases (typestate, const generics,
+sealed tokens), unmaintainable as a system, and in any case incapable
+of expressing the ECMA-335 correspondence. The conclusion of this
+section is not that Rust's guarantees are weak --- the corpus shows the
+project extracting a great deal from them --- but that the residual
+obligations are precisely of the kind for which proof assistants
+exist.

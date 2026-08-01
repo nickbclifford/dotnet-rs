@@ -1,0 +1,179 @@
+\section{The formal content of a \safetyc{} comment}
+\label{sec:theory}
+
+Before we can evaluate designs, we must pin down the mathematical content of
+the thing being proposed. This section fixes terminology used in the rest of
+the study: what proposition an \code{unsafe} block's safety comment actually
+denotes, what a proof of it would range over, and where Curry--Howard enters.
+
+\subsection{The proposition behind an \code{unsafe} block}
+\label{sec:theory-proposition}
+
+Rust's soundness story is often summarized as: \emph{safe code cannot cause
+undefined behavior}. The precise version, due to
+RustBelt~\cite{rustbelt2018}, is a \emph{semantic typing} statement. Each
+type $\tau$ is interpreted not as a syntactic classifier but as a predicate
+$\sem{\tau}$ on values --- in RustBelt's case, a predicate in the Iris
+separation logic~\cite{iris2018} over a low-level operational semantics of
+MIR. A function is \emph{semantically well-typed} when it maps arguments
+satisfying its parameter predicates to results satisfying its return
+predicate, without ever executing an undefined operation, \emph{regardless
+of what well-typed code surrounds it}. The fundamental theorem says
+syntactically well-typed (safe) code is semantically well-typed; soundness
+of a program containing \code{unsafe} then reduces to a sequence of manual
+lemmas:
+
+\begin{definition}[Safety obligation of an unsafe block]
+\label{def:obligation}
+Let $B$ be an \code{unsafe} block occurring in a function $f$ of module $M$,
+and let $I_M$ be the module invariant --- the (possibly ghost-state-indexed)
+predicate relating $M$'s private data structures to the abstraction $M$
+exposes. The safety obligation of $B$ is the Hoare-style statement
+\[
+  \hoare{\,P_B \sep I_M\,}{\;B\;}{\,Q_B \sep I_M\,}
+\]
+where $P_B$ is what the surrounding safe code is known to have established
+at entry to $B$ (from types, flow, and prior checks), and $Q_B$ is what the
+code after $B$ relies on. ``Proving the SAFETY comment'' means exhibiting a
+derivation of this triple against a formal operational model of the
+language, in which every primitive step of $B$ is shown to satisfy its
+side conditions (validity, alignment, aliasing, initialization, \dots).
+\end{definition}
+
+Three consequences of this framing structure the rest of the study.
+
+\paragraph{(1) The obligation is relative to \emph{two} semantics.}
+The side conditions in Definition~\ref{def:obligation} come from Rust's
+dynamic semantics --- pointer validity and provenance as fixed by the
+operational aliasing model (Stacked Borrows~\cite{stackedborrows2019}, now
+superseded in practice by Tree Borrows~\cite{treeborrows2025}) --- but the
+\emph{preconditions} $P_B$ in \dotnetrs{} are frequently facts about the
+\emph{virtual machine being implemented}, not about Rust: ``all mutator
+threads are stopped,'' ``this object's arena is registered and its
+generation matches,'' ``the layout descriptor says offset $k$ holds an
+object reference.'' Those facts are only expressible against a model of the
+VES itself --- an abstract machine for a fragment of
+ECMA-335~\cite{ecma335}. A verifier for \dotnetrs{} safety comments is
+therefore necessarily a \emph{two-level} system:
+\[
+  \underbrace{\text{ECMA-335 abstract machine model}}_{\text{gives meaning to } P_B, Q_B, I_M}
+  \quad\Longrightarrow\quad
+  \underbrace{\text{Rust/MIR memory model}}_{\text{gives meaning to the steps of } B}
+\]
+with a simulation relation connecting VM-level states to the Rust data
+structures that represent them. This is the same architecture as a compiler
+correctness proof (CompCert~\cite{compcert2009}, CakeML~\cite{cakeml2014}),
+run in reverse: instead of proving a compiler preserves source semantics, we
+prove a hand-written interpreter's internal transitions refine the
+specification's transitions, and that its \code{unsafe} shortcuts are
+justified by invariants the specification-level model maintains.
+
+\paragraph{(2) Module invariants, not block-local facts, carry the weight.}
+Almost none of the interesting \safetyc{} comments in \dotnetrs{} are
+self-contained. A comment like ``STW has stopped every mutator, so the
+owning arena cannot be freed during this read''
+(\cref{sec:obligations}) appeals to a \emph{protocol}: a
+state machine over coordinator phases, arena registration, lease counts,
+and thread states, whose transitions are scattered across several crates.
+In separation-logic terms this is ghost state governed by an invariant
+$I_{\mathrm{STW}}$; individual blocks open the invariant, use a token
+certifying the current phase, and close it. Any DSL that can only state
+block-local, first-order facts (``$p$ is aligned,'' ``$n \le \mathrm{len}$'')
+will be able to discharge the easy third of the corpus and will hit a wall
+exactly where the risk is concentrated. This is why the study devotes
+\cref{sec:design} to the question of \emph{where the invariant layer
+lives}, and it is the single strongest argument for reusing an existing
+Iris-class logic rather than inventing a bespoke solver.
+
+\paragraph{(3) The proof is about a model of the code, not the code.}
+Unless the checker consumes the actual MIR of the crate (as
+RefinedRust~\cite{refinedrust2024} and Aeneas~\cite{aeneas2022} do), there
+is a formalization gap: someone (or some tool) must translate each
+\code{unsafe} block and the definitions it touches into the proof
+language, and the fidelity of that translation is part of the trusted
+computing base. \Cref{sec:risks} quantifies this: for a codebase undergoing
+LLM-assisted refactors at \dotnetrs{}'s pace, an untethered model drifts
+from the code within weeks. Mechanized tethering --- extraction from MIR, or
+at minimum syntactic anchoring with CI-enforced drift checks in the style of
+the project's existing \code{check\_doc\_drift.sh} --- is not optional
+polish; it is what distinguishes verification from documentation.
+
+\subsection{The role of the Curry--Howard correspondence}
+\label{sec:theory-ch}
+
+The Curry--Howard correspondence identifies propositions with types and
+proofs with programs: a term $t : \Phi$ \emph{is} a checkable certificate of
+$\Phi$. For this project the correspondence matters in a specific,
+practical way: it determines the \emph{artifact format}. A
+\safetyc{}-comment DSL under Curry--Howard is a language of \emph{proof
+terms} whose types are safety propositions; the checker is a type checker;
+and soundness of the whole edifice reduces to (a) soundness of the ambient
+type theory and (b) adequacy of the axioms/model against which the
+propositions are stated. Concretely, three design families instantiate
+this:
+
+\begin{description}
+\item[Deep proof terms, custom checker.] The DSL is itself a small
+  dependently-typed calculus ($\Pi$, $\Sigma$, indexed inductive families
+  for the invariant taxonomy of \cref{sec:obligations}), with a
+  hand-written kernel. Curry--Howard is used directly. The kernel joins
+  the TCB; decidability and totality of type checking must be engineered
+  (bidirectional checking, no unrestricted conversion); and every
+  automation convenience (arithmetic, congruence) must be built, or
+  the proofs become impractically manual. Bespoke kernels developed
+  alongside large host projects have a poor historical record;
+  \cref{sec:design-custom} argues this option is dominated.
+\item[Shallow embedding into an existing proof assistant.] Propositions
+  and proofs are ordinary Lean~4~\cite{lean4} or Rocq~\cite{rocq}
+  terms; the annotation beside the \code{unsafe} site --- whether an
+  attribute, a comment, or an embedded proof script --- determines the
+  statement and sketches the proof, while the checked artifact lives
+  in the host. Curry--Howard is
+  inherited from the host's kernel, which is small, battle-tested, and
+  independently checkable. The VM model, the Rust memory-model fragment,
+  and the simulation relation are libraries in the host. This is the
+  architecture of RustBelt (Iris/Rocq), RefinedRust (Iris/Rocq, with a
+  MIR front end), and Aeneas (extraction to Lean).
+\item[SMT-mediated verification conditions.] Verus~\cite{verus2024} and
+  Creusot~\cite{creusot2022} compile annotations to SMT queries. This
+  buys enormous automation for first-order obligations (bounds,
+  alignment, arithmetic) at the cost of the proof-term ideal: an SMT
+  ``unsat'' is not a checkable certificate in the Curry--Howard sense,
+  and quantifier-heavy protocol invariants strain the paradigm. The
+  pragmatic middle ground --- proof terms for protocol lemmas, SMT for
+  leaf arithmetic --- is exactly the division of labor RefinedRust and
+  Verus each approach from opposite ends.
+\end{description}
+
+\subsection{The specification side: an ECMA-335 abstract machine}
+\label{sec:theory-vesmodel}
+
+The second layer --- the one that distinguishes this proposal from
+general unsafe-Rust verification --- is a formal model of the VES fragment that \dotnetrs{}
+implements. The standard itself is prose, but it is unusually
+formalization-friendly prose: it specifies an explicit evaluation-stack
+machine, a typed memory store with a precise alignment and atomicity
+contract (\ecma{I.12.6.2}, \ecma{I.12.6.6}), an acquire/release volatile
+semantics (\ecma{I.12.6.7}), a pointer taxonomy separating managed from
+unmanaged pointers with GC-reporting obligations (\ecma{II.14.4},
+\ecma{III.1.1.5}), layout rules including the prohibition on object
+references overlapping other fields (\ecma{II.10.7}), and finalization
+lifecycle rules (\ecma{I.8.9.6.7}). Prior mechanizations of comparable
+scope exist and calibrate the effort: Fruja's ASM-based CLR model covering
+the type system and bytecode verifier~\cite{fruja2006}, Gordon and Syme's
+type soundness for a CIL fragment~\cite{gordonsyme2001}, Kennedy and Syme's
+formalization of CLR generics~\cite{kennedysyme2001}, and --- closest in
+spirit to what \dotnetrs{} needs --- the Jinja/JinjaThreads line in
+Isabelle/HOL, which grew from a sequential Java-like machine to a verified
+multithreaded JVM with a verified compiler over roughly a
+decade~\cite{jinja2006,jinjathreads2012}.
+
+The model does \emph{not} need to cover the whole standard to be useful.
+The invariant families of \cref{sec:obligations} touch a compact core:
+object and array layout, the managed-pointer discipline, the memory/atomicity
+model, GC reachability and finalization, and the STW protocol (which is an
+implementation construct \emph{justified by} the standard's GC latitude, not
+mandated by it). A model of that core, indexed by the layout function that
+\dotnetrs{}'s \code{LayoutManager} actually computes, is the central
+artifact; everything else in the roadmap of \cref{sec:roadmap} is staged
+against it.

@@ -1,0 +1,220 @@
+\section{Decomposition into supervised agent refactors}
+\label{sec:decomposition}
+
+The roadmap of \cref{sec:roadmap} fixes phase order; this section maps
+the phases onto the project's existing execution machinery. \dotnetrs{}
+is developed through supervised, agent-executed refactor sessions
+managed by a local orchestrator (\code{nasin-pali-pi-jan-ilo}, state in
+\code{.refactor-orchestrator/}): each session binds one repository and
+one branch to one written goal, a kickoff agent produces a review
+document and a checklist of anchored steps
+(\code{-\,[\,]\,N.M \dots\ --- refs REVIEW.md\#anchor}), each step is
+executed by a fresh-context agent at a configured effort tier
+(\code{draft}/\code{standard}/\code{deep}/\code{max}) and must attach
+machine-checkable verification evidence, and the supervisor reviews the
+per-step diff before the step commits. The repository's history
+contains 51 such sessions, all merged, ranging from 6 to 68 checklist
+steps. The decomposition below is stated in that system's units.
+
+\subsection{Sizing measures}
+\label{sec:decomposition-measures}
+
+Wall-clock estimates are not meaningful for agent-executed work; the
+quantities that actually predict whether a session succeeds are:
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Checklist size class.} S ($\le$10 steps), M (11--25),
+  L (26--45). Prior sessions above $\sim$45 steps correlate with
+  plan defects (mass \emph{blocked} reports mid-session), so any
+  package estimated at L or larger below is pre-split.
+\item \textbf{Verification-signal quality} (\emph{high} / \emph{medium}
+  / \emph{low}): whether each step has a machine-checkable acceptance
+  test an agent can iterate against without supervision. Lean packages
+  are the extreme high case --- a \code{sorry}-free \code{lake build}
+  is a sound per-step gate, so \code{draft}-tier retry loops are
+  usable for proof search. Design-type steps (choosing a
+  \code{Prop}'s statement, cutting an LTS) are the low case: the
+  artifact compiles regardless of whether it says the right thing,
+  so tier and supervisor attention concentrate there.
+\item \textbf{Step context-independence}: whether a fresh-context agent
+  can execute a step from the checklist line, the review anchor, and
+  \code{AGENT\_MEMORY.md} alone. Grammar-and-codegen work is highly
+  independent; annotation sweeps are independent per file; model
+  design is not, and such sessions need richer review documents at
+  kickoff.
+\item \textbf{Supervisor gate density}: the fraction of steps whose
+  diff requires a substantive human judgment rather than a
+  conformance glance. This is the binding resource. It is highest
+  where statements (not proofs) are produced: vocabulary elaboration
+  rules, axioms, LTS transitions, trust grants.
+\item \textbf{Blast radius}: single-crate sessions merge cleanly;
+  sessions that touch shared files across crates serialize. Prior
+  experience with cascade refactors indicates slicing by crate
+  dependency order, not by semantic theme.
+\end{itemize}
+
+Parallelism operates at the session level, not the step level: a
+session owns one branch of one repository, so \emph{sessions in
+different repositories run concurrently}, while sessions in the same
+repository serialize (annotation sweeps within \dotnetrs{} could in
+principle run on disjoint crates, but shared-file conflicts and the
+one-branch convention argue against it). The package structure of
+\cref{sec:design-compart} was chosen partly for this reason: after
+WP-2, the three lanes below are independent repositories.
+
+\subsection{Ordered work packages}
+\label{sec:decomposition-wps}
+
+Each entry is one orchestrator session (or an explicitly noted short
+series), with a goal fragment of the kind the kickoff form accepts.
+Lanes: \textbf{A} = \dotnetrs{}, \textbf{B} =
+\path{ves-proof/crates/}, \textbf{C} =
+\path{ves-proof-lean/packages/}. Within a lane, order is
+strict; across lanes, an entry lists its cross-lane prerequisites.
+
+\begin{enumerate}[leftmargin=2.2em, itemsep=0.35em]
+\item \textbf{[A] Atomic-path soundness.} Close the unguarded
+  \code{StackValue::load\_atomic} and \code{store\_atomic} paths and
+  restructure the \code{SharedGlobalState} auto-trait overrides
+  behind a checked discipline.
+  \emph{(S; \code{deep}; high signal --- Miri leg + existing atomic
+  tests.)}
+\item \textbf{[A] Dynamic-gate promotion.} Promote the stable Miri and
+  fuzz legs from \code{continue-on-error} to blocking and extend the
+  differential harness beyond its single fixture.
+  \emph{(S; \code{standard}; high signal --- CI is its own oracle.)}
+\item \textbf{[B/C] Repository seeds (scaffolded).} Initialize the
+  \code{ves-proof} Rust workspace and its five crate skeletons under
+  \code{crates/}; initialize the five independent Lake package
+  skeletons under \path{ves-proof-lean/packages/}; reserve the two
+  manifest schemas in \path{ves-proof/schemas/}.  The base skeletons
+  exist; CI and implementation work remain governed by the later
+  packages.
+  \emph{(S; \code{standard}; done once, largely mechanical.)}
+\item \textbf{[B] \code{ves-syntax}.} Implement the script grammar,
+  AST, canonical serializer, and statement/subject hashing against a
+  golden corpus of scripts.
+  \emph{(M; \code{standard}; high signal --- golden files and
+  round-trip properties make every step self-checking.)}
+\item \textbf{[B] \code{ves-vocabulary}.} Define the declarative
+  vocabulary source for the F1--F9 constructor families and build the
+  dual code generators (Rust token types, Lean declarations).
+  \emph{(M; \code{deep} for the schema steps, \code{standard} for
+  codegen; the elaboration-rule steps carry the highest gate density
+  in lane B.)}
+\item \textbf{[B] \code{ves-tokens}.} Generate the ZST token crate:
+  trust-class constructor forms, \code{cfg}-mirroring conventions, the
+  \code{TrustGrant} build script, and zero-size/\code{inline} test
+  matrices.
+  \emph{(S--M; \code{standard}; high signal.)}
+\item \textbf{[B] \code{ves-macros}.} Implement \code{proof!},
+  \code{proof\_impl!}, and \code{contract!} over \code{ves-syntax},
+  with expansion-snapshot tests establishing the token-identity
+  property.
+  \emph{(M; \code{deep} --- proc-macro hygiene and span work; snapshot
+  tests give high signal once the harness exists.)}
+\item \textbf{[B] \code{ves-check}.} Implement extraction, the
+  structural rules, manifest comparison, and the ratchet budgets;
+  fixture-test against synthetic crates.
+  \emph{(M; \code{standard}; high signal.)}
+\item \textbf{[A] Integration bootstrap.} (Requires 6--8.) Add the
+  \code{ves-macros}/\code{ves-tokens} dependencies, the
+  \code{xtask ves-check} CI job in structural mode, and
+  \code{TRUSTED.toml} seeded from the accepted-risk boundaries.
+  \emph{(S; \code{standard}.)}
+\item \textbf{[A] Contract layer.} Declare \code{ves::contract!} on
+  the $\sim$62 documented \code{unsafe fn} and collapse the template
+  comments onto contract tokens.
+  \emph{(M; \code{standard}; per-function steps are fully
+  context-independent.)}
+\item \textbf{[A] Annotation sweep, in dependency order.} Convert
+  \safetyc{} sites to scripts one crate per session:
+  \crate{dotnet-utils} (M), then \crate{dotnet-value} (L,
+  \emph{pre-split} into pointer/object/storage and
+  stack-value/layout halves), then \crate{dotnet-runtime-memory} (M).
+  Per-site steps are independent and mostly \code{standard}; sites in
+  the invariant families F1/F5/F6 warrant \code{deep}.
+  \emph{(4 sessions; high signal --- rustc token checking plus
+  \code{ves-check} run per step.)}
+\item \textbf{[C] \code{VesCore} statement layer.} (Requires 5.)
+  Implement the vocabulary mirror, the goal elaborator, statement-hash
+  recomputation, and manifest ingestion, cross-checked against
+  \code{ves-syntax} hashes on a shared corpus.
+  \emph{(M; \code{deep} for elaboration rules --- the highest
+  gate-density work in the project, since these rules are TCB;
+  \code{standard} elsewhere.)}
+\item \textbf{[C] $\mathcal{M}_{\mathrm{VES}}$ core.} A series of four
+  sessions in fixed order: (a) memory store, alignment, and atomicity
+  (\ecma{I.12.6}); (b) type layout including \ecma{II.10.7} and the
+  reference-overlap rule; (c) pointer taxonomy and evaluation-stack
+  typing (\ecma{II.14.4}, \ecma{III.1.1.5}, after Gordon--Syme);
+  (d) reachability, finalization, and GC-handle semantics
+  (\ecma{I.8.9.6.7}).
+  \emph{(4 $\times$ M; \code{deep} for definitional steps,
+  \code{draft}--\code{standard} for lemma backfill; medium signal
+  until 14 exists --- definitions compile whether or not they are
+  faithful, so supervisor review concentrates on statements.)}
+\item \textbf{[C] Differential harness.} Execute
+  $\mathcal{M}_{\mathrm{VES}}$ against the fixture corpus and real
+  .NET; drive the model's fidelity backlog from divergences.
+  \emph{(M; \code{standard}; converts lane C to high signal
+  retroactively --- divergence lists become mechanical checklist
+  items.)}
+\item \textbf{[C] \code{VesProtocol} model.} Define the STW/arena LTS
+  and model-check it exhaustively at 2--3 threads; every
+  counterexample becomes a checklist item against the model or, if
+  real, an issue against \dotnetrs{}.
+  \emph{(M; \code{deep} for the LTS cut, \code{standard} for the
+  checking harness; the LTS transitions are supervisor-heavy.)}
+\item \textbf{[C] \code{RustAssumptions}.} State the
+  $\mathcal{M}_{\mathrm{Rust}}$ axioms with one Miri-falsifier
+  template per axiom.
+  \emph{(M; \code{deep}; low proof content but every statement is
+  TCB --- gate density comparable to 12.)}
+\item \textbf{[C] Manifest round trip.} (Requires 8, 12.) Land the
+  stub generator and proof-manifest export, and run the first
+  end-to-end obligation$\to$stub$\to$proof$\to$manifest$\to$%
+  \code{ves-check} cycle on a toy site.
+  \emph{(S; \code{standard}; high signal --- the cycle either closes
+  or does not.)}
+\item \textbf{[C] Protocol theorem.} (Requires 15.) Prove the pinning
+  invariants of the LTS --- the F1 keystone.
+  \emph{(M--L; \code{max} with \code{draft}-tier retry loops for
+  subgoals; perfect signal, hardest content; the roadmap's designated
+  stall point, isolated so a stall strands nothing.)}
+\item \textbf{[C] Representation relation and
+  \code{GcDescFaithful}.} (Requires 13b.) Define $\mathcal{R}$ and
+  prove layout faithfulness against the mechanized \ecma{II.10.7}
+  rules, testing the shared corpus against the executable model first.
+  \emph{(2 sessions, M each; \code{deep}; medium-to-high signal.)}
+\item \textbf{[C] Site campaign.} (Requires 17; 18 for F1 sites, 19
+  for F2 sites.) Retire trust grants family by family --- the two
+  accepted-risk boundaries, then \code{Collect} completeness, the
+  atomics family, and P/Invoke pinning --- one session per family,
+  each step one lemma with the \code{sorry}-free gate.
+  \emph{(4--5 $\times$ M; mixed tiers; perfect signal; steps fully
+  independent, and by this point the sessions are the routine kind
+  the orchestrator was built for.)}
+\item \textbf{[A] Ratchet closure.} Flip \code{ves-check} from
+  warning to blocking for the proved families and record the residual
+  grant budget.
+  \emph{(S; \code{standard}.)}
+\end{enumerate}
+
+\subsection{Pipeline shape}
+
+The dependency structure yields three long-lived concurrent lanes with
+four synchronization points: lane B is unblocked immediately after the
+repository seeds (3) and runs 4$\to$8 sequentially; lane A resumes at 9 once lane
+B delivers the macros; lane C starts at 12 as soon as the vocabulary
+(5) stabilizes and is otherwise independent of lane A entirely; and
+the only cross-lane joins are 9 (A$\leftarrow$B), 12 (C$\leftarrow$B),
+17 (C$\leftarrow$B), and 20 (C$\leftarrow$A's annotation sweep, which
+supplies the real obligation manifest). Within lane C, sessions 13a--d
+are sequential but 14 can begin once 13a lands, and 15/16 are mutually
+independent. At peak (after 9), three sessions run concurrently ---
+one per repository --- which matches the supervision model: gate
+density, not agent throughput, is the binding constraint, and the
+lanes are deliberately mixed so that at most one supervisor-heavy
+session (12, 15, 16, 18) is active at a time while high-signal sweeps
+(11, 13-backfill, 20) fill the remaining lanes.

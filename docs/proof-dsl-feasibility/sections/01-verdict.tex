@@ -1,0 +1,85 @@
+\section{Overview and principal findings}
+\label{sec:verdict}
+
+\begin{verdictbox}[Principal finding]
+The proposal is feasible for a single developer working with
+LLM agents, subject to one architectural correction. A machine-checked
+proof layer over \dotnetrs{}'s \safetyc{} corpus is tractable because
+the corpus factors into approximately nine invariant families,
+40--60 proof sites of genuine difficulty, and a small number of
+protocol theorems --- not 620 independent obligations. The correction
+concerns the checker: the dependently-typed language should be a
+domain-fitted \emph{surface} --- an embedded, tactic-oriented
+proof-script DSL in the lineage of \code{dotnetdll}'s \code{asm!}
+macro, whose premises are ghost tokens checked by \code{rustc} and
+whose scripts elaborate into Lean 4 --- rather than a calculus with its
+own kernel and solver. The fallback position named in the original
+proposal (``develop a model environment in Lean or Rocq and compile
+our proof language to that'') is, on the evidence assembled here, the
+correct primary design.
+\end{verdictbox}
+
+Six findings carry the argument:
+
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{The premise is confirmed empirically in this
+  repository.} Two soundness defects entered the tree in the five
+  commits preceding this study --- a feature-gated no-op cited as an
+  alignment witness, and a \code{Sync} implementation justified by a
+  false claim --- and both instantiate a single failure mode:
+  \emph{prose asserting a witness that no code establishes}. Under
+  the ghost-token design the first is not expressible --- citing a
+  \code{cfg}-excluded guard is a compile error --- and the proof layer
+  addresses the class (\cref{sec:system-defects},
+  \cref{sec:dsl-example-fail}).
+\item \textbf{Each component has substantial precedent; the
+  composition does not.} Machine-checked proofs of real \code{unsafe}
+  Rust exist (RefinedRust, VeriFast, Verus); machine-readable safety
+  annotations are an emerging Rust convention (RFC 3842,
+  \code{tag-std}); verified collectors and verified bytecode machines
+  exist (Hawblitzel--Petrank, JinjaThreads). What exists nowhere is a
+  connection between such proofs and a managed-runtime specification
+  model: \emph{no mechanized formalization of ECMA-335 exists}. That
+  gap accounts for roughly half the projected cost and all of the
+  novelty; an executable Lean model of the VES core would be a
+  publishable artifact independent of the proof campaign
+  (\cref{sec:prior-art}).
+\item \textbf{The verification problem is two-level by nature.} The
+  difficult \safetyc{} comments appeal simultaneously to Rust-side
+  facts (validity, aliasing, provenance under Tree Borrows) and
+  VES-side facts (stop-the-world protocol state, layout faithfulness,
+  evaluation-stack typing, GC reachability). The architecture must
+  therefore pair a Rust memory-model fragment with an ECMA-335
+  abstract machine and a representation relation between them --- the
+  structure of a compiler-correctness proof, applied in the reverse
+  direction (\cref{sec:theory}, \cref{sec:design-model}).
+\item \textbf{Lean 4 is the appropriate primary backend; Rocq is the
+  appropriate escalation path.} Lean is stronger on the model half
+  (executable specifications, differential testing against the
+  existing 486-fixture oracle, elaborator metaprogramming for the DSL,
+  the largest automation and agent-tooling ecosystem); Rocq holds the
+  foundational Rust-semantics results (Iris, RustBelt, Tree Borrows,
+  RefinedRust). The recommended design states Rust-substrate
+  obligations against a small, Miri-falsifiable axiomatization in
+  Lean and retains RefinedRust-in-Rocq as an upgrade path for a small
+  set of critical modules (\cref{sec:design-embed}).
+\item \textbf{Compartmentalization determines survivability.} The
+  verifier decomposes into five small Rust crates and five Lean
+  packages, each separately versioned, publishable, and abandonable
+  (\cref{sec:design-compart}); the only artifacts crossing the
+  boundary to \dotnetrs{} are two small build dependencies and two
+  content-hashed manifests. The VM's build and refactor velocity
+  therefore never couple to Lean, and a stalled proof campaign
+  freezes sites at \code{trusted} rather than breaking anything.
+\item \textbf{Staging dominates ambition.} The roadmap
+  (\cref{sec:roadmap}) is cut so that every phase delivers an
+  artifact the VM uses in CI within that phase: hygiene fixes and a
+  blocking UB gate; the embedded token and script layer with
+  \code{rustc}-checked premises; the executable VES model; the STW
+  protocol theorem (the principal technical risk,
+  \cref{sec:risks-concurrency}); and finally the site campaign under
+  a trusted-premise ratchet. \Cref{sec:decomposition} refines the
+  phases into an ordered sequence of supervised agent-refactor work
+  packages sized by checklist complexity and verification-signal
+  quality rather than by calendar time.
+\end{enumerate}

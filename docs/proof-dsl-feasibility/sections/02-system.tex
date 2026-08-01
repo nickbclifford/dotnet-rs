@@ -1,0 +1,162 @@
+\section{The system under study}
+\label{sec:system}
+
+\subsection{Purpose and philosophy}
+
+\dotnetrs{} (HEAD \code{97e8f658} at the time of this survey) is an
+experimental Rust implementation of the ECMA-335 Virtual Execution
+System~\cite{ecma335}: a 27-crate workspace ($\sim$75\,kLOC of Rust) that
+loads real .NET assemblies and interprets CIL, with a \gcarena{}-based
+stop-the-world garbage collector extended by a custom multi-arena STW
+coordinator, a two-pass structured-exception-handling state machine,
+generics, reflection, P/Invoke via libffi, and a feature-gated
+multithreading runtime. The project's self-description is deliberate:
+``an active research/runtime project focused on \emph{correctness,
+architecture, and validation workflows}'' --- not performance, not
+production readiness.
+
+That focus manifests as an unusually strong verification discipline
+for a codebase of this kind, which bears directly on feasibility: the
+proposal extends existing practice rather than introducing one.
+
+\begin{itemize}[leftmargin=1.4em]
+\item Two workspace-wide \code{clippy} lints at \code{deny} ---
+  \code{undocumented\_unsafe\_blocks} and
+  \code{multiple\_unsafe\_ops\_per\_block} --- so every \code{unsafe}
+  operation is individually annotated, by policy.
+\item A written unsafe-code charter in \code{CONTRIBUTING.md}: SAFETY
+  comments ``must explain the invariant that makes the operation valid;
+  \dots{} not merely restate the operation''; layout transmutes require
+  co-located size assertions; \code{unsafe impl Send/Sync} must be
+  unconditional and paired with \code{assert\_impl\_all!} guards;
+  \code{unsafe impl Collect} must justify every untraced field.
+\item Mechanized side conditions where the type system reaches: 52
+  \code{static\_assertions}/const asserts, pinned layout-size test
+  matrices across the feature cross-product, a compile-time lock-order
+  DAG (\code{define\_lock\_order\_dag!} with negative \code{AcquireAfter}
+  assertions), and capability tokens with private constructors
+  (\code{GcLifetime<'gc>}, \code{GcReadyToken<'ctx>},
+  \code{HeldLockLevel<L>}).
+\item Documented \emph{accepted-risk boundaries}: the two places where the
+  safety argument cannot be expressed through \gcarena{}'s API are
+  isolated, named, and described in the GC and memory-safety design
+  document, one of them carrying the codebase's only \code{//\,DANGER:}
+  comment.
+\end{itemize}
+
+Equally relevant are the deliberate compromises, because several of them
+become \emph{axioms} any proof system must either import or discharge:
+the GC is currently non-moving (many raw-pointer proofs silently assume
+it); multi-arena collection is STW-only; release builds keep
+\code{overflow-checks = true}; strict-provenance Miri was evaluated and
+abandoned as infeasible (dependencies perform int-to-pointer casts), even
+though \code{expose\_provenance} is load-bearing in the managed-pointer
+serialization; and the instrumentation gates --- Miri (tree-borrows mode),
+Valgrind, all four fuzz targets --- are \code{continue-on-error} in CI,
+i.e.\ \emph{informative, never blocking}.
+
+\subsection{The \code{unsafe} corpus, quantitatively}
+\label{sec:system-corpus}
+
+\begin{table}
+  \centering
+  \small
+  \begin{tabular}{@{}lr@{}}
+    \toprule
+    Measure & Count \\
+    \midrule
+    \code{unsafe \{\}} blocks (all sources)            & 581 \\
+    \quad excluding tests/fuzz harnesses               & 542 \\
+    \code{unsafe fn} declarations/definitions          & 99 \\
+    \code{unsafe impl}                                 & 29 \\
+    \quad of which \code{Collect<'gc>} (GC tracing)    & 22 \\
+    \quad of which \code{Send}/\code{Sync}             & 7 \\
+    \safetyc{} comments                                & 620 \\
+    \quad unique first lines                           & 354 \\
+    \quad single-line / multi-line                     & 363 / 257 \\
+    \code{\#\,Safety} rustdoc contracts on \code{unsafe fn} & 62 \\
+    \bottomrule
+  \end{tabular}
+  \caption{The unsafe corpus at HEAD \code{97e8f658}.}
+  \label{tab:corpus}
+\end{table}
+
+\Cref{tab:corpus} summarizes the corpus. Unsafe concentrates where one
+would expect: \crate{dotnet-vm} (130 blocks), \crate{dotnet-value} (114),
+\crate{dotnet-runtime-memory} (69), \crate{dotnet-utils} (67), then SIMD,
+threading intrinsics, and P/Invoke. By kind, the corpus is dominated by
+raw pointer arithmetic ($\sim$190 sites), raw dereference ($\sim$90),
+atomics constructed over raw memory (36 \code{AtomicU\emph{N}::from\_ptr}
+sites), \code{slice::from\_raw\_parts} (20), block copies (21), and a
+small number of high-consequence specials: 6 \gcarena{} brand escapes
+(\code{Gc::from\_ptr}, \code{unlock\_unchecked}), $\sim$15 STW-only lock
+bypasses, 3 non-test \code{transmute}s, and the libffi call path. There
+are no unions, and only 3 test-only environment mutations.
+
+Two structural facts about the \emph{comment} corpus shape the entire
+feasibility question:
+
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{The corpus is bimodal.} 342 of 620 comments (55\%) share
+  their first line verbatim with another comment; one template sentence
+  appears 67 times in one file
+  (\code{raw\_memory\_ops\_impl/\allowbreak mod.rs}), deferring to ``the
+  enclosing raw-memory operation's documented preconditions.'' This mass
+  is bookkeeping --- near-zero proof content, discharged today by the
+  lint, not by reasoning. The genuine multi-invariant arguments number
+  roughly 40--60 and cluster in eight files: \code{object/mod.rs},
+  \code{heap.rs}, \code{thread\_safe\_lock.rs}, \code{statics.rs},
+  \code{storage.rs}, \code{access.rs}, \code{write\_barrier.rs}, and
+  \code{pinvoke/call.rs}. \emph{A proof campaign should target those
+  sites and the shared contracts behind the templates --- not 620
+  individual proofs.}
+\item \textbf{The hard premises are global, not local.} The
+  load-bearing facts are protocol facts: ``STW has stopped every
+  mutator,'' ``the GC does not move objects,'' ``only the executor
+  thread touches this state,'' ``\code{off} was recorded from this slot
+  when the pointer was created.'' A per-block, first-order annotation
+  language cannot even state them; they require invariants over a model
+  of the runtime (\cref{sec:theory}).
+\end{enumerate}
+
+\subsection{Two recent soundness defects}
+\label{sec:system-defects}
+
+The most direct empirical support for the proposal comes from the
+project's recent history. Two soundness defects entered the tree in
+the five commits preceding this study, and both have the same shape:
+\emph{a SAFETY comment asserted a fact that no code established}.
+
+\paragraph{(a) The vacuous alignment guard.} \code{validate\_alignment}
+(\code{dotnet-utils/src/lib.rs:58--72}) compiles to a no-op unless the
+non-default \code{memory-validation} feature is on. Six call sites cite
+it as the alignment witness for atomic access. Four are saved by
+defense-in-depth (the atomic layer re-checks internally), but
+\code{StackValue::load\_atomic}/\code{store\_atomic}
+(\code{stack\_value.rs:743--802}) proceed to
+\code{AtomicU32::from\_ptr} with \emph{no} alignment check in every
+shipping configuration --- UB on a misaligned pointer, currently latent
+only because the live instruction paths happen to route through a
+different, guarded entry point. The stated proof at those sites is
+vacuously ``discharged'' by a function that does nothing.
+
+\paragraph{(b) The false \code{Sync} premise.} Commit \code{13d1edd4}
+added \code{unsafe impl<T:\,Send> Sync} for the single-threaded compat
+locks with the justification ``single-threaded builds cannot create a
+second thread'' --- false (the build spawns a timeout-waiter thread), and
+in the conditional-impl form the project's own charter forbids. It was
+reverted two commits later, but its narrower successor
+(\code{unsafe impl Send/Sync for SharedGlobalState},
+\code{state.rs:346--355}) still asserts a whole-program discipline
+(``only the executor accesses VM state; the waiter touches only
+\code{abort\_requested}'') that nothing checks --- and the co-located
+\code{assert\_impl\_all!} \emph{confirms the assertion rather than
+validating it}.
+
+Both defects instantiate the failure mode a machine-checked proof
+layer exists to detect: prose citing a witness that is absent,
+disabled, or false. Neither Miri nor the fixture suite detected them,
+nor could they have --- the relevant gates are non-blocking and the
+defective paths lie outside their coverage. This is the study's
+empirical premise: the project has exhausted what convention, lints,
+and runtime assertions can deliver.
