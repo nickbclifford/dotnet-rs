@@ -7,7 +7,7 @@ repositories are implementation scaffolds, not evidence that a phase is done.
 | Lane | Repository | Package root | Reserved ownership | Current status |
 | --- | --- | --- | --- |
 | A | `~/Desktop/dotnet-rs` | repository root | VM integration, scripts at unsafe sites, `TRUSTED.toml`, fast `ves-check` CI, obligation production | Phase 0 complete (commit `208a6c8b`, 2026-08-01): both live defects fixed, `miri-value`/`fuzz-raw-memory-access` promoted to blocking CI, differential harness expanded to seven fixtures. VesProof integration (WP-9 onward) not started — blocked on lane B delivering the macros. |
-| B | `~/Desktop/ves-proof` | `crates/` | `ves-syntax`, `ves-vocabulary`, `ves-tokens`, `ves-macros`, `ves-check`; manifest schemas live at `schemas/` | All five crate skeletons and both v1 schema placeholders exist; implementation not started |
+| B | `~/Desktop/ves-proof` | `crates/` | `ves-syntax`, `ves-vocabulary`, `ves-tokens`, `ves-macros`, `ves-check`; manifest schemas live at `schemas/` | WP-4 `ves-syntax` (commit `9082659`, 2026-08-01) and WP-5 `ves-vocabulary` (commit `ad67707`, 2026-08-02) implemented: script grammar/AST/hashing, and a declarative 77-constructor F1--F9 vocabulary with dual Rust/Lean code generators. The remaining three crates and both v1 schema placeholders stay scaffolds; WP-6 `ves-tokens` is next |
 | C | `~/Desktop/ves-proof-lean` | `packages/` | `VesCore`, `VesModel`, `RustAssumptions`, `VesProtocol`, `DotnetRsProofs` | All five independent Lake package skeletons exist; Lean toolchain intentionally not selected |
 
 All paths in the rest of this file are repository-relative. From this study's
@@ -52,8 +52,11 @@ versioned serialized manifests.
 ## First implementation sessions
 
 The repository-seed work is complete only in the narrow scaffolding sense.
-Lane B starts implementation with `crates/ves-syntax`; lane C starts only after
-the vocabulary shape stabilizes, with `packages/VesCore`. Lane A must not
-bootstrap the dependencies until `ves-tokens`, `ves-macros`, and structural
-`ves-check` have real test coverage. Cross-lane synchronization points and tier
-guidance are in the decomposition section of the study.
+Lane B has implemented `crates/ves-syntax` (WP-4, commit `9082659`) and
+`crates/ves-vocabulary` (WP-5, commit `ad67707`); WP-6 `ves-tokens` is next.
+Lane C is now unblocked: WP-13 (`packages/VesCore`) requires only WP-5, which
+has landed, so it may start against the checked-in `generated/VesVocabulary.lean`
+golden file without waiting on `ves-tokens`, `ves-macros`, or `ves-check`.
+Lane A must not bootstrap the dependencies until `ves-tokens`, `ves-macros`,
+and structural `ves-check` have real test coverage. Cross-lane synchronization
+points and tier guidance are in the decomposition section of the study.

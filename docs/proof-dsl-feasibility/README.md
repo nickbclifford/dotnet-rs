@@ -14,7 +14,7 @@ compartmentalized package architecture (five Rust crates + five Lean
 packages) whose only contact with dotnet-rs is two build dependencies and
 two content-hashed manifest artifacts.
 
-- **Output:** `main.pdf` (39 pages)
+- **Output:** `main.pdf` (40 pages)
 - **Build:** `./build.sh` (requires XeLaTeX + latexmk + bibtex; fonts are
   loaded by filename from the TeX Live tree, no system fontconfig needed)
 - **Sources:** `main.tex`, `preamble.tex`, `references.bib`,
@@ -41,6 +41,27 @@ harness from one fixture to seven. The `ves-proof` and `ves-proof-lean`
 skeletons (WP-3) are unchanged and still pure scaffolds — no crate or
 package has logic beyond a marker constant, and no Lean toolchain is
 pinned yet. Phase 1, starting with `ves-syntax`, is the next action.
+
+Revision 6 records that WP-4 (`ves-syntax`) is implemented in the
+`ves-proof` repository (commit `9082659`, 2026-08-01): the script grammar,
+`Script`/`Statement` AST, canonical serializer, and the
+`statement_hash`/`subject_hash` SHA-256 contract, with `GRAMMAR_VERSION`
+pinned at `"0.1.0"` and a golden corpus of valid and malformed `.ves`
+scripts (33 tests, all passing).
+
+Revision 7 records that WP-5 (`ves-vocabulary`) is implemented in the
+`ves-proof` repository (commit `ad67707`, 2026-08-02): a declarative,
+versioned source for the F1--F9 goal/premise/tactic inventory (77
+constructors across 16 namespaces with trust and family annotations),
+dependency and structural validation, and dual code generators emitting a
+`no_std` Rust ghost-token module (`generated/tokens.rs`, handed to WP-6) and
+a Lean declaration inventory (`generated/VesVocabulary.lean`, handed to
+WP-13), both covered by golden-file tests (17 tests, all passing).
+`VOCABULARY_VERSION` is now the canonical value embedded in both manifest
+schemas and in statement hashes. The other three `ves-proof` crates
+(`ves-tokens`, `ves-macros`, `ves-check`) and all five `ves-proof-lean`
+packages are unchanged scaffolds. Phase 1 is underway; WP-6 (`ves-tokens`)
+is next.
 
 The study is grounded in a survey of the repository at HEAD `97e8f658`
 (2026-07-31): 581 unsafe blocks, 620 SAFETY comments, the invariant-family

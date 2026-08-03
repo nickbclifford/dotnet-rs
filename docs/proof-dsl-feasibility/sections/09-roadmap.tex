@@ -35,10 +35,16 @@ valuable and abandonable without stranding the previous:
   reasons unrelated to this study (exit-code semantics for unhandled
   exceptions, an intentional alignment deviation, GC-timing-sensitive
   output). Phase 1 is now the critical path.
-\item[Phase 1 --- The embedded layer (4--7 weeks).] In order:
-  in \path{ves-proof/crates/}, \code{ves-syntax} and the declarative
-  vocabulary v0 (the F1--F9
-  constructors and their trust classes) with its two code generators;
+\item[Phase 1 --- The embedded layer (4--7 weeks).] \textbf{In
+  progress.} In order:
+  in \path{ves-proof/crates/}, \code{ves-syntax} (\textbf{done},
+  commit \code{9082659}: script grammar, AST, canonical serializer,
+  statement/subject hashing, golden corpus) and the declarative
+  vocabulary v0 (\textbf{done}, commit \code{ad67707}: 77 F1--F9
+  constructors across 16 namespaces with trust and family annotations,
+  dependency/structural validation, and dual code generators emitting
+  a \code{no\_std} Rust ghost-token module and a Lean declaration
+  inventory, both pinned by golden-file tests);
   \code{ves-tokens} with cfg-mirrored constructors and
   \code{TrustGrant}s generated from \code{TRUSTED.toml} (seeded from
   the accepted-risk boundaries); \code{ves-macros} with

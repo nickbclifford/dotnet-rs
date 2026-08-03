@@ -105,18 +105,39 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   substantive artifacts, and no Lean toolchain is pinned yet (no
   \code{lean-toolchain}, no \code{lake-manifest.json} ---
   deliberately, per \path{ves-proof-lean/AGENTS.md}). WP-4
-  (\code{ves-syntax}) has not started.
-\item \textbf{[B] \code{ves-syntax}.} Implement the script grammar,
-  AST, canonical serializer, and statement/subject hashing against a
-  golden corpus of scripts.
+  (\code{ves-syntax}) is now implemented; see item 4.
+\item \textbf{[B] \code{ves-syntax}. \textbf{Done}
+  (\code{ves-proof} commit \code{9082659}, 2026-08-01).} Implement the
+  script grammar, AST, canonical serializer, and statement/subject
+  hashing against a golden corpus of scripts.
   \emph{(M; \code{standard}; high signal --- golden files and
   round-trip properties make every step self-checking.)}
-\item \textbf{[B] \code{ves-vocabulary}.} Define the declarative
-  vocabulary source for the F1--F9 constructor families and build the
-  dual code generators (Rust token types, Lean declarations).
+  Landed the full public API: the \code{Script}/\code{Statement} AST,
+  parser entry points for \code{proof!}, \code{proof\_impl!}, and
+  source-text forms, the \code{canonical\_statement}/%
+  \code{canonical\_subject} serializers, and the
+  \code{statement\_hash}/\code{subject\_hash} SHA-256 contract with
+  \code{GRAMMAR\_VERSION} pinned at \code{"0.1.0"}; 33 tests over a
+  corpus of valid and malformed \code{.ves} scripts, all passing.
+\item \textbf{[B] \code{ves-vocabulary}. \textbf{Done}
+  (\code{ves-proof} commit \code{ad67707}, 2026-08-02).} Define the
+  declarative vocabulary source for the F1--F9 constructor families and
+  build the dual code generators (Rust token types, Lean declarations).
   \emph{(M; \code{deep} for the schema steps, \code{standard} for
   codegen; the elaboration-rule steps carry the highest gate density
   in lane B.)}
+  Landed 77 constructors across 16 namespaces with trust-class and
+  invariant-family annotations, dependency-resolution and structural
+  validation (rejecting untrusted premises misclassified as trusted,
+  malformed derived-dependency lists, and non-static tactics), and the
+  two code generators: a \code{no\_std}-compatible Rust ghost-token
+  module (\path{generated/tokens.rs}, handed to WP-6) and a Lean
+  declaration inventory (\path{generated/VesVocabulary.lean}, handed to
+  WP-13), both pinned by golden-file tests; \code{VOCABULARY\_VERSION}
+  is now the canonical value embedded in both manifest schemas and in
+  statement hashes. 17 tests, all passing. WP-6 (\code{ves-tokens}) is
+  next; lane C's WP-13 is unblocked in principle, since its only
+  cross-lane dependency (this item) has landed.
 \item \textbf{[B] \code{ves-tokens}.} Generate the ZST token crate:
   trust-class constructor forms, \code{cfg}-mirroring conventions, the
   \code{TrustGrant} build script, and zero-size/\code{inline} test
@@ -222,7 +243,9 @@ The dependency structure yields three long-lived concurrent lanes with
 four synchronization points: lane B is unblocked immediately after the
 repository seeds (3) and runs 4$\to$8 sequentially; lane A resumes at 9 once lane
 B delivers the macros; lane C starts at 12 as soon as the vocabulary
-(5) stabilizes and is otherwise independent of lane A entirely; and
+(5) stabilizes --- which it now has (commit \code{ad67707}), so lane C
+may begin while lane B continues 6$\to$8 --- and is otherwise
+independent of lane A entirely; and
 the only cross-lane joins are 9 (A$\leftarrow$B), 12 (C$\leftarrow$B),
 17 (C$\leftarrow$B), and 20 (C$\leftarrow$A's annotation sweep, which
 supplies the real obligation manifest). Within lane C, sessions 13a--d
