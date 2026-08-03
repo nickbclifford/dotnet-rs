@@ -37,16 +37,22 @@ deliverable is a proof rather than the token layer and the model
 Phase 0 is due diligence, not verification, and as of this revision it
 is complete (\code{208a6c8b}): the two live defects are fixed, one
 Miri leg and one fuzz target are blocking CI gates, and the
-differential harness covers seven fixtures rather than one. The
-sibling repositories \path{ves-proof} and \path{ves-proof-lean} are
-also seeded (WP-3) with their reserved package layout, but every
-crate and package is still an inert scaffold --- no toolchain is
-pinned in \path{ves-proof-lean}, and none of the five Rust crates has
-logic beyond a marker constant. Phase 1 (the embedded layer,
-starting with \code{ves-syntax}) is therefore the next and now the
-only blocking action, and remains the cheapest experiment that tests
-the whole thesis on real ground: uniquely among the phases, it yields
-value even with no Lean involvement, since ghost tokens make premise
+differential harness covers seven fixtures rather than one. Phase 1
+(the embedded layer) is now well underway: four of its five
+\path{ves-proof} crates --- \code{ves-syntax}, \code{ves-vocabulary},
+\code{ves-tokens}, and \code{ves-macros} --- are implemented and
+tested, along with the 6b follow-up that gives \code{ves-tokens} (and,
+later, \code{VesCore}) a golden-pinned vocabulary manifest instead of
+a text-scraper. \code{ves-check} is the one remaining crate and the
+sole gate on wiring this workspace into \dotnetrs{}; the sibling
+\path{ves-proof-lean} repository is still seeded (WP-3) but otherwise
+untouched, with no toolchain pinned and no package beyond a marker
+constant, even though \code{VesCore} (Phase 3) has been unblocked
+since \code{ves-vocabulary} landed and could run concurrently with
+lane B. Landing \code{ves-check} remains the cheapest experiment that
+tests the whole
+thesis on real ground: uniquely among the phases, Phase 1 yields value
+even with no Lean involvement, since ghost tokens make premise
 citations compile-checked in every feature configuration --- the
 discipline that would already have made defect (a) unwritable.
 

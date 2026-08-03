@@ -50,7 +50,10 @@ valuable and abandonable without stranding the previous:
   first pass}, commit \code{73e6dea}: the generated ZSTs, the
   exhaustive zero-size and \code{inline} matrices, and a grants module
   that is empty --- so no trusted premise is mintable --- unless a
-  registry is supplied. The \code{TRUSTED.toml} schema and its real
+  registry is supplied; the follow-up manifest work package (6b,
+  \textbf{done}, commit \code{c23ede8}) later replaced its text-scraped
+  constructor discovery with a golden-pinned vocabulary manifest, also
+  handed to \code{VesCore}. The \code{TRUSTED.toml} schema and its real
   parser move to the integration bootstrap, which is where the file is
   actually authored and seeded from the accepted-risk boundaries;
   see \cref{sec:decomposition-wps}, items 6 and 9); \code{ves-macros}

@@ -7,7 +7,7 @@ repositories are implementation scaffolds, not evidence that a phase is done.
 | Lane | Repository | Package root | Reserved ownership | Current status |
 | --- | --- | --- | --- | --- |
 | A | `~/Desktop/dotnet-rs` | repository root | VM integration, scripts at unsafe sites, `TRUSTED.toml`, fast `ves-check` CI, obligation production | Phase 0 complete (commit `208a6c8b`, 2026-08-01): both live defects fixed, `miri-value`/`fuzz-raw-memory-access` promoted to blocking CI, differential harness expanded to seven fixtures. VesProof integration (WP-9 onward) not started — blocked on lane B delivering the macros. WP-9's scope has grown: it now also owns the `TRUSTED.toml` schema and parser, and the guard-`cfg`→feature forwarding rule for checked tokens. |
-| B | `~/Desktop/ves-proof` | `crates/` | `ves-syntax`, `ves-vocabulary`, `ves-tokens`, `ves-macros`, `ves-check`; manifest schemas live at `schemas/` | WP-4 `ves-syntax` (`9082659`), WP-5 `ves-vocabulary` (`ad67707`), WP-6 `ves-tokens` (`73e6dea`, first pass), and WP-7 `ves-macros` (`85a6abc`, first pass) implemented: script grammar/AST/hashing; a declarative 71-constructor, 20-namespace F1--F9 vocabulary with dual Rust/Lean code generators; the generated `no_std` ZST token crate with a build-time `grants` module; and the four proof-script proc macros with expansion-snapshot and compile-fail coverage. `ves-check` and both v1 schema placeholders stay scaffolds; WP-8 `ves-check` is next and is now the sole gate on the lane-A integration bootstrap (WP-9) |
+| B | `~/Desktop/ves-proof` | `crates/` | `ves-syntax`, `ves-vocabulary`, `ves-tokens`, `ves-macros`, `ves-check`; manifest schemas live at `schemas/` | WP-4 `ves-syntax` (`9082659`), WP-5 `ves-vocabulary` (`ad67707`), WP-6 `ves-tokens` (`73e6dea`, first pass), WP-7 `ves-macros` (`85a6abc`, first pass), and the WP-6b follow-up (`c23ede8`) implemented: script grammar/AST/hashing; a declarative 71-constructor, 20-namespace F1--F9 vocabulary with triple Rust/Lean/manifest code generators; the generated `no_std` ZST token crate with a build-time `grants` module now driven by the golden-pinned vocabulary manifest instead of scraped Rust; and the four proof-script proc macros with expansion-snapshot and compile-fail coverage. `ves-check` and both v1 schema placeholders stay scaffolds; WP-8 `ves-check` is next and is now the sole gate on the lane-A integration bootstrap (WP-9) |
 | C | `~/Desktop/ves-proof-lean` | `packages/` | `VesCore`, `VesModel`, `RustAssumptions`, `VesProtocol`, `DotnetRsProofs` | All five independent Lake package skeletons exist; Lean toolchain intentionally not selected. Unblocked: WP-13 `VesCore` may start now |
 
 All paths in the rest of this file are repository-relative. From this study's
@@ -46,10 +46,11 @@ versioned serialized manifests.
 - Treat `obligations.v1.json`, `proofs.v1.json`, vocabulary versions, and
   statement hashes as cross-repository contracts.
 - Do not re-derive vocabulary facts by parsing a generated artifact. WP-6's
-  build script currently scrapes trusted-constructor names out of formatted
-  Rust; WP-6b replaces that with a machine-readable manifest emitted by
-  `ves-vocabulary`, and no new consumer should add a second scraper in the
-  meantime.
+  build script originally scraped trusted-constructor names out of formatted
+  Rust; WP-6b (`c23ede8`) replaced that with a machine-readable
+  `generated/vocabulary.manifest` emitted by `ves-vocabulary`, and no new
+  consumer — including WP-13's `VesCore` — should add a second scraper
+  instead of reading that manifest.
 - Do not hand-write a semantic token type in `ves-tokens`. Its `lib.rs` is a
   doc comment and two `include!`s by design; new tokens are added to the
   vocabulary source and regenerated.
@@ -61,25 +62,22 @@ versioned serialized manifests.
 
 Lane B has implemented `crates/ves-syntax` (WP-4, `9082659`),
 `crates/ves-vocabulary` (WP-5, `ad67707`), `crates/ves-tokens` (WP-6,
-`73e6dea`), and `crates/ves-macros` (WP-7, `85a6abc`). One lane-B session
-remains before the lane-A integration bootstrap can start; it runs
-independently of lane C's ongoing work:
+`73e6dea`), `crates/ves-macros` (WP-7, `85a6abc`), and the WP-6b vocabulary
+manifest follow-up (`c23ede8`). One lane-B session remains before the
+lane-A integration bootstrap can start; it runs independently of lane C's
+ongoing work:
 
 - **Lane B, WP-8 `ves-check`** — now the sole gate on WP-9. Lane B's order is
   strict (4→8), so this is the only lane-B session that can run next.
   Implement extraction, structural rules, manifest comparison, and ratchet
   budgets against synthetic fixture crates.
-- **Lane C, WP-13 `VesCore`** — unblocked by WP-5 and the longest-lead item
-  in the plan, runnable concurrently with WP-8 since the two touch different
-  repositories. It may start against the checked-in
-  `generated/VesVocabulary.lean` golden file. Prefer running WP-6b first if
-  convenient: that inventory carries no trust class or invariant family, so
-  without the manifest the elaborator has to be told by hand which
-  propositions are grant-axiomatized.
-
-**WP-6b (vocabulary manifest)** is a small lane-B session that can be slotted
-in before or interleaved with WP-8; it closes the text-scraping dependency in
-`ves-tokens` and supplies WP-13.
+- **Lane C, WP-13 `VesCore`** — unblocked by WP-5 and WP-6b, and the
+  longest-lead item in the plan, runnable concurrently with WP-8 since the
+  two touch different repositories. It may start against the checked-in
+  `generated/VesVocabulary.lean` golden file plus the now-available
+  `generated/vocabulary.manifest`, which carries the trust class and
+  invariant family the Lean inventory alone does not — no need to tell the
+  elaborator by hand which propositions are grant-axiomatized.
 
 Lane A must still not bootstrap the dependencies until structural `ves-check`
 has real test coverage; `ves-macros` already does (three unit tests, five

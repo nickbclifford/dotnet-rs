@@ -117,12 +117,36 @@ authors `TRUSTED.toml`'s schema and forwards the guard `cfg` to `ves-tokens`'
 implemented; `ves-check` (WP-8) is the sole remaining gate on WP-9, and all
 five `ves-proof-lean` packages remain unchanged scaffolds.
 
+Revision 10 records the follow-up work package 6b (`ves-proof` commit
+`c23ede8`, 2026-08-03): a third `ves-vocabulary` codegen output, a
+canonical pipe-delimited `generated/vocabulary.manifest` (one row per
+constructor — namespace, name, role, trust class, `cfg` feature,
+dependency list, invariant families — under an explicit
+`manifest-format` version). `ves-tokens`'s build script now reads
+trusted-constructor names from that manifest instead of scraping
+`generated/tokens.rs` for a `_grant: super::TrustGrant` line pattern,
+closing carried-forward item (b) from revision 8. The manifest is also
+the artifact WP-13 (`VesCore`) will consume to recover trust class and
+invariant family without re-reading generated Rust. New coverage: a
+manifest-format guard test and a test that the manifest's trusted set
+matches the vocabulary's (in `ves-vocabulary`), rewritten `ves-tokens`
+tests exercising manifest-driven discovery directly, and a new
+`cfg_matrix` test asserting the manifest's recorded `cfg_feature` for
+`checked::alignment_guard` matches the crate's actual
+`memory-validation` feature gate. Carried-forward item (a) — the
+`TRUSTED.toml` reader's own substring-match placeholder — is untouched
+and remains WP-9's; 6b closed only the discovery half of the gap, not
+the registry-parsing half. `ves-check` (WP-8) is now the sole crate
+standing between the current state and the integration bootstrap
+(WP-9); `VesCore` (WP-13) is unblocked by both WP-5 and 6b.
+
 The study is grounded in a survey of the repository at HEAD `97e8f658`
 (2026-07-31): 581 unsafe blocks, 620 SAFETY comments, 62 documented
 `unsafe fn`, the invariant-family taxonomy in §3, and the two then-live
 soundness defects discussed in §2.3 (both fixed as of `208a6c8b`,
 2026-08-01 — see §2.3 and §9). Re-measured at `bc266543` (2026-08-02):
 583 unsafe blocks, 620 SAFETY comments, 62 documented `unsafe fn` — no
-material drift. Revision 9's change is entirely in the sibling `ves-proof`
-repository; `dotnet-rs` itself is unchanged since that measurement. If those
-numbers drift far from the current tree, re-survey before quoting them.
+material drift. Revisions 9 and 10's changes are entirely in the sibling
+`ves-proof` repository; `dotnet-rs` itself is unchanged since that
+measurement. If those numbers drift far from the current tree, re-survey
+before quoting them.

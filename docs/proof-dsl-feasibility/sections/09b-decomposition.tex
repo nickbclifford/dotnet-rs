@@ -181,16 +181,17 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
     name that is a substring of another, mints a grant --- so it must
     not survive into the integration bootstrap. Reassigned to WP-9,
     which now owns both halves of the contract.
-  \item \emph{Trusted constructors are discovered by text-scraping.}
-    The build script finds them by matching
+  \item \emph{Trusted constructors were discovered by text-scraping.}
+    The build script found them by matching
     \code{\_grant: super::TrustGrant} on the same physical line as
-    \code{pub fn}, which holds only because every trusted constructor
-    today takes exactly one parameter and \code{rustfmt} keeps such
+    \code{pub fn}, which held only because every trusted constructor
+    took exactly one parameter and \code{rustfmt} kept such
     signatures on one line. A trusted-\emph{and}-derived constructor
-    would wrap and be silently skipped. The failure is fail-closed (the
-    grant is not emitted, so the citing site does not compile), but it
-    is a latent trap, and the underlying cause --- lane B re-deriving
-    vocabulary facts from formatted Rust --- is what 6b removes.
+    would have wrapped and been silently skipped. The failure was
+    fail-closed (the grant is not emitted, so the citing site does not
+    compile), but it was a latent trap, and the underlying cause ---
+    lane B re-deriving vocabulary facts from formatted Rust --- is what
+    6b removed. \textbf{Closed} by 6b below.
   \item \emph{Neither the \code{debug\_assert!} shadows nor
     lifetime-branded tokens of \cref{sec:dsl-tokens} exist.} The
     vocabulary data model has no field for a shadow predicate and no
@@ -199,21 +200,38 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
     simplifications, not rejections; see \cref{sec:dsl-tokens}.
   \end{enumerate}
   \smallskip
-  \noindent\textbf{6b --- [B] Vocabulary manifest artifact} (follow-up
-  session, unnumbered so the cross-references below keep their
-  targets). A short session
-  adding a third \code{ves-vocabulary} output: a canonical,
-  golden-pinned machine-readable inventory (namespace, name, role,
-  trust class, \code{cfg} feature, dependency list, invariant family)
-  emitted alongside the Rust and Lean artifacts. Rewire
-  \code{ves-tokens}'s build script to consume it instead of scraping
-  \path{generated/tokens.rs}, closing 6(b), and hand the same file to
-  WP-13 so \code{VesCore} can distinguish a grant-axiomatized
-  proposition from a derived one without re-reading the Rust.
+  \noindent\textbf{6b --- [B] Vocabulary manifest artifact. \textbf{Done}
+  (\code{ves-proof} commit \code{c23ede8}, 2026-08-03).} Follow-up
+  session, unnumbered so the cross-references above keep their
+  targets. Added a third \code{ves-vocabulary} output: a canonical,
+  golden-pinned, pipe-delimited manifest
+  (\path{generated/vocabulary.manifest}, one row per constructor ---
+  namespace, name, role, trust class, \code{cfg} feature, dependency
+  list, invariant families --- under an explicit \code{manifest-format}
+  version) emitted alongside the Rust and Lean artifacts. Rewired
+  \code{ves-tokens}'s build script to read trusted-constructor names
+  from the manifest instead of scraping \path{generated/tokens.rs},
+  closing 6(b); the same file is available for WP-13 to consume so
+  \code{VesCore} can distinguish a grant-axiomatized proposition from a
+  derived one without re-reading the Rust.
   \emph{(S; \code{standard}; high signal --- golden files again, and
-  the two consumers are existing tests.)} Best done before WP-13
-  begins, since retrofitting the distinction into an existing
-  elaborator is more expensive than generating it now.
+  the two consumers are existing tests.)} Landed before WP-8, as
+  intended: retrofitting the trust/family distinction into an existing
+  elaborator would have been more expensive than generating it up
+  front. Coverage: a manifest-format guard test, a test that the
+  manifest's trusted set matches the vocabulary's, and rewritten
+  \code{ves-tokens} tests exercising manifest-driven discovery directly
+  (rejecting an unsupported format version, rejecting a malformed row,
+  an empty-registry case, and the naming-convention case), plus a new
+  \code{cfg\_matrix} test asserting the manifest's recorded
+  \code{cfg\_feature} for \code{checked::alignment\_guard} matches the
+  crate's actual \code{memory-validation} feature gate --- the first
+  machine-checked link between \cref{sec:decomposition-wps}~item~9's
+  cfg-forwarding obligation and the vocabulary source. The
+  \code{TRUSTED.toml} reader itself is untouched and remains WP-9's
+  substring-match placeholder (\cref{sec:risks-trust}); 6b closes only
+  the \emph{discovery} half of the carried-forward gap, not the
+  \emph{registry-parsing} half.
 \item \textbf{[B] \code{ves-macros}. \textbf{Done, first pass}
   (\code{ves-proof} commit \code{85a6abc}, 2026-08-03).} Implement
   \code{proof!}, \code{proof\_impl!}, and \code{contract!} over
@@ -297,8 +315,8 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   the invariant families F1/F5/F6 warrant \code{deep}.
   \emph{(4 sessions; high signal --- rustc token checking plus
   \code{ves-check} run per step.)}
-\item \textbf{[C] \code{VesCore} statement layer.} (Requires 5;
-  preferably 6b, whose manifest tells the elaborator which
+\item \textbf{[C] \code{VesCore} statement layer.} (Requires 5; 6b is
+  now done, so its manifest is available to tell the elaborator which
   propositions are grant-axiomatized, which are derived, and from
   what --- facts the \path{VesVocabulary.lean} inventory alone does
   not carry.)
@@ -378,7 +396,10 @@ may begin while lane B continues 7$\to$8 --- and is otherwise
 independent of lane A entirely; and
 the only cross-lane joins are 9 (A$\leftarrow$B), 12 (C$\leftarrow$B),
 17 (C$\leftarrow$B), and 20 (C$\leftarrow$A's annotation sweep, which
-supplies the real obligation manifest). Within lane C, sessions 13a--d
+supplies the real obligation manifest). 6b landed inside lane B's
+4$\to$8 sequence without displacing it, so join 12 now delivers the
+full manifest (trust class and family included) rather than the bare
+Lean inventory. Within lane C, sessions 13a--d
 are sequential but 14 can begin once 13a lands, and 15/16 are mutually
 independent. At peak (after 9), three sessions run concurrently ---
 one per repository --- which matches the supervision model: gate
@@ -390,13 +411,16 @@ session (12, 15, 16, 18) is active at a time while high-signal sweeps
 \subsection{Current position}
 \label{sec:decomposition-position}
 
-Items 1--7 are complete: lane A's Phase 0 (1, 2), the repository seeds
-(3), and lane B's \code{ves-syntax}, \code{ves-vocabulary},
-\code{ves-tokens}, and \code{ves-macros} (4, 5, 6, 7). The
-token-identity property that makes \code{ves-syntax}'s hashes and
-\code{ves-tokens}'s ZSTs mean anything at a real unsafe site is
-therefore realized, not just designed. One session can start
-immediately:
+Items 1--7 and 6b are complete: lane A's Phase 0 (1, 2), the repository
+seeds (3), lane B's \code{ves-syntax}, \code{ves-vocabulary},
+\code{ves-tokens}, and \code{ves-macros} (4, 5, 6, 7), and the
+vocabulary-manifest follow-up (6b). The token-identity property that
+makes \code{ves-syntax}'s hashes and \code{ves-tokens}'s ZSTs mean
+anything at a real unsafe site is therefore realized, not just
+designed, and \code{ves-tokens}'s remaining discovery mechanism ---
+the \code{TRUSTED.toml} reader, not the vocabulary-manifest reader 6b
+replaced --- is exactly the one placeholder explicitly reassigned to
+WP-9. One session can start immediately:
 
 \begin{itemize}[leftmargin=1.4em]
 \item \textbf{Lane B: item 8, \code{ves-check}.} Now the sole gate on
@@ -404,17 +428,16 @@ immediately:
   means this is the only session lane B can run next, and it is the
   last piece \dotnetrs{} needs before it can depend on this workspace
   at all.
-\item \textbf{Lane C: item 12, \code{VesCore}.} Unblocked by 5,
-  supervisor-heavy, and the longest-lead item in the plan. It has been
-  runnable concurrently with lane B since revision 7 and remains so;
-  nothing about \code{ves-macros} landing changes its readiness.
+\item \textbf{Lane C: item 12, \code{VesCore}.} Unblocked by 5 and now
+  by 6b as well, supervisor-heavy, and the longest-lead item in the
+  plan. It has been runnable concurrently with lane B since revision 7
+  and remains so; with 6b done, it can now read trust class and
+  invariant family directly from the manifest instead of having them
+  supplied by hand at elaborator-design time.
 \end{itemize}
 
-Item 6b should be slotted into lane B whenever there is a gap before 8
-starts (or interleaved with it, since the two touch different crates),
-and must precede 12 if 12 is to consume it. Item 8, then the
-integration bootstrap (9), are the only things standing between the
-present state and the Phase 1 deliverable, which is also the first
-point at which the study's central hypothesis --- that scripts survive
-this project's refactor velocity --- is actually under test rather
-than under discussion.
+Item 8, then the integration bootstrap (9), are the only things
+standing between the present state and the Phase 1 deliverable, which
+is also the first point at which the study's central hypothesis ---
+that scripts survive this project's refactor velocity --- is actually
+under test rather than under discussion.
