@@ -126,8 +126,9 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   \emph{(M; \code{deep} for the schema steps, \code{standard} for
   codegen; the elaboration-rule steps carry the highest gate density
   in lane B.)}
-  Landed 77 constructors across 16 namespaces with trust-class and
-  invariant-family annotations, dependency-resolution and structural
+  Landed 71 constructors across 20 namespaces with trust-class and
+  invariant-family annotations (4 trusted, 4 derived, 1 checked, 62
+  static), dependency-resolution and structural
   validation (rejecting untrusted premises misclassified as trusted,
   malformed derived-dependency lists, and non-static tactics), and the
   two code generators: a \code{no\_std}-compatible Rust ghost-token
@@ -135,20 +136,118 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   declaration inventory (\path{generated/VesVocabulary.lean}, handed to
   WP-13), both pinned by golden-file tests; \code{VOCABULARY\_VERSION}
   is now the canonical value embedded in both manifest schemas and in
-  statement hashes. 17 tests, all passing. WP-6 (\code{ves-tokens}) is
-  next; lane C's WP-13 is unblocked in principle, since its only
-  cross-lane dependency (this item) has landed.
-\item \textbf{[B] \code{ves-tokens}.} Generate the ZST token crate:
+  statement hashes. 17 tests, all passing. Carried forward: both
+  generated artifacts are \emph{prose-lossy} with respect to the
+  source. The Rust module encodes trust class structurally (a
+  \code{TrustGrant} parameter, a \code{cfg} gate, dependency
+  parameters) but drops the invariant family; the Lean inventory is
+  \code{opaque \dots{} : Prop} declarations plus tactic-name comments,
+  carrying neither trust class nor family. Consumers therefore cannot
+  read vocabulary facts back out of either artifact --- see 6b.
+\item \textbf{[B] \code{ves-tokens}. \textbf{Done, first pass}
+  (\code{ves-proof} commit \code{73e6dea}, 2026-08-02).} Generate the
+  ZST token crate:
   trust-class constructor forms, \code{cfg}-mirroring conventions, the
   \code{TrustGrant} build script, and zero-size/\code{inline} test
   matrices.
   \emph{(S--M; \code{standard}; high signal.)}
-\item \textbf{[B] \code{ves-macros}.} Implement \code{proof!},
-  \code{proof\_impl!}, and \code{contract!} over \code{ves-syntax},
-  with expansion-snapshot tests establishing the token-identity
-  property.
+  Landed a \code{no\_std}, \code{forbid(unsafe\_code)} crate whose
+  \code{lib.rs} is nothing but two \code{include!}s: the build script
+  copies \path{ves-vocabulary/generated/tokens.rs} into
+  \code{OUT\_DIR} and synthesizes \path{OUT_DIR/trust_grants.rs}, a
+  \code{pub mod grants} holding one \code{TrustGrant} const per
+  \emph{registered} trusted constructor, named in
+  \code{SCREAMING\_SNAKE\_CASE} without a suffix. The registry is
+  selected by the \code{VES\_TRUSTED\_TOML\_PATH} environment variable;
+  an unset variable or a missing file yields an empty module, so the
+  default build cannot mint any trusted premise. The test matrix is
+  exhaustive by construction rather than by enumeration: a compile-time
+  \code{size\_of == 0} assertion for all 72 generated types plus a test
+  that re-derives the type list from the generated source and fails if
+  the assertion list drifts; a test asserting every constructor is
+  immediately preceded by \code{\#[inline(always)]} and that struct and
+  constructor counts agree; and grant-generation tests over the golden
+  vocabulary. 5 tests plus the const assertions, 6 under
+  \code{--features memory-validation}; all passing.
+
+  Three items are deliberately carried forward rather than closed, and
+  each is assigned below:
+  \begin{enumerate}[label=(\alph*), leftmargin=1.6em, topsep=0.2em]
+  \item \emph{The \code{TRUSTED.toml} reader is a placeholder.} With no
+    schema yet agreed (that is WP-9's deliverable), the build script
+    registers a grant when the constructor's name occurs anywhere in
+    the file as a substring, rather than parsing TOML. This is
+    fail-open in the wrong direction --- a commented-out entry, or a
+    name that is a substring of another, mints a grant --- so it must
+    not survive into the integration bootstrap. Reassigned to WP-9,
+    which now owns both halves of the contract.
+  \item \emph{Trusted constructors are discovered by text-scraping.}
+    The build script finds them by matching
+    \code{\_grant: super::TrustGrant} on the same physical line as
+    \code{pub fn}, which holds only because every trusted constructor
+    today takes exactly one parameter and \code{rustfmt} keeps such
+    signatures on one line. A trusted-\emph{and}-derived constructor
+    would wrap and be silently skipped. The failure is fail-closed (the
+    grant is not emitted, so the citing site does not compile), but it
+    is a latent trap, and the underlying cause --- lane B re-deriving
+    vocabulary facts from formatted Rust --- is what 6b removes.
+  \item \emph{Neither the \code{debug\_assert!} shadows nor
+    lifetime-branded tokens of \cref{sec:dsl-tokens} exist.} The
+    vocabulary data model has no field for a shadow predicate and no
+    token is generic, so static constructors are unconditionally empty
+    and F6 brands are not carried in token types. Both are v0
+    simplifications, not rejections; see \cref{sec:dsl-tokens}.
+  \end{enumerate}
+  \smallskip
+  \noindent\textbf{6b --- [B] Vocabulary manifest artifact} (follow-up
+  session, unnumbered so the cross-references below keep their
+  targets). A short session
+  adding a third \code{ves-vocabulary} output: a canonical,
+  golden-pinned machine-readable inventory (namespace, name, role,
+  trust class, \code{cfg} feature, dependency list, invariant family)
+  emitted alongside the Rust and Lean artifacts. Rewire
+  \code{ves-tokens}'s build script to consume it instead of scraping
+  \path{generated/tokens.rs}, closing 6(b), and hand the same file to
+  WP-13 so \code{VesCore} can distinguish a grant-axiomatized
+  proposition from a derived one without re-reading the Rust.
+  \emph{(S; \code{standard}; high signal --- golden files again, and
+  the two consumers are existing tests.)} Best done before WP-13
+  begins, since retrofitting the distinction into an existing
+  elaborator is more expensive than generating it now.
+\item \textbf{[B] \code{ves-macros}. \textbf{Done, first pass}
+  (\code{ves-proof} commit \code{85a6abc}, 2026-08-03).} Implement
+  \code{proof!}, \code{proof\_impl!}, and \code{contract!} over
+  \code{ves-syntax}, with expansion-snapshot tests establishing the
+  token-identity property.
   \emph{(M; \code{deep} --- proc-macro hygiene and span work; snapshot
   tests give high signal once the harness exists.)}
+  Landed all four macros dispatching to the shared parser:
+  expression-position \code{proof!} and item-position
+  \code{proof\_impl!} expand \code{have}/\code{trust} statements to
+  local \code{::ves\_tokens} bindings (the grant constant for a
+  \code{trust} binding is derived by upper-casing the constructor's
+  final path segment) and splice the \code{then} tokens verbatim,
+  realizing token-identity by construction rather than by
+  reconstruct-and-compare; \code{exempt!} validates its \code{reason}
+  argument and emits nothing; \code{contract!} is an unchanged-input
+  passthrough, with token generation deferred to item 10. Because
+  \code{proof\_impl!} cannot introduce item-scope bindings, its
+  premises type-check inside an anonymous \code{const \_: () = \{ fn
+  \_\_check() \{\dots\} \};} block ahead of the verbatim \code{then}
+  item --- sound, but that checker cannot capture caller-local values
+  or the protected item's own generics. Three unit tests, five
+  expansion-snapshot fixtures (\code{cargo-expand}/\code{macrotest}),
+  and three \code{trybuild} compile-fail fixtures (a feature-gated
+  checked constructor, a derived constructor with an unmet
+  prerequisite, an unregistered trust path) all pass, and all three
+  compile-fail cases fail as ordinary \code{rustc} type errors at the
+  \code{have}/\code{trust} span rather than through
+  \code{ves-macros}-specific diagnostics --- exactly the diagnostics
+  model of \cref{sec:dsl-diag}. Carried forward: the crate exports bare
+  \code{proof}/\code{proof\_impl}/\code{exempt}/\code{contract} macros
+  rather than a \code{ves::}-namespaced facade; assembling that facade
+  is integration-bootstrap work (item 9), not a \code{ves-macros}
+  concern.
 \item \textbf{[B] \code{ves-check}.} Implement extraction, the
   structural rules, manifest comparison, and the ratchet budgets;
   fixture-test against synthetic crates.
@@ -158,6 +257,32 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   \code{xtask ves-check} CI job in structural mode, and
   \code{TRUSTED.toml} seeded from the accepted-risk boundaries.
   \emph{(S; \code{standard}.)}
+  Scope grew when WP-6 landed, and this is now the one session in the
+  plan that must edit two repositories. It owns three things beyond
+  the original list. First, the \code{TRUSTED.toml} \emph{schema} ---
+  at minimum a qualified constructor name, the falsifier that monitors
+  the grant (\cref{sec:risks-trust}), and an expiry or review
+  condition --- together with the real parser replacing WP-6's
+  substring placeholder; the parser is a lane-B edit made under a
+  lane-A session, which is acceptable only because the alternative is
+  a lane-B session guessing at a schema it does not consume.
+  Second, the \emph{feature-propagation rule} for checked
+  constructors. The central \code{cfg}-mirroring guarantee of
+  \cref{sec:dsl-tokens} presumes a token constructor lives under the
+  same \code{cfg} as the guard it names; the implementation instead
+  gates it behind a \code{ves-tokens} Cargo feature
+  (\code{memory-validation}), which is only equivalent if \dotnetrs{}
+  forwards its own guard \code{cfg} to that feature rather than
+  enabling it unconditionally. That forwarding must be declared in
+  \dotnetrs{}'s manifest and asserted by a CI matrix leg that builds
+  with the guard off and confirms the citing sites fail to compile ---
+  otherwise the mechanism silently degrades to a static premise, which
+  is precisely defect (a) of \cref{sec:system-defects} in a new
+  costume.  Third, whether to supply the \code{debug\_assert!} shadow
+  hooks of \cref{sec:dsl-tokens}: the predicates are \dotnetrs{}
+  functions, so if they are wanted, the vocabulary needs a shadow field
+  and \code{ves-tokens} a hook trait, and this session is where the
+  requirement becomes concrete.
 \item \textbf{[A] Contract layer.} Declare \code{ves::contract!} on
   the $\sim$62 documented \code{unsafe fn} and collapse the template
   comments onto contract tokens.
@@ -172,7 +297,11 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   the invariant families F1/F5/F6 warrant \code{deep}.
   \emph{(4 sessions; high signal --- rustc token checking plus
   \code{ves-check} run per step.)}
-\item \textbf{[C] \code{VesCore} statement layer.} (Requires 5.)
+\item \textbf{[C] \code{VesCore} statement layer.} (Requires 5;
+  preferably 6b, whose manifest tells the elaborator which
+  propositions are grant-axiomatized, which are derived, and from
+  what --- facts the \path{VesVocabulary.lean} inventory alone does
+  not carry.)
   Implement the vocabulary mirror, the goal elaborator, statement-hash
   recomputation, and manifest ingestion, cross-checked against
   \code{ves-syntax} hashes on a shared corpus.
@@ -242,9 +371,10 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
 The dependency structure yields three long-lived concurrent lanes with
 four synchronization points: lane B is unblocked immediately after the
 repository seeds (3) and runs 4$\to$8 sequentially; lane A resumes at 9 once lane
-B delivers the macros; lane C starts at 12 as soon as the vocabulary
+B delivers \code{ves-check} (8) --- the macros (7) already landed, so
+8 is now the sole remaining gate on 9; lane C starts at 12 as soon as the vocabulary
 (5) stabilizes --- which it now has (commit \code{ad67707}), so lane C
-may begin while lane B continues 6$\to$8 --- and is otherwise
+may begin while lane B continues 7$\to$8 --- and is otherwise
 independent of lane A entirely; and
 the only cross-lane joins are 9 (A$\leftarrow$B), 12 (C$\leftarrow$B),
 17 (C$\leftarrow$B), and 20 (C$\leftarrow$A's annotation sweep, which
@@ -256,3 +386,35 @@ density, not agent throughput, is the binding constraint, and the
 lanes are deliberately mixed so that at most one supervisor-heavy
 session (12, 15, 16, 18) is active at a time while high-signal sweeps
 (11, 13-backfill, 20) fill the remaining lanes.
+
+\subsection{Current position}
+\label{sec:decomposition-position}
+
+Items 1--7 are complete: lane A's Phase 0 (1, 2), the repository seeds
+(3), and lane B's \code{ves-syntax}, \code{ves-vocabulary},
+\code{ves-tokens}, and \code{ves-macros} (4, 5, 6, 7). The
+token-identity property that makes \code{ves-syntax}'s hashes and
+\code{ves-tokens}'s ZSTs mean anything at a real unsafe site is
+therefore realized, not just designed. One session can start
+immediately:
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Lane B: item 8, \code{ves-check}.} Now the sole gate on
+  the integration bootstrap (9): lane B's sequential order (4$\to$8)
+  means this is the only session lane B can run next, and it is the
+  last piece \dotnetrs{} needs before it can depend on this workspace
+  at all.
+\item \textbf{Lane C: item 12, \code{VesCore}.} Unblocked by 5,
+  supervisor-heavy, and the longest-lead item in the plan. It has been
+  runnable concurrently with lane B since revision 7 and remains so;
+  nothing about \code{ves-macros} landing changes its readiness.
+\end{itemize}
+
+Item 6b should be slotted into lane B whenever there is a gap before 8
+starts (or interleaved with it, since the two touch different crates),
+and must precede 12 if 12 is to consume it. Item 8, then the
+integration bootstrap (9), are the only things standing between the
+present state and the Phase 1 deliverable, which is also the first
+point at which the study's central hypothesis --- that scripts survive
+this project's refactor velocity --- is actually under test rather
+than under discussion.

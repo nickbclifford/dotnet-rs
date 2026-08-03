@@ -26,8 +26,10 @@ items. First, the extraction path: the macro and the checker link the
 same \code{ves-syntax} parser, so there is one grammar, and the
 subject hash covers the protected expression's exact token stream.
 Second, the token-identity property: the macro must re-emit the
-\code{then}-expression verbatim, which is enforced by expansion
-snapshots in \code{ves-macros}' own CI. What no hash can close is the
+\code{then}-expression verbatim, which \code{ves-macros} (commit
+\code{85a6abc}) now realizes by splicing the parsed token stream
+directly rather than reconstructing it, checked by five expansion-snapshot
+fixtures in its own CI. What no hash can close is the
 semantic gap between the extracted goal term and the operational
 meaning of the surrounding Rust --- that gap is
 \cref{sec:risks-fidelity}, and full closure means MIR-level
@@ -128,6 +130,7 @@ The existing lock-order DAG and the documented forbidden inversions are
 a head start: they are, in effect, hand-written lemmas about the LTS.
 
 \subsection{Trusted-premise creep}
+\label{sec:risks-trust}
 
 The two irreducible trust classes (\cref{sec:obligations-untrusted}) ---
 spec-licensed UB from unverifiable IL, and FFI ABI agreement --- are
@@ -135,8 +138,19 @@ legitimately axiomatic. The failure mode is sociological: \code{trust} is the
 path of least resistance, and a registry that grows monotonically
 converts the proof layer back into prose with extra steps. The
 \code{TrustGrant} mechanism helps --- an unregistered trusted premise
-does not compile, so the registry cannot silently lag the code --- but
-the ratchet still requires enforcement: CI reports the grant count as a
+does not compile, so the registry cannot silently lag the code --- and
+as of \code{ves-proof} commit \code{73e6dea} it exists: the generated
+\code{grants} module is empty unless a registry is named, so the
+default build can mint none of the four trusted constructors. The
+registry \emph{reader}, however, is still a placeholder that matches
+constructor names as substrings of the raw file, which fails open in
+exactly the direction this subsection worries about --- a
+commented-out entry grants trust. Replacing it, and fixing the
+\code{TRUSTED.toml} schema so that each entry must name its falsifier
+at registration time rather than by convention, is the first-listed
+obligation of the integration bootstrap
+(\cref{sec:decomposition-wps}, item 9). Even then
+the ratchet requires enforcement: CI reports the grant count as a
 budget exactly like the existing \code{check\_mt\_cfg\_ceiling.sh},
 and each grant must name the cheapest known falsifier (a Miri mode, a
 fuzz target, a fixture) so trust is at least monitored. Two specific

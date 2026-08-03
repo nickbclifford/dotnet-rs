@@ -125,6 +125,42 @@ The grammar is deliberately regular --- every statement is
 parser} is linked into both the proc macro and the external checker,
 eliminating grammar skew by construction.
 
+The four macros above are implemented (\code{ves-proof} commit
+\code{85a6abc}, WP-7): \code{proof!} and \code{proof\_impl!} parse via
+\code{ves\_syntax::parse\_proof\_script}/\code{parse\_proof\_impl\_script}
+and expand \code{have}/\code{trust} statements to local bindings ---
+\code{have $x$ = $t$;} becomes \code{let $x$ = ::ves\_tokens::$t$;}, and
+\code{trust $x$ = registry::$c$;} becomes \code{let $x$ =
+::ves\_tokens::registry::$c$(::ves\_tokens::grants::$C$);} where $C$ is
+the upper-cased constructor name; \code{goal}, \code{show}, and
+\code{note} are checker metadata and are omitted from the Rust
+expansion entirely. The \code{then} tokens are spliced verbatim from
+the parsed \code{ThenClause}, realizing the token-identity property
+exactly as designed and confirmed by five expansion-snapshot fixtures.
+\code{proof\_impl!} cannot introduce bindings at item scope, so its
+premises type-check inside an anonymous \code{const \_: () = \{ fn
+\_\_check() \{ \dots \} \};} block ahead of the verbatim \code{then}
+item --- sound, but the isolated checker cannot capture caller-local
+values or the protected item's own generics, a real (if narrow)
+expressiveness limit worth remembering when scripting generic
+\code{unsafe impl}s. \code{exempt!} validates its \code{reason}
+argument and expands to nothing; \code{contract!} is, as planned, an
+unchanged-input passthrough in this work package, with real
+contract-token generation deferred to the contract-layer package
+(\cref{sec:decomposition-wps}, item 10). Three compile-fail fixtures
+exercise the premise-rejection paths this section relies on --- a
+feature-gated checked constructor, a derived constructor with an
+unmet prerequisite, and an unregistered trust path --- and all three
+fail exactly the way \cref{sec:dsl-example-fail} predicts, as ordinary
+\code{rustc} type errors rather than macro-specific diagnostics. One
+naming detail is still open: the implemented crate exports bare
+\code{proof}/\code{proof\_impl}/\code{exempt}/\code{contract} macros
+(invoked as \code{ves\_macros::proof!}, etc.), not the \code{ves::}
+facade used throughout this section's examples; assembling that facade
+--- presumably a thin re-export module combining \code{ves-macros} and
+\code{ves-tokens} --- is integration-bootstrap work
+(\cref{sec:decomposition-wps}, item 9), not yet done.
+
 \subsection{Premises as ghost tokens}
 \label{sec:dsl-tokens}
 
@@ -182,6 +218,32 @@ never rewrites the \code{unsafe} code it annotates --- and this is
 testable by expansion snapshot (\code{cargo expand} diff against the
 raw expression), which reduces the principal proc-macro risk to a CI
 check.
+
+The implemented \code{ves-tokens} (\code{ves-proof} commit
+\code{73e6dea}) realizes the trust classes and both properties --- all
+72 generated types carry a compile-time \code{size\_of == 0} assertion
+kept exhaustive by a test that re-derives the type list from the
+generated source, and every constructor is checked to be
+\code{\#[inline(always)]} --- with three deliberate v0 simplifications
+worth stating so that later work does not mistake them for settled
+design. Static constructors carry no \code{debug\_assert!} shadow: the
+predicates named above are \dotnetrs{} functions and the vocabulary has
+no field to attach one, so the free dynamic spot-check is currently
+forgone rather than refuted. No token is generic, so the
+lifetime-branded form sketched above
+(\code{PinnedWhileParked<'a>}) does not exist and F6 brands are not
+carried in token types --- acceptable while the arena discipline is
+enforced by \gcarena{}'s own branding, but it means a token cannot yet
+witness \emph{which} arena it speaks about. Most consequentially,
+checked constructors are gated by a Cargo feature of
+\code{ves-tokens} rather than by the guard's own \code{cfg}, since the
+two live in different crates. The guarantee is preserved only if
+\dotnetrs{} forwards its guard \code{cfg} to that feature; if it
+enables the feature unconditionally, a checked premise silently
+degrades to a static one and the mechanism stops catching defect (a).
+The integration bootstrap therefore owns the forwarding rule and a CI
+leg that builds with the guard off and confirms the citing sites fail
+to compile (\cref{sec:decomposition-wps}, item 9).
 
 What remains for the \emph{external} structural checker is what rustc
 cannot see: that every \code{unsafe} block in designated crates is
