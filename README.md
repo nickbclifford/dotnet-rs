@@ -58,6 +58,10 @@ Start with:
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
 - [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 
+For the plan behind the project's unsafe-code assurance work — invariant
+specifications, provenance discipline, falsifiers, and the trust register — see
+[`docs/ASSURANCE_ROADMAP.md`](docs/ASSURANCE_ROADMAP.md).
+
 See the `docs/` directory for additional deep dives.
 
 ## Feature flags and validation matrix

@@ -41,6 +41,10 @@ root `Cargo.toml`: `undocumented_unsafe_blocks = "deny"` and
 keep unsafe operations individually proved rather than weakening the workspace
 configuration.
 
+The longer-term plan for this policy — naming the invariants these comments
+cite, and the falsifiers that check them — is
+[`docs/ASSURANCE_ROADMAP.md`](docs/ASSURANCE_ROADMAP.md).
+
 ## Panic-vs-Result policy
 
 When adding or changing runtime behavior, classify failure paths into two categories:
