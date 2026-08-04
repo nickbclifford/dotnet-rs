@@ -140,13 +140,46 @@ the registry-parsing half. `ves-check` (WP-8) is now the sole crate
 standing between the current state and the integration bootstrap
 (WP-9); `VesCore` (WP-13) is unblocked by both WP-5 and 6b.
 
+Revision 11 records that WP-8 (`ves-check`, `ves-proof` commits
+`2c93b4b`/`e06a34b`/`da52ee5`/`bb7ea0a`, 2026-08-03) is implemented: a
+standalone checker CLI plus a reusable library of seven modules
+(`vocab`, `extract`, `manifest`, `rules`, `diff`, `ratchet`, `diag`).
+`extract` walks a target crate's `src/` tree with `syn::parse_file`,
+finds `proof!`/`proof_impl!` invocations, and dispatches their token
+streams to `ves-syntax`'s parsers, reporting malformed Rust or scripts
+as extraction violations rather than skipping them; the result is
+serialized as the now-finalized `obligations.v1.json` shape (the v1
+schemas move from draft to finalized in this revision). `rules`
+checks vocabulary-version compatibility and premise-constructor
+validity against a vocabulary manifest supplied at runtime through a
+required `--vocabulary-manifest` path — `ves-check` never links
+`ves-vocabulary` as a compile-time dependency. `ratchet` attributes
+unproved obligations to invariant families and rejects any increase
+over a checked-in `ves-budget.v1` ceiling per family. The binary's
+`extract` and `check` subcommands use exit code 0 for a passing
+policy run, 1 for structural or policy failure, and 2 for usage or
+internal error. Coverage is 57 tests: unit tests in every module,
+golden extraction against three synthetic fixture crates, and CLI
+integration tests asserting the exit-code contract, all passing. One
+item is carried forward rather than closed: `check_premise_validity`
+accepts any registered trust constructor without validating it
+against a `TRUSTED.toml` schema, marked by an explicit `TODO(WP-9)` at
+the call site, because that schema remains WP-9's deliverable. All
+five `ves-proof` crates — `ves-syntax`, `ves-vocabulary`, `ves-tokens`,
+`ves-macros`, and `ves-check` — are now implemented; the integration
+bootstrap (WP-9) in `dotnet-rs` is the sole remaining item before
+Phase 1's CI deliverable exists, and it is now unblocked. `VesCore`
+(WP-13) remains unstarted in `ves-proof-lean`, which is otherwise
+unchanged since its seed commit and still has no Lean toolchain
+pinned.
+
 The study is grounded in a survey of the repository at HEAD `97e8f658`
 (2026-07-31): 581 unsafe blocks, 620 SAFETY comments, 62 documented
 `unsafe fn`, the invariant-family taxonomy in §3, and the two then-live
 soundness defects discussed in §2.3 (both fixed as of `208a6c8b`,
 2026-08-01 — see §2.3 and §9). Re-measured at `bc266543` (2026-08-02):
 583 unsafe blocks, 620 SAFETY comments, 62 documented `unsafe fn` — no
-material drift. Revisions 9 and 10's changes are entirely in the sibling
-`ves-proof` repository; `dotnet-rs` itself is unchanged since that
-measurement. If those numbers drift far from the current tree, re-survey
+material drift, confirmed again at current HEAD `6ebda249`. Revisions 9
+through 11's changes are entirely in the sibling `ves-proof` repository;
+`dotnet-rs` itself is unchanged since that measurement. If those numbers drift far from the current tree, re-survey
 before quoting them.

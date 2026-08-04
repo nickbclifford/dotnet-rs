@@ -38,19 +38,26 @@ Phase 0 is due diligence, not verification, and as of this revision it
 is complete (\code{208a6c8b}): the two live defects are fixed, one
 Miri leg and one fuzz target are blocking CI gates, and the
 differential harness covers seven fixtures rather than one. Phase 1
-(the embedded layer) is now well underway: four of its five
-\path{ves-proof} crates --- \code{ves-syntax}, \code{ves-vocabulary},
-\code{ves-tokens}, and \code{ves-macros} --- are implemented and
-tested, along with the 6b follow-up that gives \code{ves-tokens} (and,
-later, \code{VesCore}) a golden-pinned vocabulary manifest instead of
-a text-scraper. \code{ves-check} is the one remaining crate and the
-sole gate on wiring this workspace into \dotnetrs{}; the sibling
+(the embedded layer) is now feature-complete in its own repository:
+all five \path{ves-proof} crates --- \code{ves-syntax},
+\code{ves-vocabulary}, \code{ves-tokens}, \code{ves-macros}, and
+\code{ves-check} --- are implemented and tested, along with the 6b
+follow-up that gives \code{ves-tokens} (and, later, \code{VesCore}) a
+golden-pinned vocabulary manifest instead of a text-scraper.
+\code{ves-check} extracts obligations from real Rust source, applies
+the structural and vocabulary-validity rules, and enforces per-family
+ratchet budgets, with one item deliberately deferred to the
+integration bootstrap: it accepts any registered trust constructor
+without a \code{TRUSTED.toml} schema to validate it against, because
+that schema does not exist yet. Wiring this workspace into
+\dotnetrs{} --- the integration bootstrap (WP-9) --- is now the sole
+remaining action for Phase 1's CI deliverable; the sibling
 \path{ves-proof-lean} repository is still seeded (WP-3) but otherwise
 untouched, with no toolchain pinned and no package beyond a marker
 constant, even though \code{VesCore} (Phase 3) has been unblocked
 since \code{ves-vocabulary} landed and could run concurrently with
-lane B. Landing \code{ves-check} remains the cheapest experiment that
-tests the whole
+lane A's integration work. Landing the integration bootstrap remains
+the cheapest experiment that tests the whole
 thesis on real ground: uniquely among the phases, Phase 1 yields value
 even with no Lean involvement, since ghost tokens make premise
 citations compile-checked in every feature configuration --- the

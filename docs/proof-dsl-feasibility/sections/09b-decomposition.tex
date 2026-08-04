@@ -266,10 +266,49 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
   rather than a \code{ves::}-namespaced facade; assembling that facade
   is integration-bootstrap work (item 9), not a \code{ves-macros}
   concern.
-\item \textbf{[B] \code{ves-check}.} Implement extraction, the
-  structural rules, manifest comparison, and the ratchet budgets;
+\item \textbf{[B] \code{ves-check}. \textbf{Done}
+  (\code{ves-proof} commits \code{2c93b4b}, \code{e06a34b},
+  \code{da52ee5}, \code{bb7ea0a}, 2026-08-03).} Implement extraction,
+  the structural rules, manifest comparison, and the ratchet budgets;
   fixture-test against synthetic crates.
   \emph{(M; \code{standard}; high signal.)}
+  Landed as a standalone CLI plus a reusable library of seven modules:
+  \code{vocab} reads and validates the vocabulary manifest at runtime
+  (\code{ves-check} takes it as a required \code{--vocabulary-manifest}
+  path and never links \code{ves-vocabulary} as a compile-time
+  dependency); \code{extract} walks a target crate's \code{src/} tree
+  with \code{syn::parse\_file}, visits \code{proof!}/\code{proof\_impl!}
+  invocations, and dispatches their token streams to
+  \code{ves-syntax}'s parsers, reporting malformed Rust or scripts as
+  extraction violations rather than skipping them; \code{manifest}
+  defines and serializes the canonical, sorted-key,
+  timestamp-free \code{obligations.v1.json} and \code{proofs.v1.json}
+  shapes, finalized from draft in this session
+  (\path{schemas/obligations.v1.schema.json},
+  \path{schemas/proofs.v1.schema.json}); \code{rules} checks vocabulary
+  version compatibility, premise-constructor validity, and trust-grant
+  and duplicate-obligation structure; \code{diff} classifies
+  obligations against an optional proof manifest; \code{ratchet}
+  attributes unproved obligations to invariant families from the
+  vocabulary manifest and rejects any increase over a checked-in
+  \code{ves-budget.v1} ceiling for trust grants or unproved counts per
+  family; and \code{diag} renders deterministic rustc-style
+  diagnostics. The binary exposes \code{extract} and \code{check}
+  subcommands with exit code 0 for a passing policy run, 1 for
+  structural or policy failure, and 2 for usage or internal error. 57
+  tests, all passing, spanning unit coverage of every module, golden
+  extraction against synthetic fixture crates (\code{golden},
+  \code{hash\_mismatch}, \code{budget\_breach}), and CLI integration
+  tests asserting the exit-code contract. One item is carried forward,
+  not closed: \code{check\_premise\_validity} accepts any registered
+  trust constructor without validating it against a
+  \code{TRUSTED.toml} schema, because that schema is still WP-9's
+  deliverable (marked by an explicit \code{TODO(WP-9)} at the call
+  site); \code{ves-check} enforces everything else structurally now.
+  All five \code{ves-proof} crates are implemented; \code{ves-check}
+  was the sole remaining gate on the integration bootstrap (9), which
+  is now the only session standing before \dotnetrs{} can depend on
+  this workspace.
 \item \textbf{[A] Integration bootstrap.} (Requires 6--8.) Add the
   \code{ves-macros}/\code{ves-tokens} dependencies, the
   \code{xtask ves-check} CI job in structural mode, and
@@ -387,12 +426,12 @@ strict; across lanes, an entry lists its cross-lane prerequisites.
 \subsection{Pipeline shape}
 
 The dependency structure yields three long-lived concurrent lanes with
-four synchronization points: lane B is unblocked immediately after the
-repository seeds (3) and runs 4$\to$8 sequentially; lane A resumes at 9 once lane
-B delivers \code{ves-check} (8) --- the macros (7) already landed, so
-8 is now the sole remaining gate on 9; lane C starts at 12 as soon as the vocabulary
+four synchronization points: lane B was unblocked immediately after the
+repository seeds (3) and ran 4$\to$8 sequentially to completion; lane A
+may now resume at 9, since lane B has delivered \code{ves-check} (8) ---
+the last item on lane B's critical path before the join; lane C starts at 12 as soon as the vocabulary
 (5) stabilizes --- which it now has (commit \code{ad67707}), so lane C
-may begin while lane B continues 7$\to$8 --- and is otherwise
+may run concurrently with lane A's resumption at 9 --- and is otherwise
 independent of lane A entirely; and
 the only cross-lane joins are 9 (A$\leftarrow$B), 12 (C$\leftarrow$B),
 17 (C$\leftarrow$B), and 20 (C$\leftarrow$A's annotation sweep, which
@@ -411,33 +450,37 @@ session (12, 15, 16, 18) is active at a time while high-signal sweeps
 \subsection{Current position}
 \label{sec:decomposition-position}
 
-Items 1--7 and 6b are complete: lane A's Phase 0 (1, 2), the repository
-seeds (3), lane B's \code{ves-syntax}, \code{ves-vocabulary},
-\code{ves-tokens}, and \code{ves-macros} (4, 5, 6, 7), and the
-vocabulary-manifest follow-up (6b). The token-identity property that
-makes \code{ves-syntax}'s hashes and \code{ves-tokens}'s ZSTs mean
-anything at a real unsafe site is therefore realized, not just
-designed, and \code{ves-tokens}'s remaining discovery mechanism ---
-the \code{TRUSTED.toml} reader, not the vocabulary-manifest reader 6b
-replaced --- is exactly the one placeholder explicitly reassigned to
-WP-9. One session can start immediately:
+Items 1--8 and 6b are complete: lane A's Phase 0 (1, 2), the repository
+seeds (3), all five lane-B crates --- \code{ves-syntax},
+\code{ves-vocabulary}, \code{ves-tokens}, \code{ves-macros}, and
+\code{ves-check} (4, 5, 6, 7, 8) --- and the vocabulary-manifest
+follow-up (6b). The token-identity property that makes
+\code{ves-syntax}'s hashes and \code{ves-tokens}'s ZSTs mean anything
+at a real unsafe site is therefore realized, not just designed, and
+\code{ves-check} closes the loop by extracting those hashes back out
+of real source and enforcing them structurally. Lane B's remaining
+placeholder --- the \code{TRUSTED.toml} reader, both \code{ves-tokens}'
+substring match and \code{ves-check}'s unconditional acceptance of any
+registered trust constructor --- is exactly the one item explicitly
+reassigned to WP-9. Two sessions can start immediately, in different
+repositories:
 
 \begin{itemize}[leftmargin=1.4em]
-\item \textbf{Lane B: item 8, \code{ves-check}.} Now the sole gate on
-  the integration bootstrap (9): lane B's sequential order (4$\to$8)
-  means this is the only session lane B can run next, and it is the
-  last piece \dotnetrs{} needs before it can depend on this workspace
-  at all.
-\item \textbf{Lane C: item 12, \code{VesCore}.} Unblocked by 5 and now
-  by 6b as well, supervisor-heavy, and the longest-lead item in the
-  plan. It has been runnable concurrently with lane B since revision 7
-  and remains so; with 6b done, it can now read trust class and
-  invariant family directly from the manifest instead of having them
-  supplied by hand at elaborator-design time.
+\item \textbf{Lane A: item 9, integration bootstrap.} Unblocked now
+  that lane B has delivered \code{ves-check} (8): the only session
+  standing between the present state and the Phase 1 CI deliverable,
+  and the point at which the study's central hypothesis --- that
+  scripts survive this project's refactor velocity --- is actually
+  under test rather than under discussion.
+\item \textbf{Lane C: item 12, \code{VesCore}.} Unblocked by 5 and 6b,
+  supervisor-heavy, and the longest-lead item in the plan. It has been
+  runnable concurrently with lane B since revision 7 and remains so
+  now that lane B has finished entirely; it can read trust class and
+  invariant family directly from the vocabulary manifest instead of
+  having them supplied by hand at elaborator-design time.
 \end{itemize}
 
-Item 8, then the integration bootstrap (9), are the only things
-standing between the present state and the Phase 1 deliverable, which
-is also the first point at which the study's central hypothesis ---
-that scripts survive this project's refactor velocity --- is actually
-under test rather than under discussion.
+Lane B is idle until lane A's integration bootstrap (9) or lane C's
+manifest round trip (14) needs a follow-up; no lane-B session is
+queued. Item 9 is the only thing standing between the present state
+and the Phase 1 deliverable.

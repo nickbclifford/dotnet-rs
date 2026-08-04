@@ -62,8 +62,12 @@ valuable and abandonable without stranding the previous:
   expand over \code{ves-syntax}, splicing the protected tokens verbatim
   and confirmed by five expansion snapshots and three compile-fail
   fixtures; \code{contract!} is an identity passthrough pending the
-  contract-layer package); \code{ves-check} in structural mode (empty
-  proof manifest, everything trusted or unproved); scripts
+  contract-layer package); \code{ves-check} in structural mode
+  (\textbf{done}, commits \code{2c93b4b}/\code{e06a34b}/\code{da52ee5}/%
+  \code{bb7ea0a}, 2026-08-03: extraction, structural rules, manifest
+  comparison, and per-family ratchet budgets, all fixture-tested, 57
+  tests passing; the standalone binary never links \code{ves-vocabulary}
+  and reads the vocabulary manifest at runtime instead); scripts
   on every unsafe block in \crate{dotnet-value}, \crate{dotnet-utils},
   and \crate{dotnet-runtime-memory}, and \code{ves::contract!}
   declarations on the 62 documented \code{unsafe fn}. Deliverable:
@@ -74,7 +78,8 @@ valuable and abandonable without stranding the previous:
   tag-std level~\cite{tagstd2025} before any theorem exists, and it is
   also the test of the central hypothesis: if scripts cannot survive
   this project's refactor velocity, the lesson costs a linter rather
-  than a model. Four of the five crates are in; \code{ves-check} is
+  than a model. All five crates are in; the integration bootstrap that
+  wires them into \dotnetrs{} (\cref{sec:decomposition-wps}, item 9) is
   now the critical path, and nothing in \dotnetrs{} changes until it
   lands (\cref{sec:decomposition-position}).
 \item[Phase 2 --- The model (3--6 months).] \code{VesModel}:
