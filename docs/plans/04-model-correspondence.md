@@ -73,7 +73,7 @@ one row per UB class:
 | Invalid pointer dereference (dangling, out-of-bounds) | … | Miri tree-borrows leg, `fuzz_raw_memory_access` | … |
 | Misaligned access | F4 sites | `debug_assert!` at call site, Kani harness (plan 03) | release builds |
 | Data race | F1/F7 sites | `loom` leg (plan 03) | non-modelled paths |
-| Pointer-integer provenance | 78 sites → plan 01 | nothing today; strict-provenance Miri after plan 01 | … |
+| Pointer-integer provenance | 102 audited API sites plus 2 bare test casts → plan 01 | ordinary Miri only; Plan 01 strict-provenance CI was owner-deferred | documented managed-storage boundaries remain |
 | Aliasing-model violation (Tree Borrows) | all `&mut` from raw | Miri `-Zmiri-tree-borrows` | untested paths |
 | Uninitialized read | 1 `MaybeUninit` site | — | … |
 

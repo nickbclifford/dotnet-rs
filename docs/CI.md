@@ -258,7 +258,28 @@ such path is dynamically exercised. The filters are conservative because the tra
 `parking_lot` stack has known Miri limitations. The separate `dotnet-utils` matrix leg remains
 advisory along with the other entries.
 
-The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. Strict-provenance is currently infeasible for `dotnet-vm` because dependency-level integer-to-pointer casts are reached during assembly parsing before VM unsafe sites execute.
+The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`.
+Strict provenance is currently infeasible for `dotnet-vm` because dependency-level
+integer-to-pointer casts are reached during assembly parsing before VM unsafe
+sites execute.
+
+### Strict-provenance deferral
+
+No current Miri job adds `-Zmiri-strict-provenance`. Plan 01's Phase 9 CI work
+was explicitly closed by owner-directed deferral on 2026-08-05; this is an
+accepted missing gate, not implied coverage. In particular:
+
+- `dotnet-value` remains known-red locally at the atomic GC-handle
+  `gc_handle_from_addr` storage boundary, with continuation triage also reaching
+  serialized `ObjectRef::read_unchecked` reconstruction.
+- `dotnet-runtime-memory` passed its pinned-nightly strict-provenance baseline,
+  but it has never had an entry in this advisory matrix and was not added solely
+  to satisfy the plan's stale gate wording.
+- both `dotnet-vm` entries retain their existing flags and filters unchanged.
+
+Reopening strict-provenance CI requires explicit authorization and a green local
+run for each intended leg. Do not enable a known-red matrix entry or infer strict
+coverage from the ordinary `miri-value` job in `ci.yml`.
 
 The workflow pins `nightly-2026-05-27`, which locally reports
 `rustc 1.98.0-nightly (d1fc603d1 2026-05-26)`. Both documented `dotnet-vm`

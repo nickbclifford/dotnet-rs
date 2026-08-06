@@ -45,6 +45,11 @@ met or not — so progress is not self-assessed.
 | 4 | [Model correspondence](plans/04-model-correspondence.md) | Clause→site index covers every family-F2 site; differential fixture count ratcheted upward from 7 | 2 (predicate names) |
 | 5 | [Trust register](plans/05-trust-register.md) | Every entry names a falsifier; count is CI-ceilinged | 2, 3 |
 
+**Plan 01 disposition (2026-08-05):** its implementation work concluded under an
+owner-directed strict-provenance CI deferral, so the gate in this table remains
+objectively unmet. No current CI leg uses `-Zmiri-strict-provenance`; dependent
+work must not infer that coverage from Plan 01's administrative closure.
+
 Workstream 1 is first because it is the precondition for the rest of the
 assurance story *and* for any future tool: RefinedRust rejects pointer-integer
 casts outright, Kani does not check provenance UB, and Charon needs MIR that

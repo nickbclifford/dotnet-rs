@@ -1,10 +1,47 @@
 # Plan 01 — Provenance redesign
 
-**Gate:** `MIRIFLAGS="-Zmiri-strict-provenance"` runs green on at least the
+**Original gate:** `MIRIFLAGS="-Zmiri-strict-provenance"` runs green on at least the
 `dotnet-value` and `dotnet-runtime-memory` Miri legs, and the flag is added to
 `.github/workflows/miri.yml` for those legs.
 
-**Status:** not started.
+**Status (2026-08-06):** implementation complete; original CI gate explicitly
+closed by owner-directed deferral, not met.
+
+## Final disposition
+
+The serialization, typed-reference, fuzzing, and measurement work landed while
+preserving `ManagedPtr::SIZE` at three words. Managed Stack and Static reads now
+require caller-supplied live bases; Heap and CrossArena reads derive data
+addresses from live owner storage; Transient remains deliberately
+non-deserializable. The managed-pointer fuzz targets exercise every serializable
+origin plus offset, raw tag, checksum, and resolved-address preservation. A
+bounded CallStack-owned Heap decode cache retains only traced `ObjectRef` handles,
+is invalidated after each collection cycle, and never caches data pointers or
+CrossArena leases.
+
+The original strict-provenance gate did **not** land. A pinned-nightly local
+`dotnet-runtime-memory` run passed, but that crate has no entry in the advisory
+Miri matrix. A pinned-nightly `dotnet-value` run remains known-red at the
+documented atomic GC-handle reconstruction in `gc_handle_from_addr`; continuation
+triage also reaches the separate serialized `ObjectRef::read_unchecked` boundary.
+On 2026-08-05 the owner directed that Phase 9 be closed as deferred rather than
+enable a known-failing job or add a new matrix entry. Consequently no current CI
+leg uses `-Zmiri-strict-provenance`. Reconsidering that decision requires a new,
+explicitly authorized task beginning with a green local target leg.
+
+Address-only unmanaged reconstruction is centralized in the unsafe
+`pointer::unmanaged_ptr_from_addr` helper. Its callers are the explicit
+Unmanaged, raw-storage, P/Invoke, native string, and `Unsafe.*` boundaries; no
+managed `ManagedPtr` origin calls it. Four legacy provenance-API sites remain in
+the separately documented managed storage boundaries: two in
+`ObjectRef::read_unchecked`, one in `gc_handle_from_addr`, and one in the
+lease-scoped CrossArena helper. Those exceptions explain the known-red
+`dotnet-value` strict run and must not be mistaken for a completed global
+one-helper/green-Miri claim.
+
+The 102-site table below is the audited baseline at `6ebda249`, not a current
+source inventory. Later phases removed or reclassified those sites; the final
+disposition above is authoritative for the merged implementation state.
 
 ## Why this is first
 
@@ -21,13 +58,33 @@ falsifiable instead.
 
 ## Current state (measured at `6ebda249`)
 
-- **78 occurrences** of `expose_provenance` / `with_exposed_provenance` /
-  `from_exposed`, across 15 files. Concentration: `pointer/tests.rs` (20),
+- **102 occurrences** of `expose_provenance` / `with_exposed_provenance` /
+  `from_exposed_addr` / `nonnull_from_exposed_addr`, across 15 files.
+  Concentration: `pointer/tests.rs` (20),
   `stack/raw_memory_ops_impl/mod.rs` (19), `pointer/serde.rs` (16),
   `runtime-memory/access.rs` (10), `pointer/mod.rs` (8), then a long tail of
   1–6 in `object/mod.rs`, `cts_cli_conversion.rs`, `resolver/factory.rs`,
   `pinvoke/call.rs`, `stack_value.rs`, `write_barrier.rs`, `unsafe_ptr.rs`,
   `vm-data/stack.rs`, `origin.rs`, `reflection/types/mod.rs`.
+- **The Miri baseline is confirmed.** `dotnet-runtime-memory` passes all 13
+  tests with `-Zmiri-strict-provenance`. `dotnet-value` fails at its first
+  pointer-cast test, `cts_cli_conversion::tests::widening_preserves_pointer_and_reference_payloads`,
+  on a bare cast at `crates/dotnet-value/src/cts_cli_conversion.rs:417`:
+
+  ```text
+  error: unsupported operation: integer-to-pointer casts and
+  `ptr::with_exposed_provenance` are not supported with `-Zmiri-strict-provenance`
+    --> crates/dotnet-value/src/cts_cli_conversion.rs:417:26
+     |
+  417|             NonNull::new(0x1234usize as *mut u8),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^ unsupported operation
+  ```
+
+  The command used the pinned `nightly-2026-05-27` toolchain and
+  `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance"`.
+  A second bare cast in the same test is at line 451. Both are test-only and
+  are intentionally not included in the 102-site count because they are `as`
+  casts rather than matching the provenance API search.
 - **One chokepoint already exists.** `nonnull_from_exposed_addr` at
   `crates/dotnet-value/src/pointer/mod.rs:30` is a single `pub(crate)` helper
   wrapping `with_exposed_provenance_mut`, with 30 call sites. Reconstruction is
@@ -49,6 +106,152 @@ falsifiable instead.
   `fuzz_managed_ptr_roundtrip` and `fuzz_managed_ptr_offset` in
   `crates/dotnet-value/fuzz/fuzz_targets/`.
 
+### 102-site classification
+
+| File | Count | Test-only | Incidental | Storage-boundary | Kept/out-of-scope |
+|------|------:|----------:|-----------:|-----------------:|------------------:|
+| `pointer/tests.rs` | 20 | 20 | — | — | — |
+| `stack/raw_memory_ops_impl/mod.rs` | 19 | — | 17 | — | 2 (Unmanaged origin) |
+| `pointer/serde.rs` | 16 | — | — | 16 | — |
+| `runtime-memory/access.rs` | 10 | — | 10 | — | — |
+| `pointer/mod.rs` | 8 | 4 (Arbitrary) | 3 | — | 1 (helper definition) |
+| `object/mod.rs` | 6 | — | 4 | 2 (`ObjectRef`) | — |
+| `cts_cli_conversion.rs` | 6 | 1 (line 438) | 4 | 1 (`LoadType::Object`) | — |
+| `runtime-resolver/factory.rs` | 4 | — | 1 | 3 | — |
+| `dotnet-pinvoke/call.rs` | 4 | — | — | — | 4 (genuine P/Invoke) |
+| `stack_value.rs` | 2 | — | 1 | — | 1 (NativeInt cast) |
+| `runtime-memory/write_barrier.rs` | 2 | — | 2 | — | — |
+| `dotnet-intrinsics-unsafe/unsafe_ptr.rs` | 2 | — | — | — | 2 (genuine `Unsafe.*`) |
+| `dotnet-vm-data/stack.rs` | 1 | — | — | 1 | — |
+| `pointer/origin.rs` | 1 | — | 1 | — | — |
+| `intrinsics-reflection/types/mod.rs` | 1 | — | 1 | — | — |
+| **TOTAL** | **102** | **25** | **44** | **23** | **10** |
+
+**Classification definitions:** test-only sites are in `#[test]` or fuzzing
+`Arbitrary` implementations; incidental sites already have a live pointer and
+should use it (or `ptr::addr()`); storage-boundary sites serialize the address
+and require an origin-handle redesign; kept/out-of-scope sites are genuine
+P/Invoke, `Unsafe.*`, or `Unmanaged` semantics, or separately handled
+`ObjectRef` serialization.
+
+### Factory raw-storage reconciliation
+
+The four `factory.rs` sites were re-audited against their actual dataflow. The
+`StackValue::ManagedPtr` case at line 342 already preserves its live pointer;
+only the alternate `StackValue::UnmanagedPtr` input is an incidental
+integer-to-pointer round-trip. The short `ValuePointer` representation and both
+`TypedReference` words are raw-storage boundaries: deserialization receives only
+integer bytes, not a recoverable owner or pointer.
+
+`TypedReference` is not limited to a P/Invoke call path. Its VM storage format
+is `[value address, Arc::as_ptr(TypeDescription)]`; consequently, recovering its
+type pointer also relies on the original Arc allocation remaining live. Replacing
+those reconstructions requires a stable type handle plus a recoverable value
+origin, rather than a local pointer-cast substitution.
+
+### TypedReference stable storage and P/Invoke ABI (step 4.4)
+
+`System.TypedReference` needs a representation of its own. It must not reuse
+the old two-word byte pair, and it must not be treated as a `ManagedPtr` merely
+because it contains a byref. A typed reference has two independently live
+parts: a typed value origin and a type-descriptor owner.
+
+ECMA-335 confines `typedref` to parameter and local signatures: it is created
+by `mkrefany`, copied as a typed reference, and read by `refanyval` /
+`refanytype`. It shall not be boxed, used as a field or array-element type, or
+used as a return type. This is also the correct ownership boundary for this VM:
+parameters, locals, and evaluation-stack slots are stored as `StackValue`, not
+as raw field bytes.
+
+#### VM slot representation
+
+The durable representation is a frame-owned typed slot, conceptually:
+
+```rust
+struct TypedReferenceSlot<'gc> {
+    value: StackManagedPtr<'gc>,
+    type_desc: Arc<TypeDescription>,
+}
+```
+
+`StackValue::TypedRef` already carries this exact ownership shape. The
+implementation work will make it the sole VM representation for a non-null
+`typedref` (with a separate uninitialized-local sentinel where a zero-initialized
+local is required), rather than converting it through `ValueType::TypedRef` or
+`CTSValue` bytes. `value` retains the full `ManagedPtr` and hence its
+`PointerOrigin`, offset, and live pointer provenance; `type_desc` retains a
+strong `Arc<TypeDescription>`, whose cloned `ResolutionS` keeps the metadata
+arena alive. A typed-reference copy clones these two owned handles. No
+`Arc::as_ptr`, type-address registry, or integer-to-pointer reconstruction is
+part of VM storage.
+
+This representation preserves every `PointerOrigin` directly rather than
+serializing an address. `Heap`, `Stack`, `Static`, and (when enabled)
+`CrossArenaObjectRef` continue to resolve through their existing owned origin
+handles; the CrossArena path continues to require its scoped arena lease.
+`Transient` and `Unmanaged` remain subject to their existing lifetime and
+unsafe/P/Invoke contracts. Verification must prevent a transient home from
+outliving its stack frame, but a valid slot or parameter copy keeps the live
+`ManagedPtr` itself and does not create a new raw-storage boundary.
+
+All non-slot uses are invalid-layout errors before bytes are written or read:
+
+* `CTSValue::write`, `ValueType::TypedRef`, and resolver construction must not
+  serialize a typed reference into object, boxed-value, field, static-field, or
+  vector storage.
+* `System.TypedReference` must receive a dedicated layout classification rather
+  than falling through normal value-type field layout. Generic boxing and array
+  paths reject it, and GC layout tracing never treats a byte range as a typed
+  reference.
+* A method return declared `typedref` is rejected during signature / call
+  validation. This includes the current P/Invoke typed-reference return path.
+
+The current two-word representation confirms why this separation is required:
+`ValueType::TypedRef::size_bytes()` and `CTSValue::write` produce
+`[value address, Arc::as_ptr(type)]`, while `ManagedPtr::SIZE` is already three
+words. The factory decoder's assertion that those two widths are equal and its
+subsequent `ManagedPtr::SIZE` slice are therefore not a valid decoder for the
+16-byte payload. The migration removes that decoder; it must not enlarge the
+managed `TypedReference` layout or invent a new raw-storage format to preserve
+an operation that ECMA-335 disallows.
+
+#### P/Invoke translation
+
+P/Invoke is the one boundary that needs a physical pair. For an *input
+parameter* only, marshalling translates a live `TypedReferenceSlot` into a
+call-scoped `#[repr(C)]` temporary:
+
+```rust
+struct PInvokeTypedReferenceAbi {
+    value: *mut u8,
+    type_handle: *const TypeDescription,
+}
+```
+
+This preserves the existing two-pointer libffi shape, but it is an ABI
+translation rather than VM storage:
+
+* The marshaller resolves `value` from the slot's live `ManagedPtr` origin and
+  pins or leases that origin for the complete synchronous libffi call. It does
+  not obtain an address from serialized storage.
+* `type_handle` is `Arc::as_ptr(&slot.type_desc)` as a *borrowed* native token.
+  The slot (or an explicit marshalling-owned `Arc` clone) remains alive until
+  libffi returns, so the native pointer has a defined call-scoped lifetime.
+* Native code may inspect the two fields during that call, but must neither
+  retain, free, nor manufacture either pointer. In particular it must never
+  call `Arc::from_raw` on `type_handle`.
+* `typedref` P/Invoke returns are rejected rather than imported. A returned
+  `{ value, type_handle }` pair cannot recover a managed `PointerOrigin`, and
+  treating a native `type_handle` as an `Arc` is unsound. A future explicit
+  native-handle registry would be a new ABI with its own lifetime contract; it
+  is not an implicit fallback for this two-pointer ABI.
+
+Consequently, the direct `Arc::as_ptr` export can remain only inside the
+call-scoped ABI codec, while the current P/Invoke `Arc::from_raw` return path
+and both factory raw reconstructions are removed during the same migration. The
+native ABI remains two pointers; VM lifetime and provenance are retained by the
+frame-owned slot.
+
 ## The unavoidable core, and the avoidable rest
 
 A VES must store a managed pointer as bytes in managed memory — IL can read
@@ -65,23 +268,17 @@ cross-check (which is what the checksum word is already for).
 
 ## Steps
 
-1. **Identify the actual first blocker.** Run the `dotnet-value` Miri leg with
-   `-Zmiri-strict-provenance` added and capture the first error verbatim. Do
-   this before any code changes: `docs/CI.md`'s diagnosis says "dependency-level,
-   during assembly parsing," but the dependency is not named, and the candidates
-   in `dotnet-assemblies`' tree — `dashmap` → `parking_lot_core`,
-   `crossbeam-utils`, `hashbrown`, all of which do tagged-pointer work — imply a
-   different fix than `dotnetdll` would. Record the finding in this plan.
-   *Do not assume the blocker is `dotnetdll` because the author owns it.*
-2. **Pick the leg order from step 1.** If the blocker is a dependency reached
-   only through assembly parsing, then `dotnet-value` and
-   `dotnet-runtime-memory` may already be able to run strict provenance today,
-   which makes them the gate and defers `dotnet-vm`. Confirm rather than assume.
-3. **Classify all 78 sites** into: (a) genuinely at the storage boundary,
-   (b) incidental — an address round-tripped for convenience where a pointer
-   was available, (c) test-only. Expect (c) to be ~20 and (b) to be a
-   substantial fraction of the tail files. Publish the classification as a table
-   in this plan.
+1. **Address the confirmed first blocker.** `dotnet-value` first fails on the
+   test-only bare cast at `cts_cli_conversion.rs:417` (with a second such cast
+   at line 451), not during assembly parsing. Fix these before rerunning the
+   leg and recording the next failure.
+2. **Use the confirmed leg order.** `dotnet-runtime-memory` already passes
+   strict provenance; make the `dotnet-value` test-only fixes first, then work
+   through its subsequent failures. Continue to defer `dotnet-vm`, whose
+   dependency-level parsing blocker remains outside this plan's gate.
+3. **Use the published 102-site classification** above: test-only, incidental,
+   storage-boundary, and kept/out-of-scope sites have distinct remediation
+   paths. The two bare test casts are tracked separately from the API-site count.
 4. **Eliminate class (b)** with `ptr::map_addr` / `with_addr`, or by threading
    the pointer instead of the address. These are strict-provenance-clean and
    need no design change. This is the bulk of the mechanical work and is a
