@@ -37,7 +37,7 @@ use dotnet_value::{
     StackValue,
     layout::LayoutManager,
     object::{Object, ObjectRef},
-    pointer::PointerOrigin,
+    pointer::{ManagedPtrResolver, PointerOrigin},
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{SpanBaseOps, TypeLayoutOps};
@@ -91,6 +91,7 @@ dotnet_vm_ops::trait_alias! {
         SpanBaseOps<'gc>
         + LayoutQueryHost
         + SpanPointerIntrospectionHost<'gc>
+        + ManagedPtrResolver<'gc>
         + SpanObjectFactoryHost<'gc>
         + SpanRuntimeHost<'gc>;
 }

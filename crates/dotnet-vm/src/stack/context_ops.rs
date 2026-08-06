@@ -17,9 +17,11 @@ use dotnet_utils::{BorrowScopeOps, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
+    pointer::{ManagedPtrResolver, StaticMetadata},
 };
 use dotnet_vm_data::FrameReturnAction;
 use dotnetdll::prelude::{MethodMemberIndex, MethodType};
+use std::ptr::NonNull;
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
     /// Yield to a GC safe point and retry the current instruction on resume.
@@ -330,6 +332,23 @@ impl<'a, 'gc> dotnet_vm_ops::ops::TypeLayoutOps for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {}
+
+impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
+    #[inline]
+    fn stack_slot_base(&self, slot: crate::StackSlotIndex) -> Option<NonNull<u8>> {
+        Some(self.evaluation_stack.get_slot_address(slot))
+    }
+
+    #[inline]
+    fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
+        let storage = self
+            .statics()
+            .get(metadata.type_desc.clone(), &metadata.generics);
+        storage
+            .storage
+            .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
+    }
+}
 
 impl<'a, 'gc> dotnet_intrinsics_span::SpanPointerIntrospectionHost<'gc> for VesContext<'a, 'gc> {
     #[inline]

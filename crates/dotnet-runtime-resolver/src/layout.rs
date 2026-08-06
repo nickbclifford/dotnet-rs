@@ -633,6 +633,11 @@ where
 
                 let name = t.type_name();
                 trace!("Computing layout for: {}", name);
+                if name == "System.TypedReference" {
+                    return Err(TypeResolutionError::InvalidLayout(
+                        "ECMA-335 typedref values may only occupy parameters and locals".into(),
+                    ));
+                }
                 if name == "System.ByReference`1"
                     || name == "System.ReadOnlyByReference`1"
                     || name == "System.ByReference"

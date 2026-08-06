@@ -30,7 +30,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
-    error::{ExecutionError, TypeResolutionError},
+    error::{ExecutionError, PointerDeserializationError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -38,9 +38,10 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectRef},
-    pointer::PointerOrigin,
+    pointer::{ManagedPtrInfo, PointerOrigin},
 };
 use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
+use gc_arena::Mutation;
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
@@ -73,6 +74,19 @@ pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {
     ) -> std::ptr::NonNull<u8>;
 
     fn localloc(&mut self, size: usize) -> *mut u8;
+}
+
+/// Decodes serialized managed pointers through the CallStack-owned Heap cache.
+pub trait VmManagedPtrDecodeCacheOps<'gc> {
+    /// Reads one complete serialized pointer using a caller-owned, traced cache.
+    ///
+    /// The mutation token brands decoded Heap handles with the active arena
+    /// lifetime. Stack and Static bases are still resolved by the VM context.
+    fn read_managed_ptr_with_heap_cache(
+        &mut self,
+        source: &[u8],
+        gc: &Mutation<'gc>,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError>;
 }
 
 pub trait VmResolutionOps<'gc>: ResolutionOps<'gc> {
@@ -236,6 +250,7 @@ pub trait VesOps<'gc>:
     PInvokeContext<'gc>
     + VmStackOps<'gc>
     + VmRawMemoryOps<'gc>
+    + VmManagedPtrDecodeCacheOps<'gc>
     + VmResolutionOps<'gc>
     + VmReflectionOps<'gc>
     + VmLoaderOps

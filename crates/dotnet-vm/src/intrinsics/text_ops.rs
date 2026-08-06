@@ -90,7 +90,10 @@ fn write_i32_out_arg<'gc, T: ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     }
 }
 
-fn try_write_utf16_to_span<'gc, T: RawMemoryOps<'gc>>(
+fn try_write_utf16_to_span<
+    'gc,
+    T: RawMemoryOps<'gc> + dotnet_value::pointer::ManagedPtrResolver<'gc>,
+>(
     ctx: &mut T,
     destination: &StackValue<'gc>,
     chars: &[u16],
@@ -120,7 +123,7 @@ fn try_write_utf16_to_span<'gc, T: RawMemoryOps<'gc>>(
         return Ok(true);
     }
 
-    let span_ref = dotnet_intrinsics_span::helpers::read_span_reference(&span)
+    let span_ref = dotnet_intrinsics_span::helpers::read_span_reference(&span, ctx)
         .map_err(|e| StepResult::Error(e.into()))?;
     let span_ptr = ManagedPtr::from_info_full(span_ref, TypeDescription::NULL, false);
 
@@ -160,7 +163,11 @@ pub(super) fn enum_to_string<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
 )]
 pub(super) fn enum_try_format_unconstrained<
     'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
+    T: TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + RawMemoryOps<'gc>
+        + LoaderOps
+        + dotnet_value::pointer::ManagedPtrResolver<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

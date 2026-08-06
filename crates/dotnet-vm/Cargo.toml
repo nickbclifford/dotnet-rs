@@ -28,6 +28,7 @@ dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
+hashbrown = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 phf = "0.13"
 tracing = { workspace = true }

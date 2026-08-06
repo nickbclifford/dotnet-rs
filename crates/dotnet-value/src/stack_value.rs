@@ -102,6 +102,46 @@ unsafe impl<'gc> Collect<'gc> for StackManagedPtr<'gc> {
     }
 }
 
+/// A frame-owned `typedref` value.
+///
+/// Unlike the legacy byte representation, this slot retains both the managed
+/// pointer's recoverable origin and a strong reference to the type descriptor.
+/// It may only live in a parameter, local, or evaluation-stack slot.
+#[derive(Clone, Debug)]
+pub struct TypedReferenceSlot<'gc> {
+    value: StackManagedPtr<'gc>,
+    type_desc: Arc<TypeDescription>,
+}
+
+impl<'gc> TypedReferenceSlot<'gc> {
+    pub fn new(value: StackManagedPtr<'gc>, type_desc: Arc<TypeDescription>) -> Self {
+        Self { value, type_desc }
+    }
+
+    pub fn value(&self) -> &StackManagedPtr<'gc> {
+        &self.value
+    }
+
+    pub fn value_mut(&mut self) -> &mut StackManagedPtr<'gc> {
+        &mut self.value
+    }
+
+    pub fn type_desc(&self) -> &Arc<TypeDescription> {
+        &self.type_desc
+    }
+
+    pub fn into_parts(self) -> (StackManagedPtr<'gc>, Arc<TypeDescription>) {
+        (self.value, self.type_desc)
+    }
+}
+
+// SAFETY: TypedReferenceSlot delegates tracing to its provenance-carrying managed pointer.
+unsafe impl<'gc> Collect<'gc> for TypedReferenceSlot<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        self.value.trace(cc);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -112,7 +152,10 @@ pub enum StackValue<'gc> {
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(StackManagedPtr<'gc>),
     ValueType(Object<'gc>),
-    TypedRef(StackManagedPtr<'gc>, Arc<TypeDescription>),
+    /// A valid frame-owned typed reference.
+    TypedRef(TypedReferenceSlot<'gc>),
+    /// The distinct zero-initialized state of a `typedref` local.
+    UninitializedTypedRef,
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreading")]
@@ -122,7 +165,7 @@ pub enum StackValue<'gc> {
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let variant = u.int_in_range(0..=9)?;
+        let variant = u.int_in_range(0..=10)?;
         match variant {
             0 => Ok(StackValue::Int32(u.arbitrary()?)),
             1 => Ok(StackValue::Int64(u.arbitrary()?)),
@@ -132,17 +175,18 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
             5 => Ok(StackValue::UnmanagedPtr(u.arbitrary()?)),
             6 => Ok(StackValue::ManagedPtr(StackManagedPtr::new(u.arbitrary()?))),
             7 => Ok(StackValue::ValueType(u.arbitrary()?)),
-            8 => Ok(StackValue::TypedRef(
+            8 => Ok(StackValue::TypedRef(TypedReferenceSlot::new(
                 StackManagedPtr::new(u.arbitrary()?),
                 Arc::new(u.arbitrary()?),
-            )),
+            ))),
+            9 => Ok(StackValue::UninitializedTypedRef),
             #[cfg(feature = "multithreading")]
-            9 => Ok(StackValue::CrossArenaObjectRef(
+            10 => Ok(StackValue::CrossArenaObjectRef(
                 u.arbitrary()?,
                 u.arbitrary()?,
             )),
             #[cfg(not(feature = "multithreading"))]
-            9 => Ok(StackValue::Int32(u.arbitrary()?)),
+            10 => Ok(StackValue::Int32(u.arbitrary()?)),
             _ => unreachable!(),
         }
     }
@@ -156,7 +200,7 @@ unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
         match self {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
-            Self::TypedRef(m, _) => m.trace(cc),
+            Self::TypedRef(slot) => slot.trace(cc),
             Self::ValueType(v) => {
                 v.trace(cc);
             }
@@ -180,7 +224,8 @@ pub fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
         StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
         StackValue::ManagedPtr(_) => "ManagedPtr",
         StackValue::ValueType(_) => "ValueType",
-        StackValue::TypedRef(_, _) => "TypedRef",
+        StackValue::TypedRef(_) => "TypedRef",
+        StackValue::UninitializedTypedRef => "UninitializedTypedRef",
         #[cfg(feature = "multithreading")]
         StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
     }
@@ -211,23 +256,24 @@ fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
 }
 
 #[inline]
-#[expect(
-    clippy::multiple_unsafe_ops_per_block,
-    reason = "the owner storage pointer and its recorded offset jointly identify one managed-pointer location"
-)]
 fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
     if let Some(owner) = m.owner() {
-        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-        unsafe {
-            owner
-                .0
-                .map(|h: ObjectHandle<'gc>| {
-                    h.borrow().storage.raw_data_ptr().add(m.offset.as_usize())
-                })
-                .unwrap_or(std::ptr::null_mut())
-        }
+        owner
+            .0
+            .map_or(std::ptr::null_mut(), |h: ObjectHandle<'gc>| {
+                let inner = h.borrow();
+                // SAFETY: The live Heap owner supplies the storage provenance
+                // while `inner` keeps that storage borrowed.
+                let base = unsafe { inner.storage.raw_data_ptr() };
+                // SAFETY: The ManagedPtr retains the offset associated with
+                // this live owner storage.
+                unsafe { base.add(m.byte_offset().as_usize()) }
+            })
     } else {
-        m.offset.as_usize() as *mut u8
+        // Stack, Static, CrossArena, Transient, and Unmanaged pointers already
+        // retain their live cached address. Reconstructing from the compact
+        // offset here would turn an owner-relative offset into a bogus pointer.
+        m._value.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 }
 
@@ -498,7 +544,8 @@ impl<'gc> StackValue<'gc> {
             Self::ObjectRef(o) => ref_to_ptr(o),
             Self::UnmanagedPtr(u) => ref_to_ptr(u),
             Self::ManagedPtr(m) => ref_to_ptr(m.deref()),
-            Self::TypedRef(m, _) => ref_to_ptr(m.deref()),
+            Self::TypedRef(slot) => ref_to_ptr(slot.value().deref()),
+            Self::UninitializedTypedRef => ref_to_ptr(self),
             Self::ValueType(o) => {
                 // SAFETY: Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
@@ -513,14 +560,28 @@ impl<'gc> StackValue<'gc> {
 
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
-            Self::NativeInt(i) => std::ptr::with_exposed_provenance_mut(*i as usize),
+            Self::NativeInt(i) => {
+                // SAFETY: NativeInt-to-pointer conversion is an address-only
+                // unmanaged boundary; the eventual accessor owns validity.
+                unsafe { pointer::unmanaged_ptr_from_addr(*i as usize) }
+            }
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) | Self::TypedRef(m, _) => {
+            Self::ManagedPtr(m) => {
                 if m.is_null() {
                     std::ptr::null_mut()
                 } else {
                     // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                     unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) }
+                }
+            }
+            Self::TypedRef(slot) => {
+                let value = slot.value();
+                if value.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    // SAFETY: The frame-owned typed-reference slot retains the valid managed
+                    // pointer and this operation uses it only under its existing access contract.
+                    unsafe { value.with_data(0, |data| data.as_ptr() as *mut u8) }
                 }
             }
             v => panic!("expected pointer on stack, received {:?}", v),
@@ -730,6 +791,8 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
+    /// When `t` is `LoadType::Object`, the atomic object-storage precondition
+    /// documented by [`Self::load_atomic`] also applies.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
         // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe { Self::load_atomic(ptr, t, AtomicOrdering::Relaxed) }
@@ -740,6 +803,11 @@ impl<'gc> StackValue<'gc> {
     /// Debug builds enforce this contract with `is_ptr_aligned_to_field`; release-build callers
     /// must uphold it. Managed-code instruction paths through `RawMemoryAccess` validate
     /// alignment before reaching this low-level operation.
+    /// When `t` is `LoadType::Object`, the location must contain zero or a live
+    /// object GC-handle address in the VM's atomic object-storage representation.
+    /// The caller must hold the GC lifetime and synchronization required to
+    /// retain that object through use of the returned `StackValue`.
+    ///
     /// Loads a value from a raw pointer using atomic operations.
     /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
@@ -764,7 +832,9 @@ impl<'gc> StackValue<'gc> {
         // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
 
-        CtsToCli::widen_load_atomic_raw(t, val)
+        // SAFETY: `val` was atomically loaded from the valid, aligned storage
+        // required by this method's safety contract.
+        unsafe { CtsToCli::widen_load_atomic_raw(t, val) }
     }
 
     /// # Safety
@@ -804,7 +874,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Object => {
                 let obj = self.as_object_ref();
                 let val = match obj.0 {
-                    Some(h) => Gc::as_ptr(h).expose_provenance(),
+                    Some(h) => Gc::as_ptr(h).addr(),
                     None => 0,
                 };
                 (val as u64, ObjectRef::SIZE)
@@ -1095,6 +1165,61 @@ mod tests {
         assert_eq!(
             err,
             StackValueError::ManagedException(ManagedExceptionError::overflow())
+        );
+    }
+
+    #[test]
+    fn managed_pointer_numeric_operations_use_cached_non_heap_address() {
+        let mut storage = [0u8; 8];
+        let base = NonNull::new(storage.as_mut_ptr()).unwrap();
+        let address = NonNull::new(base.as_ptr().wrapping_add(3)).unwrap();
+        let ptr = ManagedPtr::new(
+            Some(address),
+            TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(3)),
+        )
+        .with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+        let managed = StackValue::ManagedPtr(ptr.into());
+        let numeric = StackValue::NativeInt(address.as_ptr().addr() as isize);
+
+        assert_eq!(managed, numeric);
+        assert_eq!(managed.partial_cmp(&numeric), Some(Ordering::Equal));
+
+        let difference = (managed.clone() - managed).unwrap();
+        assert_eq!(difference, StackValue::NativeInt(0));
+    }
+
+    #[test]
+    fn typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin() {
+        let type_desc = Arc::new(TypeDescription::NULL);
+        let origin = PointerOrigin::Stack(StackSlotIndex::new(7));
+        let ptr = ManagedPtr::new(
+            Some(NonNull::dangling()),
+            TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(3)),
+        )
+        .with_origin(origin.clone());
+        let slot = TypedReferenceSlot::new(ptr.into(), Arc::clone(&type_desc));
+
+        let copied = slot.clone();
+
+        assert!(Arc::ptr_eq(slot.type_desc(), copied.type_desc()));
+        assert_eq!(Arc::strong_count(&type_desc), 3);
+        assert_eq!(slot.value().origin(), &origin);
+        assert_eq!(copied.value().origin(), &origin);
+        assert_eq!(slot.value().byte_offset(), ByteOffset::new(3));
+        assert_eq!(copied.value().byte_offset(), ByteOffset::new(3));
+    }
+
+    #[test]
+    fn uninitialized_typed_reference_has_a_distinct_stack_kind() {
+        assert_eq!(
+            stack_value_kind(&StackValue::UninitializedTypedRef),
+            "UninitializedTypedRef"
         );
     }
 }

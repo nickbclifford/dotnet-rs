@@ -1,6 +1,6 @@
 use gc_arena::{Arena, Rootable};
 
-#[cfg(feature = "memory-validation")]
+#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 use dotnet_utils::sync::MANAGED_THREAD_ID;
 
 #[cfg(feature = "multithreading")]
@@ -14,12 +14,12 @@ fn next_test_arena_id() -> crate::ArenaId {
     crate::ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
 }
 
-#[cfg(feature = "memory-validation")]
+#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 struct ManagedThreadIdGuard {
     previous: Option<crate::ArenaId>,
 }
 
-#[cfg(feature = "memory-validation")]
+#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 impl ManagedThreadIdGuard {
     fn set(id: crate::ArenaId) -> Self {
         let previous = MANAGED_THREAD_ID.with(|thread_id| {
@@ -31,7 +31,7 @@ impl ManagedThreadIdGuard {
     }
 }
 
-#[cfg(feature = "memory-validation")]
+#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 impl Drop for ManagedThreadIdGuard {
     fn drop(&mut self) {
         MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
@@ -78,7 +78,7 @@ pub(crate) fn with_test_gc_context<R>(
     #[cfg(feature = "multithreading")]
     let arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
 
-    #[cfg(feature = "memory-validation")]
+    #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     let _thread_id_guard = ManagedThreadIdGuard::set(arena_id);
 
     #[cfg(feature = "multithreading")]

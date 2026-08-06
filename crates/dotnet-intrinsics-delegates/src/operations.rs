@@ -309,18 +309,3 @@ pub fn delegate_remove<'gc, T: DelegateEqualsHost<'gc>>(
 
     StepResult::Continue
 }
-
-/*
-fn get_runtime_return_type<'gc, T: VesOps<'gc>>(ctx: &T, res_ctx: &ResolutionContext<'_>, method: &MethodDescription) -> RuntimeType {
-    match &method.signature().return_type.1 {
-        Some(dotnetdll::prelude::ParameterType::Value(t))
-        | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {
-            ctx.make_runtime_type(res_ctx, t)
-        }
-        Some(dotnetdll::prelude::ParameterType::TypedReference) => {
-            todo!("TypedReference in DynamicInvoke return")
-        }
-        None => RuntimeType::Void,
-    }
-}
-*/

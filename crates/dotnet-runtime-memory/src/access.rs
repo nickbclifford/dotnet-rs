@@ -14,10 +14,10 @@ use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, NoManagedPtrResolver, unmanaged_ptr_from_addr},
     storage::FieldStorage,
 };
-use std::{ptr, sync::Arc};
+use std::{ptr, ptr::NonNull, sync::Arc};
 
 #[cfg(all(feature = "bench-instrumentation", feature = "multithreading"))]
 use std::time::Instant;
@@ -159,7 +159,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // write_value_internal will copy the data.
             self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless API contract requires `offset` to be a
+            // valid unmanaged address for this write.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing to unmanaged null pointer",
@@ -214,7 +216,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
+            // SAFETY: The ownerless API contract requires `offset` to be a
+            // valid unmanaged address for this read.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading from unmanaged null pointer",
@@ -302,7 +306,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 })
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless API contract requires `offset` to be a
+            // valid unmanaged address for this byte write.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing bytes to unmanaged null pointer",
@@ -318,6 +324,28 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             Ok(())
         }
+    }
+
+    /// Writes raw bytes through a provenance-carrying pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid and writable for `data.len()` bytes,
+    /// and that the write is appropriately synchronized. The pointed-to storage must not
+    /// require a heap-owner write barrier.
+    pub unsafe fn write_bytes_ptr(
+        &mut self,
+        ptr: NonNull<u8>,
+        data: &[u8],
+    ) -> Result<(), MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        validate_atomic_access(ptr as *const u8, false);
+        // SAFETY: The caller guarantees that `ptr` is valid and writable for `data.len()`
+        // bytes. `data` is the caller's separate source slice, so the regions do not alias.
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+        }
+        Ok(())
     }
 
     /// Safely reads raw bytes from a memory location.
@@ -347,7 +375,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(())
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
+            // SAFETY: The ownerless API contract requires `offset` to be a
+            // valid unmanaged address for this byte read.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: reading bytes from unmanaged null pointer",
@@ -360,6 +390,27 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             Ok(())
         }
+    }
+
+    /// Reads raw bytes through a provenance-carrying pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid and readable for `dest.len()` bytes,
+    /// and that the read is appropriately synchronized.
+    pub unsafe fn read_bytes_ptr(
+        &self,
+        ptr: NonNull<u8>,
+        dest: &mut [u8],
+    ) -> Result<(), MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        validate_atomic_access(ptr, false);
+        // SAFETY: The caller guarantees that `ptr` is valid and readable for `dest.len()`
+        // bytes. `dest` is the caller's separate destination slice, so the regions do not alias.
+        unsafe {
+            ptr::copy_nonoverlapping(ptr, dest.as_mut_ptr(), dest.len());
+        }
+        Ok(())
     }
 
     /// Atomically compares and exchanges a value in memory.
@@ -415,7 +466,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless atomic API contract requires `offset` to
+            // be a valid synchronized unmanaged address for this operation.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                 return Err(CompareExchangeError::Bounds(
                     MemoryAccessError::UnalignedAccess(ptr as usize),
@@ -429,6 +482,40 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             .map_err(CompareExchangeError::Mismatch)
         }
+    }
+
+    /// Atomically compares and exchanges through a provenance-carrying pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for a read and write of `size` bytes, remains
+    /// live for the operation, and is appropriately synchronized. The pointer must be aligned
+    /// for `size`; unaligned pointers return `MemoryAccessError::UnalignedAccess`. The pointed-to
+    /// storage must not require a heap-owner write barrier.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn compare_exchange_atomic_ptr(
+        &mut self,
+        ptr: NonNull<u8>,
+        expected: u64,
+        new: u64,
+        size: usize,
+        success: dotnet_utils::sync::Ordering,
+        failure: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, CompareExchangeError> {
+        let ptr = ptr.as_ptr();
+        if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+            return Err(CompareExchangeError::Bounds(
+                MemoryAccessError::UnalignedAccess(ptr as usize),
+            ));
+        }
+        // SAFETY: The caller guarantees valid synchronized storage, and the preceding check
+        // proves that `ptr` is aligned for `size`.
+        unsafe {
+            StandardAtomicAccess::compare_exchange_atomic(
+                ptr, size, expected, new, success, failure,
+            )
+        }
+        .map_err(CompareExchangeError::Mismatch)
     }
 
     /// Atomically exchanges a value in memory.
@@ -468,7 +555,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless atomic API contract requires `offset` to
+            // be a valid synchronized unmanaged address for this operation.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: exchange_atomic to unmanaged null pointer",
@@ -480,6 +569,30 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // SAFETY: The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
         }
+    }
+
+    /// Atomically exchanges a value through a provenance-carrying pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for a read and write of `size` bytes, remains
+    /// live for the operation, and is appropriately synchronized. The pointer must be aligned
+    /// for `size`; unaligned pointers return `MemoryAccessError::UnalignedAccess`. The pointed-to
+    /// storage must not require a heap-owner write barrier.
+    pub unsafe fn exchange_atomic_ptr(
+        &mut self,
+        ptr: NonNull<u8>,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+            return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+        }
+        // SAFETY: The caller guarantees valid synchronized storage, and the preceding check
+        // proves that `ptr` is aligned for `size`.
+        Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
     }
 
     /// Atomically adds a value to a memory location.
@@ -517,7 +630,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 )
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless atomic API contract requires `offset` to
+            // be a valid synchronized unmanaged address for this operation.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: exchange_add_atomic to unmanaged null pointer",
@@ -529,6 +644,30 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // SAFETY: The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
         }
+    }
+
+    /// Atomically adds a value through a provenance-carrying pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for a read and write of `size` bytes, remains
+    /// live for the operation, and is appropriately synchronized. The pointer must be aligned
+    /// for `size`; unaligned pointers return `MemoryAccessError::UnalignedAccess`. The pointed-to
+    /// storage must not require a heap-owner write barrier.
+    pub unsafe fn exchange_add_atomic_ptr(
+        &mut self,
+        ptr: NonNull<u8>,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+            return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+        }
+        // SAFETY: The caller guarantees valid synchronized storage, and the preceding check
+        // proves that `ptr` is aligned for `size`.
+        Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
     }
 
     /// Loads a value atomically when aligned, with synchronized memcpy for misaligned storage.
@@ -555,7 +694,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
             })
         } else {
-            let ptr = std::ptr::with_exposed_provenance::<u8>(offset.as_usize());
+            // SAFETY: The ownerless atomic API contract requires `offset` to
+            // be a valid synchronized unmanaged address for this load.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: load_atomic from unmanaged null pointer",
@@ -564,6 +705,25 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // SAFETY: The caller guarantees valid synchronized unmanaged access.
             Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
         }
+    }
+
+    /// Loads through a provenance-carrying pointer, using the unaligned fallback when needed.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for a read of `size` bytes, remains live for
+    /// the operation, and is appropriately synchronized. As with `load_atomic`, an unaligned
+    /// access must not race with another access to the same bytes.
+    pub unsafe fn load_atomic_ptr(
+        &self,
+        ptr: NonNull<u8>,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        // SAFETY: The caller guarantees valid synchronized storage; the helper retains the
+        // aligned atomic operation and unaligned fallback used by `load_atomic`.
+        Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
     }
 
     /// Stores a value atomically when aligned, with synchronized memcpy for misaligned storage.
@@ -599,7 +759,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            let ptr = std::ptr::with_exposed_provenance_mut::<u8>(offset.as_usize());
+            // SAFETY: The ownerless atomic API contract requires `offset` to
+            // be a valid synchronized unmanaged address for this store.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: store_atomic to unmanaged null pointer",
@@ -609,6 +771,28 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
             Ok(())
         }
+    }
+
+    /// Stores through a provenance-carrying pointer, using the unaligned fallback when needed.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for a write of `size` bytes, remains live for
+    /// the operation, and is appropriately synchronized. As with `store_atomic`, an unaligned
+    /// access must not race with another access to the same bytes. The pointed-to storage must
+    /// not require a heap-owner write barrier.
+    pub unsafe fn store_atomic_ptr(
+        &mut self,
+        ptr: NonNull<u8>,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<(), MemoryAccessError> {
+        let ptr = ptr.as_ptr();
+        // SAFETY: The caller guarantees valid synchronized storage; the helper retains the
+        // aligned atomic operation and unaligned fallback used by `store_atomic`.
+        unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
+        Ok(())
     }
 
     pub fn get_storage_base(&self, owner: ObjectRef<'gc>) -> (*const u8, usize) {
@@ -815,16 +999,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // live object; the resulting slice uses exactly that serialization width.
         let bytes = unsafe { std::slice::from_raw_parts(ptr, ManagedPtr::SIZE) };
         // SAFETY: `bytes` is the complete live ManagedPtr representation validated above.
-        let info = unsafe { ManagedPtr::read_branded(bytes, &gc) }
+        let info = unsafe { ManagedPtr::read_resolved_branded(bytes, &gc, &NoManagedPtrResolver) }
             .expect("record_managedptr_at_ptr: failed to read ManagedPtr");
         match &info.origin {
             PointerOrigin::Heap(r) => {
                 self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
             }
             PointerOrigin::CrossArenaObjectRef(p, target_tid) if *target_tid != owner_tid => {
-                recorder
-                    .buffer
-                    .push((*target_tid, p.as_ptr().expose_provenance()));
+                recorder.buffer.push((*target_tid, p.as_ptr().addr()));
                 maybe_flush_write_barrier_entries(recorder.buffer);
             }
             _ => {}
@@ -1282,9 +1464,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         StackValue::ObjectRef(ObjectRef::read_branded(&buf, &gc))
                     }
                     Scalar::ManagedPtr => {
-                        let info = ManagedPtr::read_branded(
+                        let info = ManagedPtr::read_resolved_branded(
                             std::slice::from_raw_parts(ptr, ManagedPtr::SIZE),
                             &gc,
+                            &NoManagedPtrResolver,
                         )
                         .map_err(|e| {
                             MemoryAccessError::TypeMismatch(
@@ -1345,6 +1528,149 @@ mod tests {
         let base = buf.as_ptr();
         // offset=0, size=4 inside an 8-byte buffer — must succeed
         assert!(check_bounds(base, base, 8, 4).is_ok());
+    }
+
+    #[test]
+    fn bytes_ptr_access_preserves_live_pointer_provenance() {
+        let heap = crate::heap::HeapManager::new();
+        let mut memory = super::RawMemoryAccess::new(&heap);
+        let mut backing = [0u8; 4];
+        let ptr = std::ptr::NonNull::new(backing.as_mut_ptr().wrapping_add(1))
+            .expect("array-derived pointer is non-null");
+
+        // SAFETY: `ptr` points to the final three writable bytes of `backing`,
+        // which are exclusively held by this test.
+        unsafe {
+            memory
+                .write_bytes_ptr(ptr, &[0xA1, 0xB2, 0xC3])
+                .expect("live pointer write succeeds");
+        }
+        assert_eq!(backing, [0, 0xA1, 0xB2, 0xC3]);
+
+        let mut dest = [0u8; 3];
+        // SAFETY: `ptr` points to three initialized readable bytes of `backing`,
+        // and `dest` is a separate writable array.
+        unsafe {
+            memory
+                .read_bytes_ptr(ptr, &mut dest)
+                .expect("live pointer read succeeds");
+        }
+        assert_eq!(dest, [0xA1, 0xB2, 0xC3]);
+    }
+
+    #[test]
+    fn atomic_ptr_access_preserves_live_pointer_provenance_and_contracts() {
+        let heap = crate::heap::HeapManager::new();
+        let mut memory = super::RawMemoryAccess::new(&heap);
+        let mut backing = [0u64; 2];
+        let ptr = std::ptr::NonNull::new(backing.as_mut_ptr().cast::<u8>())
+            .expect("array-derived pointer is non-null");
+
+        // SAFETY: `ptr` is derived from the live, eight-byte-aligned first element of `backing`.
+        // This test exclusively owns the backing storage and synchronizes every access with SeqCst.
+        unsafe {
+            memory
+                .store_atomic_ptr(ptr, 5, 8, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("aligned pointer store succeeds");
+        }
+        // SAFETY: `ptr` points to initialized, live backing storage exclusively accessed by this test.
+        let loaded = unsafe {
+            memory
+                .load_atomic_ptr(ptr, 8, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("aligned pointer load succeeds")
+        };
+        assert_eq!(loaded, 5);
+        // SAFETY: `ptr` is a live, aligned, exclusively accessed eight-byte storage location.
+        let previous = unsafe {
+            memory
+                .compare_exchange_atomic_ptr(
+                    ptr,
+                    5,
+                    9,
+                    8,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                )
+                .expect("aligned pointer compare-exchange succeeds")
+        };
+        assert_eq!(previous, 5);
+        // SAFETY: `ptr` is a live, aligned, exclusively accessed eight-byte storage location.
+        let previous = unsafe {
+            memory
+                .exchange_atomic_ptr(ptr, 12, 8, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("aligned pointer exchange succeeds")
+        };
+        assert_eq!(previous, 9);
+        // SAFETY: `ptr` is a live, aligned, exclusively accessed eight-byte storage location.
+        let previous = unsafe {
+            memory
+                .exchange_add_atomic_ptr(ptr, 7, 8, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("aligned pointer exchange-add succeeds")
+        };
+        assert_eq!(previous, 12);
+        // SAFETY: `ptr` points to initialized, live backing storage exclusively accessed by this test.
+        let loaded = unsafe {
+            memory
+                .load_atomic_ptr(ptr, 8, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("aligned pointer load succeeds")
+        };
+        assert_eq!(loaded, 19);
+
+        // SAFETY: Adding one stays within the live backing allocation and deliberately produces
+        // a pointer unaligned for four-byte atomic operations.
+        let unaligned = std::ptr::NonNull::new(unsafe { ptr.as_ptr().add(1) })
+            .expect("derived pointer is non-null");
+        // SAFETY: `unaligned` has four writable bytes in live, exclusively owned backing storage.
+        unsafe {
+            memory
+                .store_atomic_ptr(
+                    unaligned,
+                    0xDEAD_BEEF,
+                    4,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                )
+                .expect("unaligned pointer store uses fallback");
+        }
+        // SAFETY: `unaligned` has four initialized readable bytes in exclusively owned backing storage.
+        let loaded = unsafe {
+            memory
+                .load_atomic_ptr(unaligned, 4, dotnet_utils::sync::Ordering::SeqCst)
+                .expect("unaligned pointer load uses fallback")
+        };
+        assert_eq!(loaded, 0xDEAD_BEEF);
+        // SAFETY: The method checks alignment before dereferencing `unaligned`.
+        let compare_exchange = unsafe {
+            memory.compare_exchange_atomic_ptr(
+                unaligned,
+                0,
+                1,
+                4,
+                dotnet_utils::sync::Ordering::SeqCst,
+                dotnet_utils::sync::Ordering::SeqCst,
+            )
+        };
+        assert!(matches!(
+            compare_exchange,
+            Err(CompareExchangeError::Bounds(
+                MemoryAccessError::UnalignedAccess(_)
+            ))
+        ));
+        // SAFETY: The method checks alignment before dereferencing `unaligned`.
+        let exchange = unsafe {
+            memory.exchange_atomic_ptr(unaligned, 1, 4, dotnet_utils::sync::Ordering::SeqCst)
+        };
+        assert!(matches!(
+            exchange,
+            Err(MemoryAccessError::UnalignedAccess(_))
+        ));
+        // SAFETY: The method checks alignment before dereferencing `unaligned`.
+        let exchange_add = unsafe {
+            memory.exchange_add_atomic_ptr(unaligned, 1, 4, dotnet_utils::sync::Ordering::SeqCst)
+        };
+        assert!(matches!(
+            exchange_add,
+            Err(MemoryAccessError::UnalignedAccess(_))
+        ));
     }
 
     #[test]

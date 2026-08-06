@@ -4,6 +4,7 @@ use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDesc
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
+    pointer::unmanaged_ptr_from_addr,
     string::CLRString,
     with_vector,
 };
@@ -200,12 +201,17 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
     _generics: &GenericLookup,
 ) -> StepResult {
     let arg = ctx.pop();
-    let ptr = match arg {
-        StackValue::NativeInt(p) => p as *const u16,
-        StackValue::Int32(p) => p as usize as *const u16,
-        StackValue::Int64(p) => p as usize as *const u16,
-        _ => std::ptr::null(),
+    let address = match arg {
+        StackValue::NativeInt(p) => Some(p as usize),
+        StackValue::Int32(p) => Some(p as usize),
+        StackValue::Int64(p) => Some(p as usize),
+        _ => None,
     };
+    // SAFETY: The native `String(char*)` constructor contract requires a live,
+    // null-terminated unmanaged UTF-16 address; the loop below owns that proof.
+    let ptr = address.map_or(std::ptr::null(), |address| unsafe {
+        unmanaged_ptr_from_addr(address).cast_const().cast::<u16>()
+    });
 
     let value = if !ptr.is_null() {
         let mut chars = Vec::new();

@@ -134,7 +134,7 @@ impl<'gc> PointerOrigin<'gc> {
             PointerOrigin::Heap(r) => r.resurrect(fc, visited, depth),
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().expose_provenance());
+                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().addr());
             }
             PointerOrigin::Transient(obj) => obj.resurrect(fc, visited, depth),
             _ => {}

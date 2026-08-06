@@ -159,13 +159,13 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         let element_desc =
             dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
-        let a_ptr_info = match read_span_reference(&a) {
+        let a_ptr_info = match read_span_reference(&a, ctx) {
             Ok(info) => info,
             Err(e) => {
                 return StepResult::Error(e.into());
             }
         };
-        let b_ptr_info = match read_span_reference(&b) {
+        let b_ptr_info = match read_span_reference(&b, ctx) {
             Ok(info) => info,
             Err(e) => {
                 return StepResult::Error(e.into());
@@ -281,7 +281,7 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
-            let info = match read_span_reference(&span) {
+            let info = match read_span_reference(&span, ctx) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
@@ -374,11 +374,11 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, T: SpanIntrinsicHost<'g
         return StepResult::Continue;
     }
 
-    let a_ptr_info = match read_span_reference(&a) {
+    let a_ptr_info = match read_span_reference(&a, ctx) {
         Ok(info) => info,
         Err(e) => return StepResult::Error(e.into()),
     };
-    let b_ptr_info = match read_span_reference(&b) {
+    let b_ptr_info = match read_span_reference(&b, ctx) {
         Ok(info) => info,
         Err(e) => return StepResult::Error(e.into()),
     };

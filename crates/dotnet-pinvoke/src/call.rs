@@ -1,7 +1,8 @@
 use crate::{
     call_types::{
-        AlignedReturnBuffer, TempBuffer, WriteBackSource, apply_write_backs,
-        copy_value_type_return_data, ffi_cif_return_layout, validate_typed_return_abi,
+        AlignedReturnBuffer, PInvokeTypedReferenceAbi, TempBuffer, WriteBackSource,
+        apply_write_backs, copy_value_type_return_data, ffi_cif_return_layout,
+        validate_typed_return_abi,
     },
     loader::NativeLibraries,
     marshal::param_to_type,
@@ -12,11 +13,13 @@ use dotnet_types::{
     generics::ConcreteType,
     members::MethodDescription,
 };
-use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
+#[cfg(test)]
+use dotnet_utils::ByteOffset;
+use dotnet_utils::gc::ThreadSafeReadGuard;
 use dotnet_value::{
     StackValue,
     object::ObjectRef,
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::{ManagedPtr, PointerOrigin, unmanaged_ptr_from_addr},
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{PInvokeContext, ResolutionOps};
@@ -563,43 +566,19 @@ fn handle_pinvoke_return<'gc>(
             ctx.drop_top(arg_count);
             ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
         }
-        Some(ParameterType::TypedReference) => {
-            let ret = match read_pinvoke_return::<[usize; 2]>(ctx, call_data) {
-                Ok(v) => v,
-                Err(e) => return e,
-            };
-            let addr = ret[0];
-            let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
-            if type_ptr.is_null() {
-                return StepResult::Error(
-                    ExecutionError::InternalError(
-                        "null type handle in returned TypedReference".into(),
-                    )
-                    .into(),
-                );
-            }
-            // SAFETY: Native interop returns the `Arc::as_ptr` handle paired with this
-            // TypedReference. Reconstituting it temporarily and restoring the raw ownership
-            // leaves the native reference count intact while producing an owned clone.
-            let type_desc = unsafe {
-                let arc = Arc::from_raw(type_ptr);
-                let clone = arc.clone();
-                let _ = Arc::into_raw(arc);
-                clone
-            };
-            let m = ManagedPtr::new(
-                NonNull::new(addr as *mut u8),
-                (*type_desc).clone(),
-                None,
-                false,
-                Some(ByteOffset::new(0)),
-            );
-            ctx.drop_top(arg_count);
-            ctx.push(StackValue::TypedRef(m.into(), type_desc));
-        }
+        Some(ParameterType::TypedReference) => return reject_typed_reference_pinvoke_return(),
     }
 
     StepResult::Continue
+}
+
+fn reject_typed_reference_pinvoke_return() -> StepResult {
+    StepResult::Error(
+        ExecutionError::InvalidCil(
+            "ECMA-335 typedref values cannot be P/Invoke return values".into(),
+        )
+        .into(),
+    )
 }
 
 fn external_call_impl<'gc>(
@@ -610,6 +589,13 @@ fn external_call_impl<'gc>(
     let Some(p) = &method.method().pinvoke else {
         unreachable!()
     };
+
+    if matches!(
+        method.signature().return_type.1,
+        Some(ParameterType::TypedReference)
+    ) {
+        return reject_typed_reference_pinvoke_return();
+    }
 
     let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
     let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
@@ -821,48 +807,67 @@ fn external_call_impl<'gc>(
                     return e;
                 }
             }
-            StackValue::TypedRef(p, t) => {
-                if let Some(owner) = p.owner() {
-                    ctx.pin_object(owner);
-                    pinned_objects.push(owner);
-                }
-                let mut bytes = ManagedPtr::serialization_buffer();
-                #[expect(
-                    clippy::multiple_unsafe_ops_per_block,
-                    reason = "obtaining and offsetting the pinned raw address is one heap-pointer marshaling proof"
-                )]
-                let addr =
-                    // SAFETY: For heap-backed pointers we pin and keep the guard alive in
-                    // `local_guards` before taking/offsetting raw addresses; for non-heap pointers we
-                    // only expose addresses already represented by `ManagedPtr`.
-                    unsafe {
-                    if let PointerOrigin::Heap(obj) = p.origin() {
-                        if let Some(h) = obj.0 {
-                            let guard = PinnedGuard::new(h);
-                            let ptr = guard
-                                .guard
-                                .storage
-                                .raw_data_ptr()
-                                .add(p.byte_offset().as_usize());
-                            local_guards.push(guard);
-                            ptr.expose_provenance()
-                        } else {
-                            p.byte_offset().as_usize()
-                        }
-                    } else {
-                        p.with_data(0, |data| data.as_ptr().expose_provenance())
+            StackValue::TypedRef(slot) => {
+                let p = slot.value();
+                let value = match p.origin() {
+                    PointerOrigin::Heap(ObjectRef(Some(handle))) => {
+                        ctx.pin_object(ObjectRef(Some(*handle)));
+                        pinned_objects.push(ObjectRef(Some(*handle)));
+                        // SAFETY: The heap owner is pinned above, and this guard is retained in
+                        // `local_guards` for the whole synchronous native call.
+                        let guard = unsafe { PinnedGuard::new(*handle) };
+                        // SAFETY: `guard` holds the object storage lock until it is retained below.
+                        let base = unsafe { guard.guard.storage.raw_data_ptr() };
+                        // SAFETY: The typed-reference slot's offset was established for this live
+                        // object origin, whose storage remains pinned and guarded through the call.
+                        let value = unsafe { base.add(p.byte_offset().as_usize()) };
+                        local_guards.push(guard);
+                        value
+                    }
+                    PointerOrigin::Heap(ObjectRef(None)) => {
+                        return StepResult::Error(
+                            ExecutionError::InvalidCil(
+                                "cannot marshal a typedref with a null heap origin".into(),
+                            )
+                            .into(),
+                        );
+                    }
+                    #[cfg(feature = "multithreading")]
+                    PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+                        // SAFETY: `ptr` is an owned cross-arena lock handle retained by the slot.
+                        let lock = unsafe { &*ptr.as_ptr() };
+                        let guard = lock.borrow();
+                        // SAFETY: `guard` keeps the cross-arena object storage live and immobile
+                        // until it is retained in `cross_arena_guards` below.
+                        let base = unsafe { guard.storage.raw_data_ptr() };
+                        // SAFETY: The typed-reference slot's offset was established for this live
+                        // cross-arena object origin and remains valid while `guard` is retained.
+                        let value = unsafe { base.add(p.byte_offset().as_usize()) };
+                        cross_arena_guards.push(guard);
+                        value
+                    }
+                    _ => {
+                        // SAFETY: The slot retains the managed pointer's live origin. For stack,
+                        // static, transient, and unmanaged origins, their established P/Invoke
+                        // lifetime contract keeps the resolved pointer valid through this call.
+                        unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) }
                     }
                 };
-                let type_ptr = Arc::as_ptr(t).expose_provenance();
-                bytes[0..ObjectRef::SIZE].copy_from_slice(&addr.to_ne_bytes());
-                bytes[ObjectRef::SIZE..ManagedPtr::SIZE].copy_from_slice(&type_ptr.to_ne_bytes());
+                let abi = PInvokeTypedReferenceAbi {
+                    value,
+                    // The frame slot remains on `ctx` until the call returns, retaining this Arc.
+                    type_handle: Arc::as_ptr(slot.type_desc()),
+                };
 
-                temp_buffers.push(TempBuffer::Bytes(bytes.to_vec()));
+                temp_buffers.push(TempBuffer::TypedReference(abi));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = match set_bytes_arg_ptr(&temp_buffers[idx]) {
-                    Ok(ptr) => ptr,
-                    Err(e) => return e,
+                arg_ptrs[i] = match temp_buffers[idx].as_typed_reference() {
+                    Ok(abi) => {
+                        abi as *const PInvokeTypedReferenceAbi as *mut PInvokeTypedReferenceAbi
+                            as *mut c_void
+                    }
+                    Err(e) => return StepResult::Error(e.into()),
                 };
             }
             StackValue::ManagedPtr(p) => {
@@ -932,9 +937,10 @@ fn external_call_impl<'gc>(
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                std::ptr::with_exposed_provenance_mut::<u8>(
-                                    p.byte_offset().as_usize(),
-                                )
+                                // SAFETY: A handle-less Heap origin reaches this
+                                // branch only as the P/Invoke raw-address fallback;
+                                // native-call validity remains the caller's contract.
+                                unmanaged_ptr_from_addr(p.byte_offset().as_usize())
                             }
                         } else {
                             p.with_data(0, |data| data.as_ptr().cast_mut())
@@ -955,6 +961,14 @@ fn external_call_impl<'gc>(
                         return e;
                     }
                 }
+            }
+            StackValue::UninitializedTypedRef => {
+                return StepResult::Error(
+                    ExecutionError::InvalidCil(
+                        "cannot marshal an uninitialized typedref local".into(),
+                    )
+                    .into(),
+                );
             }
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
@@ -1045,6 +1059,36 @@ mod tests {
         .expect("raw write-back copy should succeed");
 
         assert_eq!(destination, vec![9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn typed_reference_input_abi_is_a_two_pointer_temporary() {
+        assert_eq!(
+            std::mem::size_of::<PInvokeTypedReferenceAbi>(),
+            std::mem::size_of::<[*mut u8; 2]>(),
+        );
+        assert_eq!(
+            std::mem::align_of::<PInvokeTypedReferenceAbi>(),
+            std::mem::align_of::<*mut u8>(),
+        );
+
+        let temporary = TempBuffer::TypedReference(PInvokeTypedReferenceAbi {
+            value: std::ptr::null_mut(),
+            type_handle: std::ptr::null(),
+        });
+        let abi = temporary
+            .as_typed_reference()
+            .expect("typedref temporary must retain its ABI pair");
+        assert!(abi.value.is_null());
+        assert!(abi.type_handle.is_null());
+    }
+
+    #[test]
+    fn typed_reference_pinvoke_return_is_rejected() {
+        assert!(matches!(
+            reject_typed_reference_pinvoke_return(),
+            StepResult::Error(_)
+        ));
     }
 
     #[test]

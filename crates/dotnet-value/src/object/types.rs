@@ -20,11 +20,13 @@ use std::{
     iter,
     marker::PhantomData,
     mem::size_of,
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
 };
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
+#[cfg(any(feature = "fuzzing", test))]
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ValueType<'gc> {
@@ -43,7 +45,6 @@ pub enum ValueType<'gc> {
     Pointer(ManagedPtr<'gc>),
     Float32(f32),
     Float64(f64),
-    TypedRef(ManagedPtr<'gc>, Arc<TypeDescription>),
     Struct(Object<'gc>),
 }
 
@@ -53,7 +54,6 @@ unsafe impl<'gc> Collect<'gc> for ValueType<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         match self {
             Self::Pointer(p) => p.trace(cc),
-            Self::TypedRef(p, _) => p.trace(cc),
             Self::Struct(o) => o.trace(cc),
             _ => {}
         }
@@ -73,7 +73,6 @@ impl<'gc> ValueType<'gc> {
             ValueType::Float32(_) => 4,
             ValueType::Float64(_) => 8,
             ValueType::Pointer(_) => 16,
-            ValueType::TypedRef(_, _) => 16,
             ValueType::Struct(o) => o.size_bytes(),
         }
     }
@@ -81,7 +80,6 @@ impl<'gc> ValueType<'gc> {
     pub fn validate_resurrection_invariants(&self) {
         match self {
             ValueType::Pointer(p) => p.validate_magic(),
-            ValueType::TypedRef(p, _) => p.validate_magic(),
             ValueType::Struct(o) => o.validate_resurrection_invariants(),
             _ => {}
         }
@@ -95,7 +93,6 @@ impl<'gc> ValueType<'gc> {
     ) {
         match self {
             ValueType::Pointer(p) => p.resurrect(fc, visited, depth),
-            ValueType::TypedRef(p, _) => p.resurrect(fc, visited, depth),
             ValueType::Struct(o) => o.resurrect(fc, visited, depth),
             _ => {}
         }
@@ -135,13 +132,6 @@ impl<'gc> CTSValue<'gc> {
                 }
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
-                TypedRef(p, t) => {
-                    // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
-                    let addr = unsafe { p.with_data(0, |data| data.as_ptr() as usize) };
-                    let type_ptr = Arc::as_ptr(t) as usize;
-                    dest[0..8].copy_from_slice(&addr.to_ne_bytes());
-                    dest[8..16].copy_from_slice(&type_ptr.to_ne_bytes());
-                }
                 Struct(o) => o.instance_storage.with_data(|d| dest.copy_from_slice(d)),
             },
             CTSValue::Ref(o) => o.write(dest),

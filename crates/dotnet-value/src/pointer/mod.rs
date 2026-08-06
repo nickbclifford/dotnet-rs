@@ -26,9 +26,22 @@ pub mod serde;
 
 pub use origin::*;
 
+/// Reconstructs a raw pointer at an unmanaged integer address.
+///
+/// This is the single reconstruction primitive for address-only `Unmanaged`,
+/// P/Invoke, and `Unsafe.*` boundaries. Managed origins must instead derive a
+/// pointer from their provenance-carrying owner or resolver.
+///
+/// # Safety
+///
+/// For every later access through the returned pointer, the caller must prove
+/// that `addr` is zero or denotes live storage with the required provenance,
+/// bounds, alignment, lifetime, and synchronization. This function validates
+/// none of those properties. It must never be used to recover a managed
+/// `ManagedPtr` origin from serialized address bits.
 #[inline]
-pub(crate) fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
-    NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(addr))
+pub unsafe fn unmanaged_ptr_from_addr(addr: usize) -> *mut u8 {
+    std::ptr::with_exposed_provenance_mut::<u8>(addr)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +68,57 @@ pub fn reset_static_registry() {
 
 pub(crate) static NEXT_STATIC_ID: AtomicU32 = AtomicU32::new(1);
 
+/// Resolves live storage bases for executable managed-pointer deserialization.
+///
+/// Serialized Stack and Static origins retain only a stable slot or metadata
+/// handle plus an offset. Implementors must return a currently live base for
+/// that handle; [`ManagedPtr::read_resolved_unchecked`] derives the resulting
+/// pointer from that provenance-carrying base and the encoded offset.
+pub trait ManagedPtrResolver<'gc> {
+    /// Returns the live start address of an evaluation-stack slot.
+    fn stack_slot_base(&self, slot: StackSlotIndex) -> Option<NonNull<u8>>;
+
+    /// Returns the live start address of static storage for `metadata`.
+    fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>>;
+}
+
+/// Caller-owned cache for decoded non-null Heap handles.
+///
+/// Implementations must own values from a GC-traced root and must discard every
+/// entry after the collection cycle that can recycle serialized handle-address
+/// words. Implementations must never retain an object-data pointer, storage
+/// guard, or CrossArena lease: a cache hit only avoids decoding the serialized
+/// Heap handle and still resolves current object storage.
+///
+/// This trait deliberately covers Heap handles only. Stack and Static storage
+/// remains resolver-owned, while CrossArena decoding must acquire a fresh arena
+/// lease for every traversal.
+pub trait HeapManagedPtrDecodeCache<'gc> {
+    /// Returns the rooted handle previously decoded from `serialized_handle`.
+    fn get_heap_handle(&mut self, serialized_handle: usize) -> Option<ObjectRef<'gc>>;
+
+    /// Retains a newly decoded non-null Heap handle under its complete wire word.
+    fn insert_heap_handle(&mut self, serialized_handle: usize, owner: ObjectRef<'gc>);
+}
+
+/// A resolver for contexts that deliberately cannot deserialize Stack or Static
+/// pointers into executable addresses.
+///
+/// This is suitable only when a caller accepts Heap, CrossArena, and Unmanaged
+/// origins and wants Stack/Static origins rejected with a contextual error.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct NoManagedPtrResolver;
+
+impl<'gc> ManagedPtrResolver<'gc> for NoManagedPtrResolver {
+    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
+        None
+    }
+
+    fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
+        None
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub NonNull<u8>);
 
@@ -63,7 +127,7 @@ impl<'a> Arbitrary<'a> for UnmanagedPtr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
         Ok(UnmanagedPtr(
-            nonnull_from_exposed_addr(ptr_val).unwrap_or(NonNull::dangling()),
+            NonNull::new(std::ptr::without_provenance_mut(ptr_val)).unwrap_or(NonNull::dangling()),
         ))
     }
 }
@@ -72,8 +136,6 @@ static_collect!(UnmanagedPtr);
 /// Stack-related metadata for a [`ManagedPtr`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPtrStackInfo {
-    /// The actual memory address being pointed to.
-    pub address: Option<NonNull<u8>>,
     /// The offset from the base of the owner (either an object on the heap or a stack slot).
     pub offset: ByteOffset,
     pub origin: PointerOrigin<'static>,
@@ -82,9 +144,7 @@ pub struct ManagedPtrStackInfo {
 #[cfg(feature = "fuzzing")]
 impl<'a> Arbitrary<'a> for ManagedPtrStackInfo {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let ptr_val: usize = u.arbitrary()?;
         Ok(Self {
-            address: nonnull_from_exposed_addr(ptr_val),
             offset: u.arbitrary()?,
             origin: u.arbitrary()?,
         })
@@ -106,7 +166,7 @@ impl<'a, 'gc> Arbitrary<'a> for ManagedPtrInfo<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
         Ok(Self {
-            address: nonnull_from_exposed_addr(ptr_val),
+            address: NonNull::new(std::ptr::without_provenance_mut(ptr_val)),
             origin: u.arbitrary()?,
             offset: u.arbitrary()?,
         })
@@ -143,7 +203,7 @@ impl<'a, 'gc> Arbitrary<'a> for ManagedPtr<'gc> {
         let origin: PointerOrigin<'gc> = u.arbitrary()?;
         let offset = u.arbitrary()?;
         let pinned: bool = u.arbitrary()?;
-        let value = nonnull_from_exposed_addr(ptr_val);
+        let value = NonNull::new(std::ptr::without_provenance_mut(ptr_val));
         let packed_offset = Self::pack_offset(&origin, value, offset);
         let unmanaged_inline_offset = matches!(origin, PointerOrigin::Unmanaged)
             && packed_offset.as_usize() == offset.as_usize();
@@ -251,7 +311,7 @@ impl<'gc> ManagedPtr<'gc> {
             Err(_) => {
                 // For unmanaged pointers we preserve full-width absolute address in `_value`.
                 // Any managed origin offset that exceeds u32 is unsupported by the compact form.
-                let resolved = value.map(|p| p.as_ptr().expose_provenance()).unwrap_or(0);
+                let resolved = value.map(|p| p.as_ptr().addr()).unwrap_or(0);
                 panic!(
                     "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
                     offset.as_usize(),
@@ -267,7 +327,7 @@ impl<'gc> ManagedPtr<'gc> {
             if self.has_unmanaged_inline_offset() {
                 ByteOffset::new(self.offset.as_usize())
             } else {
-                ByteOffset::new(self._value.map_or(0, |p| p.as_ptr().expose_provenance()))
+                ByteOffset::new(self._value.map_or(0, |p| p.as_ptr().addr()))
             }
         } else {
             ByteOffset::new(self.offset.as_usize())
@@ -583,7 +643,7 @@ impl<'gc> ManagedPtr<'gc> {
         m
     }
 
-    pub fn with_stack_origin(mut self, slot_index: StackSlotIndex, _offset: ByteOffset) -> Self {
+    pub fn with_stack_origin(mut self, slot_index: StackSlotIndex) -> Self {
         self.validate_magic();
         let byte_offset = self.byte_offset();
         self.origin = PointerOrigin::Stack(slot_index);

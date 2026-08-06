@@ -2,23 +2,27 @@ use crate::{
     MethodInfo, ResolutionContext, StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::ops::*,
-    state::{ArenaLocalState, SharedGlobalState},
+    state::{ArenaLocalState, SharedGlobalState, StaticStorageManager},
     sync::Arc,
 };
 use dotnet_tracer::Tracer;
 use dotnet_types::{
-    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
-    members::MethodDescription, runtime::RuntimeType,
+    TypeDescription,
+    error::{ExecutionError, TypeResolutionError},
+    generics::GenericLookup,
+    members::MethodDescription,
+    runtime::RuntimeType,
 };
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{
-    StackValue,
+    ManagedPtr, StackValue,
     object::{HeapStorage, ObjectRef},
+    pointer::{ManagedPtrInfo, ManagedPtrResolver, StaticMetadata},
     storage::FieldStorage,
 };
 use dotnet_vm_data::FrameReturnAction;
 use dotnetdll::prelude::*;
-use gc_arena::Collect;
+use gc_arena::{Collect, Mutation};
 use std::ptr::NonNull;
 
 pub use dotnet_vm_data::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
@@ -36,6 +40,52 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
     pub(crate) continuation: &'a mut dotnet_vm_data::VmContinuation<'gc>,
     pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
+    pub(crate) heap_managed_ptr_decode_cache: &'a mut super::HeapManagedPtrDecodeCache<'gc>,
+}
+
+struct VesManagedPtrResolver<'a, 'gc> {
+    evaluation_stack: &'a EvaluationStack<'gc>,
+    statics: &'a StaticStorageManager,
+}
+
+impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver<'a, 'gc> {
+    fn stack_slot_base(&self, slot: crate::StackSlotIndex) -> Option<NonNull<u8>> {
+        Some(self.evaluation_stack.get_slot_address(slot))
+    }
+
+    fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
+        let storage = self
+            .statics
+            .get(metadata.type_desc.clone(), &metadata.generics);
+        storage
+            .storage
+            .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
+    }
+}
+
+impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
+    fn read_managed_ptr_with_heap_cache(
+        &mut self,
+        source: &[u8],
+        gc: &Mutation<'gc>,
+    ) -> Result<ManagedPtrInfo<'gc>, dotnet_types::error::PointerDeserializationError> {
+        let resolver = VesManagedPtrResolver {
+            evaluation_stack: &*self.evaluation_stack,
+            statics: &self.shared.statics,
+        };
+        // SAFETY: The field reader supplies one complete ManagedPtr encoding
+        // from live managed storage. The cache is rooted by this CallStack and
+        // GCArena::finish_cycle invalidates its serialized-handle keys after
+        // each collection epoch.
+        unsafe {
+            ManagedPtr::read_resolved_branded_with_heap_cache_unchecked(
+                source,
+                gc,
+                &resolver,
+                self.heap_managed_ptr_decode_cache,
+            )
+        }
+    }
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
@@ -142,7 +192,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             let value = match l {
                 TypedReference => {
                     pinned_locals.push(false);
-                    StackValue::null()
+                    StackValue::UninitializedTypedRef
                 }
                 Variable {
                     by_ref: _,
@@ -219,7 +269,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             was_auto_invoked
         );
 
-        let _res = self.return_frame();
+        let result = self.return_frame();
+        if !matches!(result, StepResult::Continue) {
+            return result;
+        }
 
         if self.frame_stack.is_empty() {
             tracing::debug!("handle_return: stack empty after pop, returning Return");
@@ -258,6 +311,24 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     pub fn return_frame(&mut self) -> StepResult {
+        if matches!(
+            self.frame_stack
+                .current_frame()
+                .state
+                .info_handle
+                .signature
+                .return_type
+                .1,
+            Some(ParameterType::TypedReference)
+        ) {
+            return StepResult::Error(
+                ExecutionError::InvalidCil(
+                    "ECMA-335 typedref values cannot be method return values".into(),
+                )
+                .into(),
+            );
+        }
+
         // VM invariant: `return_frame` is only reached while executing a method body, so the
         // dispatch loop must have an active frame. An empty stack here indicates a bug in frame
         // lifecycle management, not a recoverable runtime condition.

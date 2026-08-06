@@ -1,6 +1,6 @@
 use crate::{
     StackValue,
-    object::{CTSValue, ObjectInner, ObjectRef, ValueType},
+    object::{CTSValue, ObjectHandle, ObjectInner, ObjectRef, ValueType},
 };
 use dotnet_types::error::TypeResolutionError;
 use dotnet_utils::gc::ThreadSafeLock;
@@ -119,6 +119,28 @@ impl CtsScalarKind {
     }
 }
 
+/// Reconstructs an object GC handle from the address bits in atomic object storage.
+///
+/// # Safety
+///
+/// `addr` must be zero or the exact address bits of a live `ObjectHandle<'gc>`
+/// obtained by atomically loading valid `LoadType::Object` VM storage. The
+/// caller must hold the GC lifetime and any synchronization required to keep
+/// that object alive. This is the sole integer-to-GC-handle reconstruction at
+/// this atomic GC-handle storage boundary; it must not be used for serialized
+/// object references or general managed-pointer paths.
+#[inline]
+unsafe fn gc_handle_from_addr<'gc>(addr: usize) -> Option<ObjectHandle<'gc>> {
+    let ptr = std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'gc>>>(addr);
+    if ptr.is_null() {
+        None
+    } else {
+        // SAFETY: The caller guarantees that `addr` is the address of a live
+        // GC handle from the atomic Object storage boundary for this `'gc`.
+        Some(unsafe { Gc::from_ptr(ptr) })
+    }
+}
+
 pub struct CtsToCli;
 
 impl CtsToCli {
@@ -146,7 +168,6 @@ impl CtsToCli {
             ValueType::Pointer(v) => StackValue::ManagedPtr(v.into()),
             ValueType::Float32(v) => StackValue::NativeFloat(v as f64),
             ValueType::Float64(v) => StackValue::NativeFloat(v),
-            ValueType::TypedRef(ptr, ty) => StackValue::TypedRef(ptr.into(), ty),
             ValueType::Struct(obj) => StackValue::ValueType(obj),
         }
     }
@@ -159,7 +180,15 @@ impl CtsToCli {
         Some(scalar.widen_raw(read_le_u64_prefix(data, scalar.storage_size())))
     }
 
-    pub fn widen_load_atomic_raw<'gc>(load: LoadType, raw: u64) -> StackValue<'gc> {
+    /// # Safety
+    ///
+    /// When `load` is `LoadType::Object`, `raw` must be zero or the address
+    /// bits from an atomic load of valid VM object storage containing a live
+    /// object for `'gc`. The caller must retain the GC lifetime and required
+    /// synchronization through the returned `StackValue`'s use.
+    ///
+    /// Non-object `LoadType` values have no additional safety requirement.
+    pub(crate) unsafe fn widen_load_atomic_raw<'gc>(load: LoadType, raw: u64) -> StackValue<'gc> {
         if let Some(scalar) = CtsScalarKind::from_load_type(load) {
             return scalar.widen_raw(raw);
         }
@@ -168,15 +197,9 @@ impl CtsToCli {
             LoadType::Float32 => StackValue::NativeFloat(f32::from_bits(raw as u32) as f64),
             LoadType::Float64 => StackValue::NativeFloat(f64::from_bits(raw)),
             LoadType::Object => {
-                let ptr = std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'gc>>>(
-                    raw as usize,
-                );
-                let obj = if ptr.is_null() {
-                    None
-                } else {
-                    // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
-                    Some(unsafe { Gc::from_ptr(ptr) })
-                };
+                // SAFETY: The caller's Object-load contract is exactly the
+                // atomic GC-handle storage-boundary contract of this helper.
+                let obj = unsafe { gc_handle_from_addr(raw as usize) };
                 StackValue::ObjectRef(ObjectRef(obj))
             }
             _ => unreachable!("unsupported load conversion for {:?}", load),
@@ -239,11 +262,11 @@ impl CliToCts {
         match data {
             StackValue::Int32(i) => Ok(i as u32),
             StackValue::NativeInt(i) => Ok((i as usize) as u32),
-            StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().expose_provenance() as u32),
+            StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().addr() as u32),
             StackValue::ManagedPtr(p) => {
                 // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
                 let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-                Ok(ptr.expose_provenance() as u32)
+                Ok(ptr.addr() as u32)
             }
             other => Err(TypeResolutionError::InvalidLayout(
                 format!("invalid stack value {:?} for conversion into u32", other).into(),
@@ -270,21 +293,19 @@ impl CliToCts {
                     .into(),
                 )
             }),
-            StackValue::UnmanagedPtr(p) => {
-                p.0.as_ptr().expose_provenance().try_into().map_err(|_| {
-                    TypeResolutionError::InvalidLayout(
-                        format!(
-                            "failed to convert unmanaged pointer into {}",
-                            any::type_name::<T>()
-                        )
-                        .into(),
+            StackValue::UnmanagedPtr(p) => p.0.as_ptr().addr().try_into().map_err(|_| {
+                TypeResolutionError::InvalidLayout(
+                    format!(
+                        "failed to convert unmanaged pointer into {}",
+                        any::type_name::<T>()
                     )
-                })
-            }
+                    .into(),
+                )
+            }),
             StackValue::ManagedPtr(p) => {
                 // SAFETY: The managed pointer/object bits originate from a valid VM value and this conversion does not extend their lifetime.
                 let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-                ptr.expose_provenance().try_into().map_err(|_| {
+                ptr.addr().try_into().map_err(|_| {
                     TypeResolutionError::InvalidLayout(
                         format!(
                             "failed to convert managed pointer into {}",
@@ -356,7 +377,10 @@ mod tests {
     use dotnet_types::{TypeDescription, error::TypeResolutionError};
     use dotnetdll::prelude::{BaseType, LoadType};
     use gc_arena::Gc;
-    use std::ptr::NonNull;
+    use std::{
+        ptr::NonNull,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     #[test]
     fn convert_i64_rejects_non_int64_input() {
@@ -394,19 +418,23 @@ mod tests {
     #[test]
     fn load_widening_small_integers_preserves_sign_and_zero_extension() {
         assert_eq!(
-            CtsToCli::widen_load_atomic_raw(LoadType::Int8, 0xFF),
+            // SAFETY: Integer load kinds have no additional safety requirement.
+            unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Int8, 0xFF) },
             StackValue::Int32(-1)
         );
         assert_eq!(
-            CtsToCli::widen_load_atomic_raw(LoadType::UInt8, 0xFF),
+            // SAFETY: Integer load kinds have no additional safety requirement.
+            unsafe { CtsToCli::widen_load_atomic_raw(LoadType::UInt8, 0xFF) },
             StackValue::Int32(255)
         );
         assert_eq!(
-            CtsToCli::widen_load_atomic_raw(LoadType::Int16, 0xFFFE),
+            // SAFETY: Integer load kinds have no additional safety requirement.
+            unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Int16, 0xFFFE) },
             StackValue::Int32(-2)
         );
         assert_eq!(
-            CtsToCli::widen_load_atomic_raw(LoadType::UInt16, 0xFFFE),
+            // SAFETY: Integer load kinds have no additional safety requirement.
+            unsafe { CtsToCli::widen_load_atomic_raw(LoadType::UInt16, 0xFFFE) },
             StackValue::Int32(0xFFFE)
         );
     }
@@ -414,7 +442,7 @@ mod tests {
     #[test]
     fn widening_preserves_pointer_and_reference_payloads() {
         let ptr = ManagedPtr::new(
-            NonNull::new(0x1234usize as *mut u8),
+            NonNull::new(std::ptr::without_provenance_mut(0x1234usize)),
             TypeDescription::NULL,
             None,
             false,
@@ -433,22 +461,34 @@ mod tests {
 
         with_test_gc_context(|gc| {
             let obj = ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("x")));
-            let raw = obj
-                .0
-                .map(|h| Gc::as_ptr(h).expose_provenance() as u64)
-                .expect("object reference should be non-null");
+            let object_storage = AtomicUsize::new(
+                obj.0
+                    .map(|h| Gc::as_ptr(h).addr())
+                    .expect("object reference should be non-null"),
+            );
+            let raw = object_storage.load(Ordering::SeqCst) as u64;
             assert_eq!(
-                CtsToCli::widen_load_atomic_raw(LoadType::Object, raw),
+                // SAFETY: `raw` is the address of the live object held by the
+                // test GC context, atomically loaded from test object storage.
+                unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Object, raw) },
                 StackValue::ObjectRef(obj)
             );
         });
 
+        let null_object_storage = AtomicUsize::new(0);
         assert_eq!(
-            CtsToCli::widen_load_atomic_raw(LoadType::Object, 0),
+            // SAFETY: The zero value was atomically loaded from object storage
+            // and denotes the null object reference.
+            unsafe {
+                CtsToCli::widen_load_atomic_raw(
+                    LoadType::Object,
+                    null_object_storage.load(Ordering::SeqCst) as u64,
+                )
+            },
             StackValue::ObjectRef(ObjectRef(None))
         );
 
-        let raw_ptr = NonNull::new(0x5678usize as *mut u8).unwrap();
+        let raw_ptr = NonNull::new(std::ptr::without_provenance_mut(0x5678usize)).unwrap();
         let narrowed =
             CliToCts::convert_num::<usize>(StackValue::UnmanagedPtr(UnmanagedPtr(raw_ptr)))
                 .expect("unmanaged pointer should narrow to native uint");

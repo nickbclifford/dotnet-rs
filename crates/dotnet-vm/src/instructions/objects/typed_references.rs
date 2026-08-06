@@ -6,7 +6,7 @@ use crate::{
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
-use dotnet_value::StackValue;
+use dotnet_value::{StackValue, TypedReferenceSlot};
 use dotnetdll::prelude::*;
 use std::sync::Arc;
 
@@ -22,19 +22,22 @@ pub fn mkrefany<'gc, T: ResolutionOps<'gc> + LoaderOps + ExceptionOps<'gc> + Eva
     };
     let target_type = dotnet_vm_ops::vm_try!(ctx.make_concrete(class));
     let target_td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type));
-    ctx.push(StackValue::TypedRef(m, Arc::new(target_td)));
+    ctx.push(StackValue::TypedRef(TypedReferenceSlot::new(
+        m,
+        Arc::new(target_td),
+    )));
     StepResult::Continue
 }
 
 #[dotnet_instruction(ReadTypedReferenceType)]
 pub fn refanytype<'gc, T: ExceptionOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T) -> StepResult {
     let tr = vm_pop!(ctx);
-    let StackValue::TypedRef(_, td) = tr else {
+    let StackValue::TypedRef(slot) = tr else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
     // refanytype pushes a RuntimeTypeHandle (which is a pointer to the type)
-    ctx.push(StackValue::NativeInt(Arc::as_ptr(&td) as isize));
+    ctx.push(StackValue::NativeInt(Arc::as_ptr(slot.type_desc()) as isize));
     StepResult::Continue
 }
 
@@ -44,10 +47,11 @@ pub fn refanyval<'gc, T: ResolutionOps<'gc> + LoaderOps + ExceptionOps<'gc> + Ev
     class: &MethodType,
 ) -> StepResult {
     let tr = vm_pop!(ctx);
-    let StackValue::TypedRef(m, td) = tr else {
+    let StackValue::TypedRef(slot) = tr else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
+    let (m, td) = slot.into_parts();
     let target_type = dotnet_vm_ops::vm_try!(ctx.make_concrete(class));
     let target_td = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type));
 

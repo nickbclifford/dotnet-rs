@@ -7,7 +7,7 @@ use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::ObjectRef,
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::{ManagedPtr, PointerOrigin, unmanaged_ptr_from_addr},
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps};
@@ -30,7 +30,11 @@ pub fn intrinsic_unsafe_as_pointer<
         // SAFETY: `with_data(0, ...)` exposes no bytes and only obtains the address associated
         // with this live managed pointer for the Unsafe.AsPointer contract.
         StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
-        StackValue::NativeInt(i) => std::ptr::with_exposed_provenance_mut::<u8>(i as usize),
+        StackValue::NativeInt(i) => {
+            // SAFETY: `Unsafe.AsPointer` explicitly interprets NativeInt as an
+            // unmanaged address; the intrinsic caller owns pointer validity.
+            unsafe { unmanaged_ptr_from_addr(i as usize) }
+        }
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
         _ => {
@@ -518,12 +522,16 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let val = ctx.pop();
     let (ptr, pinned, origin, offset_base) = match val {
-        StackValue::NativeInt(p) => (
-            std::ptr::with_exposed_provenance_mut::<u8>(p as usize),
-            false,
-            PointerOrigin::Unmanaged,
-            None,
-        ),
+        StackValue::NativeInt(p) => {
+            // SAFETY: `Unsafe.AsRef(void*)` explicitly interprets NativeInt as
+            // an unmanaged address; the intrinsic caller owns pointer validity.
+            (
+                unsafe { unmanaged_ptr_from_addr(p as usize) },
+                false,
+                PointerOrigin::Unmanaged,
+                None,
+            )
+        }
         StackValue::ManagedPtr(m) => (
             // SAFETY: `with_data(0, ...)` only exposes the address represented by the live
             // managed pointer; no data is read or written here.

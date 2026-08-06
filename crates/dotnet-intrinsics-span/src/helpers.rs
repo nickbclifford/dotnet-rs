@@ -7,18 +7,32 @@ use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout},
     object::{HeapStorage, Object},
-    pointer::{ManagedPtr, ManagedPtrInfo, PointerOrigin},
+    pointer::{ManagedPtr, ManagedPtrInfo, ManagedPtrResolver, PointerOrigin},
 };
 use dotnet_vm_ops::ops::{MemoryOps, RawMemoryOps};
 
-/// Read the _reference ManagedPtr from a Span/ReadOnlySpan value type.
-pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc>, IntrinsicError> {
-    let ptr = span
+/// Read the executable `_reference` ManagedPtr from a Span/ReadOnlySpan value type.
+///
+/// The field is stored in the three-word ManagedPtr wire format, so Stack and
+/// Static origins require `resolver` to supply their currently live bases.
+pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
+    span: &Object<'gc>,
+    resolver: &R,
+) -> Result<ManagedPtrInfo<'gc>, IntrinsicError> {
+    let field = span
         .instance_storage
-        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .ok_or(IntrinsicError::Static("Span must have _reference field"))?
-        .read();
-    Ok(ptr.into_info())
+        .layout()
+        .get_field(span.description.clone(), "_reference")
+        .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
+    span.instance_storage.with_data(|data| {
+        // SAFETY: The field layout identifies one complete ManagedPtr representation in `data`.
+        unsafe { ManagedPtr::read_resolved_unchecked(&data[field.position.as_usize()..], resolver) }
+            .map_err(|e| {
+                IntrinsicError::Message(
+                    format!("Failed to deserialize span _reference: {e}").into(),
+                )
+            })
+    })
 }
 
 /// Read the _length from a Span/ReadOnlySpan value type.
@@ -31,11 +45,14 @@ pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
 }
 
 /// Read the _reference ManagedPtr from a ManagedPtr that points to a Span.
-pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
+pub fn read_span_reference_from_ptr<'gc, T>(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
     ctx: &T,
-) -> Result<ManagedPtr<'gc>, IntrinsicError> {
+) -> Result<ManagedPtr<'gc>, IntrinsicError>
+where
+    T: RawMemoryOps<'gc> + MemoryOps<'gc> + ManagedPtrResolver<'gc>,
+{
     let ref_field = layout
         .get_field_by_name("_reference")
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
@@ -62,11 +79,13 @@ pub fn read_span_reference_from_ptr<'gc, T: RawMemoryOps<'gc> + MemoryOps<'gc>>(
 
     // Deserialize the ManagedPtrInfo from bytes
     // SAFETY: `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
-    // and we pass the current branded GC token for lifetime validation.
+    // we pass the current branded GC token for lifetime validation, and `ctx`
+    // resolves live Stack and Static bases for executable pointer recovery.
     let info = unsafe {
-        ManagedPtr::read_branded(
+        ManagedPtr::read_resolved_branded(
             &ptr_bytes,
             &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+            ctx,
         )
     }
     .map_err(|e| {
@@ -147,9 +166,9 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     Ok(())
 }
 
-pub fn with_span_data<'gc, R, T: RawMemoryOps<'gc>>(
+pub fn with_span_data<'gc, 'span, R, T: RawMemoryOps<'gc> + ManagedPtrResolver<'span>>(
     ctx: &T,
-    span: Object,
+    span: Object<'span>,
     element_type: TypeDescription,
     element_size: usize,
     f: impl FnOnce(&[u8]) -> R,
@@ -158,7 +177,7 @@ pub fn with_span_data<'gc, R, T: RawMemoryOps<'gc>>(
         ctx.as_borrow_scope(),
         ctx.as_borrow_scope().gc_ready_token(),
     );
-    let info = read_span_reference(&span)?;
+    let info = read_span_reference(&span, ctx)?;
     let len = read_span_length(&span)? as usize;
 
     if len == 0 {

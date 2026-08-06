@@ -672,6 +672,7 @@ dependencies = [
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
+ "hashbrown 0.17.1",
  "lru",
  "parking_lot",
  "phf",

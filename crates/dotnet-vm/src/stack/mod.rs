@@ -82,6 +82,7 @@ mod call_ops_impl;
 pub mod context;
 mod context_ops;
 mod exception_ops_impl;
+mod managed_ptr_decode_cache;
 mod memory_ops_impl;
 pub mod ops;
 mod raw_memory_ops_impl;
@@ -91,6 +92,7 @@ mod stack_ops_impl;
 
 pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
 pub use dotnet_vm_data::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
+pub use managed_ptr_decode_cache::{HeapManagedPtrDecodeCache, HeapManagedPtrDecodeCacheStats};
 pub use ops::{
     ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps, LoaderOps,
     LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps, ReflectionOps,
@@ -111,6 +113,7 @@ pub struct CallStack<'gc> {
     pub execution: ThreadContext<'gc>,
     pub shared: Arc<SharedGlobalState>,
     pub local: ArenaLocalState<'gc>,
+    pub(crate) heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache<'gc>,
     pub thread_id: Cell<dotnet_utils::ArenaId>,
     #[cfg(feature = "multithreading")]
     pub arena: dotnet_utils::gc::ArenaHandle,
@@ -126,6 +129,7 @@ unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
         // NOT here. Setting/clearing it here would interfere with gc-arena's
         // deferred work list processing (StackValue traces happen AFTER this returns).
         self.execution.trace(cc);
+        self.heap_managed_ptr_decode_cache.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
     }
@@ -169,7 +173,17 @@ impl GCArena {
     }
 
     pub fn finish_cycle(&mut self) {
-        self.arena.finish_cycle()
+        // A completed cycle is the single collection-epoch boundary for every
+        // per-CallStack decode cache. Entries remain traced during the cycle,
+        // then must be discarded before an old serialized handle address can be
+        // reused in the next mutator epoch.
+        self.arena.finish_cycle();
+        self.arena.mutate_root(|_, engine| {
+            engine
+                .stack
+                .heap_managed_ptr_decode_cache
+                .invalidate_after_collection();
+        });
     }
 
     pub fn collect_debt(&mut self) {
@@ -196,6 +210,7 @@ impl<'gc> CallStack<'gc> {
             },
             shared,
             local,
+            heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache::default(),
             thread_id: Cell::new(dotnet_utils::ArenaId::INVALID),
             #[cfg(feature = "multithreading")]
             arena: dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId::INVALID),
@@ -229,6 +244,7 @@ impl<'gc> CallStack<'gc> {
             original_stack_height: &mut self.execution.original_stack_height,
             continuation: &mut self.execution.continuation,
             call_args_buffer: &mut self.execution.call_args_buffer,
+            heap_managed_ptr_decode_cache: &mut self.heap_managed_ptr_decode_cache,
         }
     }
 

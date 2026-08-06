@@ -164,11 +164,12 @@ pub struct ObjectPtr(NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 #[cfg(feature = "fuzzing")]
 impl<'a> Arbitrary<'a> for ObjectPtr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let ptr_val: usize = u.arbitrary()?;
-        // SAFETY: Used only for fuzzing corpus deserialization.  The resulting
-        // pointer must NOT be dereferenced; it is only compared against the
-        // fuzzing object registry (`is_valid_object_ptr`) before use.
-        Ok(unsafe { std::mem::transmute::<usize, ObjectPtr>(ptr_val) })
+        let _address_seed: usize = u.arbitrary()?;
+        // No arena is available to an unscoped Arbitrary implementation, so it
+        // cannot manufacture a valid ObjectPtr from fuzz bytes. A typed dangling
+        // sentinel preserves variant-shape coverage without integer-to-pointer
+        // reconstruction; targets that dereference must build a live arena fixture.
+        Ok(ObjectPtr(NonNull::dangling()))
     }
 }
 
@@ -254,9 +255,11 @@ pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let ptr_val: usize = u.arbitrary()?;
-        // SAFETY: Used only for serialization fuzzing. Do NOT dereference.
-        Ok(unsafe { std::mem::transmute::<usize, ObjectRef<'_>>(ptr_val) })
+        let _handle_seed: usize = u.arbitrary()?;
+        // A live Gc handle cannot be created without an arena mutation token.
+        // Use the valid null representation; GC-backed fuzz targets construct
+        // live ObjectRefs in their own arena fixtures.
+        Ok(ObjectRef(None))
     }
 }
 
@@ -289,7 +292,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != tracing_id {
-                        let ptr = Gc::as_ptr(h).expose_provenance();
+                        let ptr = Gc::as_ptr(h).addr();
                         if !record_cross_arena_ref(owner_id, ptr) {
                             return;
                         }
@@ -380,7 +383,7 @@ impl<'gc> ObjectRef<'gc> {
             );
         }
         if let Some(handle) = self.0 {
-            let ptr = Gc::as_ptr(handle).expose_provenance();
+            let ptr = Gc::as_ptr(handle).addr();
             if visited.insert(ptr) {
                 let inner = handle.borrow();
                 inner.validate_resurrection_invariants();
@@ -442,10 +445,10 @@ impl<'gc> ObjectRef<'gc> {
                     // Sign-extend from 16-bit to correctly handle ArenaId::INVALID (u64::MAX)
                     let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
                     let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
-                    // `ptr_val` was produced by `ObjectRef::write` from a pointer whose
-                    // provenance was explicitly exposed. Reconstitute that pointer through
-                    // the exposed-provenance API so strict-provenance Miri can model the
-                    // tag-stripping round trip.
+                    // `ObjectRef::write` stores only the lock's numeric address.
+                    // Reconstitution is therefore this type's explicit serialized-object
+                    // storage boundary, separate from ManagedPtr's origin-resolved paths.
+                    // The arena lease below supplies liveness, but not strict provenance.
                     let real_ptr = std::ptr::with_exposed_provenance::<
                         ThreadSafeLock<ObjectInner<'static>>,
                     >(real_ptr_val);
@@ -459,7 +462,7 @@ impl<'gc> ObjectRef<'gc> {
                     let _lease = lease;
 
                     // Also record it if we are tracing
-                    record_cross_arena_ref(owner_id, real_ptr.expose_provenance());
+                    record_cross_arena_ref(owner_id, real_ptr.addr());
 
                     // Continue with the untagged pointer to construct the ObjectRef
                     let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
@@ -496,8 +499,9 @@ impl<'gc> ObjectRef<'gc> {
                 return ObjectRef(None);
             }
 
-            // Non-tagged object references are likewise serialized as exposed addresses by
-            // `ObjectRef::write`; recover them without a bare integer-to-pointer cast.
+            // Non-tagged object references likewise contain only a numeric
+            // handle address. This is the local ObjectRef storage boundary;
+            // callers guarantee that the encoded handle remains live.
             let ptr =
                 std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'gc>>>(ptr_val);
 
@@ -512,7 +516,7 @@ impl<'gc> ObjectRef<'gc> {
                     }
 
                     // Verify magic number to ensure we are pointing to a valid object
-                    // SAFETY: `ptr` was cast from a raw `usize` stored in `source`.
+                    // SAFETY: `ptr` was reconstructed from the address stored in `source`.
                     // Alignment was verified by `is_multiple_of` above.  The caller
                     // guarantees `source` contains a live `Gc` pointer, so the
                     // allocation is valid for the lifetime of this call.
@@ -552,7 +556,7 @@ impl<'gc> ObjectRef<'gc> {
         let ptr_val: usize = match self.0 {
             None => 0,
             Some(s) => {
-                let ptr = Gc::as_ptr(s).expose_provenance();
+                let ptr = Gc::as_ptr(s).addr();
                 #[cfg(feature = "multithreading")]
                 {
                     // Encode arena ownership with Tag 5 for every managed owner.

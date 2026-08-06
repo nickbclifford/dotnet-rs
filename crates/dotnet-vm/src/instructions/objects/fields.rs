@@ -425,7 +425,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
     ) {
         // This is a ref field - we need to deserialize the ManagedPtr from the field bytes
         // to get its actual origin, not use the parent's origin!
-        // We must read the raw bytes and call ManagedPtr::read_branded directly.
+        // We must read the raw bytes and resolve the ManagedPtr directly.
 
         use dotnet_value::pointer::ManagedPtr as MP;
 
@@ -436,15 +436,10 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
             ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes)
         });
 
-        // Deserialize to get the actual origin.
-        // SAFETY: `ptr_bytes` was filled from one complete ManagedPtr field above, and the GC
-        // token brands any decoded managed handle to the active arena lifetime.
-        let info = match unsafe {
-            MP::read_branded(
-                &ptr_bytes,
-                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
-            )
-        } {
+        // Deserialize through the caller-owned cache. It retains only rooted
+        // Heap handles; the VM still resolves a fresh storage base on every hit.
+        let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+        let info = match ctx.read_managed_ptr_with_heap_cache(&ptr_bytes, gc.mutation()) {
             Ok(i) => i,
             Err(e) => {
                 return StepResult::internal_error(format!(

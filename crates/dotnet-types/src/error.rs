@@ -215,17 +215,28 @@ pub enum PointerDeserializationError {
     InvalidStaticId(u32),
     #[error("Checksum mismatch")]
     ChecksumMismatch,
+    #[error("serialized offset does not match its packed mirror")]
+    OffsetMismatch,
+    #[error("no live stack-slot base is available for serialized slot {0}")]
+    UnresolvedStackSlot(usize),
+    #[error("no live static-storage base is available for serialized static pointer")]
+    UnresolvedStaticStorage,
 }
 
 #[cfg(feature = "fuzzing")]
 impl Arbitrary<'_> for PointerDeserializationError {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.arbitrary::<usize>()? % 4;
+        let tag = u.arbitrary::<usize>()? % 7;
         match tag {
             0 => Ok(PointerDeserializationError::UnknownTag(u.arbitrary()?)),
             1 => Ok(PointerDeserializationError::UnknownSubtag(u.arbitrary()?)),
             2 => Ok(PointerDeserializationError::InvalidStaticId(u.arbitrary()?)),
-            _ => Ok(PointerDeserializationError::ChecksumMismatch),
+            3 => Ok(PointerDeserializationError::ChecksumMismatch),
+            4 => Ok(PointerDeserializationError::OffsetMismatch),
+            5 => Ok(PointerDeserializationError::UnresolvedStackSlot(
+                u.arbitrary()?,
+            )),
+            _ => Ok(PointerDeserializationError::UnresolvedStaticStorage),
         }
     }
 }

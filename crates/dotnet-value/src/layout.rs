@@ -143,7 +143,7 @@ impl LayoutManager {
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // SAFETY: The layout selected this field and storage contains its valid serialized representation.
-                let info = unsafe { ManagedPtr::read_unchecked(storage) }
+                let info = unsafe { ManagedPtr::read_metadata_unchecked(storage) }
                     .expect("LayoutManager::trace: failed to read ManagedPtr");
                 info.origin.trace(cc);
             }
@@ -175,7 +175,7 @@ impl LayoutManager {
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // SAFETY: The layout selected this field and storage contains its valid serialized representation.
-                let info = unsafe { ManagedPtr::read_branded(storage, fc) }
+                let info = unsafe { ManagedPtr::read_metadata_branded(storage, fc) }
                     .expect("LayoutManager::resurrect: failed to read ManagedPtr");
                 info.origin.resurrect(fc, visited, depth);
             }
@@ -420,8 +420,8 @@ impl FieldLayoutManager {
                 let off = offset.as_usize();
                 if off + ManagedPtr::SIZE <= storage.len() {
                     // SAFETY: layout creation ensures these offsets contain valid ManagedPtrs.
-                    // ManagedPtr::read_unchecked is tag-aware and safe to use during GC tracing.
-                    let info = unsafe { ManagedPtr::read_unchecked(&storage[off..]) }
+                    // Metadata decoding is tag-aware and cannot manufacture executable pointers during GC tracing.
+                    let info = unsafe { ManagedPtr::read_metadata_unchecked(&storage[off..]) }
                         .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
                     info.origin.trace(cc);
                 }
@@ -602,7 +602,7 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
     fn read_from(bytes: &[u8]) -> Self {
         // SAFETY: The layout selected this field and storage contains its valid serialized representation.
         let info = unsafe {
-            ManagedPtr::read_unchecked(bytes)
+            ManagedPtr::read_resolved_unchecked(bytes, &crate::pointer::NoManagedPtrResolver)
                 .expect("bytes were written by ManagedPtr::write_to for this same field")
         };
         ManagedPtr::from_info_full(info, dotnet_types::TypeDescription::NULL, false)

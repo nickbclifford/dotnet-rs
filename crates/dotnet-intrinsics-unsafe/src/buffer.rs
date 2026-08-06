@@ -7,6 +7,7 @@ use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::HeapStorage,
+    pointer::unmanaged_ptr_from_addr,
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps};
@@ -26,7 +27,11 @@ fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
 #[inline]
 fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
     match value {
-        StackValue::NativeInt(v) => Some(*v as *mut u8),
+        StackValue::NativeInt(v) => {
+            // SAFETY: Unsafe buffer operations explicitly interpret NativeInt
+            // as an unmanaged address; their caller owns pointer validity.
+            Some(unsafe { unmanaged_ptr_from_addr(*v as usize) })
+        }
         StackValue::UnmanagedPtr(ptr) => Some(ptr.0.as_ptr()),
         StackValue::ManagedPtr(ptr) => {
             if ptr.is_null() {

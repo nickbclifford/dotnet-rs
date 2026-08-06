@@ -58,12 +58,13 @@ pub use dotnet_vm_data::{CollectableMethodDescription, MethodInfo, MethodState, 
 pub use executor::{Executor, ExecutorResult};
 pub use stack::{
     ArgumentOps, BasePointer, CallStack, EvalStackOps, EvaluationStack, ExceptionContext,
-    ExceptionOps, ExceptionState, FrameStack, GCArena, GCArenaRoot, IntrinsicDispatchOps,
-    LoaderOps, LocalOps, MemoryOps, PInvokeContext, PinnedLocals, RawMemoryOps,
-    ReflectionLookupOps, ReflectionOps, ResolutionOps, StackFrame, StackOps, StaticsOps,
-    ThreadContext, ThreadOps, TypedStackOps, VariableOps, VesBaseOps, VesContext, VesInternals,
-    VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext, VmRawMemoryOps,
-    VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps, ops,
+    ExceptionOps, ExceptionState, FrameStack, GCArena, GCArenaRoot, HeapManagedPtrDecodeCache,
+    HeapManagedPtrDecodeCacheStats, IntrinsicDispatchOps, LoaderOps, LocalOps, MemoryOps,
+    PInvokeContext, PinnedLocals, RawMemoryOps, ReflectionLookupOps, ReflectionOps, ResolutionOps,
+    StackFrame, StackOps, StaticsOps, ThreadContext, ThreadOps, TypedStackOps, VariableOps,
+    VesBaseOps, VesContext, VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps,
+    VmPInvokeContext, VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
+    ops,
 };
 pub use state::ReflectionRegistry;
 

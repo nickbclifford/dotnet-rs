@@ -627,7 +627,7 @@ pub fn intrinsic_method_table_get_primitive_cor_element_type<
     let method_table_value = ctx.pop();
     let method_table_ptr = match method_table_value {
         StackValue::NativeInt(v) => v as usize,
-        StackValue::UnmanagedPtr(v) => v.0.as_ptr().expose_provenance(),
+        StackValue::UnmanagedPtr(v) => v.0.as_ptr().addr(),
         value => {
             let message = format!(
                 "Invalid type on stack ({:?}); expected method table pointer.",

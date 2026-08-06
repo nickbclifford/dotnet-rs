@@ -220,19 +220,26 @@ impl<'gc> EvaluationStack<'gc> {
             }
         };
 
+        let update_managed_ptr = |m: &mut dotnet_value::StackManagedPtr<'gc>| {
+            if let PointerOrigin::Stack(idx) = m.origin() {
+                let off = m.byte_offset();
+                let slot_ptr = resolve_slot_ptr(*idx);
+                // SAFETY: `slot_ptr` identifies the start of the live stack slot and
+                // `off` was recorded from that slot when the pointer was created.
+                let raw_ptr = unsafe { slot_ptr.as_ptr().add(off.as_usize()) };
+                // SAFETY: adding the recorded offset to a non-null stack-slot pointer
+                // preserves non-nullness.
+                let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
+                m.update_cached_ptr(new_ptr);
+            }
+        };
+
         let update_val = |val: &mut StackValue<'gc>| match val {
             StackValue::ManagedPtr(m) => {
-                if let PointerOrigin::Stack(idx) = m.origin() {
-                    let off = m.byte_offset();
-                    let slot_ptr = resolve_slot_ptr(*idx);
-                    // SAFETY: `slot_ptr` identifies the start of the live stack slot and
-                    // `off` was recorded from that slot when the pointer was created.
-                    let raw_ptr = unsafe { slot_ptr.as_ptr().add(off.as_usize()) };
-                    // SAFETY: adding the recorded offset to a non-null stack-slot pointer
-                    // preserves non-nullness.
-                    let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
-                    m.update_cached_ptr(new_ptr);
-                }
+                update_managed_ptr(m);
+            }
+            StackValue::TypedRef(slot) => {
+                update_managed_ptr(slot.value_mut());
             }
             StackValue::ValueType(obj) => {
                 let layout = obj.instance_storage.layout().clone();
@@ -245,19 +252,11 @@ impl<'gc> EvaluationStack<'gc> {
                             // selected by the layout manager from storage it previously wrote.
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
                             if let PointerOrigin::Stack(idx) = info.origin {
-                                let slot_ptr = resolve_slot_ptr(idx);
-                                // SAFETY: `slot_ptr` and `info.offset` were recorded from
-                                // the live stack slot when this managed pointer was created.
-                                let raw_ptr =
-                                    unsafe { slot_ptr.as_ptr().add(info.offset.as_usize()) };
-                                // SAFETY: adding the recorded offset to a non-null stack-slot
-                                // pointer preserves non-nullness.
-                                let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
                                 let ptr_size = ObjectRef::SIZE;
                                 let word0: usize = 1
                                     | ((idx.as_usize() & 0x3FFFFFFF) << 3)
                                     | (info.offset.as_usize() << 33);
-                                let word1 = new_ptr.as_ptr().expose_provenance();
+                                let word1 = info.offset.as_usize();
                                 let word2 = word0 ^ word1;
                                 slice[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                                 slice[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());

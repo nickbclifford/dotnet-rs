@@ -13,7 +13,7 @@ use dotnet_value::{
     cts_cli_conversion::{CliToCts, CtsScalarKind},
     layout::{FieldLayoutManager, HasLayout},
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, NoManagedPtrResolver, unmanaged_ptr_from_addr},
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
@@ -49,6 +49,12 @@ where
         ctx: &Ctx,
     ) -> Result<ObjectRef<'gc>, TypeResolutionError> {
         let t = self.normalize_type(t.clone())?;
+
+        if self.loader.find_concrete_type(t.clone())?.type_name() == "System.TypedReference" {
+            return Err(TypeResolutionError::InvalidLayout(
+                "ECMA-335 typedref values cannot be boxed".into(),
+            ));
+        }
 
         // ECMA-335 §I.8.2.4: Boxing Nullable<T> produces null if HasValue=false, or boxed T if HasValue=true.
         if t.is_nullable(self.loader.as_ref())
@@ -335,11 +341,23 @@ where
             )),
             BaseType::ValuePointer(_modifiers, inner) => match data {
                 StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p.into_inner()))),
+                StackValue::UnmanagedPtr(p) => {
+                    let inner_type = self.resolve_pointer_inner_type(inner)?;
+                    Ok(CTSValue::Value(Pointer(ManagedPtr::new(
+                        Some(p.0),
+                        inner_type,
+                        None,
+                        false,
+                        Some(ByteOffset::new(p.0.as_ptr().addr())),
+                    ))))
+                }
                 _ => {
                     let ptr = CliToCts::convert_num::<usize>(data)?;
                     let inner_type = self.resolve_pointer_inner_type(inner)?;
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(std::ptr::with_exposed_provenance_mut(ptr)),
+                        // SAFETY: Scalar-to-ValuePointer conversion is the CLI
+                        // unmanaged-address boundary; no managed origin exists.
+                        NonNull::new(unsafe { unmanaged_ptr_from_addr(ptr) }),
                         inner_type,
                         None,
                         false,
@@ -392,12 +410,9 @@ where
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    let StackValue::TypedRef(p, t) = data else {
-                        return Err(TypeResolutionError::InvalidLayout(
-                            format!("expected TypedRef, got {:?}", data).into(),
-                        ));
-                    };
-                    return Ok(CTSValue::Value(TypedRef(p.into_inner(), t)));
+                    return Err(TypeResolutionError::InvalidLayout(
+                        "ECMA-335 typedref values may only occupy parameters and locals".into(),
+                    ));
                 }
 
                 if let StackValue::ValueType(mut o) = data {
@@ -528,16 +543,28 @@ where
                 if data.len() >= ManagedPtr::SIZE {
                     // SAFETY: `data.len() >= ManagedPtr::SIZE` is checked above, and the bytes
                     // come from VM-managed storage that uses ManagedPtr's serialization format.
-                    let info = unsafe { ManagedPtr::read_branded(&data[..ManagedPtr::SIZE], &gc) }
-                        .expect("read_cts_value: ManagedPtr deserialization failed");
+                    let info = unsafe {
+                        ManagedPtr::read_resolved_branded(
+                            &data[..ManagedPtr::SIZE],
+                            &gc,
+                            &NoManagedPtrResolver,
+                        )
+                    }
+                    .expect("read_cts_value: ManagedPtr deserialization failed");
                     let m = ManagedPtr::from_info_full(info, inner_type, false);
                     Ok(CTSValue::Value(Pointer(m)))
                 } else {
                     let mut ptr_bytes = [0u8; ObjectRef::SIZE];
                     ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
+                    // SAFETY: This legacy `ValuePointer` representation is a raw-address
+                    // storage boundary. `data` contains no owner or origin handle from which
+                    // provenance could be recovered, so its producer must ensure the address
+                    // remains valid for the resulting unmanaged pointer's use.
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(std::ptr::with_exposed_provenance_mut(ptr)),
+                        // SAFETY: The preceding raw-storage boundary contract
+                        // supplies the unmanaged pointer validity premise.
+                        NonNull::new(unsafe { unmanaged_ptr_from_addr(ptr) }),
                         inner_type,
                         None,
                         false,
@@ -587,46 +614,9 @@ where
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    debug_assert_eq!(
-                        ManagedPtr::SIZE,
-                        ObjectRef::SIZE * 2,
-                        "TypedReference serialization must contain [addr, type_ptr]"
-                    );
-                    let mut buf = ManagedPtr::serialization_buffer();
-                    buf.copy_from_slice(&data[..ManagedPtr::SIZE]);
-                    let addr_bytes = buf[0..ObjectRef::SIZE]
-                        .try_into()
-                        .expect("slice bound is ObjectRef::SIZE by construction");
-                    let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().expect(
-                        "slice bound is ManagedPtr::SIZE - ObjectRef::SIZE by construction",
-                    );
-                    let addr = usize::from_ne_bytes(addr_bytes);
-                    let type_ptr = std::ptr::with_exposed_provenance::<TypeDescription>(
-                        usize::from_ne_bytes(type_bytes),
-                    );
-
-                    if type_ptr.is_null() {
-                        return Err(TypeResolutionError::InvalidHandle);
-                    }
-
-                    // SAFETY: `type_ptr` comes from a `TypedReference` payload written as
-                    // `Arc::as_ptr` in VM code paths; we reconstruct, clone, then restore raw
-                    // ownership with `Arc::into_raw` to preserve the original refcount.
-                    let type_desc = unsafe {
-                        let arc = Arc::from_raw(type_ptr);
-                        let clone = arc.clone();
-                        let _ = Arc::into_raw(arc);
-                        clone
-                    };
-
-                    let m = ManagedPtr::new(
-                        NonNull::new(std::ptr::with_exposed_provenance_mut(addr)),
-                        (*type_desc).clone(),
-                        None,
-                        false,
-                        Some(ByteOffset::new(0)),
-                    );
-                    return Ok(CTSValue::Value(TypedRef(m, type_desc)));
+                    return Err(TypeResolutionError::InvalidLayout(
+                        "ECMA-335 typedref values may only occupy parameters and locals; they cannot be read from managed storage".into(),
+                    ));
                 }
 
                 let instance =

@@ -1,3 +1,4 @@
+use dotnet_types::TypeDescription;
 use dotnet_types::error::ExecutionError;
 use dotnet_utils::ByteOffset;
 use dotnet_value::pointer::PointerOrigin;
@@ -15,6 +16,18 @@ pub(crate) enum WriteBackSource<'gc> {
     Raw(NonNull<u8>),
 }
 
+/// Native, call-scoped representation of a `typedref` input parameter.
+///
+/// This is deliberately not VM storage. `value` and `type_handle` borrow the
+/// live [`TypedReferenceSlot`](dotnet_value::TypedReferenceSlot) being
+/// marshaled, and must not outlive the synchronous libffi call.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct PInvokeTypedReferenceAbi {
+    pub(crate) value: *mut u8,
+    pub(crate) type_handle: *const TypeDescription,
+}
+
 pub(crate) enum TempBuffer {
     I32(Box<i32>),
     I64(Box<i64>),
@@ -22,6 +35,7 @@ pub(crate) enum TempBuffer {
     F64(Box<f64>),
     Ptr(Box<*mut u8>),
     Bytes(Vec<u8>),
+    TypedReference(PInvokeTypedReferenceAbi),
 }
 
 impl TempBuffer {
@@ -33,6 +47,7 @@ impl TempBuffer {
             TempBuffer::F64(_) => "f64",
             TempBuffer::Ptr(_) => "ptr",
             TempBuffer::Bytes(_) => "bytes",
+            TempBuffer::TypedReference(_) => "typedref",
         }
     }
 
@@ -91,6 +106,16 @@ impl TempBuffer {
             TempBuffer::Bytes(buf) => Ok(buf),
             _ => Err(ExecutionError::TypeMismatch {
                 expected: "P/Invoke temp buffer bytes",
+                actual: self.kind_name().into(),
+            }),
+        }
+    }
+
+    pub(crate) fn as_typed_reference(&self) -> Result<&PInvokeTypedReferenceAbi, ExecutionError> {
+        match self {
+            TempBuffer::TypedReference(value) => Ok(value),
+            _ => Err(ExecutionError::TypeMismatch {
+                expected: "P/Invoke temp buffer typedref",
                 actual: self.kind_name().into(),
             }),
         }

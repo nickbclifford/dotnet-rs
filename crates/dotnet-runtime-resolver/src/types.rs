@@ -239,7 +239,6 @@ where
             ValueType::Pointer(_) => asms.corlib_wkt(WellKnown::IntPtr),
             ValueType::Float32(_) => asms.corlib_wkt(WellKnown::Single),
             ValueType::Float64(_) => asms.corlib_wkt(WellKnown::Double),
-            ValueType::TypedRef(_, _) => asms.corlib_wkt(WellKnown::TypedReference),
             ValueType::Struct(s) => Ok(s.description.clone()),
         }
     }
@@ -260,7 +259,9 @@ where
             StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_wkt(WellKnown::Object),
             StackValue::ManagedPtr(m) => Ok(m.inner_type()),
             StackValue::ValueType(o) => Ok(o.description.clone()),
-            StackValue::TypedRef(_, _) => self.loader.corlib_wkt(WellKnown::TypedReference),
+            StackValue::TypedRef(_) | StackValue::UninitializedTypedRef => {
+                self.loader.corlib_wkt(WellKnown::TypedReference)
+            }
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
                 // SAFETY: Cross-arena object pointers are live GC handles maintained by the

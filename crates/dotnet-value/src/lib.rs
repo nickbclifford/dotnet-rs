@@ -31,7 +31,9 @@ mod validation_tests;
 pub use crate::{
     object::{HeapStorage, Object, ObjectHandle, ObjectPtr, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
-    stack_value::{ManagedExceptionError, StackValue, StackValueError},
+    stack_value::{
+        ManagedExceptionError, StackManagedPtr, StackValue, StackValueError, TypedReferenceSlot,
+    },
     string::CLRString,
     validation::ValidationTag,
 };

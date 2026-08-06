@@ -2,7 +2,8 @@ use crate::{
     ByteOffset, StackSlotIndex,
     object::ObjectRef,
     pointer::{
-        ManagedPtr, ManagedPtrInfo, ManagedPtrStackInfo, PointerOrigin, nonnull_from_exposed_addr,
+        HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver,
+        ManagedPtrStackInfo, PointerOrigin, unmanaged_ptr_from_addr,
     },
 };
 use dotnet_types::error::PointerDeserializationError;
@@ -10,284 +11,457 @@ use gc_arena::Mutation;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
-use crate::{ArenaId, object::ObjectPtr};
+use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_addr};
+
 #[cfg(feature = "multithreading")]
-use dotnet_utils::gc::ThreadSafeLock;
+fn cross_arena_storage_base_with_lease(ptr: crate::object::ObjectPtr) -> *mut u8 {
+    // This private helper is called only by `cross_arena_ptr_from_addr` callbacks,
+    // whose contract holds the target arena lease for the callback duration.
+    // SAFETY: That callback-scoped lease keeps `ptr`'s object storage live while
+    // its base address is read.
+    unsafe { ptr.as_heap_storage(|storage| storage.raw_data_ptr()) }
+}
+
+/// Supplies the cached live base while `ManagedPtr::write` checks its debug
+/// round trip. The serialized reader must still recover the Stack/Static
+/// origin and apply its encoded offset before the resulting address is checked.
+#[cfg(debug_assertions)]
+struct DebugWriteResolver {
+    base: Option<NonNull<u8>>,
+}
+
+#[cfg(debug_assertions)]
+impl<'gc> ManagedPtrResolver<'gc> for DebugWriteResolver {
+    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
+        self.base
+    }
+
+    fn static_storage_base(
+        &self,
+        _metadata: &crate::pointer::StaticMetadata,
+    ) -> Option<NonNull<u8>> {
+        self.base
+    }
+}
 
 impl<'gc> ManagedPtr<'gc> {
-    /// One word for the pointer, one word for the owner, and one word for the checksum.
+    /// The serialized representation always occupies three words.
+    ///
+    /// # Origin-handle convention
+    ///
+    /// - `Heap`: word 0 is the GC handle address from `Gc::as_ptr(handle).addr()`;
+    ///   word 1 is the byte offset. `ObjectRef::read_unchecked` is the sole
+    ///   GC-handle reconstruction boundary.
+    /// - `Stack`: word 0 is `1 | (slot_idx << 3) | (offset << 33)`; word 1 is
+    ///   the full compact byte offset, never a cached address. The packed
+    ///   word-0 field mirrors its low 31 bits for legacy tag compatibility.
+    /// - `Static`: word 0 is
+    ///   `7 | (1 << 3) | (registry_id << 6) | (offset << 38)`; word 1 is the
+    ///   full compact byte offset, never a cached address. The packed word-0
+    ///   field mirrors its low 26 bits.
+    /// - `Unmanaged`: word 0 is zero and word 1 is the absolute address. The
+    ///   address is the value because this origin has no recoverable handle.
+    /// - `CrossArenaObjectRef`: word 0 is `lock_ptr.addr() | 5`; word 1 is
+    ///   `offset | (arena_id << 32)`. Its lock-pointer reconstruction is
+    ///   confined to the scoped helper established before this redesign.
+    /// - `Transient`: word 0 carries its tag and offset and word 1 is the byte
+    ///   offset, but it remains unserializable: metadata and resolved reads return
+    ///   `PointerDeserializationError::UnknownSubtag`.
+    ///
+    /// Word 2 remains the integrity word `word0 ^ word1`. Address words must
+    /// be obtained with `ptr::addr()`, not provenance exposure.
     pub const SIZE: usize = ObjectRef::SIZE * 3;
 
     pub fn serialization_buffer() -> [u8; ObjectRef::SIZE * 3] {
         [0u8; ObjectRef::SIZE * 3]
     }
 
-    /// Read only the stack-related metadata from memory. This does not require a GCHandle
-    /// because it does not return an ObjectRef.
+    /// Read stack-related metadata without constructing an executable pointer.
+    ///
+    /// Stack reallocation uses this to preserve the encoded slot and offset.
+    /// Call [`ManagedPtr::read_resolved_unchecked`] when an executable pointer
+    /// is required.
     ///
     /// # Safety
     ///
-    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
-    #[expect(
-        clippy::multiple_unsafe_ops_per_block,
-        reason = "the byte offset and unaligned read jointly decode one serialized pointer word"
-    )]
+    /// The `source` slice must contain one complete serialized `ManagedPtr`.
     pub unsafe fn read_stack_info(source: &[u8]) -> ManagedPtrStackInfo {
         let ptr_size = ObjectRef::SIZE;
-        if source.len() < ptr_size * 2 {
-            panic!("ManagedPtr::read: buffer too small");
+        if source.len() < Self::SIZE {
+            panic!("ManagedPtr::read_stack_info: buffer too small");
         }
 
-        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-        let word0 = unsafe { (source.as_ptr() as *const usize).read_unaligned() };
-        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-        let word1 = unsafe { (source.as_ptr().add(ptr_size) as *const usize).read_unaligned() };
+        let word0 = usize::from_ne_bytes(
+            source[..ptr_size]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word1 = usize::from_ne_bytes(
+            source[ptr_size..ptr_size * 2]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word2 = usize::from_ne_bytes(
+            source[ptr_size * 2..ptr_size * 3]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        if word2 != word0 ^ word1 {
+            panic!("ManagedPtr::read_stack_info: checksum mismatch");
+        }
 
         if word0 & 1 != 0 {
-            let tag = word0 & 7;
-            match tag {
+            match word0 & 7 {
                 1 => {
-                    // Stack pointer
-                    let idx = (word0 >> 3) & 0x3FFFFFFF;
-                    let off = word0 >> 33;
+                    let packed_offset = word0 >> 33;
+                    if word1 > u32::MAX as usize || packed_offset != (word1 & 0x7FFF_FFFF) {
+                        panic!("ManagedPtr::read_stack_info: encoded offset mismatch");
+                    }
+                    let idx = (word0 >> 3) & 0x3FFF_FFFF;
                     return ManagedPtrStackInfo {
-                        address: nonnull_from_exposed_addr(word1),
-                        offset: ByteOffset::new(off),
+                        offset: ByteOffset::new(word1),
                         origin: PointerOrigin::Stack(StackSlotIndex::new(idx)),
                     };
                 }
                 7 if ((word0 >> 3) & 7) == 2 => {
-                    // Transient (Tag 7, Subtag 2)
-                    let off = word0 >> 6;
                     return ManagedPtrStackInfo {
-                        address: nonnull_from_exposed_addr(word1),
-                        offset: ByteOffset::new(off),
-                        origin: PointerOrigin::Unmanaged, // Can't recover Object without GCHandle
+                        offset: ByteOffset::new(word0 >> 6),
+                        // A transient origin has no recoverable metadata owner.
+                        origin: PointerOrigin::Unmanaged,
                     };
                 }
                 _ => {}
             }
         }
 
-        // Heap pointer or Static/Unmanaged
-        // We can't fully reconstruct Static/Heap without GCHandle, so we mark as Unmanaged
-        // for stack info purposes.
+        // This helper is intentionally metadata-only. Its only consumer is
+        // stack reallocation, which acts solely on the Stack case above.
         ManagedPtrStackInfo {
-            address: nonnull_from_exposed_addr(word1),
             offset: ByteOffset::new(word1),
             origin: PointerOrigin::Unmanaged,
         }
     }
 
-    /// Read pointer and owner from memory, branded with a GCHandle.
-    /// Returns detailed metadata about the pointer. Type info must be supplied by caller.
+    /// Read only the serialized origin and offset metadata.
+    ///
+    /// This is the deserialization entry point for tracing and resurrection:
+    /// those operations need the origin but must not manufacture executable
+    /// Stack or Static addresses. Use [`ManagedPtr::read_resolved_unchecked`]
+    /// for an execution path and supply a live-base resolver there.
     ///
     /// # Safety
     ///
-    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
-    /// It must contain valid bytes representing a `ManagedPtr`.
-    pub unsafe fn read_branded(
-        source: &[u8],
-        _gc: &Mutation<'gc>,
-    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-        unsafe { Self::read_unchecked(source) }
-    }
-
-    /// Read pointer and owner from memory.
-    /// Returns detailed metadata about the pointer. Type info must be supplied by caller.
-    ///
-    /// # Safety
-    ///
-    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
-    /// It must contain valid bytes representing a `ManagedPtr`.
-    #[cfg_attr(
-        feature = "multithreading",
-        expect(
-            clippy::multiple_unsafe_ops_per_block,
-            reason = "cross-arena decoding traverses the encoded lock pointer and its storage pointer as one reconstruction"
-        )
-    )]
-    pub unsafe fn read_unchecked(
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    pub unsafe fn read_metadata_unchecked(
         source: &[u8],
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         let ptr_size = ObjectRef::SIZE;
+        if source.len() < Self::SIZE {
+            panic!("ManagedPtr::read_metadata_unchecked: buffer too small");
+        }
 
-        let mut word0_bytes = [0u8; ObjectRef::SIZE];
-        word0_bytes.copy_from_slice(&source[0..ptr_size]);
-        let word0 = usize::from_ne_bytes(word0_bytes);
-
-        let mut word1_bytes = [0u8; ObjectRef::SIZE];
-        word1_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
-        let word1 = usize::from_ne_bytes(word1_bytes);
-
-        let mut word2_bytes = [0u8; ObjectRef::SIZE];
-        word2_bytes.copy_from_slice(&source[ptr_size * 2..ptr_size * 3]);
-        let word2 = usize::from_ne_bytes(word2_bytes);
+        let word0 = usize::from_ne_bytes(
+            source[..ptr_size]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word1 = usize::from_ne_bytes(
+            source[ptr_size..ptr_size * 2]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word2 = usize::from_ne_bytes(
+            source[ptr_size * 2..ptr_size * 3]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
 
         if word2 != word0 ^ word1 {
             return Err(PointerDeserializationError::ChecksumMismatch);
         }
 
-        let tag = word0 & 7;
-        if word0 & 1 != 0 {
-            // Tagged pointer or Stack
-            match tag {
-                1 => {
-                    // Stack (Tag 1)
-                    let slot_idx = (word0 >> 3) & 0x3FFFFFFF;
-                    let slot_offset = word0 >> 33;
-                    let raw_ptr = nonnull_from_exposed_addr(word1);
+        match word0 & 7 {
+            1 => {
+                let packed_offset = word0 >> 33;
+                if word1 > u32::MAX as usize || packed_offset != (word1 & 0x7FFF_FFFF) {
+                    return Err(PointerDeserializationError::OffsetMismatch);
+                }
+                let slot_idx = (word0 >> 3) & 0x3FFF_FFFF;
+                Ok(ManagedPtrInfo {
+                    address: None,
+                    origin: PointerOrigin::Stack(StackSlotIndex::new(slot_idx)),
+                    offset: ByteOffset::new(word1),
+                })
+            }
+            5 => {
+                #[cfg(feature = "multithreading")]
+                {
+                    let owner_id_val = (word1 >> 32) as u32;
+                    // Sign-extend `ArenaId::INVALID` and other negative IDs.
+                    let owner_id = ArenaId::new(owner_id_val as i32 as i64 as u64);
+                    // SAFETY: Valid CrossArena serialization contains a live lock
+                    // address in the encoded arena. The helper holds that arena's
+                    // lease while it reconstructs the origin handle; the callback
+                    // deliberately does not access object storage.
+                    let ptr = unsafe { cross_arena_ptr_from_addr(word0 & !7, owner_id, |ptr| ptr) }
+                        .ok_or(PointerDeserializationError::UnknownTag(5))?;
                     Ok(ManagedPtrInfo {
-                        address: raw_ptr,
-                        origin: PointerOrigin::Stack(StackSlotIndex::new(slot_idx)),
-                        offset: ByteOffset::new(slot_offset),
+                        address: None,
+                        origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
+                        offset: ByteOffset::new(word1 & 0xFFFF_FFFF),
                     })
                 }
-                5 => {
-                    // CrossArenaObjectRef (Tag 5)
-                    // Recover ObjectPtr from Word 0 and ArenaId/Offset from Word 1.
-                    // This avoids dereferencing the pointer during deserialization,
-                    // making it safe even if memory contains garbage or is half-written.
-                    #[cfg(feature = "multithreading")]
-                    {
-                        let lock_ptr = std::ptr::with_exposed_provenance::<
-                            ThreadSafeLock<crate::object::ObjectInner<'static>>,
-                        >(word0 & !7);
-
-                        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                        let ptr = unsafe {
-                            ObjectPtr::from_raw(lock_ptr)
-                                .ok_or(PointerDeserializationError::UnknownTag(tag))?
-                        };
-
-                        let offset_val = word1 & 0xFFFFFFFF;
-                        let owner_id_val = (word1 >> 32) as u32;
-                        // Sign-extend from 32-bit to correctly handle ArenaId::INVALID (u64::MAX)
-                        let owner_id = ArenaId::new(owner_id_val as i32 as i64 as u64);
-
-                        // If we are in debug/validation mode, we still want to ensure
-                        // the pointer is valid, but we do it AFTER recovering owner_id.
-                        #[cfg(any(feature = "memory-validation", debug_assertions))]
-                        {
-                            if !lock_ptr.is_null() {
-                                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                                let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
-                                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                                unsafe { (*inner_ptr).validate_magic() };
-                            }
-                        }
-
-                        // RECOVERY: We must use the data storage pointer as the base, not ObjectInner.
-                        // We use the recovered offset directly.
-                        // Note: If we need the absolute address, we still have to dereference base_ptr,
-                        // but we can postpone this or make it safe.
-                        // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                        let base_ptr = unsafe {
-                            if lock_ptr.is_null() {
-                                NonNull::dangling().as_ptr()
-                            } else {
-                                let inner_ptr = (*lock_ptr).as_ptr();
-                                (*inner_ptr).storage.raw_data_ptr()
-                            }
-                        };
-                        let base_addr = base_ptr.expose_provenance();
-
-                        Ok(ManagedPtrInfo {
-                            address: if base_ptr.is_null() {
-                                None
-                            } else {
-                                nonnull_from_exposed_addr(base_addr + offset_val)
-                            },
-                            origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
-                            offset: ByteOffset::new(offset_val),
-                        })
-                    }
-                    #[cfg(not(feature = "multithreading"))]
-                    {
-                        // Fallback for non-multithreading mode (should not happen)
-                        let _ = tag;
-                        Err(PointerDeserializationError::UnknownTag(tag))
-                    }
-                }
-                7 => {
-                    // Extended Tags
-                    let subtag = (word0 >> 3) & 7;
-                    match subtag {
-                        1 => {
-                            // Static (Subtag 1)
-                            let id = ((word0 >> 6) & 0xFFFFFFFF) as u32;
-                            let slot_offset = word0 >> 38;
-                            let raw_ptr = nonnull_from_exposed_addr(word1);
-
-                            if id > 0
-                                && let Some(meta) = super::static_registry().get(&id)
-                            {
-                                Ok(ManagedPtrInfo {
-                                    address: raw_ptr,
-                                    origin: PointerOrigin::Static(meta.clone()),
-                                    offset: ByteOffset::new(slot_offset),
-                                })
-                            } else {
-                                Err(PointerDeserializationError::InvalidStaticId(id))
-                            }
-                        }
-                        2 => {
-                            // Transient (Subtag 2)
-                            // NOTE: Object reference is lost on serialization/deserialization.
-                            // Recovering as Unmanaged is unsafe if the stack relocates.
-                            Err(PointerDeserializationError::UnknownSubtag(subtag))
-                        }
-                        _ => {
-                            // Unmanaged or unknown subtag
-                            Err(PointerDeserializationError::UnknownSubtag(subtag))
-                        }
-                    }
-                }
-                _ => {
-                    // Invalid tag or unhandled format
-                    Err(PointerDeserializationError::UnknownTag(tag))
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    Err(PointerDeserializationError::UnknownTag(5))
                 }
             }
-        } else {
-            // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
-            // Read Owner (Offset 0)
-            // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-            let owner = unsafe { ObjectRef::read_unchecked(&source[0..ptr_size]) };
-
-            // Read Offset (Offset 8)
-            let offset = ByteOffset::new(word1);
-
-            // Compute pointer from owner's data + offset
-            let ptr = if let Some(handle) = owner.0 {
-                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    NonNull::new(base_ptr.wrapping_add(offset.as_usize()))
+            7 => match (word0 >> 3) & 7 {
+                1 => {
+                    let id = ((word0 >> 6) & 0xFFFF_FFFF) as u32;
+                    let slot_offset = word0 >> 38;
+                    if word1 > u32::MAX as usize || slot_offset != (word1 & 0x03FF_FFFF) {
+                        return Err(PointerDeserializationError::OffsetMismatch);
+                    }
+                    let metadata = super::static_registry()
+                        .get(&id)
+                        .map(|metadata| metadata.clone())
+                        .ok_or(PointerDeserializationError::InvalidStaticId(id))?;
+                    Ok(ManagedPtrInfo {
+                        address: None,
+                        origin: PointerOrigin::Static(metadata),
+                        offset: ByteOffset::new(word1),
+                    })
                 }
-            } else if offset == ByteOffset::ZERO {
-                // Null owner with zero offset means null pointer
-                None
-            } else {
-                // Null owner but non-zero offset - this is a static data pointer or unmanaged
-                // Store raw pointer directly in word1 for absolute addresses
-                nonnull_from_exposed_addr(offset.as_usize())
-            };
-
-            Ok(ManagedPtrInfo {
-                address: ptr,
-                origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| {
-                    PointerOrigin::Heap(ObjectRef(Some(h)))
-                }),
-                offset,
-            })
+                2 => Err(PointerDeserializationError::UnknownSubtag(2)),
+                subtag => Err(PointerDeserializationError::UnknownSubtag(subtag)),
+            },
+            0 => {
+                // The untagged encoding is either a Heap ObjectRef or an
+                // Unmanaged absolute address. Metadata decoding retains no
+                // executable address in either case.
+                // SAFETY: `source` is a full ManagedPtr representation; its
+                // initial word is the ObjectRef encoding expected by this helper.
+                let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
+                Ok(ManagedPtrInfo {
+                    address: None,
+                    origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| {
+                        PointerOrigin::Heap(ObjectRef(Some(h)))
+                    }),
+                    offset: ByteOffset::new(word1),
+                })
+            }
+            tag => Err(PointerDeserializationError::UnknownTag(tag)),
         }
     }
 
-    /// Write owner and offset to memory.
-    /// Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
+    /// Read only managed-pointer metadata, branded with a GC token.
+    ///
+    /// The token carries the lifetime of decoded Heap and CrossArena origin
+    /// handles; it does not grant Stack or Static storage access.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    pub unsafe fn read_metadata_branded(
+        source: &[u8],
+        _gc: &Mutation<'gc>,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        // SAFETY: The branded caller supplies one complete ManagedPtr encoding.
+        unsafe { Self::read_metadata_unchecked(source) }
+    }
+
+    /// Read a `ManagedPtr` into an executable provenance-carrying address.
+    ///
+    /// Stack and Static encodings carry an offset, not an address. `resolver`
+    /// must provide their live storage bases; this method applies the encoded
+    /// offset directly to that live pointer. A resolver that cannot supply a
+    /// base receives a contextual deserialization error instead of an address
+    /// reconstructed from an integer.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    pub unsafe fn read_resolved_unchecked<R: ManagedPtrResolver<'gc> + ?Sized>(
+        source: &[u8],
+        resolver: &R,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        // SAFETY: The caller supplies one complete ManagedPtr encoding.
+        let info = unsafe { Self::read_metadata_unchecked(source) }?;
+        // SAFETY: The metadata came from the complete encoded source above.
+        unsafe { Self::resolve_metadata_unchecked(source, resolver, info) }
+    }
+
+    unsafe fn resolve_metadata_unchecked<R: ManagedPtrResolver<'gc> + ?Sized>(
+        _source: &[u8],
+        resolver: &R,
+        mut info: ManagedPtrInfo<'gc>,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        let offset = info.offset.as_usize();
+        info.address = match &info.origin {
+            PointerOrigin::Stack(slot) => Some(
+                resolver
+                    .stack_slot_base(*slot)
+                    .and_then(|base| NonNull::new(base.as_ptr().wrapping_add(offset)))
+                    .ok_or(PointerDeserializationError::UnresolvedStackSlot(
+                        slot.as_usize(),
+                    ))?,
+            ),
+            PointerOrigin::Static(metadata) => Some(
+                resolver
+                    .static_storage_base(metadata)
+                    .and_then(|base| NonNull::new(base.as_ptr().wrapping_add(offset)))
+                    .ok_or(PointerDeserializationError::UnresolvedStaticStorage)?,
+            ),
+            PointerOrigin::Heap(owner) => match owner.0 {
+                Some(handle) => {
+                    // SAFETY: Heap origin serialization contains a live branded
+                    // handle. The resulting pointer is derived while its storage
+                    // is borrowed from that handle.
+                    let base = unsafe { handle.borrow().storage.raw_data_ptr() };
+                    NonNull::new(base.wrapping_add(offset))
+                }
+                None => None,
+            },
+            PointerOrigin::Unmanaged => {
+                // SAFETY: This branch is exclusively the address-only Unmanaged
+                // wire representation; the caller owns its validity contract.
+                NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(_, owner_id) => {
+                let word0 = usize::from_ne_bytes(
+                    _source[..ObjectRef::SIZE]
+                        .try_into()
+                        .expect("slice length was checked by metadata decoding"),
+                );
+                // SAFETY: Metadata decoding already validated the CrossArena
+                // representation. The helper holds the encoded arena lease for
+                // the complete origin-to-storage traversal below.
+                let base = unsafe {
+                    cross_arena_ptr_from_addr(word0 & !7, *owner_id, |ptr| {
+                        cross_arena_storage_base_with_lease(ptr)
+                    })
+                }
+                .ok_or(PointerDeserializationError::UnknownTag(5))?;
+                NonNull::new(base.wrapping_add(offset))
+            }
+            PointerOrigin::Transient(_) => unreachable!("Transient cannot be decoded"),
+        };
+        Ok(info)
+    }
+
+    /// Read an executable managed pointer using a caller-owned Heap-handle cache.
+    ///
+    /// The cache applies only to a non-null, untagged Heap word. A hit still
+    /// validates all three serialized words, resolves live object storage from
+    /// the rooted handle, and applies the encoded offset. Other origins use the
+    /// ordinary resolver path unchanged.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    /// `cache` must retain its Heap values in a GC-traced owner and invalidate
+    /// them at its collection-epoch boundary before a serialized handle address
+    /// can be reused.
+    pub unsafe fn read_resolved_with_heap_cache_unchecked<
+        R: ManagedPtrResolver<'gc> + ?Sized,
+        C: HeapManagedPtrDecodeCache<'gc> + ?Sized,
+    >(
+        source: &[u8],
+        resolver: &R,
+        cache: &mut C,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        let ptr_size = ObjectRef::SIZE;
+        if source.len() < Self::SIZE {
+            panic!("ManagedPtr::read_resolved_with_heap_cache_unchecked: buffer too small");
+        }
+
+        let word0 = usize::from_ne_bytes(
+            source[..ptr_size]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word1 = usize::from_ne_bytes(
+            source[ptr_size..ptr_size * 2]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        let word2 = usize::from_ne_bytes(
+            source[ptr_size * 2..ptr_size * 3]
+                .try_into()
+                .expect("slice length was checked above"),
+        );
+        if word2 != word0 ^ word1 {
+            return Err(PointerDeserializationError::ChecksumMismatch);
+        }
+
+        if word0 != 0 && word0 & 7 == 0 {
+            let owner = match cache.get_heap_handle(word0) {
+                Some(owner) => owner,
+                None => {
+                    // SAFETY: `source` starts with the complete Heap ObjectRef
+                    // representation validated as an untagged non-null word above.
+                    let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
+                    if owner.0.is_some() {
+                        cache.insert_heap_handle(word0, owner);
+                    }
+                    owner
+                }
+            };
+            let info = ManagedPtrInfo {
+                address: None,
+                origin: PointerOrigin::Heap(owner),
+                offset: ByteOffset::new(word1),
+            };
+            // SAFETY: `source` was completely validated above and `info` carries
+            // either a rooted cached Heap handle or the normal decoded handle.
+            return unsafe { Self::resolve_metadata_unchecked(source, resolver, info) };
+        }
+
+        // SAFETY: Non-Heap encodings keep their established decoding behavior.
+        unsafe { Self::read_resolved_unchecked(source, resolver) }
+    }
+
+    /// Read an executable managed pointer and brand decoded GC handles.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    pub unsafe fn read_resolved_branded<R: ManagedPtrResolver<'gc> + ?Sized>(
+        source: &[u8],
+        gc: &Mutation<'gc>,
+        resolver: &R,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        let _ = gc;
+        // SAFETY: The branded caller supplies one complete ManagedPtr encoding.
+        unsafe { Self::read_resolved_unchecked(source, resolver) }
+    }
+
+    /// Read a branded executable managed pointer using a caller-owned Heap cache.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    /// The cache must satisfy [`HeapManagedPtrDecodeCache`]'s tracing and
+    /// collection-epoch invalidation contract.
+    pub unsafe fn read_resolved_branded_with_heap_cache_unchecked<
+        R: ManagedPtrResolver<'gc> + ?Sized,
+        C: HeapManagedPtrDecodeCache<'gc> + ?Sized,
+    >(
+        source: &[u8],
+        gc: &Mutation<'gc>,
+        resolver: &R,
+        cache: &mut C,
+    ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
+        let _ = gc;
+        // SAFETY: The branded caller supplies one complete ManagedPtr encoding
+        // and a cache satisfying its documented contract.
+        unsafe { Self::read_resolved_with_heap_cache_unchecked(source, resolver, cache) }
+    }
+
+    /// Writes the three-word origin handle, offset, and XOR integrity word
+    /// described by [`ManagedPtr::SIZE`].
     pub fn write(&self, dest: &mut [u8]) {
         self.validate_magic();
 
@@ -298,12 +472,12 @@ impl<'gc> ManagedPtr<'gc> {
             PointerOrigin::Stack(slot_idx) => {
                 let w0: usize =
                     1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (byte_offset.as_usize() << 33);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
+                let w1 = byte_offset.as_usize();
                 (w0, w1)
             }
             PointerOrigin::Heap(owner) => {
                 let w0 = match owner.0 {
-                    Some(h) => gc_arena::Gc::as_ptr(h).expose_provenance(),
+                    Some(h) => gc_arena::Gc::as_ptr(h).addr(),
                     None => 0,
                 };
                 let w1 = byte_offset.as_usize();
@@ -322,17 +496,17 @@ impl<'gc> ManagedPtr<'gc> {
                     | (1 << 3)
                     | ((id as usize & 0xFFFFFFFF) << 6)
                     | (byte_offset.as_usize() << 38);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
+                let w1 = byte_offset.as_usize();
                 (w0, w1)
             }
             PointerOrigin::Unmanaged => {
                 let w0: usize = 0;
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
+                let w1 = self._value.map_or(0, |p| p.as_ptr().addr());
                 (w0, w1)
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let w0: usize = ptr.as_ptr().expose_provenance() | 5;
+                let w0: usize = ptr.as_ptr().addr() | 5;
                 // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
                 // This avoids dereferencing the pointer during deserialization/GC.
                 let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
@@ -342,7 +516,7 @@ impl<'gc> ManagedPtr<'gc> {
             }
             PointerOrigin::Transient(_) => {
                 let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
-                let w1 = self._value.map_or(0, |p| p.as_ptr().expose_provenance());
+                let w1 = byte_offset.as_usize();
                 (w0, w1)
             }
         };
@@ -354,9 +528,15 @@ impl<'gc> ManagedPtr<'gc> {
 
         #[cfg(debug_assertions)]
         if !matches!(self.origin, PointerOrigin::Transient(_)) {
+            let expected_address = self._value.map(|address| address.as_ptr().addr());
+            let base = self._value.and_then(|address| {
+                NonNull::new(address.as_ptr().wrapping_sub(byte_offset.as_usize()))
+            });
+            let resolver = DebugWriteResolver { base };
             let recovered =
-                // SAFETY: This serialized pointer value is validated by the surrounding pointer API before it is reconstructed or accessed.
-                unsafe { Self::read_unchecked(dest) }.expect("ManagedPtr::write: recovery failed");
+                // SAFETY: `dest` was just filled with one complete ManagedPtr encoding above.
+                unsafe { Self::read_resolved_unchecked(dest, &resolver) }
+                    .expect("ManagedPtr::write: recovery failed");
             let self_origin_norm = self.origin.clone().normalize();
             let recovered_origin_norm = recovered.origin.clone().normalize();
 
@@ -373,6 +553,14 @@ impl<'gc> ManagedPtr<'gc> {
                     byte_offset, recovered.offset
                 );
             }
+
+            assert_eq!(
+                recovered.address.map(|address| address.as_ptr().addr()),
+                expected_address,
+                "ManagedPtr serialization round-trip failed: resolved address mismatch. Original: {:?}, Recovered: {:?}",
+                expected_address,
+                recovered.address.map(|address| address.as_ptr().addr())
+            );
         }
     }
 }
