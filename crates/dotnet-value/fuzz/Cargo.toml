@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 arbitrary = { version = "1.3", features = ["derive"] }
 dotnet-value = { path = "..", features = ["fuzzing"] }
 dotnet-utils = { path = "../../dotnet-utils", features = ["fuzzing"] }
+gc-arena = "0.6.0"
 dotnet-types = { path = "../../dotnet-types", features = ["fuzzing"] }
 
 # Prevent this from interfering with workspaces

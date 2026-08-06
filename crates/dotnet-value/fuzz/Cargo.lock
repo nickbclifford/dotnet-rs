@@ -190,6 +190,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "gc-arena",
  "libfuzzer-sys",
 ]
 
