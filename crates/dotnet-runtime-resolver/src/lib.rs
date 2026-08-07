@@ -80,6 +80,40 @@ pub trait VmtCacheAdapter: ResolverThreadSafety + 'static {
     );
 }
 
+/// The only currently supported static constrained call form. Keeping the call kind in the key
+/// makes a later static constrained form opt in explicitly instead of accidentally sharing a
+/// metadata result with different dispatch semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StaticConstrainedCallKind {
+    Call,
+}
+
+/// Exact, loader-owned key for metadata that is invariant for a static constrained call.
+///
+/// This deliberately contains no receiver, managed pointer, delegate target, or tail-call state.
+/// `GenericLookup` equality is structural, so equivalent generic slices from separate frames
+/// share only when they describe the same closed source instantiation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StaticConstrainedCacheKey {
+    pub kind: StaticConstrainedCallKind,
+    pub constraint: ConcreteType,
+    pub base_method: MethodDescription,
+    pub source_lookup: GenericLookup,
+}
+
+pub trait StaticConstrainedCacheAdapter: ResolverThreadSafety + 'static {
+    fn get_static_constrained_cached(
+        &self,
+        key: &StaticConstrainedCacheKey,
+    ) -> Option<MethodDescription>;
+    fn set_static_constrained_cached(
+        &self,
+        key: StaticConstrainedCacheKey,
+        method: MethodDescription,
+    );
+    fn record_static_constrained_key_clones(&self, _count: u64) {}
+}
+
 pub trait TypePropertyCacheAdapter: ResolverThreadSafety + 'static {
     fn get_hierarchy_cached(&self, child: &ConcreteType, parent: &ConcreteType) -> Option<bool>;
     fn set_hierarchy_cached(&self, child: ConcreteType, parent: ConcreteType, is_match: bool);
@@ -93,12 +127,16 @@ pub trait TypePropertyCacheAdapter: ResolverThreadSafety + 'static {
 }
 
 pub trait ResolverCacheAdapter:
-    IntrinsicCacheAdapter + VmtCacheAdapter + TypePropertyCacheAdapter
+    IntrinsicCacheAdapter + VmtCacheAdapter + StaticConstrainedCacheAdapter + TypePropertyCacheAdapter
 {
 }
 
-impl<T: IntrinsicCacheAdapter + VmtCacheAdapter + TypePropertyCacheAdapter> ResolverCacheAdapter
-    for T
+impl<
+    T: IntrinsicCacheAdapter
+        + VmtCacheAdapter
+        + StaticConstrainedCacheAdapter
+        + TypePropertyCacheAdapter,
+> ResolverCacheAdapter for T
 {
 }
 

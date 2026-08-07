@@ -261,6 +261,16 @@ define_global_caches! {
         capacity: unbounded,
         front: (none)
     };
+    /// Exact static constrained metadata: `(kind, constraint, base method, source lookup)`.
+    /// It is intentionally separate from the VMT, which remains the sole virtual-target cache.
+    static_constrained_cache: ShardedCache<
+        dotnet_runtime_resolver::StaticConstrainedCacheKey,
+        MethodDescription,
+    > => {
+        kind: CacheKind::StaticConstrained,
+        capacity: unbounded,
+        front: (none)
+    };
 }
 
 #[cfg(feature = "multithreading")]

@@ -31,6 +31,7 @@ pub struct CacheStats {
     pub overrides: CacheStat,
     pub method_info: CacheStat,
     pub delegate_dispatch: CacheStat,
+    pub static_constrained: CacheStat,
     pub assembly_type: CacheStat,
     pub assembly_method: CacheStat,
     pub shared_runtime_types: CacheStat,
@@ -57,6 +58,7 @@ impl std::fmt::Display for CacheStats {
         writeln!(f, "  Overrides Cache:        {}", self.overrides)?;
         writeln!(f, "  Method Info Cache:      {}", self.method_info)?;
         writeln!(f, "  Delegate Dispatch:      {}", self.delegate_dispatch)?;
+        writeln!(f, "  Static Constrained:     {}", self.static_constrained)?;
         writeln!(f, "  Assembly Type Cache:    {}", self.assembly_type)?;
         writeln!(f, "  Assembly Method Cache:  {}", self.assembly_method)?;
         writeln!(f, "  Shared Type Cache:      {}", self.shared_runtime_types)?;
@@ -186,6 +188,7 @@ define_cache_kinds! {
         Overrides => { key: "overrides", front: false },
         MethodInfo => { key: "method_info", front: true },
         DelegateDispatch => { key: "delegate_dispatch", front: false },
+        StaticConstrained => { key: "static_constrained", front: false },
     }
     shared {
         SharedRuntimeTypes => { key: "shared_runtime_types", front: false },
@@ -756,6 +759,7 @@ impl RuntimeMetrics {
             overrides: cache_stat(CacheKind::Overrides),
             method_info: cache_stat(CacheKind::MethodInfo),
             delegate_dispatch: cache_stat(CacheKind::DelegateDispatch),
+            static_constrained: cache_stat(CacheKind::StaticConstrained),
             assembly_type: self.stat(
                 sizes.assembly_type_info.0,
                 sizes.assembly_type_info.1,

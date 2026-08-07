@@ -58,6 +58,36 @@ fn delegate_dispatch_classification_is_cached_by_resolved_method() {
 }
 
 #[test]
+fn static_constrained_dispatch_caches_only_exact_metadata() {
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/interfaces/static_constrained_generic_default_42.cs",
+    ));
+    let resolution = harness
+        .loader
+        .load_resolution_from_file(&dll_path)
+        .expect("static constrained fixture must load");
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+
+    let result = harness.run_with_shared(resolution, Arc::clone(&shared));
+    assert_eq!(
+        result.exit_code, 42,
+        "static constrained fixture failed: {:?}",
+        result.stderr
+    );
+
+    let cache = shared.get_cache_stats().static_constrained;
+    assert!(
+        cache.misses > 0,
+        "static constrained cache was never populated"
+    );
+    assert!(
+        cache.hits > 0,
+        "repeated static constrained calls missed the cache"
+    );
+}
+
+#[test]
 #[cfg(not(feature = "fuzzing"))]
 fn hello_world() {
     let harness = TestHarness::get();

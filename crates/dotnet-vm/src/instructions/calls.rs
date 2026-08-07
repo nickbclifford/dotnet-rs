@@ -116,51 +116,20 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    // Deliberately uncached in Phase 2. Phase 3 will add a call-site sidecar so constrained
-    // dispatch is prepared once rather than introducing a second, ad-hoc cache here.
-    // according to the standard, this doesn't really make sense
-    // because the constrained prefix should only be on callvirt
-    // however, this appears to be used for static interface dispatch?
-
     let constraint_type = dotnet_vm_ops::vm_try!(ctx.current_context().make_concrete(constraint));
     let (method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(source, &ctx.current_context())
     );
-
-    let td: TypeDescription =
-        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
-    let type_context = ctx.current_context().for_type(td.clone());
-
-    for o in td.definition().overrides.iter() {
-        let target =
-            dotnet_vm_ops::vm_try!(type_context.locate_method(o.implementation, &lookup, None));
-        let declaration =
-            dotnet_vm_ops::vm_try!(type_context.locate_method(o.declaration, &lookup, None));
-        if method == declaration {
-            // vm_trace!(ctx, "-- dispatching to {:?} --", target);
-            // Note: Uses dispatch_method directly since method is already resolved
-            return ctx.dispatch_method(target, lookup);
-        }
-    }
-
-    // Static abstract interface members (e.g., INumber<T>.Min) may be implemented
-    // directly on the constrained concrete type without an overrides entry.
-    if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
-        td,
-        &method.method().name,
-        method.signature(),
-        method.resolution(),
+    let target = dotnet_vm_ops::vm_try!(ctx.resolver().resolve_static_constrained_method(
+        constraint_type,
+        method,
         &lookup,
-        false,
-    ) {
-        return ctx.dispatch_method(impl_method, lookup);
-    }
+    ));
 
-    // Generic-math style static interface members can have default bodies on the
-    // interface itself (no concrete override entry on the constrained type).
-    // In that case dispatch to the resolved interface method directly.
-    ctx.dispatch_method(method, lookup)
+    // The resolver cache contains only target metadata. The source lookup remains live here so
+    // no cached route can capture caller state, a managed pointer, or tail-call eligibility.
+    ctx.dispatch_method(target, lookup)
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]

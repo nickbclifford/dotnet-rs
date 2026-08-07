@@ -7,7 +7,8 @@ use crate::{
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_runtime_resolver::{
-    IntrinsicCacheAdapter, ResolverLayoutAdapter, TypePropertyCacheAdapter, VmtCacheAdapter,
+    IntrinsicCacheAdapter, ResolverLayoutAdapter, StaticConstrainedCacheAdapter,
+    StaticConstrainedCacheKey, TypePropertyCacheAdapter, VmtCacheAdapter,
 };
 use dotnet_types::{
     TypeDescription,
@@ -156,6 +157,29 @@ impl VmtCacheAdapter for VmResolverCaches {
         overrides: Arc<HashMap<MethodDescription, MethodDescription>>,
     ) {
         self.caches.overrides_cache.insert(key, overrides);
+    }
+}
+
+impl StaticConstrainedCacheAdapter for VmResolverCaches {
+    fn get_static_constrained_cached(
+        &self,
+        key: &StaticConstrainedCacheKey,
+    ) -> Option<MethodDescription> {
+        self.caches.static_constrained_cache.get(key)
+    }
+
+    fn set_static_constrained_cached(
+        &self,
+        key: StaticConstrainedCacheKey,
+        method: MethodDescription,
+    ) {
+        self.caches.static_constrained_cache.insert(key, method);
+    }
+
+    fn record_static_constrained_key_clones(&self, count: u64) {
+        self.caches
+            .static_constrained_cache
+            .record_key_clones(count);
     }
 }
 

@@ -1,4 +1,6 @@
-use crate::{ResolverExecutionContext, ResolverService};
+use crate::{
+    ResolverExecutionContext, ResolverService, StaticConstrainedCacheKey, StaticConstrainedCallKind,
+};
 use dotnet_types::{
     TypeDescription, WellKnown,
     error::TypeResolutionError,
@@ -614,6 +616,118 @@ where
         Ok(None)
     }
 
+    /// Resolves a static constrained target without involving the VMT. The only cacheable result
+    /// is the exact metadata method selected for the closed constraint/source pair; the caller
+    /// keeps constructing its live dispatch lookup and all receiver-dependent dispatch remains in
+    /// [`Self::resolve_virtual_method`].
+    pub fn resolve_static_constrained_method(
+        &self,
+        constraint: ConcreteType,
+        base_method: MethodDescription,
+        source_lookup: &GenericLookup,
+    ) -> Result<MethodDescription, TypeResolutionError> {
+        let key = StaticConstrainedCacheKey {
+            kind: StaticConstrainedCallKind::Call,
+            constraint,
+            base_method,
+            source_lookup: source_lookup.clone(),
+        };
+
+        if !static_constrained_cache_enabled() {
+            return self.resolve_static_constrained_method_uncached(&key);
+        }
+
+        // Constructing the key moves the concrete constraint and base method; only the live
+        // source lookup is cloned into its owned structural key.
+        self.caches.record_static_constrained_key_clones(1);
+        if let Some(method) = self.caches.get_static_constrained_cached(&key) {
+            if static_constrained_shadow_enabled() {
+                let uncached = self.resolve_static_constrained_method_uncached(&key)?;
+                assert_eq!(
+                    method, uncached,
+                    "static constrained cache disagreed with resolver for {key:?}"
+                );
+            }
+            return Ok(method);
+        }
+
+        // Cold first use deliberately follows the normal resolver path. Errors are not cached:
+        // a failed lookup can become meaningful after a later load, whereas a successful result
+        // owns the descriptors that keep its metadata arena alive for this SharedGlobalState.
+        let method = self.resolve_static_constrained_method_uncached(&key)?;
+        self.caches
+            .set_static_constrained_cached(key, method.clone());
+        Ok(method)
+    }
+
+    fn resolve_static_constrained_method_uncached(
+        &self,
+        key: &StaticConstrainedCacheKey,
+    ) -> Result<MethodDescription, TypeResolutionError> {
+        let constraint = self.loader.find_concrete_type(key.constraint.clone())?;
+
+        // Reuse the resolver's exact MethodImpl map first. Besides avoiding an instruction-side
+        // metadata walk, this retains the established canonical facade/CoreLib identity bridge.
+        // Variance is intentionally deferred until after the exact direct and DIM routes below.
+        if let Some(method) = self.find_override_implementation(
+            constraint.clone(),
+            &key.base_method,
+            &key.source_lookup,
+            false,
+        )? {
+            return Ok(method);
+        }
+
+        // This is the existing static constrained direct-implementation lookup. Do it before
+        // widening any match so established constrained calls retain their exact route.
+        if let Some(method) = self.loader.find_method_in_type_with_substitution(
+            constraint.clone(),
+            &key.base_method.method().name,
+            key.base_method.signature(),
+            key.base_method.resolution(),
+            &key.source_lookup,
+            false,
+        ) {
+            return Ok(method);
+        }
+
+        // Preserve default-interface precedence: a default body wins over a variance-only
+        // wrapper, which could otherwise recursively delegate back to the interface call.
+        if key.base_method.body().is_some() {
+            return Ok(key.base_method.clone());
+        }
+
+        // Only unresolved non-default cases may widen through the established variance-aware
+        // override and signature rules. This retains facade/CoreLib and variance support without
+        // changing the exact/default routes above.
+        if let Some(method) = self.find_override_implementation(
+            constraint.clone(),
+            &key.base_method,
+            &key.source_lookup,
+            true,
+        )? {
+            return Ok(method);
+        }
+
+        let method_for_lookup = self.method_for_lookup(&key.base_method, &key.source_lookup, true);
+        let signature_lookup = method_for_lookup.parent_generics.clone();
+        if let Some(method) = self.loader.find_method_in_type_internal(
+            constraint,
+            &key.base_method.method().name,
+            key.base_method.signature(),
+            key.base_method.resolution(),
+            Some(&signature_lookup),
+            Some(&key.source_lookup),
+            true,
+        ) {
+            return Ok(method);
+        }
+
+        // A static interface member can provide its own default body. Returning the resolved
+        // base metadata is the existing fallback and still leaves the live lookup at the caller.
+        Ok(key.base_method.clone())
+    }
+
     #[inline]
     pub fn locate_method(
         &self,
@@ -635,4 +749,12 @@ where
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         self.loader.locate_field(resolution, field, generics)
     }
+}
+
+fn static_constrained_shadow_enabled() -> bool {
+    std::env::var("DOTNET_STATIC_CONSTRAINED_SHADOW").is_ok_and(|value| value == "1")
+}
+
+fn static_constrained_cache_enabled() -> bool {
+    std::env::var("DOTNET_STATIC_CONSTRAINED_CACHE").map_or(true, |value| value != "0")
 }
