@@ -1,8 +1,7 @@
 use gc_arena::static_collect;
-use lru::LruCache;
 use std::{
+    collections::HashMap,
     fmt::{Debug, Formatter},
-    num::NonZeroUsize,
     ops::Deref,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -109,7 +108,7 @@ struct InternConfig {
 
 const STRING_INTERN_DEFAULT_MAX_ENTRIES: usize = 4096;
 
-type StringInternerCache = LruCache<Arc<[u16]>, Arc<[u16]>>;
+type StringInternerCache = HashMap<Arc<[u16]>, Arc<[u16]>>;
 
 pub fn parse_env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
@@ -139,11 +138,8 @@ static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
     }
 });
 
-static STRING_INTERNER: LazyLock<Mutex<StringInternerCache>> = LazyLock::new(|| {
-    let capacity = NonZeroUsize::new(INTERN_CONFIG.max_entries)
-        .expect("string interner max entries must be non-zero");
-    Mutex::new(StringInternerCache::new(capacity))
-});
+static STRING_INTERNER: LazyLock<Mutex<StringInternerCache>> =
+    LazyLock::new(|| Mutex::new(StringInternerCache::new()));
 
 fn maybe_intern(chars: Vec<u16>) -> StringStorage {
     if !INTERN_CONFIG.enabled {
@@ -157,8 +153,14 @@ fn maybe_intern(chars: Vec<u16>) -> StringStorage {
         return StringStorage::Interned(Arc::clone(existing));
     }
 
+    // The interner is an optimization only. Clearing keeps it bounded without the eviction-path
+    // panic that high-cardinality workloads previously triggered.
+    if interner.len() >= INTERN_CONFIG.max_entries {
+        interner.clear();
+    }
+
     let interned = Arc::<[u16]>::from(chars.into_boxed_slice());
-    interner.put(Arc::clone(&interned), Arc::clone(&interned));
+    interner.insert(Arc::clone(&interned), Arc::clone(&interned));
     StringStorage::Interned(interned)
 }
 

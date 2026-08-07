@@ -20,6 +20,40 @@ use dotnet_vm_data::{FrameReturnAction, StepResult};
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
 
+#[dotnet_intrinsic(
+    "static System.Reflection.MethodBase System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)"
+)]
+#[dotnet_intrinsic(
+    "static System.Reflection.MethodBase System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle, System.RuntimeTypeHandle)"
+)]
+pub fn intrinsic_method_base_get_method_from_handle<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    if method.signature().parameters.len() == 2 {
+        let _declaring_type = ctx.pop_value_type();
+    }
+    let handle = ctx.pop_value_type();
+
+    let handle_type =
+        dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeMethodHandle));
+    let method_obj = handle
+        .instance_storage
+        .field::<ObjectRef<'gc>>(handle_type, "_value")
+        .expect("System.RuntimeMethodHandle must declare a _value field")
+        .read();
+    if method_obj.0.is_none() {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The method handle does not reference a managed method.",
+        );
+    }
+
+    ctx.push_obj(method_obj);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_ReturnType()")]

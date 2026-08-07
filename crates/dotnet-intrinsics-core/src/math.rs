@@ -578,8 +578,23 @@ pub fn intrinsic_math_min_byte<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b = ctx.pop_i32() as u8;
-    let a = ctx.pop_i32() as u8;
+    let pop_byte = |ctx: &mut T| match ctx.pop() {
+        StackValue::Int32(value) => Ok(value as u8),
+        StackValue::Int64(value) => Ok(value as u8),
+        StackValue::NativeInt(value) => Ok(value as u8),
+        other => Err(StepResult::type_error(
+            "byte-compatible integer",
+            format!("{other:?}"),
+        )),
+    };
+    let b = match pop_byte(ctx) {
+        Ok(value) => value,
+        Err(step) => return step,
+    };
+    let a = match pop_byte(ctx) {
+        Ok(value) => value,
+        Err(step) => return step,
+    };
     ctx.push_i32(std::cmp::min(a, b) as i32);
     StepResult::Continue
 }
@@ -614,8 +629,23 @@ pub fn intrinsic_math_max_byte<'gc, T: TypedStackOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b = ctx.pop_i32() as u8;
-    let a = ctx.pop_i32() as u8;
+    let pop_byte = |ctx: &mut T| match ctx.pop() {
+        StackValue::Int32(value) => Ok(value as u8),
+        StackValue::Int64(value) => Ok(value as u8),
+        StackValue::NativeInt(value) => Ok(value as u8),
+        other => Err(StepResult::type_error(
+            "byte-compatible integer",
+            format!("{other:?}"),
+        )),
+    };
+    let b = match pop_byte(ctx) {
+        Ok(value) => value,
+        Err(step) => return step,
+    };
+    let a = match pop_byte(ctx) {
+        Ok(value) => value,
+        Err(step) => return step,
+    };
     ctx.push_i32(std::cmp::max(a, b) as i32);
     StepResult::Continue
 }

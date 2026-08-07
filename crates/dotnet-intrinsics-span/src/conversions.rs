@@ -731,3 +731,351 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
 
     StepResult::Continue
 }
+
+/// `MemoryMarshal.GetReference` is the static counterpart of a span's pinnable-reference
+/// accessor. Framework code uses it for branch-free span traversal, including the globalization
+/// path reached while EF Core initializes its diagnostics source.
+#[dotnet_intrinsic(
+    "static T& System.Runtime.InteropServices.MemoryMarshal::GetReference<T>(System.Span<T>)"
+)]
+#[dotnet_intrinsic(
+    "static T& System.Runtime.InteropServices.MemoryMarshal::GetReference<T>(System.ReadOnlySpan<T>)"
+)]
+pub fn intrinsic_memory_marshal_get_reference<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let element_type = dotnet_vm_ops::vm_try!(generics.method_arg(0));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+
+    let managed = match ctx.pop() {
+        StackValue::ValueType(span) => {
+            let info = match read_span_reference(&span, ctx) {
+                Ok(info) => info,
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            ManagedPtr::from_info_full(info, element_desc, false)
+        }
+        StackValue::ManagedPtr(span_ptr) => {
+            let layout = dotnet_vm_ops::vm_try!(
+                ctx.span_type_layout(ConcreteType::from(span_ptr.inner_type(),))
+            );
+            let LayoutManager::Field(fields) = &*layout else {
+                return StepResult::Error(
+                    ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
+                );
+            };
+            let managed = match read_span_reference_from_ptr(&span_ptr, fields, ctx) {
+                Ok(managed) => managed,
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            managed.with_inner_type(element_desc)
+        }
+        other => {
+            return StepResult::type_error("Span<T> or ReadOnlySpan<T>", format!("{other:?}"));
+        }
+    };
+
+    ctx.push_managed_ptr(managed);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Span<T> System.Span<T>::Slice(int)")]
+#[dotnet_intrinsic("System.Span<T> System.Span<T>::Slice(int, int)")]
+#[dotnet_intrinsic("System.ReadOnlySpan<T> System.ReadOnlySpan<T>::Slice(int)")]
+#[dotnet_intrinsic("System.ReadOnlySpan<T> System.ReadOnlySpan<T>::Slice(int, int)")]
+pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let requested_length = match method.signature().parameters.len() {
+        1 => None,
+        2 => match pop_nonneg_usize(ctx) {
+            Ok(length) => Some(length),
+            Err(step) => return step,
+        },
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Span.Slice expected one or two arguments.",
+            );
+        }
+    };
+    let start = match pop_nonneg_usize(ctx) {
+        Ok(start) => start,
+        Err(step) => return step,
+    };
+
+    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
+    let element_size = element_layout.size().as_usize();
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let span_layout =
+        dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(method.parent.clone(),)));
+
+    let (reference, total_length) = match ctx.pop() {
+        StackValue::ValueType(span) => {
+            let reference = match read_span_reference(&span, ctx) {
+                Ok(info) => ManagedPtr::from_info_full(info, element_desc.clone(), false),
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            let length = match read_span_length(&span) {
+                Ok(length) => length,
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            (reference, length)
+        }
+        StackValue::ManagedPtr(span_ptr) => {
+            let LayoutManager::Field(fields) = &*span_layout else {
+                return StepResult::Error(
+                    ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
+                );
+            };
+            let reference = match read_span_reference_from_ptr(&span_ptr, fields, ctx) {
+                Ok(reference) => reference.with_inner_type(element_desc.clone()),
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            let length = match read_span_length_from_ptr(&span_ptr, fields, ctx) {
+                Ok(length) => length,
+                Err(err) => return StepResult::Error(err.into()),
+            };
+            (reference, length)
+        }
+        other => {
+            return StepResult::type_error("Span<T> or ReadOnlySpan<T>", format!("{other:?}"));
+        }
+    };
+
+    let Ok(total_length) = usize::try_from(total_length) else {
+        return StepResult::internal_error("Span had a negative length");
+    };
+    if start > total_length {
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "start");
+    }
+    let length = requested_length.unwrap_or(total_length - start);
+    if length > total_length - start {
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
+    }
+
+    let Some(byte_offset) = start.checked_mul(element_size) else {
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "start");
+    };
+    let Ok(byte_offset) = isize::try_from(byte_offset) else {
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "start");
+    };
+    let Some(length) = i32::try_from(length).ok() else {
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
+    };
+
+    // SAFETY: bounds checks above prove the byte adjustment stays within the source span.
+    let reference = unsafe { reference.offset(byte_offset) };
+    let span = dotnet_vm_ops::vm_try!(
+        ctx.span_new_object_with_type_generics(method.parent.clone(), vec![element_type.clone()],)
+    );
+    span.instance_storage
+        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
+        .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
+        .write(reference);
+    span.instance_storage
+        .field::<i32>(span.description.clone(), "_length")
+        .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
+        .write(length);
+
+    ctx.push_value_type(span);
+    StepResult::Continue
+}
+
+fn span_reference_and_length<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    span: StackValue<'gc>,
+    element_desc: &dotnet_types::TypeDescription,
+) -> Result<(ManagedPtr<'gc>, i32), StepResult> {
+    match span {
+        StackValue::ValueType(span) => {
+            let reference = read_span_reference(&span, ctx)
+                .map(|info| ManagedPtr::from_info_full(info, element_desc.clone(), false))
+                .map_err(|err| StepResult::Error(err.into()))?;
+            let length = read_span_length(&span).map_err(|err| StepResult::Error(err.into()))?;
+            Ok((reference, length))
+        }
+        StackValue::ManagedPtr(span_ptr) => {
+            let layout = ctx
+                .span_type_layout(ConcreteType::from(span_ptr.inner_type()))
+                .map_err(|err| StepResult::Error(err.into()))?;
+            let LayoutManager::Field(fields) = &*layout else {
+                return Err(StepResult::Error(
+                    ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
+                ));
+            };
+            let reference = read_span_reference_from_ptr(&span_ptr, fields, ctx)
+                .map(|reference| reference.with_inner_type(element_desc.clone()))
+                .map_err(|err| StepResult::Error(err.into()))?;
+            let length = read_span_length_from_ptr(&span_ptr, fields, ctx)
+                .map_err(|err| StepResult::Error(err.into()))?;
+            Ok((reference, length))
+        }
+        other => Err(StepResult::type_error(
+            "Span<T> or ReadOnlySpan<T>",
+            format!("{other:?}"),
+        )),
+    }
+}
+
+#[dotnet_intrinsic("static System.ReadOnlySpan<T> System.Span<T>::op_Implicit(System.Span<T>)")]
+pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let source = ctx.pop();
+    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let (reference, length) = match source {
+        StackValue::ObjectRef(ObjectRef(None)) => (
+            ManagedPtr::new(None, element_desc.clone(), None, false, None),
+            0,
+        ),
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let (ptr, length) = {
+                let object = handle.borrow();
+                let HeapStorage::Vec(vector) = &object.storage else {
+                    return StepResult::type_error(
+                        "array or Span<T>",
+                        format!("{:?}", object.storage),
+                    );
+                };
+                // SAFETY: the owning handle is retained by the ManagedPtr below, and the vector
+                // borrow keeps its backing storage live while deriving the data pointer.
+                (
+                    unsafe { vector.raw_data_ptr() },
+                    vector.layout.length as i32,
+                )
+            };
+            (
+                ManagedPtr::new(
+                    NonNull::new(ptr),
+                    element_desc.clone(),
+                    Some(ObjectRef(Some(handle))),
+                    false,
+                    None,
+                ),
+                length,
+            )
+        }
+        other => match span_reference_and_length(ctx, other, &element_desc) {
+            Ok(data) => data,
+            Err(step) => return step,
+        },
+    };
+
+    let Some(ParameterType::Value(return_type)) = &method.signature().return_type.1 else {
+        return StepResult::internal_error("Span conversion must return a value type");
+    };
+    let return_concrete = dotnet_vm_ops::vm_try!(generics.make_concrete(
+        method.resolution(),
+        return_type.clone(),
+        ctx.loader().as_ref(),
+    ));
+    let return_span = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(return_concrete));
+    let span = dotnet_vm_ops::vm_try!(
+        ctx.span_new_object_with_type_generics(return_span, vec![element_type.clone()],)
+    );
+    span.instance_storage
+        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
+        .expect("ReadOnlySpan<T> must declare a _reference field")
+        .write(reference);
+    span.instance_storage
+        .field::<i32>(span.description.clone(), "_length")
+        .expect("ReadOnlySpan<T> must declare a _length field")
+        .write(length);
+
+    ctx.push_value_type(span);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("void System.Span<T>::CopyTo(System.Span<T>)")]
+#[dotnet_intrinsic("void System.ReadOnlySpan<T>::CopyTo(System.Span<T>)")]
+pub fn intrinsic_span_copy_to<'gc, T: SpanIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let destination = ctx.pop();
+    let source = ctx.pop();
+
+    let element_type = dotnet_vm_ops::vm_try!(generics.type_arg(0));
+    let element_layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(element_type.clone()));
+    let element_desc =
+        dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+    let element_size = element_layout.size().as_usize();
+
+    let (source_reference, source_length) =
+        match span_reference_and_length(ctx, source, &element_desc) {
+            Ok(data) => data,
+            Err(step) => return step,
+        };
+    let (destination_reference, destination_length) =
+        match span_reference_and_length(ctx, destination, &element_desc) {
+            Ok(data) => data,
+            Err(step) => return step,
+        };
+    let Ok(source_length) = usize::try_from(source_length) else {
+        return StepResult::internal_error("Span had a negative length");
+    };
+    let Ok(destination_length) = usize::try_from(destination_length) else {
+        return StepResult::internal_error("Span had a negative length");
+    };
+    if destination_length < source_length {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentException", "Destination is too short.");
+    }
+
+    // Materialize before writing so overlapping source/destination spans retain CopyTo's
+    // memmove semantics and reference-type elements use the normal typed write path.
+    let mut values = Vec::with_capacity(source_length);
+    for index in 0..source_length {
+        let offset = ByteOffset::new(index * element_size);
+        // SAFETY: source span metadata supplied the managed origin and base offset; the length
+        // check above and element-size stride keep this read within the source span.
+        let value = unsafe {
+            ctx.read_unaligned(
+                source_reference.origin().clone(),
+                source_reference.byte_offset() + offset,
+                &element_layout,
+                Some(element_desc.clone()),
+            )
+        };
+        match value {
+            Ok(value) => values.push(value),
+            Err(err) => {
+                return StepResult::Error(
+                    ExecutionError::InternalError(err.to_string().into()).into(),
+                );
+            }
+        }
+    }
+
+    for (index, value) in values.into_iter().enumerate() {
+        let offset = ByteOffset::new(index * element_size);
+        // SAFETY: destination span metadata supplied the managed origin and base offset; its
+        // validated length is at least the source length, so this write is in bounds.
+        let result = unsafe {
+            ctx.write_unaligned(
+                destination_reference.origin().clone(),
+                destination_reference.byte_offset() + offset,
+                value,
+                &element_layout,
+            )
+        };
+        if let Err(err) = result {
+            return StepResult::Error(ExecutionError::InternalError(err.to_string().into()).into());
+        }
+    }
+
+    StepResult::Continue
+}
