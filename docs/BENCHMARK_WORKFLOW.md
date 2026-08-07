@@ -468,6 +468,35 @@ key cost explicitly. Broad descriptor/generic and `Arc` leaf costs stayed approx
 absolute sampled cycle weight between the two runs, so this result supports avoiding repeated
 resolver traversal, not a claim that the cache removes all descriptor churn.
 
+### Generality attempts and narrow follow-up (2026-08-07)
+
+The same pre-warmed `perf` configuration was attempted for `json_dom` and `ef_inmemory`, both
+with the cache enabled and with `DOTNET_STATIC_CONSTRAINED_CACHE=0`. Neither pair produced a valid
+steady-state measurement, so neither is evidence for or against cache generality:
+
+| case | cache enabled | cache disabled | conclusion |
+|---|---|---|---|
+| `json_dom` | managed `ArgumentNullException` from `System.Buffer.BlockCopy` during `JsonDocument.MetadataDb.Enlarge` | same managed exception | failure is cache-independent in this run |
+| `ef_inmemory` | VM massive-allocation guard rejected `length=1,975,610,521`, `element_size=8` | process segfaulted while warming up | correctness guard remains failing; no comparison is valid |
+
+The failed recorder logs and partial `perf.data` files are retained under
+`target/perf-traces/cache-generality/{json-dom,ef-inmemory}-{on,off}`. Do not compare their sample
+counts or cycle weights: each process stopped during warm-up.
+
+The valid cache-enabled `linq_pipeline` trace still showed metadata-arena `Arc` clone/drop as the
+largest leaves (12.84%/11.51%). Rather than add another broad cache or alter virtual dispatch, the
+next change is deliberately limited to `VesContext::init_locals`: it resolves local declarations
+and initializes default values but never uses reflection owner access, so its temporary resolver
+context now borrows the method and carries no method/type reflection owners. This removes the
+otherwise unnecessary descriptor clones at the two frame-entry call sites.
+
+The first like-for-like enabled follow-up captured 76,399 samples with zero empty or foreign
+process stacks and a 507.98 ms median, compared with 77,682 samples and a 514.44 ms median in the
+earlier enabled capture. Its `init_locals` exclusive cycle share was 0.10%, down from 0.15%; the
+dominant metadata-arena leaves remained essentially unchanged (12.89%/11.40%). This is a
+directional single-run check, not a causal performance claim; repeat a controlled unprofiled
+comparison after restoring `json_dom` and `ef_inmemory` correctness.
+
 Reproduce the performance captures with distinct output directories:
 
 ```bash

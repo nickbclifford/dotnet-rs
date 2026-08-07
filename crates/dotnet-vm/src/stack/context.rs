@@ -172,18 +172,22 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     pub(crate) fn init_locals(
         &mut self,
-        method: MethodDescription,
+        method: &MethodDescription,
         locals: &[LocalVariable],
         generics: &GenericLookup,
         locals_base: crate::StackSlotIndex,
     ) -> Result<PinnedLocals, TypeResolutionError> {
         let mut pinned_locals = PinnedLocals::with_capacity(locals.len());
+        // Local initialization only resolves the declared local types and creates their
+        // default values. It never exposes this context through reflection, the sole consumer
+        // of descriptor owners, so do not clone the method/type descriptors just to carry
+        // reflection ownership that this path cannot observe.
         let ctx = ResolutionContext {
             generics,
             state: self.shared.resolution_shared(),
             resolution: method.resolution(),
-            type_owner: Some(method.parent.clone()),
-            method_owner: Some(method),
+            type_owner: None,
+            method_owner: None,
         };
 
         for (i, l) in locals.iter().enumerate() {

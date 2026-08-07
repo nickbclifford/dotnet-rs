@@ -348,12 +348,8 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let local_slot_count = method.locals.len();
         self.evaluation_stack
             .reserve_slots(locals_base.as_usize() + local_slot_count + method.max_stack);
-        let pinned_locals = self.init_locals(
-            method.source.clone(),
-            method.locals,
-            &generic_inst,
-            locals_base,
-        )?;
+        let pinned_locals =
+            self.init_locals(&method.source, method.locals, &generic_inst, locals_base)?;
 
         let stack_base = locals_base + pinned_locals.len();
 
@@ -423,12 +419,8 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             self.push(a);
         }
         let locals_base = self.evaluation_stack.top_of_stack();
-        let pinned_locals = self.init_locals(
-            method.source.clone(),
-            method.locals,
-            &generic_inst,
-            locals_base,
-        )?;
+        let pinned_locals =
+            self.init_locals(&method.source, method.locals, &generic_inst, locals_base)?;
         let stack_base = locals_base + pinned_locals.len();
 
         self.frame_stack.push_frame(
