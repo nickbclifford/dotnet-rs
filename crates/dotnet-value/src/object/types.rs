@@ -191,21 +191,29 @@ unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
         let element = &self.layout.element_layout;
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
+                let element_size = element.size();
                 for i in 0..self.layout.length {
                     // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
                     unsafe {
                         super::ObjectRef::read_unchecked(
-                            &self.storage[(element.size() * i).as_usize()..],
+                            &self.storage[(element_size * i).as_usize()..],
                         )
                     }
                     .trace(cc);
                 }
             }
             _ => {
+                // ObjectRef vectors are handled above. For every other layout, only a managed
+                // pointer can lead to a GC edge; primitive elements require no tracing at all.
+                if !element.has_managed_ptrs() {
+                    return;
+                }
+
+                let element_size = element.size();
                 for i in 0..self.layout.length {
                     LayoutManager::trace(
                         element,
-                        &self.storage[(element.size() * i).as_usize()..],
+                        &self.storage[(element_size * i).as_usize()..],
                         cc,
                     );
                 }
@@ -522,6 +530,15 @@ mod vector_object_ref_tests {
     };
     use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
     use dotnetdll::prelude::BaseType;
+    use gc_arena::{Gc, GcWeak, collect::Trace};
+
+    struct NoopTrace;
+
+    impl<'gc> Trace<'gc> for NoopTrace {
+        fn trace_gc(&mut self, _gc: Gc<'gc, ()>) {}
+
+        fn trace_gc_weak(&mut self, _gc: GcWeak<'gc, ()>) {}
+    }
 
     fn object_ref_vector<'gc>(length: usize, fill_byte: u8) -> Vector<'gc> {
         Vector::new(
@@ -572,5 +589,23 @@ mod vector_object_ref_tests {
             let tail = &vector.get()[2 * ObjectRef::SIZE..3 * ObjectRef::SIZE];
             assert_eq!(tail, &[0x01; ObjectRef::SIZE]);
         });
+    }
+
+    #[test]
+    fn tracing_a_primitive_vector_skips_element_storage() {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::Int32),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                length: 2,
+            },
+            // The fast path must not inspect primitive element storage at all. A non-empty
+            // vector with no backing bytes would have panicked in the generic tracing loop.
+            vec![],
+            vec![2],
+        );
+        let mut trace = NoopTrace;
+
+        vector.trace(&mut trace);
     }
 }

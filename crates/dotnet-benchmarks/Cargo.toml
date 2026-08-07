@@ -60,5 +60,9 @@ harness = false
 name = "managed_ptr_serde"
 harness = false
 
+[[bench]]
+name = "runtime_primitives"
+harness = false
+
 [lints]
 workspace = true

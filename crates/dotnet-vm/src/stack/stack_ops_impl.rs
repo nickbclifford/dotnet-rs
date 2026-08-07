@@ -10,15 +10,6 @@ use dotnet_value::{
 impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn push(&mut self, value: StackValue<'gc>) {
-        #[cfg(feature = "multithreading")]
-        {
-            #[cfg(feature = "bench-instrumentation")]
-            dotnet_metrics::record_active_allocation_pressure(
-                dotnet_metrics::AllocationPressureSource::StackPush,
-                value.size_bytes(),
-            );
-            self.gc.record_allocation(value.size_bytes());
-        }
         self.trace_push(&value);
         self.evaluation_stack.push(value);
         self.on_push();
