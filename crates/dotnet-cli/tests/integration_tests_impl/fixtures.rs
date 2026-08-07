@@ -77,14 +77,21 @@ fn static_constrained_dispatch_caches_only_exact_metadata() {
     );
 
     let cache = shared.get_cache_stats().static_constrained;
-    assert!(
-        cache.misses > 0,
-        "static constrained cache was never populated"
-    );
-    assert!(
-        cache.hits > 0,
-        "repeated static constrained calls missed the cache"
-    );
+    let cache_enabled =
+        std::env::var("DOTNET_STATIC_CONSTRAINED_CACHE").map_or(true, |value| value != "0");
+    if cache_enabled {
+        assert!(
+            cache.misses > 0,
+            "static constrained cache was never populated"
+        );
+        assert!(
+            cache.hits > 0,
+            "repeated static constrained calls missed the cache"
+        );
+    } else {
+        assert_eq!(cache.hits, 0, "disabled cache recorded a hit");
+        assert_eq!(cache.misses, 0, "disabled cache recorded a miss");
+    }
 }
 
 #[test]

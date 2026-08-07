@@ -165,18 +165,23 @@ latches the exact retired instruction rather than the interrupted instruction. N
 configurable from software without hardware support. On supported CPUs:
 ```bash
 ./scripts/profile_perf.sh fixture --name system_text_json \
-  --call-graph dwarf,8192 -e cpu/cycles/ppp  # 'ppp' = PEBS precise level 3
+  --backend perf --call-graph dwarf,8192 --event cpu/cycles/ppp  # 'ppp' = PEBS precise level 3
 ```
 
 **Reality:** ~7% of main-thread cycles are in syscalls (mmap/mprotect from Vec growth
 hitting the allocator). This is expected allocation pressure; the skid frames are an
 artefact of measuring it with a regular PMU, not a real cost to fix.
 
-## Optional Perf/Flamegraph Traces
+## Optional Firefox Profiler Traces
 
 Use `scripts/profile_perf.sh` on Linux to capture a profile for focused runtime analysis. The
 script builds the selected target first, then profiles the test or benchmark executable directly
 so build work does not pollute the trace.
+
+The primary output is a Firefox-Profiler-importable trace, not the generated SVG. For the perf
+backend, drag `perf.script` into [profiler.firefox.com](https://profiler.firefox.com); it keeps
+the captured instruction addresses, process/thread identity, and resolved symbols. The SVG is a
+secondary quick-look export for tools that prefer folded stacks.
 
 Both modes build with the dedicated `profiling` Cargo profile (inherits `bench-fat`, adds
 `debug = "full"` and `strip = false`) and force frame pointers via
@@ -190,6 +195,12 @@ unwinds on optimized code.
 capture ~44k clean main-thread samples; samply additionally symbolicates libc/system libraries
 itself and serves the Firefox Profiler natively (see the samply section below). Force a backend
 with `--backend perf` / `--backend samply`.
+
+Every capture writes a `command.txt` manifest and `record.log`. The manifest records the selected
+backend, recorder version, input event, sampling rate, call-graph mode, Cargo configuration,
+kernel/CPU details, and Firefox Profiler artifact path. Keep this file with any trace shared for
+comparison; `auto` can select a different backend on another host. Samply manifests mark the
+perf-only event and call-graph fields as not applicable.
 
 ### Call graph: fp (default) vs dwarf — perf backend
 
@@ -235,26 +246,35 @@ Default behavior:
 - Runs Criterion with the `json` filter.
 - Writes artifacts under `target/perf-traces/bench-json/<timestamp>/`.
 
-### Perf Trace Artifacts
+### Trace Artifacts
 
 Each run writes:
 
-- `perf.data`: raw perf profile for external flamegraph explorers.
+- `perf.data` (perf backend): raw perf profile for external tooling.
 - `perf.script`: symbol-resolved text dump (`perf script -F +pid,+dsoff --no-inline` piped
-  through `resolve_perf_syms.py`), ready to load directly in the
-  [Firefox Profiler](https://profiler.firefox.com) (drag the file into the UI). System-library
-  internals (libc/ld.so) are resolved to real names rather than `[unknown]`.
-- `perf.inline.script`: inline-expanded, also symbol-resolved; source for the folded stacks.
+  through `resolve_perf_syms.py`), the primary perf artifact for
+  [Firefox Profiler](https://profiler.firefox.com). System-library internals (libc/ld.so) are
+  resolved to real names rather than `[unknown]`.
+- `perf.inline.script` (perf backend): inline-expanded form used only to generate folded stacks.
+- `profile.json.gz` (samply backend): self-contained Firefox Profiler profile; open it with
+  `samply load profile.json.gz` to serve symbols from the capture machine.
 - `stacks.folded` and `flamegraph.svg`: generated from `perf.inline.script` via Inferno (or
-  Brendan Gregg tools). Install with `cargo install inferno` if absent.
-- `quality.txt`: the `[quality]` summary (sample count, period-weighted unresolved-leaf %,
-  foreign-process %, and any warnings).
-- `command.txt`: run metadata and the discovered executable path.
+  Brendan Gregg tools). These are secondary quick-look exports; their width is labeled with the
+  selected perf event rather than the generic “samples”. Install with `cargo install inferno` if
+  absent.
+- `quality.txt`: for perf, sample count plus period-weighted unresolved-leaf, foreign-process,
+  and single-frame percentages, with the busiest process/thread identities. For samply, it records
+  the capture mode and points at the Firefox Profiler artifact; perf-only percentages are not
+  fabricated.
+- `command.txt`: the trace manifest, including the discovered executable path, host/kernel and
+  recorder data, and the artifact intended for Firefox Profiler import.
+- `record.log`: unfiltered recorder output, retained to diagnose recorder warnings or sample loss.
 
 Common options:
 
 ```bash
 ./scripts/profile_perf.sh bench --name json --frequency 3997 --call-graph fp
+./scripts/profile_perf.sh bench --name json --backend perf --event cycles
 ./scripts/profile_perf.sh bench --name ef_inmemory --sample-size 10
 ./scripts/profile_perf.sh fixture --name system_text_json --features validation-all
 ./scripts/profile_perf.sh bench --name json -- --measurement-time 5
@@ -423,3 +443,36 @@ changes.
 These low-sample end-to-end timing deltas are workload-level observations, not a direct count of
 allocations or proof that any specific change caused a result. A controlled-environment repeat is
 required before drawing a causal performance conclusion.
+
+## Static-constrained resolver-cache comparison (2026-08-07)
+
+`linq_pipeline` was captured twice with the same `profiling` configuration, Linux `perf` backend,
+`cycles` event, frame-pointer call graph, 3997 Hz sample rate, and 30 Criterion samples. The
+fixture was pre-warmed before each capture. The cache-off run used
+`DOTNET_STATIC_CONSTRAINED_CACHE=0`; enabled is the default.
+
+| mode | Criterion estimate (95% CI) | trace samples | static-constrained resolver, inclusive cycle weight |
+|---|---:|---:|---:|
+| enabled | 514.44 ms (513.70–515.24 ms) | 77,682 | 0.07% |
+| disabled | 616.30 ms (604.19–628.89 ms) | 92,780 | 17.39% |
+
+Criterion compared the disabled capture with the enabled baseline as **+19.80%** (95% CI
++17.46% to +22.33%, `p < 0.05`). Both traces reported zero empty stacks and zero foreign-process
+cycle weight, so this is a localized, clean signal: the resolver-level cache is a measurable win
+for this constrained-dispatch workload.
+
+The `bench-instrumentation` counter run recorded six cached metadata entries, 12,144 hits, and six
+misses (99.95% hit rate) for the final `linq_pipeline` execution; cache-disabled mode correctly
+recorded zero hits, misses, and entries. Its 12,150 cache-key clones show the remaining per-call
+key cost explicitly. Broad descriptor/generic and `Arc` leaf costs stayed approximately flat in
+absolute sampled cycle weight between the two runs, so this result supports avoiding repeated
+resolver traversal, not a claim that the cache removes all descriptor churn.
+
+Reproduce the performance captures with distinct output directories:
+
+```bash
+./scripts/profile_perf.sh bench --name linq_pipeline --backend perf --sample-size 30 \
+  --output-dir target/perf-traces/linq-cache-on
+DOTNET_STATIC_CONSTRAINED_CACHE=0 ./scripts/profile_perf.sh bench --name linq_pipeline \
+  --backend perf --sample-size 30 --output-dir target/perf-traces/linq-cache-off
+```

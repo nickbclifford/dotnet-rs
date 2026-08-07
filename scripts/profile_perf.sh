@@ -11,6 +11,9 @@ MODE=""
 NAME=""
 OUTPUT_DIR=""
 FREQUENCY="3997"
+# `perf record` defaults to cycles, but carrying it explicitly lets each trace state exactly
+# which CPU event produced its weights and makes precise-event captures reproducible.
+PERF_EVENT="cycles"
 # Call-graph mode: "fp" (default) or "dwarf[,size]".
 #
 # fp:   reliable at any kernel.perf_event_mlock_kb setting because frame-pointer
@@ -76,7 +79,8 @@ Modes:
 Common options:
   --name <name>           Fixture substring or benchmark case (default: system_text_json for fixture, json for bench)
   --output-dir <path>     Output directory (default: target/perf-traces/<mode>-<name>/<timestamp>)
-  --frequency <hz>        perf sample frequency (default: 3997)
+  --frequency <hz>        Sampling frequency for perf or samply (default: 3997)
+  --event <event>         perf sampling event (default: cycles; perf backend only)
   --call-graph <mode>     perf call graph mode (default: fp)
   --features <features>   Cargo features to enable
   --no-default-features   Disable Cargo default features
@@ -86,8 +90,8 @@ Common options:
                           samply (denser, fully-symbolicated, native Firefox Profiler) when
                           it is installed and kernel.perf_event_paranoid <= 1, else perf.
   --no-prewarm            Skip the untraced warm-up run (which builds the fixture DLL and
-                          warms caches OUTSIDE the trace; without it, a first-time `dotnet
-                          build` subprocess pollutes the capture — usually keep it on)
+                          warms caches OUTSIDE the trace; without it, a first-time dotnet
+                          build subprocess pollutes the capture — usually keep it on)
   --extra-args [--] ...   Forward remaining args to the test/bench executable
   -h, --help              Show this message
 
@@ -144,6 +148,10 @@ parse_args() {
         ;;
       --frequency)
         FREQUENCY="$2"
+        shift 2
+        ;;
+      --event)
+        PERF_EVENT="$2"
         shift 2
         ;;
       --call-graph)
@@ -237,18 +245,58 @@ write_metadata() {
   local exe="$1"
   local target_name="$2"
   local metadata="$OUTPUT_DIR/command.txt"
+  local profiler_artifact
+  local raw_artifact
+  local recorder_version
+  local perf_paranoid="<unavailable>"
+  local perf_mlock_kb="<unavailable>"
+  local perf_max_sample_rate="<unavailable>"
+  local cpu_model="<unavailable>"
+  local perf_event="<not applicable>"
+  local call_graph="<not applicable>"
+
+  if [[ "$BACKEND" == "perf" ]]; then
+    raw_artifact="perf.data"
+    profiler_artifact="perf.script"
+    recorder_version="$(perf --version 2>&1 || true)"
+    perf_event="$PERF_EVENT"
+    call_graph="$CALL_GRAPH"
+  else
+    raw_artifact="profile.json.gz"
+    profiler_artifact="profile.json.gz"
+    recorder_version="$(samply --version 2>&1 || true)"
+  fi
+  [[ -r /proc/sys/kernel/perf_event_paranoid ]] && perf_paranoid="$(< /proc/sys/kernel/perf_event_paranoid)"
+  [[ -r /proc/sys/kernel/perf_event_mlock_kb ]] && perf_mlock_kb="$(< /proc/sys/kernel/perf_event_mlock_kb)"
+  [[ -r /proc/sys/kernel/perf_event_max_sample_rate ]] && perf_max_sample_rate="$(< /proc/sys/kernel/perf_event_max_sample_rate)"
+  if [[ -r /proc/cpuinfo ]]; then
+    cpu_model="$(awk -F ': ' '$1 == "model name" { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)"
+    [[ -n "$cpu_model" ]] || cpu_model="<unavailable>"
+  fi
 
   {
+    echo "format: dotnet-rs trace metadata v1"
     echo "mode: $MODE"
     echo "name: $target_name"
     echo "executable: $exe"
+    echo "backend: $BACKEND"
+    echo "recorder_version: ${recorder_version:-<unavailable>}"
+    echo "raw_artifact: $raw_artifact"
+    echo "firefox_profiler_artifact: $profiler_artifact"
+    echo "recorder_log: record.log"
     echo "frequency: $FREQUENCY"
-    echo "call_graph: $CALL_GRAPH"
+    echo "perf_event: $perf_event"
+    echo "call_graph: $call_graph"
     echo "features: ${FEATURES:-<default>}"
     echo "no_default_features: $NO_DEFAULT_FEATURES"
     echo "cargo_profile: ${CARGO_PROFILE:-<default>}"
     echo "rustflags: $(append_rustflag "${RUSTFLAGS:-}" "-Cforce-frame-pointers=yes")"
     echo "extra_args: ${EXTRA_ARGS[*]:-<none>}"
+    echo "kernel: $(uname -srmo)"
+    echo "cpu_model: $cpu_model"
+    echo "kernel.perf_event_paranoid: $perf_paranoid"
+    echo "kernel.perf_event_mlock_kb: $perf_mlock_kb"
+    echo "kernel.perf_event_max_sample_rate: $perf_max_sample_rate"
   } > "$metadata"
 }
 
@@ -310,7 +358,7 @@ postprocess_perf_data() {
     echo "[perf] wrote $folded"
 
     if command -v inferno-flamegraph >/dev/null 2>&1; then
-      inferno-flamegraph "$folded" > "$svg"
+      inferno-flamegraph --countname "$PERF_EVENT" "$folded" > "$svg"
       echo "[perf] wrote $svg"
     fi
   elif command -v stackcollapse-perf.pl >/dev/null 2>&1; then
@@ -318,7 +366,7 @@ postprocess_perf_data() {
     echo "[perf] wrote $folded"
 
     if command -v flamegraph.pl >/dev/null 2>&1; then
-      flamegraph.pl "$folded" > "$svg"
+      flamegraph.pl --countname "$PERF_EVENT" "$folded" > "$svg"
       echo "[perf] wrote $svg"
     fi
   else
@@ -333,6 +381,7 @@ run_perf() {
   local target_name="$1"
   shift
   local perf_data="$OUTPUT_DIR/perf.data"
+  local record_log="$OUTPUT_DIR/record.log"
 
   # The process comm perf records; resolve_perf_syms.py uses it to flag samples that landed
   # in OTHER processes (subprocess pollution).  perf truncates comm to 15 chars.
@@ -353,15 +402,32 @@ run_perf() {
     mmap_pages=256
   fi
 
-  perf record \
+  if ! perf record \
     -o "$perf_data" \
+    -e "$PERF_EVENT" \
     -F "$FREQUENCY" \
     -m "$mmap_pages" \
     --call-graph "$CALL_GRAPH" \
-    -- "$exe" "$@"
+    -- "$exe" "$@" 2>&1 | tee "$record_log"; then
+    fail "perf record failed; see $record_log"
+  fi
 
   echo "[perf] wrote $perf_data"
   postprocess_perf_data
+}
+
+write_samply_quality() {
+  local profile="$1"
+  local quality="$OUTPUT_DIR/quality.txt"
+
+  {
+    echo "[quality] backend=samply"
+    echo "[quality] Firefox Profiler artifact: $profile"
+    echo "[quality] recorder log: $OUTPUT_DIR/record.log"
+    echo "[quality] sampling: ${FREQUENCY} Hz, frame-pointer unwinding"
+    echo "[quality] note: unresolved-leaf and foreign-process percentages are available only for perf.script captures"
+  } > "$quality"
+  cat "$quality" >&2
 }
 
 run_samply() {
@@ -370,6 +436,7 @@ run_samply() {
   local target_name="$1"
   shift
   local profile="$OUTPUT_DIR/profile.json.gz"
+  local record_log="$OUTPUT_DIR/record.log"
 
   TARGET_COMM="$(basename "$exe")"
   write_metadata "$exe" "$target_name"
@@ -382,11 +449,14 @@ run_samply() {
   # needs no call-graph / mlock / ring-buffer tuning and short-lived threads still unwind
   # cleanly.  --save-only writes a self-contained profile; symbolication (binary debuginfo +
   # libc/system libs via debuginfod) happens lazily when the profile is loaded in the UI.
-  DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
-    samply record --save-only -o "$profile" --rate "$FREQUENCY" -- "$exe" "$@"
+  if ! DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.archlinux.org}" \
+    samply record --save-only -o "$profile" --rate "$FREQUENCY" -- "$exe" "$@" 2>&1 | tee "$record_log"; then
+    fail "samply record failed; see $record_log"
+  fi
 
   echo "[samply] wrote $profile"
   echo "[samply] view it (opens the Firefox Profiler, symbolicates on load): samply load $profile"
+  write_samply_quality "$profile"
 }
 
 # Dispatch to the selected capture backend.  Both implementations take (exe, target_name, args…).
@@ -526,6 +596,10 @@ if [[ "$BACKEND" == "auto" ]]; then
       echo "[profile] backend=perf — install samply for a denser, fully-symbolicated capture: cargo install samply"
     fi
   fi
+fi
+
+if [[ "$BACKEND" == "samply" && "$PERF_EVENT" != "cycles" ]]; then
+  fail "--event applies only to the perf backend; use --backend perf for '$PERF_EVENT'"
 fi
 
 ensure_tools

@@ -36,7 +36,9 @@ from collections import defaultdict
 # A stack frame line, e.g. "\t    7f50.. [unknown] (/usr/lib/libc.so.6+0x104ce4)".
 FRAME_RE = re.compile(r"^(\s+)([0-9a-fA-F]+)\s+(.*?)\s+\((.*)\)\s*$")
 # A sample header line, e.g. "comm  1234/1234  987.65:  4200 cpu/cycles/Pu:".
-HEADER_RE = re.compile(r"^(\S.*?)\s+\d+(?:/\d+)?\s+\d+\.\d+:\s+(\d+)\s+\S")
+HEADER_RE = re.compile(
+    r"^(\S.*?)\s+(\d+)(?:/(\d+))?\s+\d+\.\d+:\s+(\d+)\s+\S"
+)
 DSOFF_RE = re.compile(r"^(.*)\+0x[0-9a-fA-F]+$")
 
 
@@ -170,18 +172,29 @@ def main():
 
     # Pass 2: rewrite frames (strip +0x.. suffix; fill in resolved names) and gather stats.
     out_lines = []
-    total_samples = empty_samples = 0
+    total_samples = empty_samples = single_frame_samples = 0
     total_period = 0
     unresolved_period = 0          # cycles whose leaf frame stayed [unknown]/kernel
+    single_frame_period = 0        # shallow stacks: useful signal for unwind truncation
     comm_period = defaultdict(int)
+    thread_period = defaultdict(int)
     cur_period = 0
     cur_comm = ""
     cur_leaf_unresolved = None
+    cur_frame_count = 0
 
     def flush_sample():
-        nonlocal unresolved_period
-        if cur_leaf_unresolved:
+        nonlocal empty_samples, single_frame_samples, unresolved_period, single_frame_period
+        if not cur_comm:
+            return
+        if cur_frame_count == 0:
+            empty_samples += 1
             unresolved_period += cur_period
+        elif cur_leaf_unresolved:
+            unresolved_period += cur_period
+        if cur_frame_count == 1:
+            single_frame_samples += 1
+            single_frame_period += cur_period
 
     for line in lines:
         h = HEADER_RE.match(line)
@@ -190,20 +203,20 @@ def main():
             if cur_comm:
                 flush_sample()
             cur_comm = h.group(1).strip()
-            cur_period = int(h.group(2))
+            pid = h.group(2)
+            tid = h.group(3) or pid
+            cur_period = int(h.group(4))
             total_samples += 1
             total_period += cur_period
             comm_period[cur_comm] += cur_period
+            thread_period[(cur_comm, tid)] += cur_period
             cur_leaf_unresolved = None
+            cur_frame_count = 0
             out_lines.append(line)
             continue
 
         m = FRAME_RE.match(line)
         if not m:
-            # blank line between samples => detect empty stacks (header followed by blank)
-            if line.strip() == "" and out_lines and HEADER_RE.match(out_lines[-1] or ""):
-                empty_samples += 1
-                cur_leaf_unresolved = True   # no frame at all == unresolved leaf
             out_lines.append(line)
             continue
 
@@ -217,6 +230,7 @@ def main():
         # leaf frame (first frame after header) determines sample resolution
         if cur_leaf_unresolved is None:
             cur_leaf_unresolved = new_sym == "[unknown]"
+        cur_frame_count += 1
         out_lines.append(f"{indent}{ip} {new_sym} ({dso})")
 
     if cur_comm:
@@ -241,14 +255,20 @@ def main():
         return 100.0 * x / total_period
 
     print(f"[quality] samples={total_samples} "
-          f"empty_stacks={empty_samples} ({100.0*empty_samples/total_samples:.0f}% of count)",
+          f"empty_stacks={empty_samples} ({100.0*empty_samples/total_samples:.0f}% of count) "
+          f"single_frame={single_frame_samples} ({100.0*single_frame_samples/total_samples:.0f}% of count)",
           file=sys.stderr)
     print(f"[quality] period-weighted: unresolved-leaf={pct(unresolved_period):.1f}%  "
-          f"foreign-process={pct(foreign_period):.1f}%", file=sys.stderr)
+          f"foreign-process={pct(foreign_period):.1f}%  "
+          f"single-frame={pct(single_frame_period):.1f}%", file=sys.stderr)
     if len(comm_period) > 1:
         top = sorted(comm_period.items(), key=lambda kv: -kv[1])[:4]
         summary = ", ".join(f"{c}={pct(p):.0f}%" for c, p in top)
         print(f"[quality] processes by cycles: {summary}", file=sys.stderr)
+    if len(thread_period) > 1:
+        top = sorted(thread_period.items(), key=lambda kv: -kv[1])[:4]
+        summary = ", ".join(f"{comm}/{tid}={pct(p):.0f}%" for (comm, tid), p in top)
+        print(f"[quality] threads by cycles: {summary}", file=sys.stderr)
 
     warnings = []
     if args.target_comm and pct(foreign_period) > 20:
@@ -259,6 +279,11 @@ def main():
         warnings.append(
             f"{pct(unresolved_period):.0f}% of cycles have an unresolved leaf frame "
             f"(short/idle-dominated capture or missing debuginfo)")
+    if pct(single_frame_period) > 30:
+        warnings.append(
+            f"{pct(single_frame_period):.0f}% of cycles have only one stack frame "
+            f"(shallow or truncated call chains; frame-pointer unwinding stops at libraries "
+            f"without frame pointers)")
     if total_samples < 200:
         warnings.append(
             f"only {total_samples} samples — too few for a meaningful flamegraph; "
