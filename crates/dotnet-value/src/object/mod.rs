@@ -400,6 +400,17 @@ impl<'gc> ObjectRef<'gc> {
         #[cfg(feature = "multithreading")]
         {
             let size = size_of::<ObjectInner>() + value.size_bytes();
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_allocation_pressure(
+                match &value {
+                    HeapStorage::Obj(_) | HeapStorage::Boxed(_) => {
+                        dotnet_metrics::AllocationPressureSource::Object
+                    }
+                    HeapStorage::Vec(_) => dotnet_metrics::AllocationPressureSource::Vector,
+                    HeapStorage::Str(_) => dotnet_metrics::AllocationPressureSource::String,
+                },
+                size,
+            );
             gc.record_allocation(size);
         }
 

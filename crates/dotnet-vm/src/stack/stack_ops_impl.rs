@@ -11,7 +11,14 @@ impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn push(&mut self, value: StackValue<'gc>) {
         #[cfg(feature = "multithreading")]
-        self.gc.record_allocation(value.size_bytes());
+        {
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_allocation_pressure(
+                dotnet_metrics::AllocationPressureSource::StackPush,
+                value.size_bytes(),
+            );
+            self.gc.record_allocation(value.size_bytes());
+        }
         self.trace_push(&value);
         self.evaluation_stack.push(value);
         self.on_push();
@@ -86,6 +93,11 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
     fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_allocation_pressure(
+                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
+                value.size_bytes(),
+            );
             self.gc.record_allocation(value.size_bytes());
         }
         let bp = self.frame_stack.current_frame().base;
@@ -104,6 +116,11 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
     fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_allocation_pressure(
+                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
+                value.size_bytes(),
+            );
             self.gc.record_allocation(value.size_bytes());
         }
         let bp = self.frame_stack.current_frame().base;
@@ -136,6 +153,11 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
     fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_allocation_pressure(
+                dotnet_metrics::AllocationPressureSource::ValueTypeWrite,
+                value.size_bytes(),
+            );
             self.gc.record_allocation(value.size_bytes());
         }
         self.evaluation_stack.set_slot(index, value)

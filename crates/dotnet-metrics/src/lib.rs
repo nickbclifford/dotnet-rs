@@ -213,6 +213,57 @@ pub enum OpcodeCategory {
     Other,
 }
 
+/// The runtime operation that charged bytes to an arena's allocation-pressure budget.
+///
+/// These counters intentionally describe pressure accounting rather than every Rust allocation:
+/// their purpose is to make it clear which VM operations can request a collection.
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AllocationPressureSource {
+    Object,
+    Vector,
+    String,
+    StackPush,
+    ValueTypeWrite,
+}
+
+impl AllocationPressureSource {
+    pub const ALL: [Self; 5] = [
+        Self::Object,
+        Self::Vector,
+        Self::String,
+        Self::StackPush,
+        Self::ValueTypeWrite,
+    ];
+    pub const COUNT: usize = Self::ALL.len();
+
+    #[inline]
+    pub const fn as_index(self) -> usize {
+        self as usize
+    }
+
+    #[inline]
+    pub const fn as_key(self) -> &'static str {
+        match self {
+            Self::Object => "object",
+            Self::Vector => "vector",
+            Self::String => "string",
+            Self::StackPush => "stack_push",
+            Self::ValueTypeWrite => "value_type_write",
+        }
+    }
+}
+
+/// Benchmark-only allocation-pressure counters for one source.
+#[cfg(feature = "bench-instrumentation")]
+#[derive(Debug, Clone, Copy, Serialize, Default, PartialEq, Eq)]
+pub struct AllocationPressureSnapshot {
+    /// Number of charges made to the arena pressure budget.
+    pub charge_count: u64,
+    /// Total bytes charged to the arena pressure budget.
+    pub charged_bytes: u64,
+}
+
 impl OpcodeCategory {
     pub fn as_key(self) -> &'static str {
         match self {
@@ -288,6 +339,8 @@ pub struct BenchInstrumentationSnapshot {
     pub opcode_dispatch_by_category: BTreeMap<String, u64>,
     pub intrinsic_call_total: u64,
     pub intrinsic_calls_by_signature: BTreeMap<String, u64>,
+    /// Allocation-pressure charges grouped by the operation that issued them.
+    pub allocation_pressure_by_source: BTreeMap<String, AllocationPressureSnapshot>,
     pub cache_key_clone_total: u64,
     pub cache_key_clones_by_cache: BTreeMap<String, u64>,
     pub front_cache_hits_by_cache: BTreeMap<String, u64>,
@@ -302,6 +355,13 @@ const GC_PAUSE_SAMPLE_WINDOW: usize = 1_000;
 struct CacheCounters {
     hits: AtomicU64,
     misses: AtomicU64,
+}
+
+#[cfg(feature = "bench-instrumentation")]
+#[derive(Debug, Default)]
+struct AllocationPressureCounters {
+    charge_count: AtomicU64,
+    charged_bytes: AtomicU64,
 }
 
 /// Metrics counters.
@@ -387,6 +447,8 @@ pub struct RuntimeMetrics {
     intrinsic_call_total: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     intrinsic_calls_by_signature: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    allocation_pressure: [AllocationPressureCounters; AllocationPressureSource::COUNT],
     #[cfg(feature = "bench-instrumentation")]
     cache_key_clones: [AtomicU64; CacheKind::COUNT],
     #[cfg(feature = "bench-instrumentation")]
@@ -563,6 +625,20 @@ impl RuntimeMetrics {
 
     #[cfg(not(feature = "bench-instrumentation"))]
     pub fn record_intrinsic_signature_call(&self, _signature: impl Into<String>) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_allocation_pressure(&self, source: AllocationPressureSource, bytes: usize) {
+        let counters = &self.allocation_pressure[source.as_index()];
+        counters.charge_count.fetch_add(1, Ordering::Relaxed);
+        counters
+            .charged_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_allocation_pressure(&self, _source: AllocationPressureSource, _bytes: usize) {}
 
     #[cfg(feature = "bench-instrumentation")]
     pub fn record_gc_fixed_point_iteration(&self, iteration: u64, object_count: u64) {
@@ -801,6 +877,19 @@ impl RuntimeMetrics {
             .lock()
             .expect("intrinsic metric lock poisoned")
             .clone();
+        let allocation_pressure_by_source = AllocationPressureSource::ALL
+            .into_iter()
+            .map(|source| {
+                let counters = &self.allocation_pressure[source.as_index()];
+                (
+                    source.as_key().to_string(),
+                    AllocationPressureSnapshot {
+                        charge_count: counters.charge_count.load(Ordering::Relaxed),
+                        charged_bytes: counters.charged_bytes.load(Ordering::Relaxed),
+                    },
+                )
+            })
+            .collect();
         let gc_fixed_point_cross_arena_objects_by_iteration = self
             .gc_fixed_point_cross_arena_objects_by_iteration
             .lock()
@@ -901,6 +990,7 @@ impl RuntimeMetrics {
             opcode_dispatch_by_category,
             intrinsic_call_total: self.intrinsic_call_total.load(Ordering::Relaxed),
             intrinsic_calls_by_signature,
+            allocation_pressure_by_source,
             cache_key_clone_total,
             cache_key_clones_by_cache,
             front_cache_hits_by_cache,
@@ -1044,6 +1134,18 @@ pub fn record_active_layout_scan_timing(path: impl Into<String>, duration: Durat
             // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
             let metrics = unsafe { &*metrics_ptr };
             metrics.record_layout_scan_timing(path, duration);
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+#[inline]
+pub fn record_active_allocation_pressure(source: AllocationPressureSource, bytes: usize) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_allocation_pressure(source, bytes);
         }
     });
 }
@@ -1258,6 +1360,42 @@ mod tests {
         assert_eq!(snapshot.front_cache_misses_by_cache.get("vmt"), Some(&1));
         assert!(!snapshot.front_cache_hits_by_cache.contains_key("layout"));
         assert!(!snapshot.front_cache_misses_by_cache.contains_key("layout"));
+    }
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[test]
+    fn allocation_pressure_instrumentation_reports_every_source() {
+        let metrics = RuntimeMetrics::new();
+        metrics.record_allocation_pressure(AllocationPressureSource::Vector, 512);
+        metrics.record_allocation_pressure(AllocationPressureSource::Vector, 256);
+        metrics.record_allocation_pressure(AllocationPressureSource::ValueTypeWrite, 64);
+
+        let snapshot = metrics.bench_snapshot(empty_cache_sizes());
+
+        assert_eq!(
+            snapshot.allocation_pressure_by_source.get("vector"),
+            Some(&AllocationPressureSnapshot {
+                charge_count: 2,
+                charged_bytes: 768,
+            })
+        );
+        assert_eq!(
+            snapshot
+                .allocation_pressure_by_source
+                .get("value_type_write"),
+            Some(&AllocationPressureSnapshot {
+                charge_count: 1,
+                charged_bytes: 64,
+            })
+        );
+        assert_eq!(
+            snapshot.allocation_pressure_by_source.len(),
+            AllocationPressureSource::COUNT
+        );
+        assert_eq!(
+            snapshot.allocation_pressure_by_source.get("stack_push"),
+            Some(&AllocationPressureSnapshot::default())
+        );
     }
 
     #[test]
