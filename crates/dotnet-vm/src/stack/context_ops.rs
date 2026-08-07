@@ -256,6 +256,26 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn delegate_dispatch_kind(
+        &self,
+        method: &MethodDescription,
+    ) -> Option<dotnet_intrinsics_delegates::DelegateDispatchKind> {
+        self.shared.caches.delegate_dispatch_cache.get(method)
+    }
+
+    #[inline]
+    fn cache_delegate_dispatch_kind(
+        &self,
+        method: MethodDescription,
+        kind: dotnet_intrinsics_delegates::DelegateDispatchKind,
+    ) {
+        self.shared
+            .caches
+            .delegate_dispatch_cache
+            .insert(method, kind);
+    }
+
     fn delegate_method_info(
         &self,
         method: MethodDescription,

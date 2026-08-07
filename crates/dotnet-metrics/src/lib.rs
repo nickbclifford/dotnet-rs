@@ -30,6 +30,7 @@ pub struct CacheStats {
     pub has_finalizer: CacheStat,
     pub overrides: CacheStat,
     pub method_info: CacheStat,
+    pub delegate_dispatch: CacheStat,
     pub assembly_type: CacheStat,
     pub assembly_method: CacheStat,
     pub shared_runtime_types: CacheStat,
@@ -55,6 +56,7 @@ impl std::fmt::Display for CacheStats {
         writeln!(f, "  Has Finalizer Cache:    {}", self.has_finalizer)?;
         writeln!(f, "  Overrides Cache:        {}", self.overrides)?;
         writeln!(f, "  Method Info Cache:      {}", self.method_info)?;
+        writeln!(f, "  Delegate Dispatch:      {}", self.delegate_dispatch)?;
         writeln!(f, "  Assembly Type Cache:    {}", self.assembly_type)?;
         writeln!(f, "  Assembly Method Cache:  {}", self.assembly_method)?;
         writeln!(f, "  Shared Type Cache:      {}", self.shared_runtime_types)?;
@@ -183,6 +185,7 @@ define_cache_kinds! {
         HasFinalizer => { key: "has_finalizer", front: false },
         Overrides => { key: "overrides", front: false },
         MethodInfo => { key: "method_info", front: true },
+        DelegateDispatch => { key: "delegate_dispatch", front: false },
     }
     shared {
         SharedRuntimeTypes => { key: "shared_runtime_types", front: false },
@@ -752,6 +755,7 @@ impl RuntimeMetrics {
             has_finalizer: cache_stat(CacheKind::HasFinalizer),
             overrides: cache_stat(CacheKind::Overrides),
             method_info: cache_stat(CacheKind::MethodInfo),
+            delegate_dispatch: cache_stat(CacheKind::DelegateDispatch),
             assembly_type: self.stat(
                 sizes.assembly_type_info.0,
                 sizes.assembly_type_info.1,
@@ -1294,6 +1298,7 @@ mod tests {
             (CacheKind::HasFinalizer, "has_finalizer"),
             (CacheKind::Overrides, "overrides"),
             (CacheKind::MethodInfo, "method_info"),
+            (CacheKind::DelegateDispatch, "delegate_dispatch"),
             (CacheKind::SharedRuntimeTypes, "shared_runtime_types"),
             (CacheKind::SharedRuntimeMethods, "shared_runtime_methods"),
             (CacheKind::SharedRuntimeFields, "shared_runtime_fields"),
@@ -1325,6 +1330,7 @@ mod tests {
             CacheKind::HasFinalizer,
             CacheKind::Overrides,
             CacheKind::MethodInfo,
+            CacheKind::DelegateDispatch,
         ];
 
         assert!(CacheKind::GLOBAL.starts_with(&legacy_order));

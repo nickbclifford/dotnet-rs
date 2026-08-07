@@ -94,11 +94,12 @@ pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
 pub use dotnet_vm_data::{EvaluationStack, ExceptionState, FrameStack, StackFrame};
 pub use managed_ptr_decode_cache::{HeapManagedPtrDecodeCache, HeapManagedPtrDecodeCacheStats};
 pub use ops::{
-    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, IntrinsicDispatchOps, LoaderOps,
-    LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionLookupOps, ReflectionOps,
-    ResolutionOps, StackOps, StaticsOps, ThreadOps, TypedStackOps, VariableOps, VesBaseOps,
-    VesInternals, VesOps, VmCallOps, VmExceptionContext, VmLoaderOps, VmPInvokeContext,
-    VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps, VmStaticsOps,
+    ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionContext, ExceptionOps,
+    IntrinsicDispatchOps, LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps,
+    ReflectionLookupOps, ReflectionOps, ResolutionOps, StackOps, StaticsOps, ThreadOps,
+    TypedStackOps, VariableOps, VesBaseOps, VesInternals, VesOps, VmCallOps, VmExceptionContext,
+    VmLoaderOps, VmPInvokeContext, VmRawMemoryOps, VmReflectionOps, VmResolutionOps, VmStackOps,
+    VmStaticsOps,
 };
 
 pub(crate) fn receiver_object_generics(receiver: ObjectRef<'_>) -> GenericLookup {

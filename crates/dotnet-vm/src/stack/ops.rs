@@ -45,8 +45,8 @@ use gc_arena::Mutation;
 
 pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    ArgumentOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps, LocalOps, PInvokeContext,
-    RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
+    ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionContext, ExceptionOps, LoaderOps,
+    LocalOps, PInvokeContext, RawMemoryOps, ReflectionOps, ResolutionOps, SimdCapabilityOps,
     SimdIntrinsicHost as VmSimdIntrinsicHost, StackOps, StaticsOps, ThreadOps, TypedStackOps,
     VariableOps, VesBaseOps, VesInternals,
 };
@@ -92,6 +92,17 @@ pub trait VmManagedPtrDecodeCacheOps<'gc> {
 pub trait VmResolutionOps<'gc>: ResolutionOps<'gc> {
     fn current_context(&self) -> ResolutionContext<'_>;
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b>;
+}
+
+/// The input to unified method dispatch.
+///
+/// Most instruction handlers begin with a metadata [`MethodSource`] and let unified dispatch
+/// resolve it in the current context. `callvirt` already needs that resolution to locate its
+/// receiver, so it passes the result through this variant rather than resolving the same source
+/// a second time.
+pub enum UnifiedDispatchTarget<'a> {
+    Source(&'a MethodSource),
+    Resolved(MethodDescription, GenericLookup),
 }
 
 pub trait IntrinsicDispatchOps<'gc> {
@@ -160,11 +171,8 @@ pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
     fn statics(&self) -> &StaticStorageManager;
 }
 
-pub trait VmCallOps<'gc> {
+pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
     fn return_frame(&mut self) -> StepResult;
-
-    fn pop_call_args_into_buffer(&mut self, count: usize);
-    fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>>;
 
     fn constructor_frame(
         &mut self,
@@ -190,14 +198,14 @@ pub trait VmCallOps<'gc> {
 
     fn unified_dispatch(
         &mut self,
-        source: &MethodSource,
+        target: UnifiedDispatchTarget<'_>,
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
 
     fn unified_dispatch_tail(
         &mut self,
-        source: &MethodSource,
+        target: UnifiedDispatchTarget<'_>,
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;

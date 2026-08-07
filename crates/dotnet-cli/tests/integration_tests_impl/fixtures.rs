@@ -1,7 +1,11 @@
 #[allow(unused_imports)]
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::integration_tests_impl::harness::TestHarness;
+use dotnet_vm::state;
 
 /// Helper function to set up a multi-arena test.
 ///
@@ -24,6 +28,33 @@ fn test_cache_observability() {
     // Verify cache stats are tracking
     assert!(harness.loader.type_cache_size() > 0);
     assert!(harness.loader.method_cache_size() > 0);
+}
+
+#[test]
+fn delegate_dispatch_classification_is_cached_by_resolved_method() {
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/delegates/delegate_multicast_buffer_reuse_42.cs",
+    ));
+    let resolution = harness
+        .loader
+        .load_resolution_from_file(&dll_path)
+        .expect("delegate fixture must load");
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+
+    let result = harness.run_with_shared(resolution, Arc::clone(&shared));
+    assert_eq!(
+        result.exit_code, 42,
+        "delegate fixture failed: {:?}",
+        result.stderr
+    );
+
+    let cache = shared.get_cache_stats().delegate_dispatch;
+    assert!(
+        cache.misses > 0,
+        "delegate dispatch cache was never populated"
+    );
+    assert!(cache.hits > 0, "repeated delegate invokes missed the cache");
 }
 
 #[test]

@@ -37,7 +37,26 @@ pub use helpers::try_delegate_dispatch;
 
 pub(crate) const BEGIN_END_NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
+/// Stable classification of a bodyless resolved method for delegate dispatch.
+///
+/// The classification is keyed by [`MethodDescription`] in the VM because walking the declaring
+/// type's ancestry is invariant for a resolved method but expensive on every `Invoke` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DelegateDispatchKind {
+    NotDelegate,
+    Invoke,
+    Constructor,
+    BeginOrEndInvoke,
+    OtherDelegateMethod,
+}
+
 pub trait DelegateInvokeHost<'gc> {
+    /// Returns a cached classification for a resolved bodyless method, if one exists.
+    fn delegate_dispatch_kind(&self, method: &MethodDescription) -> Option<DelegateDispatchKind>;
+
+    /// Caches a classification that was computed from stable method metadata.
+    fn cache_delegate_dispatch_kind(&self, method: MethodDescription, kind: DelegateDispatchKind);
+
     fn delegate_method_info(
         &self,
         method: MethodDescription,

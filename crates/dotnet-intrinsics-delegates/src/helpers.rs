@@ -2,7 +2,9 @@
 //!
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
-use crate::{BEGIN_END_NOT_SUPPORTED_MSG, DelegateInvokeHost, invoke::invoke_delegate};
+use crate::{
+    BEGIN_END_NOT_SUPPORTED_MSG, DelegateDispatchKind, DelegateInvokeHost, invoke::invoke_delegate,
+};
 use dotnet_types::{
     TypeDescription, WellKnown, generics::GenericLookup, members::MethodDescription,
 };
@@ -22,6 +24,22 @@ pub fn is_delegate_type<T: LoaderOps>(ctx: &T, td: TypeDescription) -> bool {
     is_type_or_ancestor_named(ctx, td.clone(), |canonical| {
         canonical == "System.Delegate" || canonical == "System.MulticastDelegate"
     })
+}
+
+fn classify_delegate_dispatch<T: LoaderOps>(
+    ctx: &T,
+    method: &MethodDescription,
+) -> DelegateDispatchKind {
+    if !is_delegate_type(ctx, method.parent.clone()) {
+        return DelegateDispatchKind::NotDelegate;
+    }
+
+    match &*method.method().name {
+        "Invoke" => DelegateDispatchKind::Invoke,
+        ".ctor" => DelegateDispatchKind::Constructor,
+        "BeginInvoke" | "EndInvoke" => DelegateDispatchKind::BeginOrEndInvoke,
+        _ => DelegateDispatchKind::OtherDelegateMethod,
+    }
 }
 
 fn is_type_or_ancestor_named<T, F>(ctx: &T, td: TypeDescription, matches_name: F) -> bool
@@ -55,20 +73,20 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
         return None;
     }
 
-    // Check if this is a delegate type
-    if !is_delegate_type(ctx, method.parent.clone()) {
-        return None;
-    }
+    let dispatch_kind = ctx.delegate_dispatch_kind(&method).unwrap_or_else(|| {
+        let kind = classify_delegate_dispatch(ctx, &method);
+        ctx.cache_delegate_dispatch_kind(method.clone(), kind);
+        kind
+    });
 
-    let method_name = &*method.method().name;
-    match method_name {
-        "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
-        ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" | "EndInvoke" => Some(ctx.throw_by_name_with_message(
+    match dispatch_kind {
+        DelegateDispatchKind::Invoke => Some(invoke_delegate(ctx, method, lookup)),
+        DelegateDispatchKind::Constructor => None, // Constructor is handled by support library stub
+        DelegateDispatchKind::BeginOrEndInvoke => Some(ctx.throw_by_name_with_message(
             "System.NotSupportedException",
             BEGIN_END_NOT_SUPPORTED_MSG,
         )),
-        _ => None,
+        DelegateDispatchKind::NotDelegate | DelegateDispatchKind::OtherDelegateMethod => None,
     }
 }
 

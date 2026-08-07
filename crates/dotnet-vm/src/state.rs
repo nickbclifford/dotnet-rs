@@ -252,6 +252,15 @@ define_global_caches! {
             Arc<MethodInfo<'static>>
         )
     };
+    /// Cache for bodyless resolved-method delegate dispatch classification.
+    delegate_dispatch_cache: LockedCache<
+        MethodDescription,
+        dotnet_intrinsics_delegates::DelegateDispatchKind,
+    > => {
+        kind: CacheKind::DelegateDispatch,
+        capacity: unbounded,
+        front: (none)
+    };
 }
 
 #[cfg(feature = "multithreading")]
@@ -813,5 +822,6 @@ mod global_cache_registry_tests {
         assert_eq!(caches.has_finalizer_cache.front_cache_capacity(), None);
         assert_eq!(caches.overrides_cache.front_cache_capacity(), None);
         assert!(caches.method_info_cache.front_cache_capacity().is_some());
+        assert_eq!(caches.delegate_dispatch_cache.front_cache_capacity(), None);
     }
 }

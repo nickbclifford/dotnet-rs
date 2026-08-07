@@ -4,7 +4,7 @@ use crate::{
     layout::type_layout,
     resolution::TypeResolutionExt,
     stack::{
-        ops::{VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
+        ops::{UnifiedDispatchTarget, VesOps, VmCallOps, VmLoaderOps, VmResolutionOps},
         receiver_object_generics,
     },
 };
@@ -45,9 +45,9 @@ pub fn call<'gc, T: VmCallOps<'gc>>(
 ) -> StepResult {
     // Use unified dispatch pipeline for calls. If `tail.` is present, attempt to honor it.
     if tail_call {
-        ctx.unified_dispatch_tail(param0, None, None)
+        ctx.unified_dispatch_tail(UnifiedDispatchTarget::Source(param0), None, None)
     } else {
-        ctx.unified_dispatch(param0, None, None)
+        ctx.unified_dispatch(UnifiedDispatchTarget::Source(param0), None, None)
     }
 }
 
@@ -57,7 +57,7 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
     tail_call: bool,
 ) -> StepResult {
     // Determine number of arguments to extract this_type
-    let (base_method, _) = dotnet_vm_ops::vm_try!(
+    let (base_method, lookup) = dotnet_vm_ops::vm_try!(
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
@@ -82,9 +82,17 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
     };
 
     if tail_call {
-        ctx.unified_dispatch_tail(param0, Some(this_type), None)
+        ctx.unified_dispatch_tail(
+            UnifiedDispatchTarget::Resolved(base_method, lookup),
+            Some(this_type),
+            None,
+        )
     } else {
-        ctx.unified_dispatch(param0, Some(this_type), None)
+        ctx.unified_dispatch(
+            UnifiedDispatchTarget::Resolved(base_method, lookup),
+            Some(this_type),
+            None,
+        )
     }
 }
 
@@ -108,6 +116,8 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
+    // Deliberately uncached in Phase 2. Phase 3 will add a call-site sidecar so constrained
+    // dispatch is prepared once rather than introducing a second, ad-hoc cache here.
     // according to the standard, this doesn't really make sense
     // because the constrained prefix should only be on callvirt
     // however, this appears to be used for static interface dispatch?

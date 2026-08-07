@@ -92,6 +92,15 @@ pub trait EvalStackOps<'gc> {
     fn top_of_stack(&self) -> StackSlotIndex;
 }
 
+/// Access to the reusable, VM-owned argument vector used while preparing calls.
+///
+/// A call site takes the buffer only while it is moving its arguments back to the evaluation
+/// stack, then returns the now-empty vector so subsequent calls retain its allocation.
+pub trait CallArgumentBufferOps<'gc> {
+    fn pop_call_args_into_buffer(&mut self, count: usize);
+    fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>>;
+}
+
 pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     fn push_i32(&mut self, value: i32) {
         self.push(StackValue::Int32(value));
@@ -563,12 +572,13 @@ crate::trait_alias! {
     /// Host contract for delegate intrinsic handlers.
     ///
     /// Required capabilities used by current handlers:
-    /// - delegate argument stack handling (`pop_multiple`, `drop_top`, `push`)
+    /// - reusable delegate call-argument storage
     /// - exception throws for unsupported paths
     /// - runtime method lookup/dispatch (`dispatch_method`, `lookup_method_by_index`)
     /// - runtime state access for multicast frames (`frame_stack_mut`)
     pub trait DelegateIntrinsicHost<'gc> =
         EvalStackOps<'gc>
+        + CallArgumentBufferOps<'gc>
         + ExceptionOps<'gc>
         + LoaderOps
         + MemoryOps<'gc>

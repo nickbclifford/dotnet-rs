@@ -11,7 +11,6 @@ use crate::{
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::ObjectRef;
-use dotnet_vm_ops::prepared_call::PreparedCall;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, collect::Trace};
 use std::sync::OnceLock;
@@ -299,7 +298,7 @@ impl<'gc> ExecutionEngine<'gc> {
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         self.ves_context(gc)
-            .unified_dispatch(source, this_type, ctx)
+            .unified_dispatch(UnifiedDispatchTarget::Source(source), this_type, ctx)
     }
 
     pub fn dispatch_method(
@@ -346,7 +345,7 @@ impl<'gc> ExecutionEngine<'gc> {
             }
         }
 
-        let (target_delegate, args, _next_index) = {
+        let (target_delegate, args) = {
             let frame = ctx.frame_stack.current_frame_mut();
             let state = frame.multicast_state.as_mut().expect("handle_multicast_step is only entered when the current frame's multicast_state.is_some()");
             let index = state.next_index;
@@ -357,13 +356,15 @@ impl<'gc> ExecutionEngine<'gc> {
                         .expect("multicast targets vector storage must match vector length")
                 });
                 state.next_index += 1;
-                (Some(target), state.args.clone(), index)
+                // Move the retained argument vector out only while preparing this target. It is
+                // restored before dispatch so later multicast targets reuse the same storage.
+                (Some(target), Some(std::mem::take(&mut state.args)))
             } else {
-                (None, vec![], index)
+                (None, None)
             }
         };
 
-        if let Some(target_delegate) = target_delegate {
+        if let (Some(target_delegate), Some(args)) = (target_delegate, args) {
             let invoke_method = ctx
                 .frame_stack
                 .current_frame()
@@ -373,10 +374,16 @@ impl<'gc> ExecutionEngine<'gc> {
                 .clone();
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
 
-            let prepared_call =
-                PreparedCall::for_multicast_step(invoke_method, lookup, target_delegate, args);
-            let call_target = prepared_call.push_arguments(&mut ctx);
-            let (invoke_method, lookup) = call_target.into_parts();
+            ctx.push(dotnet_value::StackValue::ObjectRef(target_delegate));
+            for arg in &args {
+                ctx.push(arg.clone());
+            }
+            ctx.frame_stack
+                .current_frame_mut()
+                .multicast_state
+                .as_mut()
+                .expect("multicast state must remain installed while dispatching a target")
+                .args = args;
 
             ctx.dispatch_method(invoke_method, lookup)
         } else {

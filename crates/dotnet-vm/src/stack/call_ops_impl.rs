@@ -4,8 +4,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            EvalStackOps, ExceptionOps, LoaderOps, StaticsOps, TypedStackOps, VmCallOps,
-            VmLoaderOps, VmResolutionOps,
+            CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps, StaticsOps,
+            TypedStackOps, UnifiedDispatchTarget, VmCallOps, VmLoaderOps, VmResolutionOps,
         },
         receiver_object_generics,
     },
@@ -266,12 +266,7 @@ fn managed_frame_abort(
     ))
 }
 
-impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
-    #[inline]
-    fn return_frame(&mut self) -> StepResult {
-        VesContext::return_frame(self)
-    }
-
+impl<'a, 'gc> CallArgumentBufferOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn pop_call_args_into_buffer(&mut self, count: usize) {
         VesContext::pop_call_args_into_buffer(self, count);
@@ -280,6 +275,13 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>> {
         self.call_args_buffer
+    }
+}
+
+impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn return_frame(&mut self) -> StepResult {
+        VesContext::return_frame(self)
     }
 
     fn constructor_frame(
@@ -478,12 +480,12 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn unified_dispatch(
         &mut self,
-        source: &MethodSource,
+        target: UnifiedDispatchTarget<'_>,
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         self.unified_dispatch_common(
-            source,
+            target,
             this_type,
             ctx,
             "unified_dispatch",
@@ -494,12 +496,12 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn unified_dispatch_tail(
         &mut self,
-        source: &MethodSource,
+        target: UnifiedDispatchTarget<'_>,
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         self.unified_dispatch_common(
-            source,
+            target,
             this_type,
             ctx,
             "unified_dispatch_tail",
@@ -760,7 +762,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     #[inline]
     fn unified_dispatch_common(
         &mut self,
-        source: &MethodSource,
+        target: UnifiedDispatchTarget<'_>,
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
         dispatch_label: &str,
@@ -769,15 +771,20 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let context = ctx.cloned().unwrap_or_else(|| self.current_context());
 
         tracing::debug!(
-            "{}: source={:?}, this_type={:?}",
+            "{}: pre_resolved={}, this_type={:?}",
             dispatch_label,
-            source,
+            matches!(&target, UnifiedDispatchTarget::Resolved(..)),
             this_type
         );
 
-        let (resolved, mut lookup) = match self.resolver().find_generic_method(source, &context) {
-            Ok(v) => v,
-            Err(e) => return StepResult::Error(e.into()),
+        let (resolved, mut lookup) = match target {
+            UnifiedDispatchTarget::Source(source) => {
+                match self.resolver().find_generic_method(source, &context) {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Error(e.into()),
+                }
+            }
+            UnifiedDispatchTarget::Resolved(method, lookup) => (method, lookup),
         };
 
         if this_type.is_some() {

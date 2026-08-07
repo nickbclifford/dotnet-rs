@@ -12,7 +12,6 @@ use dotnet_vm_data::{MulticastState, StepResult};
 use dotnet_vm_ops::{
     intrinsic_args::{ArgPolicy, expect_stack_object_with_policy},
     ops::{DelegateIntrinsicHost, ExceptionOps},
-    prepared_call::PreparedCall,
 };
 
 pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
@@ -22,13 +21,15 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
 ) -> StepResult {
     let num_invoke_args = invoke_method.signature().parameters.len();
 
-    // Stack order: [delegate_instance, arg0, arg1, ..., argN]
-    // pop_multiple returns them in order they were on stack.
-    let args = ctx.pop_multiple(num_invoke_args + 1);
+    // Stack order: [delegate_instance, arg0, arg1, ..., argN]. Keep only the invoke arguments
+    // in the VM-owned reusable buffer, then pop the receiver separately. This avoids allocating
+    // a temporary argument vector and copying it again for the target call.
+    ctx.pop_call_args_into_buffer(num_invoke_args);
+    let delegate_value = ctx.pop();
 
     let delegate_ref = match expect_stack_object_with_policy(
         ctx,
-        &args[0],
+        &delegate_value,
         "delegate object reference",
         ArgPolicy::ManagedNullNre,
     ) {
@@ -71,8 +72,12 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     if let Some(targets_handle) = multicast_targets {
         // Push a dummy frame for the current Invoke method
         let method_info = dotnet_vm_ops::vm_try!(ctx.delegate_method_info(invoke_method, _lookup));
+        let args = std::mem::take(ctx.call_args_buffer_mut());
 
-        // Push arguments back onto stack so call_frame can consume them
+        // Push a copy for the first target's frame while the multicast state retains the reusable
+        // vector for subsequent targets. The vector itself is moved; no argument-vector copy is
+        // made.
+        ctx.push(dotnet_value::StackValue::ObjectRef(delegate_ref));
         for arg in &args {
             ctx.push(arg.clone());
         }
@@ -83,7 +88,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
         ctx.frame_stack_mut().current_frame_mut().multicast_state = Some(MulticastState {
             targets: targets_handle,
             next_index: 0,
-            args: args[1..].to_vec(),
+            args,
         });
 
         return StepResult::FramePushed;
@@ -93,12 +98,17 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
 
     // Look up the actual method from the registry
     let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
+    let mut args = std::mem::take(ctx.call_args_buffer_mut());
 
-    let prepared_call =
-        PreparedCall::for_delegate_target(target_method, target_lookup, target, args[1..].to_vec());
-
-    let call_target = prepared_call.push_arguments(ctx);
-    let (target_method, target_lookup) = call_target.into_parts();
+    // Match PreparedCall::for_delegate_target without transferring ownership of the reusable
+    // buffer: an instance target (or a closed static target) is followed by the invoke arguments.
+    if target_method.signature().instance || target.0.is_some() {
+        ctx.push(dotnet_value::StackValue::ObjectRef(target));
+    }
+    for arg in args.drain(..) {
+        ctx.push(arg);
+    }
+    *ctx.call_args_buffer_mut() = args;
 
     // Dispatch to the target method
     ctx.delegate_dispatch_method(target_method, target_lookup)
