@@ -468,20 +468,43 @@ key cost explicitly. Broad descriptor/generic and `Arc` leaf costs stayed approx
 absolute sampled cycle weight between the two runs, so this result supports avoiding repeated
 resolver traversal, not a claim that the cache removes all descriptor churn.
 
-### Generality attempts and narrow follow-up (2026-08-07)
+### JSON/EF generality follow-up after vector tracing fix (2026-08-07)
 
-The same pre-warmed `perf` configuration was attempted for `json_dom` and `ef_inmemory`, both
-with the cache enabled and with `DOTNET_STATIC_CONSTRAINED_CACHE=0`. Neither pair produced a valid
-steady-state measurement, so neither is evidence for or against cache generality:
+The earlier `cache-generality/*` JSON and EF artifacts are rejected.  Each stopped in warm-up, so
+their sample counts and cycle weights are not comparison data.
 
-| case | cache enabled | cache disabled | conclusion |
-|---|---|---|---|
-| `json_dom` | managed `ArgumentNullException` from `System.Buffer.BlockCopy` during `JsonDocument.MetadataDb.Enlarge` | same managed exception | failure is cache-independent in this run |
-| `ef_inmemory` | VM massive-allocation guard rejected `length=1,975,610,521`, `element_size=8` | process segfaulted while warming up | correctness guard remains failing; no comparison is valid |
+The cache-independent correctness failure was a GC tracing omission in `dotnet-value::Vector::trace`.
+Its direct `ObjectRef` vector path traced elements, but reference-bearing value-type elements could
+also serialize ordinary object references.  Those references were not traced across collection,
+which corrupted the arrays used by JSON and EF.  The fixed implementation calls
+`LayoutManager::trace` for every reference-bearing non-`ObjectRef` vector element; reference-free
+elements still return immediately.
 
-The failed recorder logs and partial `perf.data` files are retained under
-`target/perf-traces/cache-generality/{json-dom,ef-inmemory}-{on,off}`. Do not compare their sample
-counts or cycle weights: each process stopped during warm-up.
+Post-fix captures use the same pre-warmed `profiling` configuration as the LINQ pair: Linux `perf`,
+`cycles`, frame-pointer call graph, and 3997 Hz.  `DOTNET_STATIC_CONSTRAINED_SHADOW=1` was set for
+every run, and cache-off also set `DOTNET_STATIC_CONSTRAINED_CACHE=0`.  All four completed without a
+managed exception, VM error, or shadow mismatch:
+
+| case | mode | Criterion estimate (95% CI) | trace samples | trace quality | static-constrained resolver, inclusive cycle weight |
+|---|---|---:|---:|---|---:|
+| `json_dom` | enabled | 247.62 ms (245.38–250.12 ms) | 36,882 | 0 empty, 0.0% foreign | 0.492% |
+| `json_dom` | disabled | 240.03 ms (239.47–240.72 ms) | 45,535 | 0 empty, 0.0% foreign | 0.507% |
+| `ef_inmemory` | enabled | 1.9342 s (1.9250–1.9435 s) | 257,151 | 0 empty, 0.0% foreign | 1.789% |
+| `ef_inmemory` | disabled | 1.9518 s (1.9346–1.9683 s) | 259,907 | 0 empty, 0.0% foreign | 1.737% |
+
+EF's disabled run reported no timing change (`-0.07%` to `+1.88%`, `p = 0.08`).  The JSON captures
+use the retained 10-sample enabled capture and a new 30-sample disabled capture, so their differing
+Criterion estimates are not a controlled throughput claim.  More importantly, the resolver's
+inclusive cycle share is effectively unchanged in both workloads.  Shadow mode deliberately runs
+the uncached resolver on a cache hit to compare the selected metadata, so these are correctness and
+cost-location captures, not a measurement of the production cache-hit fast path.
+
+The leading named leaves are also stable: `drop_in_place<MethodDescription>` is 6.79%/6.98%
+(JSON enabled/disabled) and 6.06%/6.18% (EF); `VesContext::current_context` is 6.42%/6.93% and
+5.33%/5.11%; and loader method/type lookup stays near 4–5%.  No consistent, material
+metadata-arena `Arc` clone/drop cost appears in both valid pairs, so this result does not justify
+an Arc optimization.  Valid artifacts are exclusively under
+`target/perf-traces/cache-generality-fixed/{json-dom,ef-inmemory}-{on,off}`.
 
 The valid cache-enabled `linq_pipeline` trace still showed metadata-arena `Arc` clone/drop as the
 largest leaves (12.84%/11.51%). Rather than add another broad cache or alter virtual dispatch, the

@@ -203,9 +203,12 @@ unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
                 }
             }
             _ => {
-                // ObjectRef vectors are handled above. For every other layout, only a managed
-                // pointer can lead to a GC edge; primitive elements require no tracing at all.
-                if !element.has_managed_ptrs() {
+                // Direct ObjectRef vectors are handled above. Composite value-type elements can
+                // also contain ordinary ObjectRefs (for example,
+                // SharedArrayPoolThreadLocalArray.Array), not just ManagedPtrs. Trace every
+                // reference-bearing element so serialized references in vector storage keep
+                // their targets alive across collection.
+                if !element.is_or_contains_refs() {
                     return;
                 }
 
@@ -524,11 +527,14 @@ impl Debug for Object<'_> {
 mod vector_object_ref_tests {
     use super::*;
     use crate::{
-        layout::{ArrayLayoutManager, LayoutManager, Scalar},
+        layout::{
+            ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager,
+            Scalar,
+        },
         object::{HeapStorage, ObjectRef},
         test_helpers::with_test_gc_context,
     };
-    use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
+    use dotnet_types::{TypeDescription, generics::ConcreteType, resolution::ResolutionS};
     use dotnetdll::prelude::BaseType;
     use gc_arena::{Gc, GcWeak, collect::Trace};
 
@@ -536,6 +542,17 @@ mod vector_object_ref_tests {
 
     impl<'gc> Trace<'gc> for NoopTrace {
         fn trace_gc(&mut self, _gc: Gc<'gc, ()>) {}
+
+        fn trace_gc_weak(&mut self, _gc: GcWeak<'gc, ()>) {}
+    }
+
+    #[derive(Default)]
+    struct CountingTrace(usize);
+
+    impl<'gc> Trace<'gc> for CountingTrace {
+        fn trace_gc(&mut self, _gc: Gc<'gc, ()>) {
+            self.0 += 1;
+        }
 
         fn trace_gc_weak(&mut self, _gc: GcWeak<'gc, ()>) {}
     }
@@ -607,5 +624,55 @@ mod vector_object_ref_tests {
         let mut trace = NoopTrace;
 
         vector.trace(&mut trace);
+    }
+
+    #[test]
+    #[allow(
+        clippy::mutable_key_type,
+        reason = "TypeDescription is the runtime layout key; this regression uses the null descriptor only as a field-map key"
+    )]
+    fn tracing_a_value_type_vector_keeps_embedded_object_refs_alive() {
+        with_test_gc_context(|gc| {
+            let mut gc_desc = GcDesc::default();
+            gc_desc.set_offset(0);
+            let element_layout = FieldLayoutManager {
+                fields: [(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "array".to_string(),
+                    },
+                    FieldLayout {
+                        position: crate::ByteOffset::new(0),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                total_size: ObjectRef::SIZE,
+                alignment: ObjectRef::SIZE,
+                gc_desc,
+                has_ref_fields: false,
+            };
+            let array =
+                ObjectRef::new(gc, HeapStorage::Str(crate::string::CLRString::from("live")));
+            let mut storage = vec![0; ObjectRef::SIZE];
+            array.write(&mut storage);
+            let vector = Vector::new(
+                ConcreteType::new(ResolutionS::NULL, BaseType::Object),
+                ArrayLayoutManager {
+                    element_layout: Arc::new(LayoutManager::Field(element_layout)),
+                    length: 1,
+                },
+                storage,
+                vec![1],
+            );
+
+            let mut trace = CountingTrace::default();
+            vector.trace(&mut trace);
+            assert_eq!(
+                trace.0, 1,
+                "embedded ObjectRef was not traced from vector storage"
+            );
+        });
     }
 }
