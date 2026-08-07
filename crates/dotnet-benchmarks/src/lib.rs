@@ -21,91 +21,135 @@ use std::{
 #[derive(Clone, Copy, Debug)]
 pub struct BenchmarkCase {
     pub name: &'static str,
-    pub source: &'static str,
+    pub fixture: BenchmarkFixture,
     pub expected_exit_code: u8,
+}
+
+/// How a benchmark fixture is compiled before it is executed by the interpreter.
+///
+/// Most fixtures are self-contained source files built through `SingleFile.csproj`.
+/// Package-backed applications instead retain their own project so their `.deps.json`
+/// graph is available to the host-aware assembly loader.
+#[derive(Clone, Copy, Debug)]
+pub enum BenchmarkFixture {
+    SingleFile {
+        source: &'static str,
+    },
+    Project {
+        project: &'static str,
+        output_dll: &'static str,
+    },
 }
 
 pub const JSON_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "json",
-    source: "fixtures/json/JsonBenchmark_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/json/JsonBenchmark_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const ARITHMETIC_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "arithmetic",
-    source: "fixtures/arithmetic/TightLoop_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/arithmetic/TightLoop_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const GC_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "gc",
-    source: "fixtures/gc/AllocationPressure_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc/AllocationPressure_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const ALLOC_THROUGHPUT_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "alloc_throughput",
-    source: "fixtures/gc/AllocationThroughput_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc/AllocationThroughput_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const GC_CROSS_ARENA_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "gc_cross_arena",
-    source: "fixtures/gc_cross_arena/CrossArenaGcPressure_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/gc_cross_arena/CrossArenaGcPressure_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const DISPATCH_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "dispatch",
-    source: "fixtures/dispatch/VirtualDispatchStress_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/dispatch/VirtualDispatchStress_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const GENERICS_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "generics",
-    source: "fixtures/generics/GenericsStress_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/generics/GenericsStress_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const SPAN_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "span",
-    source: "fixtures/span/SpanEquality_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/span/SpanEquality_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const SPAN_EQUALITY_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "span_equality",
-    source: "fixtures/span_equality/SpanEqualityFocused_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/span_equality/SpanEqualityFocused_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const MEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "memory",
-    source: "fixtures/memory/MemoryBulkOps_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/memory/MemoryBulkOps_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const UNSAFE_BUFFER_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "unsafe_buffer",
-    source: "fixtures/unsafe_buffer/UnsafeBufferOps_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/unsafe_buffer/UnsafeBufferOps_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const STRING_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "string",
-    source: "fixtures/string/StringOpsSimd_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/string/StringOpsSimd_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const STACK_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "stack",
-    source: "fixtures/stack/StackOpsStress_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/stack/StackOpsStress_0.cs",
+    },
     expected_exit_code: 0,
 };
 
 pub const REFLECTION_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "reflection",
-    source: "fixtures/reflection/ReflectionEnumeration_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/reflection/ReflectionEnumeration_0.cs",
+    },
     expected_exit_code: 0,
 };
 
@@ -114,11 +158,41 @@ pub const REFLECTION_BENCHMARK: BenchmarkCase = BenchmarkCase {
 /// rayon thread-pool tuning (P1).
 pub const LOAD_DOMINATED_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "load_dominated",
-    source: "fixtures/load_dominated/LoadDominated_0.cs",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/load_dominated/LoadDominated_0.cs",
+    },
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 15] = [
+/// Real `System.Text.Json` DOM traversal rather than hand-written string scanning.
+pub const JSON_DOM_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "json_dom",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/json_dom/JsonDomBenchmark_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+/// LINQ's deferred filtering, projection, grouping, ordering, and aggregation pipeline.
+pub const LINQ_PIPELINE_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "linq_pipeline",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/linq_pipeline/LinqPipelineBenchmark_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+/// EF Core's model creation, change tracking, save, and translated in-memory query path.
+pub const EF_INMEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "ef_inmemory",
+    fixture: BenchmarkFixture::Project {
+        project: "fixtures/ef_inmemory/EfInMemory.csproj",
+        output_dll: "EfInMemory.dll",
+    },
+    expected_exit_code: 0,
+};
+
+pub const BENCHMARK_CASES: [BenchmarkCase; 18] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
@@ -134,9 +208,18 @@ pub const BENCHMARK_CASES: [BenchmarkCase; 15] = [
     STACK_BENCHMARK,
     REFLECTION_BENCHMARK,
     LOAD_DOMINATED_BENCHMARK,
+    JSON_DOM_BENCHMARK,
+    LINQ_PIPELINE_BENCHMARK,
+    EF_INMEMORY_BENCHMARK,
 ];
 
 pub struct BenchHarness {
+    loader: Arc<dotnet_assemblies::AssemblyLoader>,
+}
+
+/// A compiled benchmark fixture and the assembly loader that resolves its dependencies.
+pub struct PreparedBenchmark {
+    dll_path: PathBuf,
     loader: Arc<dotnet_assemblies::AssemblyLoader>,
 }
 
@@ -173,79 +256,134 @@ impl BenchHarness {
     }
 
     pub fn ensure_fixture_dll(&self, case: BenchmarkCase) -> PathBuf {
-        let source_path = fixture_source_path(case.source);
-        let fixture_stem = source_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .expect("fixture file stem is not valid UTF-8");
-        let category = source_path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .expect("fixture category directory is invalid");
+        match case.fixture {
+            BenchmarkFixture::SingleFile { source } => {
+                let source_path = fixture_path(source);
+                let fixture_stem = source_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .expect("fixture file stem is not valid UTF-8");
+                let category = source_path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .expect("fixture category directory is invalid");
+                let output_dir = fixture_output_base().join(category).join(fixture_stem);
+                let dll_path = output_dir.join("SingleFile.dll");
 
-        let output_dir = fixture_output_base().join(category).join(fixture_stem);
-        let dll_path = output_dir.join("SingleFile.dll");
+                if dll_is_fresh(&source_path, &dll_path) {
+                    return dll_path;
+                }
 
-        if dll_is_fresh(&source_path, &dll_path) {
-            return dll_path;
+                fs::create_dir_all(&output_dir).expect("failed to create fixture output directory");
+
+                let project = single_file_project_path();
+                let status = Command::new("dotnet")
+                    .args([
+                        "build",
+                        project.to_str().expect("invalid SingleFile.csproj path"),
+                        "-p:AllowUnsafeBlocks=true",
+                        &format!("-p:TestFile={}", source_path.display()),
+                        "-o",
+                        output_dir.to_str().expect("invalid output directory"),
+                        &format!(
+                            "-p:BaseIntermediateOutputPath={}/",
+                            output_dir.join("obj").display()
+                        ),
+                        "-v:q",
+                        "--nologo",
+                    ])
+                    .status()
+                    .expect("failed to run dotnet build for benchmark fixture");
+
+                assert!(
+                    status.success(),
+                    "dotnet build failed for benchmark fixture {}",
+                    source_path.display()
+                );
+
+                dll_path
+            }
+            BenchmarkFixture::Project {
+                project,
+                output_dll,
+            } => {
+                let project_path = fixture_path(project);
+                let output_dir = fixture_output_base().join(case.name);
+                let dll_path = output_dir.join(output_dll);
+
+                if project_is_fresh(&project_path, &dll_path) {
+                    return dll_path;
+                }
+
+                fs::create_dir_all(&output_dir).expect("failed to create fixture output directory");
+
+                let status = Command::new("dotnet")
+                    .args([
+                        "build",
+                        project_path.to_str().expect("invalid project fixture path"),
+                        "-o",
+                        output_dir.to_str().expect("invalid output directory"),
+                        &format!(
+                            "-p:BaseIntermediateOutputPath={}/",
+                            output_dir.join("obj").display()
+                        ),
+                        "-v:q",
+                        "--nologo",
+                    ])
+                    .status()
+                    .expect("failed to run dotnet build for project benchmark fixture");
+
+                assert!(
+                    status.success(),
+                    "dotnet build failed for benchmark project fixture {}",
+                    project_path.display()
+                );
+
+                dll_path
+            }
         }
+    }
 
-        fs::create_dir_all(&output_dir).expect("failed to create fixture output directory");
+    /// Compiles a fixture if necessary and attaches the right dependency-aware loader to it.
+    pub fn prepare_case(&self, case: BenchmarkCase) -> PreparedBenchmark {
+        let dll_path = self.ensure_fixture_dll(case);
+        let loader = match case.fixture {
+            BenchmarkFixture::SingleFile { .. } => Arc::clone(&self.loader),
+            BenchmarkFixture::Project { .. } => Arc::new(
+                dotnet_assemblies::AssemblyLoader::new_from_host(&dll_path, None)
+                    .expect("failed to create host-aware loader for benchmark project"),
+            ),
+        };
 
-        let project = single_file_project_path();
-        let status = Command::new("dotnet")
-            .args([
-                "build",
-                project.to_str().expect("invalid SingleFile.csproj path"),
-                "-p:AllowUnsafeBlocks=true",
-                &format!("-p:TestFile={}", source_path.display()),
-                "-o",
-                output_dir.to_str().expect("invalid output directory"),
-                &format!(
-                    "-p:BaseIntermediateOutputPath={}/",
-                    output_dir.join("obj").display()
-                ),
-                "-v:q",
-                "--nologo",
-            ])
-            .status()
-            .expect("failed to run dotnet build for benchmark fixture");
-
-        assert!(
-            status.success(),
-            "dotnet build failed for benchmark fixture {}",
-            source_path.display()
-        );
-
-        dll_path
+        PreparedBenchmark { dll_path, loader }
     }
 
     pub fn run_case(&self, case: BenchmarkCase) -> u8 {
-        let dll_path = self.ensure_fixture_dll(case);
-        self.run_dll(&dll_path)
+        let prepared = self.prepare_case(case);
+        self.run_prepared(&prepared)
     }
 
     pub fn run_case_with_metrics(&self, case: BenchmarkCase) -> BenchRunResult {
-        let dll_path = self.ensure_fixture_dll(case);
-        self.run_dll_with_metrics(&dll_path)
+        let prepared = self.prepare_case(case);
+        self.run_prepared_with_metrics(&prepared)
     }
 
-    pub fn run_dll(&self, dll_path: &Path) -> u8 {
-        self.run_dll_with_metrics(dll_path).exit_code
+    pub fn run_prepared(&self, prepared: &PreparedBenchmark) -> u8 {
+        self.run_prepared_with_metrics(prepared).exit_code
     }
 
-    pub fn run_dll_with_metrics(&self, dll_path: &Path) -> BenchRunResult {
-        let resolution = self
+    pub fn run_prepared_with_metrics(&self, prepared: &PreparedBenchmark) -> BenchRunResult {
+        let resolution = prepared
             .loader
-            .load_resolution_from_file(dll_path)
+            .load_resolution_from_file(&prepared.dll_path)
             .expect("failed to load benchmark fixture assembly");
 
         #[allow(
             clippy::arc_with_non_send_sync,
             reason = "the no-MT benchmark executor confines shared state to its run thread"
         )]
-        let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
+        let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&prepared.loader)));
         let mut executor = vm::Executor::new(shared);
 
         let entry_method = match resolution.entry_point {
@@ -395,7 +533,7 @@ fn cargo_profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
-fn fixture_source_path(relative: &str) -> PathBuf {
+fn fixture_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
@@ -418,4 +556,39 @@ fn dll_is_fresh(source: &Path, dll: &Path) -> bool {
         .expect("failed to read fixture DLL metadata");
 
     source_modified <= dll_modified
+}
+
+fn project_is_fresh(project: &Path, dll: &Path) -> bool {
+    let Ok(dll_modified) = dll.metadata().and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+    let Some(project_dir) = project.parent() else {
+        return false;
+    };
+
+    project_inputs_are_fresh(project_dir, dll_modified).unwrap_or(false)
+}
+
+fn project_inputs_are_fresh(dir: &Path, dll_modified: std::time::SystemTime) -> io::Result<bool> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("bin" | "obj")
+            ) {
+                continue;
+            }
+            if !project_inputs_are_fresh(&path, dll_modified)? {
+                return Ok(false);
+            }
+        } else if file_type.is_file() && entry.metadata()?.modified()? > dll_modified {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }

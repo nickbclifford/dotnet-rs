@@ -15,6 +15,23 @@ Recommended quick validation command:
 cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sample-size 10
 ```
 
+The end-to-end suite includes both focused runtime loops and heavier framework workloads:
+
+- `json_dom`: repeated `System.Text.Json` DOM parse and property traversal.
+- `linq_pipeline`: filtering, projection, grouping, ordering, and aggregation over an in-memory dataset.
+- `ef_inmemory`: EF Core InMemory model discovery, change tracking, save, and translated query execution.
+
+Run one case by passing its name after `--`:
+
+```bash
+cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- ef_inmemory --sample-size 10
+```
+
+Most fixtures are single source files. `ef_inmemory` is intentionally a self-contained project
+with a pinned `Microsoft.EntityFrameworkCore.InMemory` package reference. The benchmark harness
+builds it into the normal fixture cache and uses its `.runtimeconfig.json`/`.deps.json` files to
+register package assemblies with the loader.
+
 ### Release Overflow-Checks Policy
 
 The root `[profile.release]` enables `overflow-checks = true` as a correctness backstop; the
@@ -238,6 +255,7 @@ Common options:
 
 ```bash
 ./scripts/profile_perf.sh bench --name json --frequency 3997 --call-graph fp
+./scripts/profile_perf.sh bench --name ef_inmemory --sample-size 10
 ./scripts/profile_perf.sh fixture --name system_text_json --features validation-all
 ./scripts/profile_perf.sh bench --name json -- --measurement-time 5
 ./scripts/profile_perf.sh bench --name json --no-prewarm   # opt out of the warm-up run

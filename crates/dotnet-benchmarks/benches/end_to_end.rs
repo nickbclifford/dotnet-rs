@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use dotnet_benchmarks::{
     ALLOC_THROUGHPUT_BENCHMARK, ARITHMETIC_BENCHMARK, BenchHarness, DISPATCH_BENCHMARK,
-    GC_BENCHMARK, GC_CROSS_ARENA_BENCHMARK, GENERICS_BENCHMARK, JSON_BENCHMARK, MEMORY_BENCHMARK,
+    EF_INMEMORY_BENCHMARK, GC_BENCHMARK, GC_CROSS_ARENA_BENCHMARK, GENERICS_BENCHMARK,
+    JSON_BENCHMARK, JSON_DOM_BENCHMARK, LINQ_PIPELINE_BENCHMARK, MEMORY_BENCHMARK,
     REFLECTION_BENCHMARK, SPAN_BENCHMARK, SPAN_EQUALITY_BENCHMARK, STACK_BENCHMARK,
     STRING_BENCHMARK, UNSAFE_BUFFER_BENCHMARK,
 };
@@ -21,19 +22,17 @@ const DEFAULT_GC_PAUSE_P99_BOUND_US: u64 = 250_000;
 
 fn run_case(c: &mut Criterion, case: dotnet_benchmarks::BenchmarkCase) {
     let harness = BenchHarness::new();
-    let mut cached_dll = None;
+    let mut prepared = None;
     #[cfg(feature = "bench-instrumentation")]
     let mut latest_run = None;
 
     c.bench_function(case.name, |b| {
-        let dll = cached_dll
-            .get_or_insert_with(|| harness.ensure_fixture_dll(case))
-            .clone();
+        let fixture = prepared.get_or_insert_with(|| harness.prepare_case(case));
         b.iter(|| {
             #[cfg(feature = "bench-instrumentation")]
-            let run = harness.run_dll_with_metrics(&dll);
+            let run = harness.run_prepared_with_metrics(fixture);
             #[cfg(not(feature = "bench-instrumentation"))]
-            let exit_code = harness.run_dll(&dll);
+            let exit_code = harness.run_prepared(fixture);
             #[cfg(feature = "bench-instrumentation")]
             let exit_code = run.exit_code;
             assert_eq!(
@@ -74,6 +73,9 @@ fn benchmarks(c: &mut Criterion) {
     run_case(c, UNSAFE_BUFFER_BENCHMARK);
     run_case(c, STRING_BENCHMARK);
     run_case(c, REFLECTION_BENCHMARK);
+    run_case(c, JSON_DOM_BENCHMARK);
+    run_case(c, LINQ_PIPELINE_BENCHMARK);
+    run_case(c, EF_INMEMORY_BENCHMARK);
 }
 
 #[cfg(feature = "bench-instrumentation")]
@@ -151,18 +153,16 @@ fn run_gc_pause_case(
     gc_pause_p99_bound_us: u64,
 ) {
     let harness = BenchHarness::new();
-    let mut cached_dll = None;
+    let mut prepared = None;
     let mut latest_run = None;
 
     c.bench_function(case.name, |b| {
-        let dll = cached_dll
-            .get_or_insert_with(|| harness.ensure_fixture_dll(case))
-            .clone();
+        let fixture = prepared.get_or_insert_with(|| harness.prepare_case(case));
 
         b.iter_custom(|iters| {
             let mut gc_pause_p99_total_us = 0_u64;
             for _ in 0..iters {
-                let run = harness.run_dll_with_metrics(&dll);
+                let run = harness.run_prepared_with_metrics(fixture);
                 assert_eq!(
                     run.exit_code, case.expected_exit_code,
                     "GC pause benchmark fixture {} returned unexpected exit code",
