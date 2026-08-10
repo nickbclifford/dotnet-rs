@@ -3,6 +3,7 @@
 
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -52,6 +53,31 @@ class ResolvePerfSymbolsTests(unittest.TestCase):
 
         self.assertIn("\t7f00 [unknown] (/tmp/libc.so)\n", result.stdout)
         self.assertIn("unresolved-leaf=100.0%", result.stderr)
+
+    def test_preserves_file_input_shape(self):
+        script = (
+            "end_to_end  100/100  1.000: 10 cycles:\n"
+            "\t7f00 root (/tmp/end_to_end)\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as source:
+            source.write(script)
+            source.flush()
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(RESOLVER),
+                    "--target-comm",
+                    "end_to_end",
+                    "--input",
+                    source.name,
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+        self.assertEqual(result.stdout, script)
+        self.assertIn("samples=1", result.stderr)
 
 
 if __name__ == "__main__":

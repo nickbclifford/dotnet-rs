@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 
 # A stack frame line, e.g. "\t    7f50.. [unknown] (/usr/lib/libc.so.6+0x104ce4)".
@@ -110,25 +111,29 @@ class Resolver:
         return path
 
     def run_batches(self):
-        """Resolve all noted offsets, one addr2line invocation per DSO."""
+        """Resolve noted offsets without creating an argv too large for addr2line."""
         for dso, offsets in self._pending.items():
             dbg = self._debug_file.get(dso)
             if not dbg or not offsets:
                 continue
             ordered = sorted(offsets)
-            args = [self.addr2line, "-f", "-e", dbg] + [hex(o) for o in ordered]
-            try:
-                out = subprocess.run(
-                    args, capture_output=True, text=True, check=False,
-                ).stdout.splitlines()
-            except OSError:
-                continue
-            # eu-addr2line/addr2line with -f emit two lines per address: name, then file:line.
-            names = [out[i] for i in range(0, len(out), 2)]
-            for off, name in zip(ordered, names):
-                name = name.strip()
-                if name and name not in ("??", ""):
-                    self._resolved[(dso, off)] = name
+            # Limit each invocation so a trace with many distinct system-library offsets
+            # cannot exceed the kernel's exec argument-size limit.
+            for start in range(0, len(ordered), 4096):
+                batch = ordered[start:start + 4096]
+                args = [self.addr2line, "-f", "-e", dbg] + [hex(o) for o in batch]
+                try:
+                    out = subprocess.run(
+                        args, capture_output=True, text=True, check=False,
+                    ).stdout.splitlines()
+                except OSError:
+                    continue
+                # eu-addr2line/addr2line with -f emit two lines per address: name, then file:line.
+                names = [out[i] for i in range(0, len(out), 2)]
+                for off, name in zip(batch, names):
+                    name = name.strip()
+                    if name and name not in ("??", ""):
+                        self._resolved[(dso, off)] = name
 
     def name_for(self, dso, off_hex):
         try:
@@ -152,93 +157,104 @@ def main():
     ap.add_argument("--input", default="-")
     args = ap.parse_args()
 
-    raw = sys.stdin.read() if args.input == "-" else open(args.input).read()
-    lines = raw.splitlines()
-
     resolver = Resolver(args.perf_data)
 
-    # Pass 1: discover every (dso, offset) behind an [unknown] frame so we can batch addr2line.
-    for line in lines:
-        m = FRAME_RE.match(line)
-        if not m:
-            continue
-        sym, dso_field = m.group(3), m.group(4)
-        if sym != "[unknown]":
-            continue
-        dso, off = split_dsoff(dso_field)
-        if dso.startswith("/") and off is not None:
-            resolver.note(dso, off)
-    resolver.run_batches()
+    # A resolution pass must see all unknown offsets before it can rewrite the trace.  Spool
+    # stdin to a temporary file, then make two streaming passes over that file.  Holding the
+    # raw trace, split lines, and rewritten output in lists previously multiplied the memory
+    # footprint of long Criterion captures into the multi-gigabyte range.
+    source = (
+        tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+        if args.input == "-"
+        else open(args.input, encoding="utf-8")
+    )
+    try:
+        if args.input == "-":
+            for line in sys.stdin:
+                source.write(line)
+                m = FRAME_RE.match(line)
+                if m and m.group(3) == "[unknown]":
+                    dso, off = split_dsoff(m.group(4))
+                    if dso.startswith("/") and off is not None:
+                        resolver.note(dso, off)
+        else:
+            for line in source:
+                m = FRAME_RE.match(line)
+                if m and m.group(3) == "[unknown]":
+                    dso, off = split_dsoff(m.group(4))
+                    if dso.startswith("/") and off is not None:
+                        resolver.note(dso, off)
 
-    # Pass 2: rewrite frames (strip +0x.. suffix; fill in resolved names) and gather stats.
-    out_lines = []
-    total_samples = empty_samples = single_frame_samples = 0
-    total_period = 0
-    unresolved_period = 0          # cycles whose leaf frame stayed [unknown]/kernel
-    single_frame_period = 0        # shallow stacks: useful signal for unwind truncation
-    comm_period = defaultdict(int)
-    thread_period = defaultdict(int)
-    cur_period = 0
-    cur_comm = ""
-    cur_leaf_unresolved = None
-    cur_frame_count = 0
+        resolver.run_batches()
+        source.seek(0)
 
-    def flush_sample():
-        nonlocal empty_samples, single_frame_samples, unresolved_period, single_frame_period
-        if not cur_comm:
-            return
-        if cur_frame_count == 0:
-            empty_samples += 1
-            unresolved_period += cur_period
-        elif cur_leaf_unresolved:
-            unresolved_period += cur_period
-        if cur_frame_count == 1:
-            single_frame_samples += 1
-            single_frame_period += cur_period
+        # Pass 2: rewrite frames (strip +0x.. suffix; fill in resolved names) and gather stats.
+        total_samples = empty_samples = single_frame_samples = 0
+        total_period = 0
+        unresolved_period = 0          # cycles whose leaf frame stayed [unknown]/kernel
+        single_frame_period = 0        # shallow stacks: useful signal for unwind truncation
+        comm_period = defaultdict(int)
+        thread_period = defaultdict(int)
+        cur_period = 0
+        cur_comm = ""
+        cur_leaf_unresolved = None
+        cur_frame_count = 0
 
-    for line in lines:
-        h = HEADER_RE.match(line)
-        if h:
-            # finalize previous sample
-            if cur_comm:
-                flush_sample()
-            cur_comm = h.group(1).strip()
-            pid = h.group(2)
-            tid = h.group(3) or pid
-            cur_period = int(h.group(4))
-            total_samples += 1
-            total_period += cur_period
-            comm_period[cur_comm] += cur_period
-            thread_period[(cur_comm, tid)] += cur_period
-            cur_leaf_unresolved = None
-            cur_frame_count = 0
-            out_lines.append(line)
-            continue
+        def flush_sample():
+            nonlocal empty_samples, single_frame_samples, unresolved_period, single_frame_period
+            if not cur_comm:
+                return
+            if cur_frame_count == 0:
+                empty_samples += 1
+                unresolved_period += cur_period
+            elif cur_leaf_unresolved:
+                unresolved_period += cur_period
+            if cur_frame_count == 1:
+                single_frame_samples += 1
+                single_frame_period += cur_period
 
-        m = FRAME_RE.match(line)
-        if not m:
-            out_lines.append(line)
-            continue
+        for line in source:
+            h = HEADER_RE.match(line)
+            if h:
+                # finalize previous sample
+                if cur_comm:
+                    flush_sample()
+                cur_comm = h.group(1).strip()
+                pid = h.group(2)
+                tid = h.group(3) or pid
+                cur_period = int(h.group(4))
+                total_samples += 1
+                total_period += cur_period
+                comm_period[cur_comm] += cur_period
+                thread_period[(cur_comm, tid)] += cur_period
+                cur_leaf_unresolved = None
+                cur_frame_count = 0
+                sys.stdout.write(line)
+                continue
 
-        indent, ip, sym, dso_field = m.groups()
-        dso, off = split_dsoff(dso_field)
-        new_sym = sym
-        if sym == "[unknown]" and off is not None and dso.startswith("/"):
-            r = resolver.name_for(dso, off)
-            if r:
-                new_sym = r
-        # leaf frame (first frame after header) determines sample resolution
-        if cur_leaf_unresolved is None:
-            cur_leaf_unresolved = new_sym == "[unknown]"
-        cur_frame_count += 1
-        out_lines.append(f"{indent}{ip} {new_sym} ({dso})")
+            m = FRAME_RE.match(line)
+            if not m:
+                sys.stdout.write(line)
+                continue
 
-    if cur_comm:
-        flush_sample()
+            indent, ip, sym, dso_field = m.groups()
+            dso, off = split_dsoff(dso_field)
+            new_sym = sym
+            if sym == "[unknown]" and off is not None and dso.startswith("/"):
+                r = resolver.name_for(dso, off)
+                if r:
+                    new_sym = r
+            # leaf frame (first frame after header) determines sample resolution
+            if cur_leaf_unresolved is None:
+                cur_leaf_unresolved = new_sym == "[unknown]"
+            cur_frame_count += 1
+            newline = "\n" if line.endswith("\n") else ""
+            sys.stdout.write(f"{indent}{ip} {new_sym} ({dso}){newline}")
 
-    sys.stdout.write("\n".join(out_lines))
-    if raw.endswith("\n"):
-        sys.stdout.write("\n")
+        if cur_comm:
+            flush_sample()
+    finally:
+        source.close()
 
     # ---- quality summary (stderr) ----
     if total_period == 0:
