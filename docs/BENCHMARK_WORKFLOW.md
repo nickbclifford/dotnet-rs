@@ -528,3 +528,57 @@ Reproduce the performance captures with distinct output directories:
 DOTNET_STATIC_CONSTRAINED_CACHE=0 ./scripts/profile_perf.sh bench --name linq_pipeline \
   --backend perf --sample-size 30 --output-dir target/perf-traces/linq-cache-off
 ```
+
+## Controlled unprofiled vector-tracing comparison (2026-08-10)
+
+This closes the requested follow-up after `0509cf71`, which fixed missing
+`LayoutManager::trace` calls for reference-bearing value-type elements in
+`Vector::trace`.  The primary intended targets were `json_dom` and `ef_inmemory`.
+The baseline was run from a detached worktree at `5b1efde2` (the revision immediately
+before the fix), then the comparison was run at current HEAD.  Both used the same
+`target/bench-fat/dotnet-bench-fixtures` cache, Criterion's 10-sample minimum, and no
+`perf`, Samply, or profiling wrapper:
+
+```bash
+# In a detached worktree at 5b1efde2, with CARGO_TARGET_DIR pointing at this checkout's target/
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- --sample-size 10 --save-baseline before-vector-trace-fix
+
+# At current HEAD, using that same target directory and prebuilt fixture cache
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- --baseline before-vector-trace-fix --sample-size 10
+```
+
+The table records Criterion's relative-time mean 95% confidence interval; negative
+values are faster.  `5b1efde2`'s `end_to_end` suite contains only the first 14 cases.
+It does not register `json_dom`, `linq_pipeline`, or `ef_inmemory`, so Criterion has no
+baseline sample from which to compute their relative change or outcome.  In particular,
+this controlled run cannot support a before/after throughput claim for the two primary
+targets; a baseline from a pre-fix revision that includes them is required for that.
+
+| case | relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `json` | −1.5320% to −1.1185% | improved |
+| `arithmetic` | −0.2542% to +0.5992% | no change detected |
+| `gc` | −0.2182% to +0.9189% | no change detected |
+| `alloc_throughput` | −0.2879% to +0.5695% | no change detected |
+| `gc_cross_arena` | −4.9245% to +1.1844% | no change detected |
+| `dispatch` | −0.7639% to +0.6262% | no change detected |
+| `generics` | −0.8233% to +0.1750% | no change detected |
+| `stack` | −0.0297% to +0.8053% | no change detected |
+| `span` | −0.5409% to −0.0231% | within noise threshold |
+| `span_equality` | −0.5628% to +0.0227% | no change detected |
+| `memory` | −0.6467% to +0.0238% | no change detected |
+| `unsafe_buffer` | +0.0449% to +0.5565% | no change detected |
+| `string` | −0.9545% to +0.0103% | no change detected |
+| `reflection` | −1.1392% to −0.5076% | within noise threshold |
+| `json_dom` | baseline unavailable (not in `5b1efde2` suite) | not compared |
+| `linq_pipeline` | baseline unavailable (not in `5b1efde2` suite) | not compared |
+| `ef_inmemory` | baseline unavailable (not in `5b1efde2` suite) | not compared |
+
+The matched cases show no uniform regression pattern like the
+`before-dead-api-sweep` run: one case improved, two changes remained within Criterion's
+noise threshold, and the other eleven reported no change.  That is neither evidence of
+a whole-suite environmental slowdown nor a causal performance conclusion about the
+vector-tracing fix.  Most importantly, the absent `json_dom` and `ef_inmemory` baseline
+rows mean this particular experiment cannot answer the intended localized question.
