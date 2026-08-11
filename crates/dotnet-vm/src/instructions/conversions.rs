@@ -70,7 +70,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 StackValue::Int64(i) => i as u64,
                 StackValue::NativeInt(i) => i as usize as u64,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `m` is a live managed pointer; a zero-length view reads no memory and
+                // SAFETY: F10.RawMemoryAccessValid — `m` is a live managed pointer; a zero-length view reads no memory and
                 // only exposes the address represented by that pointer.
                 StackValue::ManagedPtr(m) => unsafe {
                     m.with_data(0, |data| data.as_ptr() as usize) as u64
@@ -95,7 +95,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 StackValue::Int64(i) => i as u64 as usize,
                 StackValue::NativeInt(i) => i as usize,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize,
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `m` is a live managed pointer; a zero-length view reads no memory and
+                // SAFETY: F10.RawMemoryAccessValid — `m` is a live managed pointer; a zero-length view reads no memory and
                 // only exposes the address represented by that pointer.
                 StackValue::ManagedPtr(m) => unsafe {
                     m.with_data(0, |data| data.as_ptr() as usize)

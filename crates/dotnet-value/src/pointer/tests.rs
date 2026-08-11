@@ -86,7 +86,7 @@ fn test_managed_ptr_offset_oob() {
         let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by much more than size of ValueType should panic.
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The test invokes the unsafe operation specifically to verify its
+        // SAFETY: F10.RawMemoryAccessValid — The test invokes the unsafe operation specifically to verify its
         // runtime bounds validation rejects this out-of-bounds offset.
         unsafe {
             ptr.offset(1000);
@@ -132,7 +132,7 @@ fn test_heap_decode_cache_hit_miss_and_integrity() {
         ptr.write(&mut buffer);
         let mut cache = CountingHeapCache::default();
 
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The buffer was written from the live object above. This test
+        // SAFETY: F10.RawMemoryAccessValid — The buffer was written from the live object above. This test
         // cache is short-lived inside the GC fixture; production cache owners
         // must instead trace their retained ObjectRefs across collection.
         let miss = unsafe {
@@ -163,7 +163,7 @@ fn test_heap_decode_cache_hit_miss_and_integrity() {
         assert_eq!(cache.hits, 1);
 
         buffer[ManagedPtr::SIZE - 1] ^= 1;
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The corrupted buffer remains one complete representation;
+        // SAFETY: F10.RawMemoryAccessValid — The corrupted buffer remains one complete representation;
         // checksum validation must reject it before consulting the cache.
         let corrupt = unsafe {
             ManagedPtr::read_resolved_with_heap_cache_unchecked(
@@ -432,7 +432,7 @@ fn test_serialized_offsets_preserve_full_compact_range() {
     let mismatched_word1 = stack_offset + 1;
     buffer[ptr_size..ptr_size * 2].copy_from_slice(&mismatched_word1.to_ne_bytes());
     buffer[ptr_size * 2..ptr_size * 3].copy_from_slice(&(word0 ^ mismatched_word1).to_ne_bytes());
-    // SAFETY: F2.DescriptorMatchesEcmaLayout — The complete buffer is deliberately malformed to exercise validation.
+    // SAFETY: F10.RawMemoryAccessValid — The complete buffer is deliberately malformed to exercise validation.
     let mismatched = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) };
     assert!(matches!(
         mismatched,

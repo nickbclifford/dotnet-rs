@@ -342,7 +342,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         let h = boxed_nullable
             .0
             .expect("boxed_nullable was just constructed via ObjectRef::new above");
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `h` is the newly allocated boxed Nullable handle, and its active borrow keeps
+        // SAFETY: F10.BorrowedStorageStable — `h` is the newly allocated boxed Nullable handle, and its active borrow keeps
         // the matched backing storage stable while the owner-backed ManagedPtr is constructed.
         let ptr = unsafe { h.borrow().storage.raw_data_ptr() };
         let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_ct));

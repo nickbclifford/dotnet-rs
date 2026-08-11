@@ -135,7 +135,7 @@ unsafe fn gc_handle_from_addr<'gc>(addr: usize) -> Option<ObjectHandle<'gc>> {
     if ptr.is_null() {
         None
     } else {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The caller guarantees that `addr` is the address of a live
+        // SAFETY: F11.CliLoadKindMatchesStorage — The caller guarantees that `addr` is the address of a live
         // GC handle from the atomic Object storage boundary for this `'gc`.
         Some(unsafe { Gc::from_ptr(ptr) })
     }
@@ -197,7 +197,7 @@ impl CtsToCli {
             LoadType::Float32 => StackValue::NativeFloat(f32::from_bits(raw as u32) as f64),
             LoadType::Float64 => StackValue::NativeFloat(f64::from_bits(raw)),
             LoadType::Object => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — The caller's Object-load contract is exactly the
+                // SAFETY: F11.CliLoadKindMatchesStorage — The caller's Object-load contract is exactly the
                 // atomic GC-handle storage-boundary contract of this helper.
                 let obj = unsafe { gc_handle_from_addr(raw as usize) };
                 StackValue::ObjectRef(ObjectRef(obj))
@@ -418,22 +418,22 @@ mod tests {
     #[test]
     fn load_widening_small_integers_preserves_sign_and_zero_extension() {
         assert_eq!(
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — Integer load kinds have no additional safety requirement.
+            // SAFETY: F11.CliLoadKindMatchesStorage — Integer load kinds have no additional safety requirement.
             unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Int8, 0xFF) },
             StackValue::Int32(-1)
         );
         assert_eq!(
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — Integer load kinds have no additional safety requirement.
+            // SAFETY: F11.CliLoadKindMatchesStorage — Integer load kinds have no additional safety requirement.
             unsafe { CtsToCli::widen_load_atomic_raw(LoadType::UInt8, 0xFF) },
             StackValue::Int32(255)
         );
         assert_eq!(
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — Integer load kinds have no additional safety requirement.
+            // SAFETY: F11.CliLoadKindMatchesStorage — Integer load kinds have no additional safety requirement.
             unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Int16, 0xFFFE) },
             StackValue::Int32(-2)
         );
         assert_eq!(
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — Integer load kinds have no additional safety requirement.
+            // SAFETY: F11.CliLoadKindMatchesStorage — Integer load kinds have no additional safety requirement.
             unsafe { CtsToCli::widen_load_atomic_raw(LoadType::UInt16, 0xFFFE) },
             StackValue::Int32(0xFFFE)
         );
@@ -468,7 +468,7 @@ mod tests {
             );
             let raw = object_storage.load(Ordering::SeqCst) as u64;
             assert_eq!(
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` is the address of the live object held by the
+                // SAFETY: F11.CliLoadKindMatchesStorage — `raw` is the address of the live object held by the
                 // test GC context, atomically loaded from test object storage.
                 unsafe { CtsToCli::widen_load_atomic_raw(LoadType::Object, raw) },
                 StackValue::ObjectRef(obj)

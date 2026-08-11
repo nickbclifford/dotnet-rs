@@ -566,14 +566,14 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
 
     #[inline]
     fn unsafe_get_last_pinvoke_error(&self) -> i32 {
-        // SAFETY: F3.StackSlotMatchesView — The P/Invoke subsystem currently exposes one process-global last-error slot;
+        // SAFETY: F11.PInvokeLastErrorSerialized — The P/Invoke subsystem currently exposes one process-global last-error slot;
         // callers of this unsafe host operation must serialize access to that slot.
         unsafe { dotnet_pinvoke::LAST_ERROR }
     }
 
     #[inline]
     fn unsafe_set_last_pinvoke_error(&mut self, value: i32) {
-        // SAFETY: F3.StackSlotMatchesView — The P/Invoke subsystem currently exposes one process-global last-error slot;
+        // SAFETY: F11.PInvokeLastErrorSerialized — The P/Invoke subsystem currently exposes one process-global last-error slot;
         // callers of this unsafe host operation must serialize access to that slot.
         unsafe {
             dotnet_pinvoke::LAST_ERROR = value;

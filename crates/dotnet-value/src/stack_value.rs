@@ -192,7 +192,7 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
     }
 }
 
-// SAFETY: F3.StackSlotMatchesView — StackValue contains several variants that hold GC-managed references.
+// SAFETY: F5.TracesEveryGcRef — StackValue contains several variants that hold GC-managed references.
 // We manually implement trace to ensure all such references (ObjectRef, ManagedPtr, ValueType)
 // are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
 unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
@@ -547,7 +547,7 @@ impl<'gc> StackValue<'gc> {
             Self::TypedRef(slot) => ref_to_ptr(slot.value().deref()),
             Self::UninitializedTypedRef => ref_to_ptr(self),
             Self::ValueType(o) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Returning a pointer to the internal buffer.
+                // SAFETY: F10.RawMemoryAccessValid — Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
                 let ptr =
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
@@ -561,7 +561,7 @@ impl<'gc> StackValue<'gc> {
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
             Self::NativeInt(i) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — NativeInt-to-pointer conversion is an address-only
+                // SAFETY: F10.RawMemoryAccessValid — NativeInt-to-pointer conversion is an address-only
                 // unmanaged boundary; the eventual accessor owns validity.
                 unsafe { pointer::unmanaged_ptr_from_addr(*i as usize) }
             }
@@ -979,13 +979,13 @@ impl<'gc> Add for StackValue<'gc> {
         use StackValue::*;
         match (self, rhs) {
             (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object
+                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) })
             }
             (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) })
             }
@@ -1016,19 +1016,19 @@ impl<'gc> Sub for StackValue<'gc> {
         use StackValue::*;
         match (self, rhs) {
             (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe {
                     ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
                 })
             }
             (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) })
             }
             (ManagedPtr(m), Int64(i)) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe {
                     ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))

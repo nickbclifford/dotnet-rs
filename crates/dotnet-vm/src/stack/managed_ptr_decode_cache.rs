@@ -96,7 +96,7 @@ impl<'gc> HeapManagedPtrDecodeCache<'gc> {
     }
 }
 
-// SAFETY: F3.StackSlotMatchesView — Every retained Heap ObjectRef is visited while the CallStack root is
+// SAFETY: F5.TracesEveryGcRef — Every retained Heap ObjectRef is visited while the CallStack root is
 // traced. Keys, counters, and insertion-order metadata contain no GC-managed data.
 unsafe impl<'gc> Collect<'gc> for HeapManagedPtrDecodeCache<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {

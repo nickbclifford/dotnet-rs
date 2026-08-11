@@ -320,7 +320,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                 HeapStorage::Obj(o) | HeapStorage::Boxed(o) => unsafe {
                     o.instance_storage.raw_data_ptr()
                 },
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — The active object borrow keeps the matched vector allocation stable
+                // SAFETY: F10.BorrowedStorageStable — The active object borrow keeps the matched vector allocation stable
                 // while its base address is captured into an owner-backed ManagedPtr.
                 HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
                 HeapStorage::Str(_) => ptr::null_mut(),
@@ -348,7 +348,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
             let data = h.borrow();
             if let HeapStorage::Vec(ref vector) = data.storage {
                 let ptr = if field.field().name == "Data" {
-                    // SAFETY: F2.DescriptorMatchesEcmaLayout — The active object borrow keeps the matched vector allocation stable
+                    // SAFETY: F10.BorrowedStorageStable — The active object borrow keeps the matched vector allocation stable
                     // while its data address is captured into an owner-backed ManagedPtr.
                     unsafe { vector.raw_data_ptr() }
                 } else if field.field().name == "Length" {
@@ -369,7 +369,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                         // But RawArrayData is a hack anyway.
                         ByteOffset::new(
                             (ptr as usize)
-                                // SAFETY: F2.DescriptorMatchesEcmaLayout — `data` is still immutably borrowed and matched as vector
+                                // SAFETY: F10.BorrowedStorageStable — `data` is still immutably borrowed and matched as vector
                                 // storage, so its backing allocation remains stable for this offset.
                                 .wrapping_sub(unsafe { data.storage.raw_data_ptr() } as usize),
                         )

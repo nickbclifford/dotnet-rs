@@ -13,6 +13,10 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 - `F2.DescriptorMatchesEcmaLayout`: a layout descriptor's offsets, sizes, and field types match the corresponding instantiated ECMA-335 layout. The resolver's layout factory supplies the descriptor, but the specification correspondence is assumed.
 - `F3.StackSlotMatchesView`: raw evaluation-stack access reads a slot only through the type used to push it; enum discriminants and instruction stack discipline establish this locally.
 - `F3.InteriorPointerRebased`: an interior pointer retains its originating slot association and is re-established by `apply_reallocation_fixup()` after stack-vector reallocation.
+- `F10.RawMemoryAccessValid`: raw reads, writes, copies, and pointer derivations stay in live storage with the required range, initialization, alignment, and aliasing conditions. A nearby bounds/integrity check or the immediate unsafe function's caller contract establishes that condition.
+- `F10.RawAllocationOwnership`: `Box::into_raw`/`Box::leak` pointers are converted or reclaimed only through their single matching ownership operation; other raw-pointer conversions rely on their documented provenance and lifetime contract.
+- `F10.BorrowedStorageStable`: pointers obtained from managed or shared backing storage are used only while the borrow, closure, or lock that stabilizes the allocation remains active.
+- `F11.CliLoadKindMatchesStorage`: an atomic scalar is decoded only by the CLI `LoadType` with its storage bit-width and signedness; the object-handle case relies on its explicit caller contract.
 
 ## Crate Responsibilities
 

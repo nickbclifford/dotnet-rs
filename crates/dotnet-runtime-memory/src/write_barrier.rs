@@ -214,7 +214,7 @@ mod tests {
             target_id,
         )));
         let raw: *mut ThreadSafeLock<ObjectInner<'static>> = Box::into_raw(lock);
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
+        // SAFETY: F10.RawAllocationOwnership — `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
         // managed pointer and recorder have been dropped below.
         let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("boxed object pointer is non-null");
         let managed = ManagedPtr::new_cross_arena(
@@ -236,7 +236,7 @@ mod tests {
             "an unowned recorder must skip every cross-arena reference kind"
         );
         drop(managed);
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above, no aliases are used after this
+        // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` above, no aliases are used after this
         // point, and reconstructing the box releases the allocation exactly once.
         unsafe {
             drop(Box::from_raw(raw));

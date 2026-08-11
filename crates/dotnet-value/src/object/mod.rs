@@ -173,14 +173,14 @@ impl<'a> Arbitrary<'a> for ObjectPtr {
     }
 }
 
-// SAFETY: F2.DescriptorMatchesEcmaLayout — `ObjectPtr` is a raw pointer to a `ThreadSafeLock`. Under
+// SAFETY: F11.ObjectPointerThreadSafe — `ObjectPtr` is a raw pointer to a `ThreadSafeLock`. Under
 // multithreading, `ThreadSafeLock<T: Send + Sync>` is `Send + Sync` (verified
 // by `assert_impl_all!` below). `ObjectInner<'static>: Send + Sync` is
 // confirmed by the test assertions in this module.
 #[cfg(feature = "multithreading")]
 unsafe impl Send for ObjectPtr {}
 
-// SAFETY: F2.DescriptorMatchesEcmaLayout — Same rationale as the `Send` implementation above. These impls are
+// SAFETY: F11.ObjectPointerThreadSafe — Same rationale as the `Send` implementation above. These impls are
 // gated on `multithreading` because the single-threaded backend uses
 // `gc_arena::lock::RefLock`, which is `!Send + !Sync`.
 #[cfg(feature = "multithreading")]
@@ -207,7 +207,7 @@ impl ObjectPtr {
         reason = "the NonNull dereference and lock's interior-pointer access form one immutable owner-id read"
     )]
     pub fn owner_id(&self) -> ArenaId {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
+        // SAFETY: F10.BorrowedStorageStable — `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
         // `as_ref()` yields a shared reference; `as_ptr()` gives a raw pointer
         // to the interior `ObjectInner` without acquiring the lock.  Reading
         // `owner_id` is safe because it is written once at construction and is
@@ -216,7 +216,7 @@ impl ObjectPtr {
     }
 
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a valid, non-null `ThreadSafeLock` pointer kept
+        // SAFETY: F10.BorrowedStorageStable — `self.0` is a valid, non-null `ThreadSafeLock` pointer kept
         // alive by the GC arena for the duration of this call.  `as_ref()` is
         // sound because the pointer is non-null and aligned.  `borrow()` acquires
         // a shared read lock, preventing concurrent mutable access.
@@ -233,7 +233,7 @@ impl ObjectPtr {
     }
 
     pub fn as_heap_storage<T>(&self, f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T) -> T {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a valid, non-null `ThreadSafeLock` pointer.
+        // SAFETY: F10.BorrowedStorageStable — `self.0` is a valid, non-null `ThreadSafeLock` pointer.
         // `as_ref()` is sound because the pointer is non-null and aligned.
         // `borrow()` acquires a shared read lock, preventing concurrent writes.
         // The HRTB hides the raw pointer's internal `'static` arena brand: `f`
@@ -286,7 +286,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // DANGER: `lock_ptr` may dangle if its owning arena exits. Coordinated STW
                     // must keep every arena alive and every mutator stopped through this read; see the
                     // accepted-risk boundary linked from the `Collect` SAFETY comment above.
-                    // SAFETY: F2.DescriptorMatchesEcmaLayout — During STW all mutator threads are at safe points,
+                    // SAFETY: F1.StwParked — During STW all mutator threads are at safe points,
                     // so the owning arena cannot be freed.  `owner_id` is
                     // immutable after construction, so reading it without the
                     // lock is safe even under concurrent observation.
@@ -434,7 +434,7 @@ impl<'gc> ObjectRef<'gc> {
         reason = "this parser validates one serialized object-reference representation before reconstructing it"
     )]
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The caller supplies a complete serialized ObjectRef whose non-null pointer is
+        // SAFETY: F6.NoEscapeAcrossArena — The caller supplies a complete serialized ObjectRef whose non-null pointer is
         // live for the returned lifetime; the tagged branches below additionally validate arena
         // registration before reconstructing a handle.
         unsafe {
@@ -527,7 +527,7 @@ impl<'gc> ObjectRef<'gc> {
                     }
 
                     // Verify magic number to ensure we are pointing to a valid object
-                    // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` was reconstructed from the address stored in `source`.
+                    // SAFETY: F6.NoEscapeAcrossArena — `ptr` was reconstructed from the address stored in `source`.
                     // Alignment was verified by `is_multiple_of` above.  The caller
                     // guarantees `source` contains a live `Gc` pointer, so the
                     // allocation is valid for the lifetime of this call.
@@ -838,7 +838,7 @@ impl<'gc> ObjectRef<'gc> {
             HeapStorage::Vec(v) => f(&v.storage),
             HeapStorage::Obj(o) => o.instance_storage.with_data(f),
             HeapStorage::Str(s) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `CLRString` stores UTF-16 `u16` code units.  Casting
+                // SAFETY: F10.RawMemoryAccessValid — `CLRString` stores UTF-16 `u16` code units.  Casting
                 // to `*const u8` is valid (u8 alignment ≤ u16 alignment).
                 // `s.len() * 2` gives the correct byte length; the multiplication
                 // cannot overflow because `s.len()` is bounded by the allocation
@@ -869,7 +869,7 @@ impl<'gc> ObjectRef<'gc> {
             HeapStorage::Obj(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Boxed(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Str(s) => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `CLRString` stores UTF-16 `u16` code units. Casting to
+                // SAFETY: F10.RawMemoryAccessValid — `CLRString` stores UTF-16 `u16` code units. Casting to
                 // `*mut u8` is valid (`u8` alignment <= `u16` alignment), and
                 // `s.len() * 2` is the correct byte-length view.
                 let bytes = unsafe {
@@ -1011,7 +1011,7 @@ mod tests {
         let mut source = [0u8; 8];
         source.copy_from_slice(&tagged_ptr.to_ne_bytes());
 
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — tagged_ptr is a validly constructed Tag 5 pointer.
+        // SAFETY: F6.NoEscapeAcrossArena — tagged_ptr is a validly constructed Tag 5 pointer.
         let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
 
         assert!(
@@ -1099,7 +1099,7 @@ mod tests {
                 "encoded arena id must match owner"
             );
 
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — `bytes` was produced by `ObjectRef::write`, which
+            // SAFETY: F6.NoEscapeAcrossArena — `bytes` was produced by `ObjectRef::write`, which
             // encodes a valid live `Gc` pointer with a Tag 5 owner marker.
             // The owning arena is still registered at this point
             // (`unregister_arena` is called only after the closure returns),
@@ -1129,7 +1129,7 @@ mod tests {
         )));
         let raw = Box::into_raw(corrupt);
 
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` immediately above and
+        // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` immediately above and
         // has not been freed.  The `ObjectPtr` is only used inside this test
         // and is never sent to another thread.
         let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
@@ -1138,7 +1138,7 @@ mod tests {
         let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
 
         // Reclaim the allocation regardless of the panic outcome.
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above; no other owner
+        // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` above; no other owner
         // of the allocation exists at this point.
         let _ = unsafe { Box::from_raw(raw) };
 
@@ -1171,7 +1171,7 @@ mod tests {
         )));
         let raw = Box::into_raw(obj);
 
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` immediately above and
+        // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` immediately above and
         // has not been freed.  The `ObjectPtr` is used only inside this test.
         let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
 
@@ -1180,7 +1180,7 @@ mod tests {
         // under multithreading it panics because the arena is not registered.
         let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
 
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above; no other owner
+        // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` above; no other owner
         // of the allocation exists at this point.
         let _ = unsafe { Box::from_raw(raw) };
 

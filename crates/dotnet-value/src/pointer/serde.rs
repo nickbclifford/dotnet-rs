@@ -288,7 +288,7 @@ impl<'gc> ManagedPtr<'gc> {
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         // SAFETY: F3.InteriorPointerRebased — The caller supplies one complete ManagedPtr encoding.
         let info = unsafe { Self::read_metadata_unchecked(source) }?;
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — The metadata came from the complete encoded source above.
+        // SAFETY: F10.RawMemoryAccessValid — The metadata came from the complete encoded source above.
         unsafe { Self::resolve_metadata_unchecked(source, resolver, info) }
     }
 
@@ -324,7 +324,7 @@ impl<'gc> ManagedPtr<'gc> {
                 None => None,
             },
             PointerOrigin::Unmanaged => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — This branch is exclusively the address-only Unmanaged
+                // SAFETY: F10.RawMemoryAccessValid — This branch is exclusively the address-only Unmanaged
                 // wire representation; the caller owns its validity contract.
                 NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
             }
@@ -414,7 +414,7 @@ impl<'gc> ManagedPtr<'gc> {
                 origin: PointerOrigin::Heap(owner),
                 offset: ByteOffset::new(word1),
             };
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — `source` was completely validated above and `info` carries
+            // SAFETY: F10.RawMemoryAccessValid — `source` was completely validated above and `info` carries
             // either a rooted cached Heap handle or the normal decoded handle.
             return unsafe { Self::resolve_metadata_unchecked(source, resolver, info) };
         }

@@ -170,9 +170,9 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_atomic_load_is_rejected() {
         let data = Aligned8([0u8; 8]);
-        // SAFETY: F3.InteriorPointerRebased — Offset one remains within the test's eight-byte backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset one remains within the test's eight-byte backing allocation.
         let ptr = unsafe { data.0.as_ptr().add(1) };
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points into the live test allocation; the checked operation is
+        // SAFETY: F4.WidthAligned — `ptr` points into the live test allocation; the checked operation is
         // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
@@ -184,9 +184,9 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_atomic_store_is_rejected() {
         let mut data = Aligned8([0u8; 8]);
-        // SAFETY: F3.InteriorPointerRebased — Offset one remains within the test's eight-byte backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset one remains within the test's eight-byte backing allocation.
         let ptr = unsafe { data.0.as_mut_ptr().add(1) };
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points into the live test allocation; the checked operation is
+        // SAFETY: F4.WidthAligned — `ptr` points into the live test allocation; the checked operation is
         // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int32, AtomicOrdering::Relaxed);

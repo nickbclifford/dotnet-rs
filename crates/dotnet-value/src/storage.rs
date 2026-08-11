@@ -66,7 +66,7 @@ impl BoundedPtr {
     )]
     pub unsafe fn read<T: FieldType>(&self, offset: usize) -> T {
         assert!(offset + size_of::<T>() <= self.len);
-        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw operation.
+        // SAFETY: F10.RawMemoryAccessValid — The FieldStorage layout and access guard guarantee valid storage for this raw operation.
         unsafe {
             T::read_from(std::slice::from_raw_parts(
                 self.ptr.add(offset),
@@ -226,7 +226,7 @@ impl FieldStorage {
             field_ptr,
             alignment
         );
-        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw
+        // SAFETY: F10.RawMemoryAccessValid — The FieldStorage layout and access guard guarantee valid storage for this raw
         // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
         // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
@@ -261,7 +261,7 @@ impl FieldStorage {
             field_ptr,
             alignment
         );
-        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw
+        // SAFETY: F10.RawMemoryAccessValid — The FieldStorage layout and access guard guarantee valid storage for this raw
         // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
         // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::store_field(field_ptr, value, ord) }
@@ -273,10 +273,10 @@ impl FieldStorage {
     )]
     pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
         self.validate_magic();
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller guarantees data stability per this method's contract and the pointer
+        // SAFETY: F10.BorrowedStorageStable — Caller guarantees data stability per this method's contract and the pointer
         // does not outlive the lock.
         let data_ptr = unsafe { self.data.data_ptr() };
-        // SAFETY: F1.GcHandleRooted — `data_ptr` points to the storage protected by `self.data`.
+        // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the storage protected by `self.data`.
         unsafe { &*data_ptr }
     }
 
@@ -290,10 +290,10 @@ impl FieldStorage {
         reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
     )]
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller upholds synchronization guarantees and the pointer does not outlive
+        // SAFETY: F10.BorrowedStorageStable — Caller upholds synchronization guarantees and the pointer does not outlive
         // the lock.
         let data_ptr = unsafe { self.data.data_ptr() };
-        // SAFETY: F1.GcHandleRooted — `data_ptr` points to the storage protected by `self.data`.
+        // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the storage protected by `self.data`.
         unsafe { (*data_ptr).as_mut_ptr() }
     }
 
@@ -303,7 +303,7 @@ impl FieldStorage {
         visited: &mut HashSet<usize>,
         depth: usize,
     ) {
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — Resurrection happens during a stop-the-world pause, so no other
+        // SAFETY: F10.BorrowedStorageStable — Resurrection happens during a stop-the-world pause, so no other
         // threads are running. We can safely access the inner value without
         // acquiring the normal field access guard. This avoids deadlock (or panic)
         // if a thread was already holding exclusive field access when it reached

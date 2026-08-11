@@ -441,7 +441,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
             && let Some(ptr) = entry.0.0
         {
             match &ptr.borrow().storage {
-                // SAFETY: F8.LockOrderRespected — The validated pinned GCHandle keeps `ptr` and its object lock alive;
+                // SAFETY: F10.BorrowedStorageStable — The validated pinned GCHandle keeps `ptr` and its object lock alive;
                 // this branch only exposes that stable address for AddrOfPinnedObject.
                 HeapStorage::Obj(_) => unsafe { ptr.as_ptr() as isize },
                 HeapStorage::Vec(v) => v.get().as_ptr() as isize,

@@ -744,7 +744,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         arena.mutate(|_, c| {
                             let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
                             for ptr in ptrs {
-                                // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptrs` originates from coordinator-owned object
+                                // SAFETY: F1.StwParked — `ptrs` originates from coordinator-owned object
                                 // pointers captured during marking. They are only consumed
                                 // during the same collection cycle while arenas are stopped.
                                 let ptr = unsafe { ObjectPtr::from_raw(ptr.as_ptr() as *const _) }

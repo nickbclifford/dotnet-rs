@@ -6,7 +6,7 @@ registry, and `scripts/check_doc_drift.sh` enforces that every cited predicate
 name exists in the registry and every registry predicate is cited at least
 once.
 
-**Status:** complete — registry, owner-document invariant sections, contributor policy, and drift checks landed; all 539 current `// SAFETY:` comments in `dotnet-value`, `dotnet-runtime-memory`, `dotnet-utils`, and `dotnet-vm` cite registry predicates.
+**Status:** complete — the citation audit was re-derived against the registry statements (including new raw-memory, raw-allocation, borrowed-storage, CLI-load, object-pointer, and P/Invoke-state predicates), and the drift gate passes. The prior “539 current comments” claim was incorrect: the four `src/` trees contain 465 `// SAFETY:` comments (153 value, 104 runtime-memory, 67 utils, 141 VM). The gate intentionally recurses into each crate and therefore also checks 8 fuzz-target comments, for 473 cited sites total.
 
 ## Goal
 

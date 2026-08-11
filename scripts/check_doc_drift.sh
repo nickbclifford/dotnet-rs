@@ -191,7 +191,7 @@ if [[ ! -f "$REGISTRY_PATH" ]]; then
 fi
 
 mapfile -t REGISTRY_PREDICATES < <(
-  sed -nE 's/^\| `(F[1-9]\.[A-Za-z][A-Za-z0-9]*)` \|.*/\1/p' "$REGISTRY_PATH"
+  sed -nE 's/^\| `(F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]*)` \|.*/\1/p' "$REGISTRY_PATH"
 )
 
 if [[ ${#REGISTRY_PREDICATES[@]} -eq 0 ]]; then
@@ -201,7 +201,7 @@ fi
 
 while IFS= read -r safety_site; do
   citation="${safety_site#*// SAFETY:}"
-  if [[ ! "$citation" =~ F[1-9]\.[A-Za-z][A-Za-z0-9]* ]]; then
+  if [[ ! "$citation" =~ F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]* ]]; then
     FAIL=$((FAIL + 1))
     echo "[INVARIANT] SAFETY comment lacks a registry citation: $safety_site"
   fi
@@ -209,7 +209,7 @@ done < <(grep -rnE '^[[:space:]]*// SAFETY:' "${SAFETY_CRATES[@]}" 2>/dev/null |
 
 mapfile -t CITED_PREDICATES < <(
   grep -rhE '^[[:space:]]*// SAFETY:' "$CRATES_DIR" 2>/dev/null \
-    | grep -oE 'F[1-9]\.[A-Za-z][A-Za-z0-9]*' \
+    | grep -oE 'F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]*' \
     | sort -u
 )
 

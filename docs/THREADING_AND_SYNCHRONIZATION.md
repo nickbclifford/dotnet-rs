@@ -20,6 +20,8 @@ CLI's Rayon pool, tracer, and integration-test timeout harness can do so in eith
 - `F7.InitializationPublished`: immutable fields read without a lock are written before their owner is published. This happens-before edge is assumed and must remain a trust-register candidate.
 - `F8.LockOrderRespected`: all nested locking follows the `define_lock_order_dag!` order, with negative `AcquireAfter` assertions rejecting known inversions.
 - `F8.NoSafepointWhileHeapBorrowed`: a `GcScopeGuard` or `ThreadSafeLock` exclusion prevents safepoint polling and allocation while a heap borrow is held.
+- `F11.ObjectPointerThreadSafe`: `ObjectPtr` may be sent or shared only because it points to `ThreadSafeLock<ObjectInner>` satisfying the required `Send`/`Sync` bounds.
+- `F11.PInvokeLastErrorSerialized`: callers serialize access to the process-global P/Invoke last-error slot, as required by its unsafe host-operation contract.
 
 ## Thread Lifecycle (`threading/`)
 

@@ -263,13 +263,13 @@ impl AtomicAccess for StandardAtomicAccess {
         // Although the trait requires alignment, we use unaligned reads
         // during the transition period to avoid UB if alignment is missed.
         match size {
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             1 => unsafe { ptr.read_unaligned() as u64 },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             2 => unsafe { (ptr as *const u16).read_unaligned() as u64 },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             4 => unsafe { (ptr as *const u32).read_unaligned() as u64 },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             8 => unsafe { (ptr as *const u64).read_unaligned() },
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -284,13 +284,13 @@ impl AtomicAccess for StandardAtomicAccess {
         // Although the trait requires alignment, we use unaligned writes
         // during the transition period to avoid UB if alignment is missed.
         match size {
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             1 => unsafe { ptr.write_unaligned(value as u8) },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             2 => unsafe { (ptr as *mut u16).write_unaligned(value as u16) },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             4 => unsafe { (ptr as *mut u32).write_unaligned(value as u32) },
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             8 => unsafe { (ptr as *mut u64).write_unaligned(value) },
             _ => {
                 // invariant: VM atomic paths only support 1/2/4/8-byte accesses; this unsafe trait API cannot return Result.
@@ -307,10 +307,10 @@ impl AtomicAccess for StandardAtomicAccess {
         _success: Ordering,
         _failure: Ordering,
     ) -> Result<u64, u64> {
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let current = unsafe { Self::load_atomic(ptr, size, Ordering::Relaxed) };
         if current == expected {
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             unsafe { Self::store_atomic(ptr, size, new, Ordering::Relaxed) };
             Ok(current)
         } else {
@@ -319,9 +319,9 @@ impl AtomicAccess for StandardAtomicAccess {
     }
 
     unsafe fn exchange_atomic(ptr: *mut u8, size: usize, new: u64, _ordering: Ordering) -> u64 {
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let current = unsafe { Self::load_atomic(ptr, size, Ordering::Relaxed) };
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         unsafe { Self::store_atomic(ptr, size, new, Ordering::Relaxed) };
         current
     }
@@ -332,9 +332,9 @@ impl AtomicAccess for StandardAtomicAccess {
         value: u64,
         _ordering: Ordering,
     ) -> u64 {
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let current = unsafe { Self::load_atomic(ptr, size, Ordering::Relaxed) };
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         unsafe { Self::store_atomic(ptr, size, current.wrapping_add(value), Ordering::Relaxed) };
         current
     }
@@ -354,7 +354,7 @@ impl Atomic {
     /// this falls back to a non-atomic memcpy guarded by that lock.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
         if Self::is_atomic_field_access_supported(ptr, size) {
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
                 1 => (val as u8).to_ne_bytes().to_vec(),
@@ -366,7 +366,7 @@ impl Atomic {
         } else {
             validate_atomic_access(ptr, false);
             let mut buf = vec![0u8; size];
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
             buf
         }
@@ -402,11 +402,11 @@ impl Atomic {
                 ),
                 _ => unreachable!(),
             };
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             unsafe { StandardAtomicAccess::store_atomic(ptr, size, val, ordering) };
         } else {
             validate_atomic_access(ptr as *const u8, false);
-            // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
             unsafe { ptr::copy_nonoverlapping(value.as_ptr(), ptr, size) };
         }
     }
@@ -422,40 +422,40 @@ mod tests {
         let mut data = [0u64; 2];
         let ptr = data.as_mut_ptr() as *mut u8;
 
-        // SAFETY: F1.GcHandleRooted — `ptr` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` points into the test's live two-word backing allocation.
         unsafe { StandardAtomicAccess::store_atomic(ptr, 1, 0xAA, Ordering::SeqCst) };
-        // SAFETY: F1.GcHandleRooted — `ptr` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` points into the test's live two-word backing allocation.
         let first = unsafe { StandardAtomicAccess::load_atomic(ptr, 1, Ordering::SeqCst) };
         assert_eq!(first, 0xAA);
         assert_eq!(data[0] as u8, 0xAA);
 
-        // SAFETY: F3.InteriorPointerRebased — Offset two is within the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset two is within the test's live two-word backing allocation.
         let ptr2 = unsafe { ptr.add(2) };
-        // SAFETY: F1.GcHandleRooted — `ptr2` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr2` points into the test's live two-word backing allocation.
         unsafe { StandardAtomicAccess::store_atomic(ptr2, 2, 0xBBCC, Ordering::SeqCst) };
-        // SAFETY: F1.GcHandleRooted — `ptr2` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr2` points into the test's live two-word backing allocation.
         let second = unsafe { StandardAtomicAccess::load_atomic(ptr2, 2, Ordering::SeqCst) };
         assert_eq!(second, 0xBBCC);
         // On little-endian, 0xBBCC at offset 2 in u64:
         // [00 00 CC BB 00 00 00 00]
         assert_eq!((data[0] >> 16) as u16, 0xBBCC);
 
-        // SAFETY: F3.InteriorPointerRebased — Offset four is within the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset four is within the test's live two-word backing allocation.
         let ptr4 = unsafe { ptr.add(4) };
-        // SAFETY: F1.GcHandleRooted — `ptr4` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr4` points into the test's live two-word backing allocation.
         unsafe { StandardAtomicAccess::store_atomic(ptr4, 4, 0xDEADBEEF, Ordering::SeqCst) };
-        // SAFETY: F1.GcHandleRooted — `ptr4` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr4` points into the test's live two-word backing allocation.
         let fourth = unsafe { StandardAtomicAccess::load_atomic(ptr4, 4, Ordering::SeqCst) };
         assert_eq!(fourth, 0xDEADBEEF);
         assert_eq!((data[0] >> 32) as u32, 0xDEADBEEF);
 
-        // SAFETY: F3.InteriorPointerRebased — Offset eight is the start of the second word in the allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset eight is the start of the second word in the allocation.
         let ptr8 = unsafe { ptr.add(8) };
-        // SAFETY: F1.GcHandleRooted — `ptr8` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr8` points into the test's live two-word backing allocation.
         unsafe {
             StandardAtomicAccess::store_atomic(ptr8, 8, 0x0123456789ABCDEF, Ordering::SeqCst)
         };
-        // SAFETY: F1.GcHandleRooted — `ptr8` points into the test's live two-word backing allocation.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr8` points into the test's live two-word backing allocation.
         let eighth = unsafe { StandardAtomicAccess::load_atomic(ptr8, 8, Ordering::SeqCst) };
         assert_eq!(eighth, 0x0123456789ABCDEF);
         assert_eq!(data[1], 0x0123456789ABCDEF);
@@ -468,13 +468,13 @@ mod tests {
 
         // Valid load orderings.
         for ord in [Ordering::Relaxed, Ordering::Acquire, Ordering::SeqCst] {
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points to the live local `u64` used by this test.
+            // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
             unsafe { StandardAtomicAccess::load_atomic(ptr, 8, ord) };
         }
 
         // Valid store orderings.
         for ord in [Ordering::Relaxed, Ordering::Release, Ordering::SeqCst] {
-            // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points to the live local `u64` used by this test.
+            // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
             unsafe { StandardAtomicAccess::store_atomic(ptr, 8, 42, ord) };
         }
     }
@@ -485,7 +485,7 @@ mod tests {
     fn test_invalid_load_ordering() {
         let val = 0u64;
         let ptr = std::ptr::from_ref(&val).cast::<u8>();
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points to the live local `u64` used by this test.
+        // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
             StandardAtomicAccess::load_atomic(ptr, 8, Ordering::Release);
         }
@@ -497,7 +497,7 @@ mod tests {
     fn test_invalid_store_ordering() {
         let mut val = 0u64;
         let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points to the live local `u64` used by this test.
+        // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
             StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::Acquire);
         }
@@ -508,7 +508,7 @@ mod tests {
     fn test_mixed_access_validation() {
         let mut val = 0u64;
         let ptr = std::ptr::from_mut(&mut val).cast::<u8>();
-        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points to the live local `u64` used by this test.
+        // SAFETY: F4.WidthAligned — `ptr` points to the live local `u64` used by this test.
         unsafe {
             // This should not panic, but it will populate ATOMIC_LOCATIONS
             StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::SeqCst);
@@ -522,7 +522,7 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_validate_alignment_rejects_misaligned_pointer() {
         let data = [0u8; 16];
-        // SAFETY: F3.InteriorPointerRebased — Offset one remains within the live sixteen-byte allocation.
+        // SAFETY: F10.RawMemoryAccessValid — Offset one remains within the live sixteen-byte allocation.
         let misaligned_ptr = unsafe { data.as_ptr().add(1) };
         crate::validate_alignment(misaligned_ptr, 4);
     }
@@ -535,9 +535,9 @@ mod tests {
         let mut data = [0u8; 16];
         data[1..9].copy_from_slice(&0x0102030405060708u64.to_ne_bytes());
         let ptr = data.as_ptr();
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let misaligned_ptr = unsafe { ptr.add(1) };
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let loaded = unsafe { Atomic::load_field(misaligned_ptr, 8, Ordering::SeqCst) };
         assert_eq!(loaded, 0x0102030405060708u64.to_ne_bytes());
     }
@@ -548,7 +548,7 @@ mod tests {
         // 3-byte store: not atomically expressible, falls back to memcpy.
         // Caller must hold an external lock; here we just verify the bytes are written.
         let mut data = [0u8; 8];
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         unsafe {
             Atomic::store_field(data.as_mut_ptr(), &[1, 2, 3], Ordering::SeqCst);
         }
@@ -561,9 +561,9 @@ mod tests {
         let mut data = [0u8; 8];
         data[1..5].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         let ptr = data.as_ptr();
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let misaligned_ptr = unsafe { ptr.add(1) };
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         let loaded = unsafe { Atomic::load_field(misaligned_ptr, 4, Ordering::SeqCst) };
         assert_eq!(loaded, vec![0x11, 0x22, 0x33, 0x44]);
     }
@@ -572,7 +572,7 @@ mod tests {
     #[cfg(not(feature = "multithreading"))]
     fn test_store_field_unsupported_size_falls_back_non_mt() {
         let mut data = [0u8; 8];
-        // SAFETY: F1.GcHandleRooted — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
         unsafe {
             Atomic::store_field(data.as_mut_ptr(), &[0xAA, 0xBB, 0xCC], Ordering::SeqCst);
         }

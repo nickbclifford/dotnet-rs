@@ -536,7 +536,7 @@ impl<'gc> ManagedPtr<'gc> {
                 f(&data[offset..offset + to_access])
             }),
             _ => {
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller must ensure the pointer is valid.
+                // SAFETY: F10.RawMemoryAccessValid — Caller must ensure the pointer is valid.
                 // Inline pointer resolution to avoid lockless aliasing.
                 let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
                     // Stack pointer - use cached value
@@ -692,7 +692,7 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
         match &self.origin {
             PointerOrigin::Heap(owner) => {
                 let handle = owner.0?;
-                // SAFETY: F2.DescriptorMatchesEcmaLayout — `handle` is a live object handle and we only read the
+                // SAFETY: F10.RawMemoryAccessValid — `handle` is a live object handle and we only read the
                 // immutable base pointer for offset computation.
                 let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
                 if base_ptr.is_null() {

@@ -132,7 +132,7 @@ fn try_write_utf16_to_span<
         bytes.extend_from_slice(&ch.to_ne_bytes());
     }
 
-    // SAFETY: F2.DescriptorMatchesEcmaLayout — `read_span_reference` decoded the live span origin, the length check proves room for
+    // SAFETY: F10.RawMemoryAccessValid — `read_span_reference` decoded the live span origin, the length check proves room for
     // every UTF-16 code unit, and `bytes` contains exactly `chars.len() * 2` bytes.
     unsafe {
         ctx.write_bytes(span_ptr.origin().clone(), span_ptr.byte_offset(), &bytes)
