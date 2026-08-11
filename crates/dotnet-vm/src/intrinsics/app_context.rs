@@ -37,7 +37,7 @@ pub fn intrinsic_app_context_try_get_switch<
     };
 
     let layout = LayoutManager::Scalar(Scalar::UInt8);
-    // SAFETY: `get_ptr_info` decoded the managed `bool&` out parameter, and the UInt8 layout
+    // SAFETY: F2.DescriptorMatchesEcmaLayout — `get_ptr_info` decoded the managed `bool&` out parameter, and the UInt8 layout
     // matches the single-byte value written through that origin and offset.
     dotnet_vm_ops::vm_try!(unsafe {
         ctx.write_unaligned(

@@ -91,7 +91,7 @@ pub fn ldelem<
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(load_type));
     let offset = layout.size() * index;
 
-    // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
+    // SAFETY: F4.WidthAligned — read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe {
         ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type))
     } {
@@ -140,7 +140,7 @@ pub fn ldelem_primitive<
     let layout = LayoutManager::Scalar(layout);
     let offset = layout.size() * index;
 
-    // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
+    // SAFETY: F4.WidthAligned — read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
     {
         Ok(v) => v,
@@ -220,7 +220,7 @@ fn ldelema_internal<
             return Err(());
         }
         #[expect(clippy::multiple_unsafe_ops_per_block, reason = "retrieving vector storage and deriving its checked element address share one bounds proof")]
-        // SAFETY: `index < v.layout.length` above, and `element_offset` uses the vector's own
+        // SAFETY: F3.InteriorPointerRebased — `index < v.layout.length` above, and `element_offset` uses the vector's own
         // element stride, so the derived address lies within its live backing storage.
         let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
         Ok(ptr)
@@ -278,7 +278,7 @@ pub fn stelem<
     let layout = dotnet_vm_ops::vm_try!(type_layout(store_type, &res_ctx));
     let offset = layout.size() * index;
 
-    // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    // SAFETY: F4.WidthAligned — write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx
@@ -318,7 +318,7 @@ pub fn stelem_primitive<
     let layout = LayoutManager::Scalar(layout);
     let offset = layout.size() * index;
 
-    // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    // SAFETY: F4.WidthAligned — write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx

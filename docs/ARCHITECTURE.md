@@ -8,6 +8,12 @@ For contributor rules on when to use `panic!`/`unreachable!`/`debug_assert!`/`ex
 
 That section also documents the host-error (`VmError`) vs managed-exception (`ManagedException` / `ExceptionState`) boundary.
 
+## Invariants
+
+- `F2.DescriptorMatchesEcmaLayout`: a layout descriptor's offsets, sizes, and field types match the corresponding instantiated ECMA-335 layout. The resolver's layout factory supplies the descriptor, but the specification correspondence is assumed.
+- `F3.StackSlotMatchesView`: raw evaluation-stack access reads a slot only through the type used to push it; enum discriminants and instruction stack discipline establish this locally.
+- `F3.InteriorPointerRebased`: an interior pointer retains its originating slot association and is re-established by `apply_reallocation_fixup()` after stack-vector reallocation.
+
 ## Crate Responsibilities
 
 The project is divided into several crates, each with a focused responsibility:

@@ -17,7 +17,7 @@ use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_addr};
 fn cross_arena_storage_base_with_lease(ptr: crate::object::ObjectPtr) -> *mut u8 {
     // This private helper is called only by `cross_arena_ptr_from_addr` callbacks,
     // whose contract holds the target arena lease for the callback duration.
-    // SAFETY: That callback-scoped lease keeps `ptr`'s object storage live while
+    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — That callback-scoped lease keeps `ptr`'s object storage live while
     // its base address is read.
     unsafe { ptr.as_heap_storage(|storage| storage.raw_data_ptr()) }
 }
@@ -199,7 +199,7 @@ impl<'gc> ManagedPtr<'gc> {
                     let owner_id_val = (word1 >> 32) as u32;
                     // Sign-extend `ArenaId::INVALID` and other negative IDs.
                     let owner_id = ArenaId::new(owner_id_val as i32 as i64 as u64);
-                    // SAFETY: Valid CrossArena serialization contains a live lock
+                    // SAFETY: F1.GcHandleRooted — Valid CrossArena serialization contains a live lock
                     // address in the encoded arena. The helper holds that arena's
                     // lease while it reconstructs the origin handle; the callback
                     // deliberately does not access object storage.
@@ -240,7 +240,7 @@ impl<'gc> ManagedPtr<'gc> {
                 // The untagged encoding is either a Heap ObjectRef or an
                 // Unmanaged absolute address. Metadata decoding retains no
                 // executable address in either case.
-                // SAFETY: `source` is a full ManagedPtr representation; its
+                // SAFETY: F3.InteriorPointerRebased — `source` is a full ManagedPtr representation; its
                 // initial word is the ObjectRef encoding expected by this helper.
                 let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
                 Ok(ManagedPtrInfo {
@@ -267,7 +267,7 @@ impl<'gc> ManagedPtr<'gc> {
         source: &[u8],
         _gc: &Mutation<'gc>,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        // SAFETY: The branded caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding.
         unsafe { Self::read_metadata_unchecked(source) }
     }
 
@@ -286,9 +286,9 @@ impl<'gc> ManagedPtr<'gc> {
         source: &[u8],
         resolver: &R,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        // SAFETY: The caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F3.InteriorPointerRebased — The caller supplies one complete ManagedPtr encoding.
         let info = unsafe { Self::read_metadata_unchecked(source) }?;
-        // SAFETY: The metadata came from the complete encoded source above.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The metadata came from the complete encoded source above.
         unsafe { Self::resolve_metadata_unchecked(source, resolver, info) }
     }
 
@@ -315,7 +315,7 @@ impl<'gc> ManagedPtr<'gc> {
             ),
             PointerOrigin::Heap(owner) => match owner.0 {
                 Some(handle) => {
-                    // SAFETY: Heap origin serialization contains a live branded
+                    // SAFETY: F6.NoEscapeAcrossArena — Heap origin serialization contains a live branded
                     // handle. The resulting pointer is derived while its storage
                     // is borrowed from that handle.
                     let base = unsafe { handle.borrow().storage.raw_data_ptr() };
@@ -324,7 +324,7 @@ impl<'gc> ManagedPtr<'gc> {
                 None => None,
             },
             PointerOrigin::Unmanaged => {
-                // SAFETY: This branch is exclusively the address-only Unmanaged
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — This branch is exclusively the address-only Unmanaged
                 // wire representation; the caller owns its validity contract.
                 NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
             }
@@ -335,7 +335,7 @@ impl<'gc> ManagedPtr<'gc> {
                         .try_into()
                         .expect("slice length was checked by metadata decoding"),
                 );
-                // SAFETY: Metadata decoding already validated the CrossArena
+                // SAFETY: F1.GcHandleRooted — Metadata decoding already validated the CrossArena
                 // representation. The helper holds the encoded arena lease for
                 // the complete origin-to-storage traversal below.
                 let base = unsafe {
@@ -400,7 +400,7 @@ impl<'gc> ManagedPtr<'gc> {
             let owner = match cache.get_heap_handle(word0) {
                 Some(owner) => owner,
                 None => {
-                    // SAFETY: `source` starts with the complete Heap ObjectRef
+                    // SAFETY: F1.GcHandleRooted — `source` starts with the complete Heap ObjectRef
                     // representation validated as an untagged non-null word above.
                     let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
                     if owner.0.is_some() {
@@ -414,12 +414,12 @@ impl<'gc> ManagedPtr<'gc> {
                 origin: PointerOrigin::Heap(owner),
                 offset: ByteOffset::new(word1),
             };
-            // SAFETY: `source` was completely validated above and `info` carries
+            // SAFETY: F2.DescriptorMatchesEcmaLayout — `source` was completely validated above and `info` carries
             // either a rooted cached Heap handle or the normal decoded handle.
             return unsafe { Self::resolve_metadata_unchecked(source, resolver, info) };
         }
 
-        // SAFETY: Non-Heap encodings keep their established decoding behavior.
+        // SAFETY: F1.GcHandleRooted — Non-Heap encodings keep their established decoding behavior.
         unsafe { Self::read_resolved_unchecked(source, resolver) }
     }
 
@@ -434,7 +434,7 @@ impl<'gc> ManagedPtr<'gc> {
         resolver: &R,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         let _ = gc;
-        // SAFETY: The branded caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding.
         unsafe { Self::read_resolved_unchecked(source, resolver) }
     }
 
@@ -455,7 +455,7 @@ impl<'gc> ManagedPtr<'gc> {
         cache: &mut C,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         let _ = gc;
-        // SAFETY: The branded caller supplies one complete ManagedPtr encoding
+        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding
         // and a cache satisfying its documented contract.
         unsafe { Self::read_resolved_with_heap_cache_unchecked(source, resolver, cache) }
     }
@@ -534,7 +534,7 @@ impl<'gc> ManagedPtr<'gc> {
             });
             let resolver = DebugWriteResolver { base };
             let recovered =
-                // SAFETY: `dest` was just filled with one complete ManagedPtr encoding above.
+                // SAFETY: F3.InteriorPointerRebased — `dest` was just filled with one complete ManagedPtr encoding above.
                 unsafe { Self::read_resolved_unchecked(dest, &resolver) }
                     .expect("ManagedPtr::write: recovery failed");
             let self_origin_norm = self.origin.clone().normalize();

@@ -61,7 +61,7 @@ impl Clone for StaticStorage {
     }
 }
 
-// SAFETY: `StaticStorage::trace` traces its `storage` field, which contains all GC-managed
+// SAFETY: F5.TracesEveryGcRef — `StaticStorage::trace` traces its `storage` field, which contains all GC-managed
 // references. The atomic fields (`init_state`, `initializing_thread`) and synchronization
 // primitives (`init_cond`, `init_mutex`) contain no GC handles. `FieldStorage::trace` reads its
 // backing bytes only during the stop-the-world tracing phase, when mutators cannot modify them.
@@ -153,7 +153,7 @@ impl Drop for WaitGraphEdgeGuard<'_> {
     }
 }
 
-// SAFETY: `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
+// SAFETY: F5.TracesEveryGcRef — `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
 // During tracing, we use data_ptr() to bypass locks, which is safe during stop-the-world GC pauses.
@@ -161,7 +161,7 @@ impl Drop for WaitGraphEdgeGuard<'_> {
 unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for shard in &self.shards {
-            // SAFETY: Tracing happens during a stop-the-world pause, so no other
+            // SAFETY: F5.TracesEveryGcRef — Tracing happens during a stop-the-world pause, so no other
             // threads are running. We can safely access the inner value without
             // acquiring the lock.
             #[cfg(debug_assertions)]

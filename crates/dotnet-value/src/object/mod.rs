@@ -173,14 +173,14 @@ impl<'a> Arbitrary<'a> for ObjectPtr {
     }
 }
 
-// SAFETY: `ObjectPtr` is a raw pointer to a `ThreadSafeLock`. Under
+// SAFETY: F2.DescriptorMatchesEcmaLayout — `ObjectPtr` is a raw pointer to a `ThreadSafeLock`. Under
 // multithreading, `ThreadSafeLock<T: Send + Sync>` is `Send + Sync` (verified
 // by `assert_impl_all!` below). `ObjectInner<'static>: Send + Sync` is
 // confirmed by the test assertions in this module.
 #[cfg(feature = "multithreading")]
 unsafe impl Send for ObjectPtr {}
 
-// SAFETY: Same rationale as the `Send` implementation above. These impls are
+// SAFETY: F2.DescriptorMatchesEcmaLayout — Same rationale as the `Send` implementation above. These impls are
 // gated on `multithreading` because the single-threaded backend uses
 // `gc_arena::lock::RefLock`, which is `!Send + !Sync`.
 #[cfg(feature = "multithreading")]
@@ -207,7 +207,7 @@ impl ObjectPtr {
         reason = "the NonNull dereference and lock's interior-pointer access form one immutable owner-id read"
     )]
     pub fn owner_id(&self) -> ArenaId {
-        // SAFETY: `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
         // `as_ref()` yields a shared reference; `as_ptr()` gives a raw pointer
         // to the interior `ObjectInner` without acquiring the lock.  Reading
         // `owner_id` is safe because it is written once at construction and is
@@ -216,7 +216,7 @@ impl ObjectPtr {
     }
 
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
-        // SAFETY: `self.0` is a valid, non-null `ThreadSafeLock` pointer kept
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a valid, non-null `ThreadSafeLock` pointer kept
         // alive by the GC arena for the duration of this call.  `as_ref()` is
         // sound because the pointer is non-null and aligned.  `borrow()` acquires
         // a shared read lock, preventing concurrent mutable access.
@@ -225,7 +225,7 @@ impl ObjectPtr {
     }
 
     pub fn with_data_mut<T>(&self, _gc: GCHandle<'_>, f: impl FnOnce(&mut [u8]) -> T) -> T {
-        // SAFETY: We have GCHandle which proves we are in a mutation context.
+        // SAFETY: F1.GcHandleRooted — We have GCHandle which proves we are in a mutation context.
         // Even if the object is in another arena, we can still write to its storage
         // because we hold the ThreadSafeLock.
         let mut inner = unsafe { self.0.as_ref().borrow_mut(_gc.mutation()) };
@@ -233,7 +233,7 @@ impl ObjectPtr {
     }
 
     pub fn as_heap_storage<T>(&self, f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T) -> T {
-        // SAFETY: `self.0` is a valid, non-null `ThreadSafeLock` pointer.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `self.0` is a valid, non-null `ThreadSafeLock` pointer.
         // `as_ref()` is sound because the pointer is non-null and aligned.
         // `borrow()` acquires a shared read lock, preventing concurrent writes.
         // The HRTB hides the raw pointer's internal `'static` arena brand: `f`
@@ -270,7 +270,7 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
         reason = "the tracing-only owner-id read traverses the GC pointer and lock interior as one immutable operation"
     )
 )]
-// SAFETY: A local handle is traced through its `Gc` implementation. During coordinated
+// SAFETY: F5.TracesEveryGcRef — A local handle is traced through its `Gc` implementation. During coordinated
 // multithreaded collection, a non-local handle is instead recorded as a cross-arena root so its
 // owning arena traces it; no reference-bearing variant is skipped. The raw owner-ID read is the
 // accepted STW boundary documented under
@@ -286,7 +286,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // DANGER: `lock_ptr` may dangle if its owning arena exits. Coordinated STW
                     // must keep every arena alive and every mutator stopped through this read; see the
                     // accepted-risk boundary linked from the `Collect` SAFETY comment above.
-                    // SAFETY: During STW all mutator threads are at safe points,
+                    // SAFETY: F2.DescriptorMatchesEcmaLayout — During STW all mutator threads are at safe points,
                     // so the owning arena cannot be freed.  `owner_id` is
                     // immutable after construction, so reading it without the
                     // lock is safe even under concurrent observation.
@@ -351,7 +351,7 @@ impl<'gc> ObjectRef<'gc> {
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         self.0.map(|h| {
             let inner = h.borrow();
-            // SAFETY: The active shared object borrow keeps the matched storage allocation live
+            // SAFETY: F1.GcHandleRooted — The active shared object borrow keeps the matched storage allocation live
             // and excludes mutation while its base address is captured.
             NonNull::new(unsafe { inner.storage.raw_data_ptr() })
                 .expect("Object storage pointer is null")
@@ -434,12 +434,12 @@ impl<'gc> ObjectRef<'gc> {
         reason = "this parser validates one serialized object-reference representation before reconstructing it"
     )]
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        // SAFETY: The caller supplies a complete serialized ObjectRef whose non-null pointer is
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The caller supplies a complete serialized ObjectRef whose non-null pointer is
         // live for the returned lifetime; the tagged branches below additionally validate arena
         // registration before reconstructing a handle.
         unsafe {
             let ptr_val = {
-                // SAFETY: Use read_unaligned to avoid UB on unaligned access.
+                // SAFETY: F4.WidthAligned — Use read_unaligned to avoid UB on unaligned access.
                 // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
                 (source.as_ptr() as *const usize).read_unaligned()
             };
@@ -492,7 +492,7 @@ impl<'gc> ObjectRef<'gc> {
                         }
 
                         // Verify magic number
-                        // SAFETY: `ptr` was reconstructed from a tagged cross-arena
+                        // SAFETY: F6.NoEscapeAcrossArena — `ptr` was reconstructed from a tagged cross-arena
                         // pointer.  We hold an arena lease (`_lease`) which guarantees
                         // the owning arena — and therefore this allocation — has not
                         // been freed.  Alignment was verified by `is_multiple_of` above.
@@ -527,7 +527,7 @@ impl<'gc> ObjectRef<'gc> {
                     }
 
                     // Verify magic number to ensure we are pointing to a valid object
-                    // SAFETY: `ptr` was reconstructed from the address stored in `source`.
+                    // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` was reconstructed from the address stored in `source`.
                     // Alignment was verified by `is_multiple_of` above.  The caller
                     // guarantees `source` contains a live `Gc` pointer, so the
                     // allocation is valid for the lifetime of this call.
@@ -535,7 +535,7 @@ impl<'gc> ObjectRef<'gc> {
                     inner.validate_magic();
                 }
 
-                // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
+                // SAFETY: F1.GcHandleRooted — The pointer was originally obtained via Gc::as_ptr and stored as bytes.
                 // Since this is only called during VM execution where 'gc is valid and
                 // the object is guaranteed to be alive (as it is traced by the caller),
                 // it is safe to reconstruct the Gc pointer.
@@ -551,7 +551,7 @@ impl<'gc> ObjectRef<'gc> {
     /// - `source` must contain a valid `Gc` pointer.
     /// - The pointer must belong to the arena associated with `gc`.
     pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> Self {
-        // SAFETY: The caller guarantees that `source` contains a live handle from `_gc`'s arena;
+        // SAFETY: F1.GcHandleRooted — The caller guarantees that `source` contains a live handle from `_gc`'s arena;
         // the mutation token brands the reconstructed reference with that arena lifetime.
         unsafe { Self::read_unchecked(source) }
     }
@@ -574,7 +574,7 @@ impl<'gc> ObjectRef<'gc> {
                     // This keeps ownership metadata intact when references flow through
                     // shared storage (e.g. statics) and are later read on another thread.
                     let lock_ptr = Gc::as_ptr(s);
-                    // SAFETY: `s` keeps the lock allocation alive. `owner_id` is immutable after
+                    // SAFETY: F1.GcHandleRooted — `s` keeps the lock allocation alive. `owner_id` is immutable after
                     // object creation, so this raw read cannot race with a write to that field.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != ArenaId::INVALID {
@@ -604,7 +604,7 @@ impl<'gc> ObjectRef<'gc> {
             }
         };
         unsafe {
-            // SAFETY: Use write_unaligned to avoid UB. Caller holds lock.
+            // SAFETY: F4.WidthAligned — Use write_unaligned to avoid UB. Caller holds lock.
             (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr_val);
         }
     }
@@ -838,7 +838,7 @@ impl<'gc> ObjectRef<'gc> {
             HeapStorage::Vec(v) => f(&v.storage),
             HeapStorage::Obj(o) => o.instance_storage.with_data(f),
             HeapStorage::Str(s) => {
-                // SAFETY: `CLRString` stores UTF-16 `u16` code units.  Casting
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — `CLRString` stores UTF-16 `u16` code units.  Casting
                 // to `*const u8` is valid (u8 alignment ≤ u16 alignment).
                 // `s.len() * 2` gives the correct byte length; the multiplication
                 // cannot overflow because `s.len()` is bounded by the allocation
@@ -869,7 +869,7 @@ impl<'gc> ObjectRef<'gc> {
             HeapStorage::Obj(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Boxed(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Str(s) => {
-                // SAFETY: `CLRString` stores UTF-16 `u16` code units. Casting to
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — `CLRString` stores UTF-16 `u16` code units. Casting to
                 // `*mut u8` is valid (`u8` alignment <= `u16` alignment), and
                 // `s.len() * 2` is the correct byte-length view.
                 let bytes = unsafe {
@@ -1011,7 +1011,7 @@ mod tests {
         let mut source = [0u8; 8];
         source.copy_from_slice(&tagged_ptr.to_ne_bytes());
 
-        // SAFETY: tagged_ptr is a validly constructed Tag 5 pointer.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — tagged_ptr is a validly constructed Tag 5 pointer.
         let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
 
         assert!(
@@ -1043,7 +1043,7 @@ mod tests {
             let mut source = [0u8; 8];
             source.copy_from_slice(&tagged_ptr.to_ne_bytes());
 
-            // SAFETY: lock is a valid GC pointer.
+            // SAFETY: F1.GcHandleRooted — lock is a valid GC pointer.
             let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
 
             assert!(
@@ -1065,7 +1065,7 @@ mod tests {
         register_arena(arena_id, Arc::new(AtomicBool::new(false)));
 
         let arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
-        // SAFETY: `arena_handle_owner` is a local that outlives the entire
+        // SAFETY: F1.GcHandleRooted — `arena_handle_owner` is a local that outlives the entire
         // `arena.mutate(...)` closure below.  We extend the lifetime to
         // `'static` only for use within that closure; the closure completes
         // before `arena_handle_owner` is dropped, so the extended lifetime is
@@ -1099,7 +1099,7 @@ mod tests {
                 "encoded arena id must match owner"
             );
 
-            // SAFETY: `bytes` was produced by `ObjectRef::write`, which
+            // SAFETY: F2.DescriptorMatchesEcmaLayout — `bytes` was produced by `ObjectRef::write`, which
             // encodes a valid live `Gc` pointer with a Tag 5 owner marker.
             // The owning arena is still registered at this point
             // (`unregister_arena` is called only after the closure returns),
@@ -1129,7 +1129,7 @@ mod tests {
         )));
         let raw = Box::into_raw(corrupt);
 
-        // SAFETY: `raw` was produced by `Box::into_raw` immediately above and
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` immediately above and
         // has not been freed.  The `ObjectPtr` is only used inside this test
         // and is never sent to another thread.
         let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
@@ -1138,7 +1138,7 @@ mod tests {
         let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
 
         // Reclaim the allocation regardless of the panic outcome.
-        // SAFETY: `raw` was produced by `Box::into_raw` above; no other owner
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above; no other owner
         // of the allocation exists at this point.
         let _ = unsafe { Box::from_raw(raw) };
 
@@ -1171,7 +1171,7 @@ mod tests {
         )));
         let raw = Box::into_raw(obj);
 
-        // SAFETY: `raw` was produced by `Box::into_raw` immediately above and
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` immediately above and
         // has not been freed.  The `ObjectPtr` is used only inside this test.
         let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
 
@@ -1180,7 +1180,7 @@ mod tests {
         // under multithreading it panics because the arena is not registered.
         let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
 
-        // SAFETY: `raw` was produced by `Box::into_raw` above; no other owner
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above; no other owner
         // of the allocation exists at this point.
         let _ = unsafe { Box::from_raw(raw) };
 

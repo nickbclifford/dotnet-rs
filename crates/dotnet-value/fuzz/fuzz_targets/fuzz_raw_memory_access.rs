@@ -21,23 +21,23 @@ fuzz_target!(|data: (u16, u8, u64, u8)| {
     let mut buffer = [0u64; 128];
     let offset_val = ((offset as usize) % (1024 - 8)) & !(size - 1);
 
-    // SAFETY: The rounded offset stays in bounds and preserves alignment for `size`.
+    // SAFETY: F3.InteriorPointerRebased — The rounded offset stays in bounds and preserves alignment for `size`.
     let ptr = unsafe { buffer.as_mut_ptr().cast::<u8>().add(offset_val) };
 
     // Skip load-incompatible orderings so fuzzing targets memory access rather than invariant panics.
     match ordering {
         Ordering::Release | Ordering::AcqRel => {}
         _ => {
-            // SAFETY: `ptr` is live and aligned for the selected width.
+            // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
             let _loaded = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
         }
     }
 
-    // SAFETY: `ptr` is live and aligned for the selected width.
+    // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
     unsafe {
         StandardAtomicAccess::store_atomic(ptr, size, value, Ordering::Relaxed);
     }
-    // SAFETY: `ptr` is live and aligned for the selected width.
+    // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
     let loaded = unsafe { StandardAtomicAccess::load_atomic(ptr, size, Ordering::Relaxed) };
 
     let mask = if size == 8 {

@@ -138,11 +138,11 @@ impl LayoutManager {
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 let info = unsafe { ManagedPtr::read_metadata_unchecked(storage) }
                     .expect("LayoutManager::trace: failed to read ManagedPtr");
                 info.origin.trace(cc);
@@ -170,11 +170,11 @@ impl LayoutManager {
     ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 let info = unsafe { ManagedPtr::read_metadata_branded(storage, fc) }
                     .expect("LayoutManager::resurrect: failed to read ManagedPtr");
                 info.origin.resurrect(fc, visited, depth);
@@ -364,7 +364,7 @@ impl GcDesc {
 
                 // Use read_unchecked to handle potential unaligned access safely
                 // and correctly reconstruct the ObjectRef.
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
                 ptr.trace(cc);
             }
@@ -372,7 +372,7 @@ impl GcDesc {
 
         for offset in &self.unaligned_offsets {
             if *offset + ptr_size <= storage.len() {
-                // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+                // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[*offset..]) };
                 ptr.trace(cc);
             }
@@ -419,7 +419,7 @@ impl FieldLayoutManager {
             self.visit_managed_ptrs(crate::ByteOffset::new(0), &mut |offset| {
                 let off = offset.as_usize();
                 if off + ManagedPtr::SIZE <= storage.len() {
-                    // SAFETY: layout creation ensures these offsets contain valid ManagedPtrs.
+                    // SAFETY: F9.MetadataArenaOutlivesDescriptors; F3.InteriorPointerRebased — layout creation ensures these offsets contain valid ManagedPtrs.
                     // Metadata decoding is tag-aware and cannot manufacture executable pointers during GC tracing.
                     let info = unsafe { ManagedPtr::read_metadata_unchecked(&storage[off..]) }
                         .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
@@ -589,7 +589,7 @@ impl_scalar_field_type!(usize, Scalar::NativeInt);
 impl<'gc> FieldType for ObjectRef<'gc> {
     const SCALAR: Scalar = Scalar::ObjectRef;
     fn read_from(bytes: &[u8]) -> Self {
-        // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+        // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
         unsafe { ObjectRef::read_unchecked(bytes) }
     }
     fn write_to(&self, bytes: &mut [u8]) {
@@ -600,7 +600,7 @@ impl<'gc> FieldType for ObjectRef<'gc> {
 impl<'gc> FieldType for ManagedPtr<'gc> {
     const SCALAR: Scalar = Scalar::ManagedPtr;
     fn read_from(bytes: &[u8]) -> Self {
-        // SAFETY: The layout selected this field and storage contains its valid serialized representation.
+        // SAFETY: F1.GcHandleRooted — The layout selected this field and storage contains its valid serialized representation.
         let info = unsafe {
             ManagedPtr::read_resolved_unchecked(bytes, &crate::pointer::NoManagedPtrResolver)
                 .expect("bytes were written by ManagedPtr::write_to for this same field")

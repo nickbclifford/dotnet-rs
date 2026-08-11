@@ -336,7 +336,7 @@ impl<L: LockLevel, T> OrderedRwLock<L, T> {
         }
         #[cfg(not(feature = "multithreading"))]
         {
-            // SAFETY: Forwarding contract to underlying lock implementation.
+            // SAFETY: F8.LockOrderRespected — Forwarding contract to underlying lock implementation.
             unsafe { self.inner.data_ptr() }
         }
     }

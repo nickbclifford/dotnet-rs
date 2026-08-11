@@ -48,7 +48,7 @@ pub enum ValueType<'gc> {
     Struct(Object<'gc>),
 }
 
-// SAFETY: ValueType is an enum where only Pointer and Struct variants contain
+// SAFETY: F2.DescriptorMatchesEcmaLayout — ValueType is an enum where only Pointer and Struct variants contain
 // potential GC references. We manually trace these variants.
 unsafe impl<'gc> Collect<'gc> for ValueType<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -182,7 +182,7 @@ impl<'gc> PartialEq for Vector<'gc> {
     }
 }
 
-// SAFETY: Vector contains raw byte storage that may hold GC pointers (ObjectRef).
+// SAFETY: F1.GcHandleRooted — Vector contains raw byte storage that may hold GC pointers (ObjectRef).
 // We use the layout manager to identify and trace any such pointers.
 unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
     #[inline]
@@ -193,7 +193,7 @@ unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 let element_size = element.size();
                 for i in 0..self.layout.length {
-                    // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
+                    // SAFETY: F1.GcHandleRooted — The object layout selected valid serialized storage for this value and preserves its lifetime.
                     unsafe {
                         super::ObjectRef::read_unchecked(
                             &self.storage[(element_size * i).as_usize()..],
@@ -302,7 +302,7 @@ impl<'gc> Vector<'gc> {
         self.validate_magic();
         let chunks = self.storage.chunks_exact(super::ObjectRef::SIZE);
         debug_assert!(chunks.remainder().is_empty());
-        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
+        // SAFETY: F1.GcHandleRooted — The object layout selected valid serialized storage for this value and preserves its lifetime.
         chunks.map(move |chunk| unsafe { super::ObjectRef::read_branded(chunk, gc) })
     }
 
@@ -355,7 +355,7 @@ impl Debug for Vector<'_> {
                         .chunks(self.layout.element_layout.size().as_usize())
                         .map(match self.layout.element_layout.as_ref() {
                             LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
-                                // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
+                                // SAFETY: F1.GcHandleRooted — The object layout selected valid serialized storage for this value and preserves its lifetime.
                                 format!("{:?}", unsafe { super::ObjectRef::read_unchecked(chunk) })
                             },
                             LayoutManager::Scalar(Scalar::ManagedPtr) => {
@@ -439,7 +439,7 @@ impl<'gc> PartialEq for Object<'gc> {
 
 impl<'gc> Eq for Object<'gc> {}
 
-// SAFETY: Object contains field storage that may hold GC pointers.
+// SAFETY: F1.GcHandleRooted — Object contains field storage that may hold GC pointers.
 // We use the layout manager associated with the type description to trace fields.
 unsafe impl<'gc> Collect<'gc> for Object<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -456,7 +456,7 @@ unsafe impl<'gc> Collect<'gc> for Object<'gc> {
 
 impl<'gc> Object<'gc> {
     pub fn size_bytes(&self) -> usize {
-        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
+        // SAFETY: F1.GcHandleRooted — The object layout selected valid serialized storage for this value and preserves its lifetime.
         size_of::<Object>() + unsafe { self.instance_storage.raw_data_unsynchronized().len() }
     }
 
@@ -466,7 +466,7 @@ impl<'gc> Object<'gc> {
     }
 
     pub fn validate_resurrection_invariants(&self) {
-        // SAFETY: The object layout selected valid serialized storage for this value and preserves its lifetime.
+        // SAFETY: F1.GcHandleRooted — The object layout selected valid serialized storage for this value and preserves its lifetime.
         let actual_size = unsafe { self.instance_storage.raw_data_unsynchronized().len() };
         let expected_size = self.instance_storage.layout().total_size;
         if actual_size != expected_size {

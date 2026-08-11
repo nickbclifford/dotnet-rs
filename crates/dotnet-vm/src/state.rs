@@ -627,7 +627,7 @@ impl<'gc> Default for ReflectionLocalState<'gc> {
     }
 }
 
-// SAFETY: `ReflectionLocalState` traces every `ObjectRef<'gc>` stored in its reflection cache
+// SAFETY: F5.TracesEveryGcRef — `ReflectionLocalState` traces every `ObjectRef<'gc>` stored in its reflection cache
 // maps. The companion vectors (`runtime_types_list`, `runtime_methods`, `runtime_fields`) contain
 // no GC-managed references.
 unsafe impl<'gc> Collect<'gc> for ReflectionLocalState<'gc> {
@@ -660,7 +660,7 @@ pub struct ArenaLocalState<'gc> {
     pub active_borrows: Cell<usize>,
 }
 
-// SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
+// SAFETY: F5.TracesEveryGcRef — `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
 // This includes the `heap` and the nested `reflection` cache state.
 unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {

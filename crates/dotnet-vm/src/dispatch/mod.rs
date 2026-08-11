@@ -79,7 +79,7 @@ pub struct ExecutionEngine<'gc> {
     pub ring_buffer: ring_buffer::InstructionRingBuffer,
 }
 
-// SAFETY: `ExecutionEngine` correctly traces its GC-managed fields (`stack`) in its
+// SAFETY: F5.TracesEveryGcRef — `ExecutionEngine` correctly traces its GC-managed fields (`stack`) in its
 // `trace` implementation. `ring_buffer` does not contain GC pointers.
 unsafe impl<'gc> Collect<'gc> for ExecutionEngine<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {

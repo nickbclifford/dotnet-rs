@@ -6,7 +6,7 @@ registry, and `scripts/check_doc_drift.sh` enforces that every cited predicate
 name exists in the registry and every registry predicate is cited at least
 once.
 
-**Status:** not started.
+**Status:** complete — registry, owner-document invariant sections, contributor policy, and drift checks landed; all 539 current `// SAFETY:` comments in `dotnet-value`, `dotnet-runtime-memory`, `dotnet-utils`, and `dotnet-vm` cite registry predicates.
 
 ## Goal
 

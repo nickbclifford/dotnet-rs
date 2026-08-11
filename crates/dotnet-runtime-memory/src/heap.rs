@@ -410,7 +410,7 @@ fn bucket_range(start: usize, size: usize) -> std::ops::RangeInclusive<usize> {
     (start >> REGISTRY_BUCKET_SHIFT)..=(end >> REGISTRY_BUCKET_SHIFT)
 }
 
-// SAFETY: `HeapManager::trace` correctly traces GC-managed object references based on their
+// SAFETY: F5.TracesEveryGcRef — `HeapManager::trace` correctly traces GC-managed object references based on their
 // handle type. Normal and Pinned handles trace their objects to keep them alive. Weak handles
 // do not trace to allow collection. The finalization queues and cross-arena roots are also
 // traced. All other fields are non-GC metadata or control state that does not need tracing.
@@ -434,7 +434,7 @@ unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
         }
         #[cfg(feature = "multithreading")]
         for ptr in self.cross_arena_roots.borrow().iter() {
-            // SAFETY: This is an accepted cross-arena boundary. Coordinated STW keeps every
+            // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — This is an accepted cross-arena boundary. Coordinated STW keeps every
             // arena alive and all mutators stopped, so each recorded pointer remains valid while the
             // temporary, rebranded handle is traced and cannot escape. `Gc::from_ptr` cannot
             // encode the foreign ownership; see

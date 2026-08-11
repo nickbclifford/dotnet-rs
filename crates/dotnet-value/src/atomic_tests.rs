@@ -16,7 +16,7 @@ mod tests {
     fn test_atomic_load_store() {
         let mut data = Aligned8([0u8; 8]);
         let ptr = data.0.as_mut_ptr();
-        // SAFETY: The test owns valid backing storage for every atomic operation performed here.
+        // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
         unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
@@ -87,7 +87,7 @@ mod tests {
             let ptr = data_clone.0.as_ptr() as *mut u8;
             let mut i = 0;
             while !stop_clone.load(Ordering::Relaxed) {
-                // SAFETY: The test owns valid backing storage for every atomic operation performed here.
+                // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
                 unsafe {
                     StackValue::Int64(i).store_atomic(
                         ptr,
@@ -103,7 +103,7 @@ mod tests {
         let reader = thread::spawn(move || {
             let ptr = data_clone2.0.as_ptr();
             while !stop_clone2.load(Ordering::Relaxed) {
-                // SAFETY: The test owns valid backing storage for every atomic operation performed here.
+                // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
                 unsafe {
                     let val =
                         StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire);
@@ -138,7 +138,7 @@ mod tests {
             let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = Aligned8([0u8; 8]);
             let ptr = buffer.0.as_mut_ptr();
-            // SAFETY: The test owns valid backing storage for every atomic operation performed here.
+            // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
             unsafe {
                 StackValue::ObjectRef(obj).store_atomic(
                     ptr,
@@ -170,9 +170,9 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_atomic_load_is_rejected() {
         let data = Aligned8([0u8; 8]);
-        // SAFETY: Offset one remains within the test's eight-byte backing allocation.
+        // SAFETY: F3.InteriorPointerRebased — Offset one remains within the test's eight-byte backing allocation.
         let ptr = unsafe { data.0.as_ptr().add(1) };
-        // SAFETY: `ptr` points into the live test allocation; the checked operation is
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points into the live test allocation; the checked operation is
         // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
@@ -184,9 +184,9 @@ mod tests {
     #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_atomic_store_is_rejected() {
         let mut data = Aligned8([0u8; 8]);
-        // SAFETY: Offset one remains within the test's eight-byte backing allocation.
+        // SAFETY: F3.InteriorPointerRebased — Offset one remains within the test's eight-byte backing allocation.
         let ptr = unsafe { data.0.as_mut_ptr().add(1) };
-        // SAFETY: `ptr` points into the live test allocation; the checked operation is
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptr` points into the live test allocation; the checked operation is
         // expected to reject its deliberately invalid alignment.
         unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int32, AtomicOrdering::Relaxed);

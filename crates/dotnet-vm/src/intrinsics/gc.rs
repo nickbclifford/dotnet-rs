@@ -441,7 +441,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
             && let Some(ptr) = entry.0.0
         {
             match &ptr.borrow().storage {
-                // SAFETY: The validated pinned GCHandle keeps `ptr` and its object lock alive;
+                // SAFETY: F8.LockOrderRespected — The validated pinned GCHandle keeps `ptr` and its object lock alive;
                 // this branch only exposes that stable address for AddrOfPinnedObject.
                 HeapStorage::Obj(_) => unsafe { ptr.as_ptr() as isize },
                 HeapStorage::Vec(v) => v.get().as_ptr() as isize,
@@ -528,7 +528,7 @@ pub fn intrinsic_dependent_handle_internal_get_target_and_dependent<
         Ok(v) => v,
         Err(e) => return e,
     };
-    // SAFETY: `get_ptr_info` decoded the managed ObjectRef out parameter, and `layout` matches
+    // SAFETY: F2.DescriptorMatchesEcmaLayout — `get_ptr_info` decoded the managed ObjectRef out parameter, and `layout` matches
     // the dependent handle value written through that origin and offset.
     dotnet_vm_ops::vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::ObjectRef(dependent), &layout)

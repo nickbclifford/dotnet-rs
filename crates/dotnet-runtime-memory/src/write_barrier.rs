@@ -109,10 +109,10 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         }
 
         if let Some(h) = target.0 {
-            // SAFETY: `h` is a live GC handle, so extracting its raw pointer preserves a valid
+            // SAFETY: F1.GcHandleRooted — `h` is a live GC handle, so extracting its raw pointer preserves a valid
             // reference to the object for this synchronous recorder operation.
             let ptr = unsafe { h.as_ptr() };
-            // SAFETY: `ptr` came from the live handle above; reading immutable `owner_id` neither
+            // SAFETY: F7.InitializationPublished — `ptr` came from the live handle above; reading immutable `owner_id` neither
             // moves nor mutates the object.
             let ref_tid = unsafe { (*ptr).owner_id() };
             if ref_tid != self.arena_id {
@@ -159,10 +159,10 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => {
                 r.0.map(|h| {
-                    // SAFETY: `h` is a live GC handle, so extracting its raw pointer preserves
+                    // SAFETY: F1.GcHandleRooted — `h` is a live GC handle, so extracting its raw pointer preserves
                     // a valid reference to the object for this closure.
                     let ptr = unsafe { h.as_ptr() };
-                    // SAFETY: `ptr` came from the live handle above; reading immutable `owner_id`
+                    // SAFETY: F7.InitializationPublished — `ptr` came from the live handle above; reading immutable `owner_id`
                     // neither moves nor mutates its object.
                     unsafe { (*ptr).owner_id() }
                 })
@@ -214,7 +214,7 @@ mod tests {
             target_id,
         )));
         let raw: *mut ThreadSafeLock<ObjectInner<'static>> = Box::into_raw(lock);
-        // SAFETY: `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
         // managed pointer and recorder have been dropped below.
         let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("boxed object pointer is non-null");
         let managed = ManagedPtr::new_cross_arena(
@@ -236,7 +236,7 @@ mod tests {
             "an unowned recorder must skip every cross-arena reference kind"
         );
         drop(managed);
-        // SAFETY: `raw` was produced by `Box::into_raw` above, no aliases are used after this
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — `raw` was produced by `Box::into_raw` above, no aliases are used after this
         // point, and reconstructing the box releases the allocation exactly once.
         unsafe {
             drop(Box::from_raw(raw));

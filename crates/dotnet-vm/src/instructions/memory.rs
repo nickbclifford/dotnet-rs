@@ -41,7 +41,7 @@ pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
             clippy::multiple_unsafe_ops_per_block,
             reason = "validating and moving the same caller-provided raw chunk share one range proof"
         )]
-        // SAFETY: The CIL `cpblk` contract requires non-null source and destination ranges valid
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The CIL `cpblk` contract requires non-null source and destination ranges valid
         // for `size` bytes. `offset..offset + current_chunk` stays within that range, and
         // `ptr::copy` preserves the instruction's overlap-permitted memmove semantics.
         unsafe {
@@ -78,7 +78,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
             clippy::multiple_unsafe_ops_per_block,
             reason = "validating and initializing the same caller-provided raw chunk share one range proof"
         )]
-        // SAFETY: The CIL `initblk` contract requires a non-null destination valid for `size`
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The CIL `initblk` contract requires a non-null destination valid for `size`
         // bytes. `offset..offset + current_chunk` stays within that caller-provided range.
         unsafe {
             validate_atomic_access(addr.add(offset), false);
@@ -148,7 +148,7 @@ pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
         StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    // SAFETY: `resolve_indirect_origin_and_offset` validates the pointer origin and offset;
+    // SAFETY: F3.InteriorPointerRebased — `resolve_indirect_origin_and_offset` validates the pointer origin and offset;
     // `write_unaligned` checks bounds and applies the heap write barrier for `layout`.
     match unsafe { ctx.write_unaligned(origin.clone(), offset, val, &layout) } {
         Ok(_) => {}
@@ -198,7 +198,7 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
         LoadType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    // SAFETY: `resolve_indirect_origin_and_offset` validates the pointer origin and offset;
+    // SAFETY: F3.InteriorPointerRebased — `resolve_indirect_origin_and_offset` validates the pointer origin and offset;
     // `read_unaligned` checks that the requested `layout` fits the selected storage.
     let val = match unsafe { ctx.read_unaligned(origin.clone(), offset, &layout, None) } {
         Ok(v) => v,

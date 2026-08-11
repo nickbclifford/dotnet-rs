@@ -86,7 +86,7 @@ fn test_managed_ptr_offset_oob() {
         let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by much more than size of ValueType should panic.
-        // SAFETY: The test invokes the unsafe operation specifically to verify its
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The test invokes the unsafe operation specifically to verify its
         // runtime bounds validation rejects this out-of-bounds offset.
         unsafe {
             ptr.offset(1000);
@@ -103,7 +103,7 @@ fn test_managed_ptr_offset_valid() {
         let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by 4 bytes (end of object) should be valid
-        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+        // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         unsafe {
             ptr.offset(4);
         }
@@ -132,7 +132,7 @@ fn test_heap_decode_cache_hit_miss_and_integrity() {
         ptr.write(&mut buffer);
         let mut cache = CountingHeapCache::default();
 
-        // SAFETY: The buffer was written from the live object above. This test
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The buffer was written from the live object above. This test
         // cache is short-lived inside the GC fixture; production cache owners
         // must instead trace their retained ObjectRefs across collection.
         let miss = unsafe {
@@ -148,7 +148,7 @@ fn test_heap_decode_cache_hit_miss_and_integrity() {
         assert_eq!(cache.hits, 0);
         assert_eq!(cache.entries.len(), 1);
 
-        // SAFETY: The cache now contains the live Heap handle decoded above;
+        // SAFETY: F1.GcHandleRooted — The cache now contains the live Heap handle decoded above;
         // the reader must still derive an address from freshly borrowed storage.
         let hit = unsafe {
             ManagedPtr::read_resolved_with_heap_cache_unchecked(
@@ -163,7 +163,7 @@ fn test_heap_decode_cache_hit_miss_and_integrity() {
         assert_eq!(cache.hits, 1);
 
         buffer[ManagedPtr::SIZE - 1] ^= 1;
-        // SAFETY: The corrupted buffer remains one complete representation;
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — The corrupted buffer remains one complete representation;
         // checksum validation must reject it before consulting the cache.
         let corrupt = unsafe {
             ManagedPtr::read_resolved_with_heap_cache_unchecked(
@@ -197,7 +197,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             None,
         );
         ptr_unmanaged.write(&mut buf);
-        // SAFETY: `NoManagedPtrResolver` is sufficient for the Unmanaged encoding.
+        // SAFETY: F3.InteriorPointerRebased — `NoManagedPtrResolver` is sufficient for the Unmanaged encoding.
         let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
         assert_eq!(
             info.address,
@@ -226,14 +226,14 @@ fn test_managed_ptr_serialization_roundtrip() {
             word1, stack_offset,
             "Stack word1 must encode the byte offset"
         );
-        // SAFETY: The bytes are complete Stack ManagedPtr encoding, but this resolver deliberately has no stack base.
+        // SAFETY: F3.InteriorPointerRebased — The bytes are complete Stack ManagedPtr encoding, but this resolver deliberately has no stack base.
         let unresolved_stack =
             unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) };
         assert!(matches!(
             unresolved_stack,
             Err(dotnet_types::error::PointerDeserializationError::UnresolvedStackSlot(123))
         ));
-        // SAFETY: The resolver returns the live stack-slot base used above.
+        // SAFETY: F3.StackSlotMatchesView — The resolver returns the live stack-slot base used above.
         let info = unsafe {
             ManagedPtr::read_resolved_unchecked(
                 &buf,
@@ -260,7 +260,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             Some(ByteOffset::new(offset)),
         );
         ptr_heap.write(&mut buf);
-        // SAFETY: Heap decoding gets its base from the branded ObjectRef handle.
+        // SAFETY: F6.NoEscapeAcrossArena — Heap decoding gets its base from the branded ObjectRef handle.
         let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
         assert_eq!(info.address, ptr);
         assert_eq!(info.origin, PointerOrigin::Heap(obj));
@@ -287,14 +287,14 @@ fn test_managed_ptr_serialization_roundtrip() {
             word1, static_offset,
             "Static word1 must encode the byte offset"
         );
-        // SAFETY: The bytes are complete Static ManagedPtr encoding, but this resolver deliberately has no static base.
+        // SAFETY: F3.InteriorPointerRebased — The bytes are complete Static ManagedPtr encoding, but this resolver deliberately has no static base.
         let unresolved_static =
             unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) };
         assert!(matches!(
             unresolved_static,
             Err(dotnet_types::error::PointerDeserializationError::UnresolvedStaticStorage)
         ));
-        // SAFETY: The resolver returns the live static-storage base used above.
+        // SAFETY: F1.GcHandleRooted — The resolver returns the live static-storage base used above.
         let info = unsafe {
             ManagedPtr::read_resolved_unchecked(
                 &buf,
@@ -313,11 +313,11 @@ fn test_managed_ptr_serialization_roundtrip() {
         {
             use crate::object::ObjectPtr;
             let ptr_raw = obj.with_data(|d| d.as_ptr());
-            // SAFETY: `obj` is kept alive for the duration of this test closure.
+            // SAFETY: F1.GcHandleRooted — `obj` is kept alive for the duration of this test closure.
             // We only use this raw pointer to validate serialization/deserialization logic.
             let ptr_lock = Gc::as_ptr(obj.0.unwrap())
                 .cast::<dotnet_utils::gc::ThreadSafeLock<crate::object::ObjectInner<'static>>>();
-            // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+            // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
             let ptr = unsafe { ObjectPtr::from_raw(ptr_lock).unwrap() };
             let arena_id = ptr.owner_id();
             let cross_offset = 12;
@@ -331,7 +331,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             );
 
             ptr_cross.write(&mut buf);
-            // SAFETY: CrossArena decoding obtains its base while holding the encoded arena lease.
+            // SAFETY: F1.GcHandleRooted — CrossArena decoding obtains its base while holding the encoded arena lease.
             let info =
                 unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
             assert_eq!(info.address, cross_ptr);
@@ -384,7 +384,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
         );
 
         ptr_transient.write(&mut buf);
-        // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+        // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
         let result = unsafe { ManagedPtr::read_metadata_unchecked(&buf) };
         assert!(result.is_err(), "Transient recovery should fail for safety");
 
@@ -418,10 +418,10 @@ fn test_serialized_offsets_preserve_full_compact_range() {
     .with_origin(PointerOrigin::Stack(StackSlotIndex::new(9)));
     let mut buffer = ManagedPtr::serialization_buffer();
     stack.write(&mut buffer);
-    // SAFETY: `buffer` was just written as one complete Stack ManagedPtr.
+    // SAFETY: F3.InteriorPointerRebased — `buffer` was just written as one complete Stack ManagedPtr.
     let stack_info = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) }.unwrap();
     assert_eq!(stack_info.offset, ByteOffset::new(stack_offset));
-    // SAFETY: The same complete encoding is valid for the stack-reallocation reader.
+    // SAFETY: F3.InteriorPointerRebased — The same complete encoding is valid for the stack-reallocation reader.
     let stack_rewrite_info = unsafe { ManagedPtr::read_stack_info(&buffer) };
     assert_eq!(stack_rewrite_info.offset, ByteOffset::new(stack_offset));
 
@@ -432,7 +432,7 @@ fn test_serialized_offsets_preserve_full_compact_range() {
     let mismatched_word1 = stack_offset + 1;
     buffer[ptr_size..ptr_size * 2].copy_from_slice(&mismatched_word1.to_ne_bytes());
     buffer[ptr_size * 2..ptr_size * 3].copy_from_slice(&(word0 ^ mismatched_word1).to_ne_bytes());
-    // SAFETY: The complete buffer is deliberately malformed to exercise validation.
+    // SAFETY: F2.DescriptorMatchesEcmaLayout — The complete buffer is deliberately malformed to exercise validation.
     let mismatched = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) };
     assert!(matches!(
         mismatched,
@@ -449,7 +449,7 @@ fn test_serialized_offsets_preserve_full_compact_range() {
         ByteOffset::new(static_offset),
     );
     static_ptr.write(&mut buffer);
-    // SAFETY: `buffer` was just written as one complete Static ManagedPtr and
+    // SAFETY: F3.InteriorPointerRebased — `buffer` was just written as one complete Static ManagedPtr and
     // its metadata remains registered for this test.
     let static_info = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) }.unwrap();
     assert_eq!(static_info.offset, ByteOffset::new(static_offset));
@@ -512,7 +512,7 @@ fn test_read_stack_info_miri() {
     buf[8..16].copy_from_slice(&w1.to_ne_bytes());
     buf[16..24].copy_from_slice(&(w0 ^ w1).to_ne_bytes());
 
-    // SAFETY: This test supplies one checksum-valid serialized ManagedPtr.
+    // SAFETY: F3.InteriorPointerRebased — This test supplies one checksum-valid serialized ManagedPtr.
     let info = unsafe { ManagedPtr::read_stack_info(&buf) };
     assert_eq!(info.offset.as_usize(), offset);
     assert_eq!(info.origin, PointerOrigin::Stack(slot_idx));
@@ -531,7 +531,7 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
     );
 
     ptr.write(&mut buf);
-    // SAFETY: This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+    // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
     let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
     assert_eq!(
         info.address,

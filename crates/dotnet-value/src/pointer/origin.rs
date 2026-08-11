@@ -46,7 +46,7 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
     }
 }
 
-// SAFETY: PointerOrigin contains several variants that hold GC-managed references.
+// SAFETY: F1.GcHandleRooted — PointerOrigin contains several variants that hold GC-managed references.
 // We manually implement trace and resurrect to ensure all such references (ObjectRef, Object)
 // are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
 unsafe impl<'gc> Collect<'gc> for PointerOrigin<'gc> {

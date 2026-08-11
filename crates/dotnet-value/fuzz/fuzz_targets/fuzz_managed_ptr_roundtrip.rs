@@ -81,7 +81,7 @@ fn with_fuzz_gc_context<R>(f: impl for<'gc> FnOnce(GCHandle<'gc>) -> R) -> R {
     let _arena_registration = ArenaRegistrationGuard::register(FUZZ_ARENA_ID);
     let _thread_id = ManagedThreadIdGuard::set(FUZZ_ARENA_ID);
     let arena_handle_owner = ArenaHandle::new(FUZZ_ARENA_ID);
-    // SAFETY: `arena_handle_owner` remains alive for the entire `arena.mutate`
+    // SAFETY: F1.GcHandleRooted — `arena_handle_owner` remains alive for the entire `arena.mutate`
     // callback, so its inner handle is valid for the constructed `GCHandle`.
     let arena_handle = unsafe {
         std::mem::transmute::<&ArenaHandleInner, &'static ArenaHandleInner>(
@@ -210,7 +210,7 @@ fuzz_target!(|input: RoundtripInput| {
         assert_eq!(word0 & 7, expected_tag, "Serialized origin tag mismatch");
 
         // Now read it back.
-        // SAFETY: `buf` was just populated with a complete ManagedPtr encoding.
+        // SAFETY: F3.InteriorPointerRebased — `buf` was just populated with a complete ManagedPtr encoding.
         let read_info =
             unsafe { ManagedPtr::read_metadata_unchecked(&buf) }.expect("Roundtrip read failed");
 
@@ -227,7 +227,7 @@ fuzz_target!(|input: RoundtripInput| {
 
         if !matches!(info_norm, PointerOrigin::Unmanaged) {
             let resolver = FuzzResolver { storage_base };
-            // SAFETY: `buf` was just populated with a complete ManagedPtr
+            // SAFETY: F3.InteriorPointerRebased — `buf` was just populated with a complete ManagedPtr
             // encoding, and the resolver supplies the live target-local bases.
             let resolved_info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &resolver) }
                 .expect("Resolved roundtrip read failed");

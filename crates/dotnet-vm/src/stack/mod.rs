@@ -120,7 +120,7 @@ pub struct CallStack<'gc> {
     pub arena: dotnet_utils::gc::ArenaHandle,
 }
 
-// SAFETY: `CallStack` correctly traces all GC-managed fields (`execution`, `local`, and
+// SAFETY: F5.TracesEveryGcRef — `CallStack` correctly traces all GC-managed fields (`execution`, `local`, and
 // `shared.statics`) in its `trace` implementation. The `thread_id` and `arena` fields are not GC-managed
 // and do not need tracing. This implementation is safe because it delegates to the
 // `Collect` implementations of its components, which are themselves safe.
@@ -226,7 +226,7 @@ impl<'gc> CallStack<'gc> {
     /// The caller must ensure that the arena handle lives as long as the GC arena.
     /// In our case, `CallStack` is stored in the arena root, so it's safe.
     pub unsafe fn arena_inner_gc(&self) -> &'gc dotnet_utils::gc::ArenaHandleInner {
-        // SAFETY: The stack owns this arena for `self`'s lifetime; this shared reborrow only
+        // SAFETY: F3.StackSlotMatchesView — The stack owns this arena for `self`'s lifetime; this shared reborrow only
         // narrows the interior mutable representation to its immutable arena view.
         unsafe { &*(self.arena.as_inner() as *const _) }
     }

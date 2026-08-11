@@ -66,7 +66,7 @@ impl BoundedPtr {
     )]
     pub unsafe fn read<T: FieldType>(&self, offset: usize) -> T {
         assert!(offset + size_of::<T>() <= self.len);
-        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw operation.
+        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw operation.
         unsafe {
             T::read_from(std::slice::from_raw_parts(
                 self.ptr.add(offset),
@@ -226,7 +226,7 @@ impl FieldStorage {
             field_ptr,
             alignment
         );
-        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw
+        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw
         // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
         // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
@@ -261,7 +261,7 @@ impl FieldStorage {
             field_ptr,
             alignment
         );
-        // SAFETY: The FieldStorage layout and access guard guarantee valid storage for this raw
+        // SAFETY: F1.GcHandleRooted — The FieldStorage layout and access guard guarantee valid storage for this raw
         // operation. Atomic::is_atomic_field_access_supported provides defense-in-depth for
         // misaligned fields by selecting a lock-guarded memcpy fallback.
         unsafe { Atomic::store_field(field_ptr, value, ord) }
@@ -273,10 +273,10 @@ impl FieldStorage {
     )]
     pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
         self.validate_magic();
-        // SAFETY: Caller guarantees data stability per this method's contract and the pointer
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller guarantees data stability per this method's contract and the pointer
         // does not outlive the lock.
         let data_ptr = unsafe { self.data.data_ptr() };
-        // SAFETY: `data_ptr` points to the storage protected by `self.data`.
+        // SAFETY: F1.GcHandleRooted — `data_ptr` points to the storage protected by `self.data`.
         unsafe { &*data_ptr }
     }
 
@@ -290,10 +290,10 @@ impl FieldStorage {
         reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
     )]
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
-        // SAFETY: Caller upholds synchronization guarantees and the pointer does not outlive
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller upholds synchronization guarantees and the pointer does not outlive
         // the lock.
         let data_ptr = unsafe { self.data.data_ptr() };
-        // SAFETY: `data_ptr` points to the storage protected by `self.data`.
+        // SAFETY: F1.GcHandleRooted — `data_ptr` points to the storage protected by `self.data`.
         unsafe { (*data_ptr).as_mut_ptr() }
     }
 
@@ -303,7 +303,7 @@ impl FieldStorage {
         visited: &mut HashSet<usize>,
         depth: usize,
     ) {
-        // SAFETY: Resurrection happens during a stop-the-world pause, so no other
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — Resurrection happens during a stop-the-world pause, so no other
         // threads are running. We can safely access the inner value without
         // acquiring the normal field access guard. This avoids deadlock (or panic)
         // if a thread was already holding exclusive field access when it reached
@@ -314,11 +314,11 @@ impl FieldStorage {
     }
 }
 
-// SAFETY: `layout.trace` visits every ObjectRef and ManagedPtr slot described by this storage's
+// SAFETY: F5.TracesEveryGcRef — `layout.trace` visits every ObjectRef and ManagedPtr slot described by this storage's
 // immutable layout. Tracing runs during STW, so `raw_data_unsynchronized` observes stable bytes.
 unsafe impl<'gc> Collect<'gc> for FieldStorage {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        // SAFETY: Tracing also happens during a stop-the-world pause, same reasoning as above
+        // SAFETY: F5.TracesEveryGcRef — Tracing also happens during a stop-the-world pause, same reasoning as above
         let data = unsafe { self.raw_data_unsynchronized() };
 
         if *TRACE_GC_PTR_READ {

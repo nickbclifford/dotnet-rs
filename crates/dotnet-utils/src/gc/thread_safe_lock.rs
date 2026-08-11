@@ -135,7 +135,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     /// Borrow the contents mutably.
     pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
-            // SAFETY: `_gc` is a `&Mutation<'gc>` token which, by gc-arena's
+            // SAFETY: F1.GcHandleRooted — `_gc` is a `&Mutation<'gc>` token which, by gc-arena's
             // contract, can only be obtained inside a `mutate` closure.  The
             // arena guarantees no GC cycle runs concurrently with mutation, so
             // no other code can observe the RefLock as immutably borrowed through
@@ -160,7 +160,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     ///
     /// Returns `None` if any locks (read_unchecked or write) are currently held.
     pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
-        // SAFETY: Same invariant as `borrow_mut`: holding a `&Mutation<'gc>`
+        // SAFETY: F1.GcHandleRooted — Same invariant as `borrow_mut`: holding a `&Mutation<'gc>`
         // token guarantees we are inside a mutation context where the arena's
         // GC cycle cannot run.  `unlock_unchecked` is the gc-arena-prescribed
         // way to access a `RefLock` mutably within a mutation context.  If
@@ -186,7 +186,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     }
 }
 
-// SAFETY: Both lock backends expose `T` to the tracer only through a shared
+// SAFETY: F5.TracesEveryGcRef — Both lock backends expose `T` to the tracer only through a shared
 // borrow. The multithreaded backend requires the GC safepoint protocol to keep
 // write-guard holders running until they release their guards, then verifies
 // that invariant with `try_read` before tracing. The single-threaded `RefLock`

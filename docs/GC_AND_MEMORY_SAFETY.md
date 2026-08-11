@@ -13,6 +13,15 @@ This document describes the garbage collection subsystem, memory safety invarian
 - **`dotnet-utils/src/lib.rs`**: `GcScopeGuard<'ctx>` and `BorrowScopeOps`
 - **`dotnet-utils/src/gc/`**: GC utility types (`mod.rs`), `GCCommand`, `ThreadSafeLock` (`thread_safe_lock.rs`), arena helpers (`arena.rs`), and cross-arena refs (`cross_arena.rs`)
 
+## Invariants
+
+- `F1.StwParked`: GC-only raw accesses require a `StopTheWorldGuard`/`GcCycleGuard` pause in which every relevant mutator is parked.
+- `F1.ArenaGenerationMatch`: cross-arena accesses hold an `ArenaLease` and compare its generation with the recorded generation; `unregister_arena` waits for active leases.
+- `F1.GcHandleRooted`: raw access through a GC reference remains rooted by its `Gc<'gc>` handle, lock guard, or live lease for the full access.
+- `F5.TracesEveryGcRef`: every unsafe `Collect` implementation enumerates every contained GC handle through its fields and variants.
+- `F6.NoEscapeAcrossArena`: arena branding, private constructors, and `for<'gc>` confinement prevent `'gc` values from escaping; the deliberate cross-arena `Gc::from_ptr` path is limited to tracing and cannot escape.
+- `F9.MetadataArenaOutlivesDescriptors`: owner-tied `Arc<MetadataArena>` metadata keeps leaked descriptor allocations alive for all descriptor users.
+
 ## Arena Architecture
 
 ### Per-Thread Arenas

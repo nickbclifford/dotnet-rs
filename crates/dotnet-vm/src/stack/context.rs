@@ -73,7 +73,7 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
             evaluation_stack: &*self.evaluation_stack,
             statics: &self.shared.statics,
         };
-        // SAFETY: The field reader supplies one complete ManagedPtr encoding
+        // SAFETY: F3.InteriorPointerRebased — The field reader supplies one complete ManagedPtr encoding
         // from live managed storage. The cache is rooted by this CallStack and
         // GCArena::finish_cycle invalidates its serialized-handle keys after
         // each collection epoch.

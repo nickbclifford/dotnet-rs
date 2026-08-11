@@ -202,7 +202,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 &ctx.current_context()
             ));
 
-            // SAFETY: `m` is a non-null managed pointer, and its origin/offset identify storage
+            // SAFETY: F3.InteriorPointerRebased — `m` is a non-null managed pointer, and its origin/offset identify storage
             // for the resolved constrained type layout; `read_unaligned` verifies that range.
             let value = match unsafe {
                 ctx.read_unaligned(
@@ -263,7 +263,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                             clippy::multiple_unsafe_ops_per_block,
                             reason = "reading a serialized ObjectRef and branding it share one managed-pointer validity proof"
                         )]
-                        // SAFETY: Heap/static/transient targets store a serialized ObjectRef, and
+                        // SAFETY: F1.GcHandleRooted — Heap/static/transient targets store a serialized ObjectRef, and
                         // `m` supplies the validated managed range used to brand that reference.
                         unsafe {
                             // Heap/static/transient: the target stores a serialized ObjectRef

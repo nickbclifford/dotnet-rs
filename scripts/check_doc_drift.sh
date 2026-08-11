@@ -21,6 +21,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CRATES_DIR="$REPO_ROOT/crates"
 DOCS_DIR="$REPO_ROOT/docs"
+REGISTRY_PATH="$DOCS_DIR/INVARIANT_REGISTRY.md"
+SAFETY_CRATES=(
+  "$CRATES_DIR/dotnet-value"
+  "$CRATES_DIR/dotnet-runtime-memory"
+  "$CRATES_DIR/dotnet-utils"
+  "$CRATES_DIR/dotnet-vm"
+)
 
 # ---------------------------------------------------------------------------
 # Check table
@@ -168,6 +175,58 @@ check() {
 for entry in "${CHECKS[@]}"; do
   IFS='|' read -r doc ident glob <<< "$entry"
   check "$doc" "$ident" "$glob"
+done
+
+# ---------------------------------------------------------------------------
+# Invariant-citation checks
+#
+# Registry rows use `F<n>.<PredicateName>` identifiers.  Source citations are
+# deliberately constrained to `// SAFETY: F<n>.<PredicateName> ...` so a
+# reviewer can see the predicate at the exact unsafe site, while the rest of
+# the comment retains the local justification.
+# ---------------------------------------------------------------------------
+if [[ ! -f "$REGISTRY_PATH" ]]; then
+  echo "[INVARIANT] missing docs/INVARIANT_REGISTRY.md"
+  exit 1
+fi
+
+mapfile -t REGISTRY_PREDICATES < <(
+  sed -nE 's/^\| `(F[1-9]\.[A-Za-z][A-Za-z0-9]*)` \|.*/\1/p' "$REGISTRY_PATH"
+)
+
+if [[ ${#REGISTRY_PREDICATES[@]} -eq 0 ]]; then
+  echo "[INVARIANT] no predicate rows found in docs/INVARIANT_REGISTRY.md"
+  exit 1
+fi
+
+while IFS= read -r safety_site; do
+  citation="${safety_site#*// SAFETY:}"
+  if [[ ! "$citation" =~ F[1-9]\.[A-Za-z][A-Za-z0-9]* ]]; then
+    FAIL=$((FAIL + 1))
+    echo "[INVARIANT] SAFETY comment lacks a registry citation: $safety_site"
+  fi
+done < <(grep -rnE '^[[:space:]]*// SAFETY:' "${SAFETY_CRATES[@]}" 2>/dev/null || true)
+
+mapfile -t CITED_PREDICATES < <(
+  grep -rhE '^[[:space:]]*// SAFETY:' "$CRATES_DIR" 2>/dev/null \
+    | grep -oE 'F[1-9]\.[A-Za-z][A-Za-z0-9]*' \
+    | sort -u
+)
+
+for predicate in "${CITED_PREDICATES[@]}"; do
+  if ! printf '%s\n' "${REGISTRY_PREDICATES[@]}" | grep -qxF "$predicate"; then
+    FAIL=$((FAIL + 1))
+    echo "[INVARIANT] source cites '$predicate', but it is absent from docs/INVARIANT_REGISTRY.md"
+  else
+    PASS=$((PASS + 1))
+  fi
+done
+
+for predicate in "${REGISTRY_PREDICATES[@]}"; do
+  if ! printf '%s\n' "${CITED_PREDICATES[@]}" | grep -qxF "$predicate"; then
+    FAIL=$((FAIL + 1))
+    echo "[INVARIANT] registry predicate '$predicate' has no source citation"
+  fi
 done
 
 echo ""

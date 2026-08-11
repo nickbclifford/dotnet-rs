@@ -323,7 +323,7 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
     let source_bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
 
-    // SAFETY: `get_ptr_context` decoded the source origin and offset, while `source_bytes` is
+    // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the source origin and offset, while `source_bytes` is
     // exactly the resolved type layout's size; `read_bytes` performs the storage bounds check.
     if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
         return ctx
@@ -360,7 +360,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     if layout.is_or_contains_refs() {
-        // SAFETY: `get_ptr_context` decoded the destination origin and offset, and the resolved
+        // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and the resolved
         // reference-bearing layout matches `value`; the callee checks bounds and records barriers.
         if let Err(e) = unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
             error!("stobj failed: {}", e);
@@ -376,7 +376,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         let bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
         dotnet_vm_ops::vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(bytes);
 
-        // SAFETY: `get_ptr_context` decoded the destination origin and offset, and `bytes` is
+        // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `bytes` is
         // exactly the resolved non-reference layout's size; the callee performs bounds checks.
         if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, bytes) } {
             return ctx.throw_by_name_with_message(
@@ -415,7 +415,7 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
         heap_zeros.as_slice()
     };
 
-    // SAFETY: `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
+    // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
     // exactly the resolved layout's size; the callee performs the storage bounds check.
     if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, zero_bytes) } {
         return ctx

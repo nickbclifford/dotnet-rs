@@ -61,7 +61,7 @@ fuzz_target!(|input: OffsetInput| {
     }
 
     let original_ptr = ptr.clone();
-    // SAFETY: the target prevalidates offset and address arithmetic, while
+    // SAFETY: F3.InteriorPointerRebased — the target prevalidates offset and address arithmetic, while
     // `ManagedPtr::offset` uses wrapping pointer arithmetic.
     let new_ptr = unsafe { ptr.offset(offset_delta) };
 

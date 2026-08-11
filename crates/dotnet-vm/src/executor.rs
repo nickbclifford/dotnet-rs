@@ -238,7 +238,7 @@ impl Executor {
                 let gc_handle = GCHandle::new(
                     gc,
                     #[cfg(feature = "multithreading")]
-                    // SAFETY: `arena_inner_gc` is only used while mutating this thread's
+                    // SAFETY: F1.GcHandleRooted — `arena_inner_gc` is only used while mutating this thread's
                     // root in the owning arena context.
                     unsafe {
                         c.stack.arena_inner_gc()
@@ -435,7 +435,7 @@ impl Executor {
                         let gc_handle = GCHandle::new(
                             gc,
                             #[cfg(feature = "multithreading")]
-                            // SAFETY: Finalizer processing runs inside this arena's mutate_root
+                            // SAFETY: F1.GcHandleRooted — Finalizer processing runs inside this arena's mutate_root
                             // closure, so the inner GC handle belongs to the same arena.
                             unsafe {
                                 c.stack.arena_inner_gc()
@@ -457,7 +457,7 @@ impl Executor {
                     let gc_handle = GCHandle::new(
                         gc,
                         #[cfg(feature = "multithreading")]
-                        // SAFETY: Instruction stepping runs inside this arena's mutate_root
+                        // SAFETY: F1.GcHandleRooted — Instruction stepping runs inside this arena's mutate_root
                         // closure, so the inner GC handle belongs to the same arena.
                         unsafe {
                             c.stack.arena_inner_gc()

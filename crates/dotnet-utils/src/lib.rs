@@ -127,7 +127,7 @@ pub struct GcScopeGuard<'ctx> {
 
 impl<'ctx> Drop for GcScopeGuard<'ctx> {
     fn drop(&mut self) {
-        // SAFETY: `ctx` comes from `GcScopeGuard::enter` and remains valid for `'ctx`.
+        // SAFETY: F8.NoSafepointWhileHeapBorrowed — `ctx` comes from `GcScopeGuard::enter` and remains valid for `'ctx`.
         // Drop runs at most once for this handle and balances `enter_gc_scope`.
         unsafe { (*self.ctx).exit_gc_scope() };
     }
@@ -149,7 +149,7 @@ impl<'ctx> GcScopeGuard<'ctx> {
 
     /// Exit the GC-critical scope and return a new GC-ready token.
     pub fn exit(self) -> GcReadyToken<'ctx> {
-        // SAFETY: `ctx` comes from `GcScopeGuard::enter` and is valid for `'ctx`.
+        // SAFETY: F8.NoSafepointWhileHeapBorrowed — `ctx` comes from `GcScopeGuard::enter` and is valid for `'ctx`.
         // `mem::forget(self)` prevents Drop from running, so this remains a single balanced exit.
         unsafe { (*self.ctx).exit_gc_scope() };
         let owner = self.ctx.cast::<()>();

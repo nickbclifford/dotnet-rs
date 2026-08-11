@@ -36,7 +36,7 @@ pub(crate) unsafe fn cross_arena_ptr_from_addr<T>(
     let lock_ptr =
         std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'static>>>(lock_addr);
 
-    // SAFETY: The caller guarantees that `lock_addr` names a live, aligned
+    // SAFETY: F4.WidthAligned — The caller guarantees that `lock_addr` names a live, aligned
     // cross-arena lock owned by `owner_id`; `_lease` keeps that arena live for
     // the callback's duration.
     let ptr = unsafe { ObjectPtr::from_raw(lock_ptr) }?;

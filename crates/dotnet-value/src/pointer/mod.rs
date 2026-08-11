@@ -515,10 +515,10 @@ impl<'gc> ManagedPtr<'gc> {
                     .0
                     .expect("ManagedPtr::with_data: null heap owner handle");
                 let inner = handle.borrow();
-                // SAFETY: `inner` holds a shared lock on the object storage;
+                // SAFETY: F1.GcHandleRooted — `inner` holds a shared lock on the object storage;
                 // we only read the raw base pointer.
                 let ptr = unsafe { inner.storage.raw_data_ptr() };
-                // SAFETY: `ptr` points to `inner.storage` which remains locked
+                // SAFETY: F1.GcHandleRooted — `ptr` points to `inner.storage` which remains locked
                 // for this scope, and `size_bytes()` is the exact allocation size.
                 let slice = unsafe { std::slice::from_raw_parts(ptr, inner.storage.size_bytes()) };
                 let offset = self.byte_offset().as_usize();
@@ -536,7 +536,7 @@ impl<'gc> ManagedPtr<'gc> {
                 f(&data[offset..offset + to_access])
             }),
             _ => {
-                // SAFETY: Caller must ensure the pointer is valid.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Caller must ensure the pointer is valid.
                 // Inline pointer resolution to avoid lockless aliasing.
                 let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
                     // Stack pointer - use cached value
@@ -546,7 +546,7 @@ impl<'gc> ManagedPtr<'gc> {
                     // Static data pointer or absolute pointer - use cached value
                     self._value.expect("ManagedPtr::with_data: null pointer")
                 };
-                // SAFETY: The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
+                // SAFETY: F3.InteriorPointerRebased — The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
                 let slice = unsafe { NonNull::slice_from_raw_parts(ptr, size).as_ref() };
                 f(slice)
             }
@@ -587,7 +587,7 @@ impl<'gc> ManagedPtr<'gc> {
         if let PointerOrigin::Heap(owner) = self.origin
             && let Some(handle) = owner.0
         {
-            // SAFETY: We are only reading the size and magic, which are immutable for the object's lifetime.
+            // SAFETY: F1.GcHandleRooted — We are only reading the size and magic, which are immutable for the object's lifetime.
             // Borrowing the lock is safe here.
             let inner = handle.borrow();
             inner.validate_magic();
@@ -666,7 +666,7 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
-// SAFETY: The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
+// SAFETY: F3.InteriorPointerRebased — The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
 unsafe impl<'gc> Collect<'gc> for ManagedPtr<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.origin.trace(cc);
@@ -692,20 +692,20 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
         match &self.origin {
             PointerOrigin::Heap(owner) => {
                 let handle = owner.0?;
-                // SAFETY: `handle` is a live object handle and we only read the
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — `handle` is a live object handle and we only read the
                 // immutable base pointer for offset computation.
                 let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
                 if base_ptr.is_null() {
                     None
                 } else {
-                    // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
+                    // SAFETY: F3.InteriorPointerRebased — offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
                     NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
                 }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _) => {
                 let base_ptr = ptr.as_heap_storage(|storage| {
-                    // SAFETY: `as_heap_storage` validates the object and keeps
+                    // SAFETY: F1.GcHandleRooted — `as_heap_storage` validates the object and keeps
                     // the lock held for the closure duration; we only read the
                     // base storage pointer.
                     unsafe { storage.raw_data_ptr() }
@@ -713,7 +713,7 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
                 if base_ptr.is_null() {
                     None
                 } else {
-                    // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
+                    // SAFETY: F3.InteriorPointerRebased — offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
                     NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
                 }
             }

@@ -95,7 +95,7 @@ impl<'gc> DerefMut for StackManagedPtr<'gc> {
     }
 }
 
-// SAFETY: StackManagedPtr contains a boxed ManagedPtr and delegates tracing to it.
+// SAFETY: F5.TracesEveryGcRef — StackManagedPtr contains a boxed ManagedPtr and delegates tracing to it.
 unsafe impl<'gc> Collect<'gc> for StackManagedPtr<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.0.trace(cc);
@@ -135,7 +135,7 @@ impl<'gc> TypedReferenceSlot<'gc> {
     }
 }
 
-// SAFETY: TypedReferenceSlot delegates tracing to its provenance-carrying managed pointer.
+// SAFETY: F5.TracesEveryGcRef — TypedReferenceSlot delegates tracing to its provenance-carrying managed pointer.
 unsafe impl<'gc> Collect<'gc> for TypedReferenceSlot<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.value.trace(cc);
@@ -192,7 +192,7 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
     }
 }
 
-// SAFETY: StackValue contains several variants that hold GC-managed references.
+// SAFETY: F3.StackSlotMatchesView — StackValue contains several variants that hold GC-managed references.
 // We manually implement trace to ensure all such references (ObjectRef, ManagedPtr, ValueType)
 // are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
 unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
@@ -262,10 +262,10 @@ fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
             .0
             .map_or(std::ptr::null_mut(), |h: ObjectHandle<'gc>| {
                 let inner = h.borrow();
-                // SAFETY: The live Heap owner supplies the storage provenance
+                // SAFETY: F1.GcHandleRooted — The live Heap owner supplies the storage provenance
                 // while `inner` keeps that storage borrowed.
                 let base = unsafe { inner.storage.raw_data_ptr() };
-                // SAFETY: The ManagedPtr retains the offset associated with
+                // SAFETY: F3.InteriorPointerRebased — The ManagedPtr retains the offset associated with
                 // this live owner storage.
                 unsafe { base.add(m.byte_offset().as_usize()) }
             })
@@ -547,7 +547,7 @@ impl<'gc> StackValue<'gc> {
             Self::TypedRef(slot) => ref_to_ptr(slot.value().deref()),
             Self::UninitializedTypedRef => ref_to_ptr(self),
             Self::ValueType(o) => {
-                // SAFETY: Returning a pointer to the internal buffer.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
                 let ptr =
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
@@ -561,7 +561,7 @@ impl<'gc> StackValue<'gc> {
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
             Self::NativeInt(i) => {
-                // SAFETY: NativeInt-to-pointer conversion is an address-only
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — NativeInt-to-pointer conversion is an address-only
                 // unmanaged boundary; the eventual accessor owns validity.
                 unsafe { pointer::unmanaged_ptr_from_addr(*i as usize) }
             }
@@ -570,7 +570,7 @@ impl<'gc> StackValue<'gc> {
                 if m.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+                    // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                     unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) }
                 }
             }
@@ -579,7 +579,7 @@ impl<'gc> StackValue<'gc> {
                 if value.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    // SAFETY: The frame-owned typed-reference slot retains the valid managed
+                    // SAFETY: F3.StackSlotMatchesView — The frame-owned typed-reference slot retains the valid managed
                     // pointer and this operation uses it only under its existing access contract.
                     unsafe { value.with_data(0, |data| data.as_ptr() as *mut u8) }
                 }
@@ -794,7 +794,7 @@ impl<'gc> StackValue<'gc> {
     /// When `t` is `LoadType::Object`, the atomic object-storage precondition
     /// documented by [`Self::load_atomic`] also applies.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
-        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe { Self::load_atomic(ptr, t, AtomicOrdering::Relaxed) }
     }
 
@@ -829,10 +829,10 @@ impl<'gc> StackValue<'gc> {
             LoadType::Object => ObjectRef::SIZE,
         };
 
-        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
 
-        // SAFETY: `val` was atomically loaded from the valid, aligned storage
+        // SAFETY: F4.WidthAligned — `val` was atomically loaded from the valid, aligned storage
         // required by this method's safety contract.
         unsafe { CtsToCli::widen_load_atomic_raw(t, val) }
     }
@@ -840,7 +840,7 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
-        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
             self.store_atomic(ptr, t, AtomicOrdering::Relaxed);
         }
@@ -881,7 +881,7 @@ impl<'gc> StackValue<'gc> {
             }
         };
 
-        // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
             StandardAtomicAccess::store_atomic(ptr, size, val, ordering);
         }
@@ -979,24 +979,24 @@ impl<'gc> Add for StackValue<'gc> {
         use StackValue::*;
         match (self, rhs) {
             (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) })
             }
             (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) })
             }
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
-                // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+                // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                 Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i as isize))
                 })))
             }
             (NativeInt(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), NativeInt(i)) => {
-                // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+                // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
                 Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i))
                 })))
@@ -1016,29 +1016,29 @@ impl<'gc> Sub for StackValue<'gc> {
         use StackValue::*;
         match (self, rhs) {
             (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe {
                     ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
                 })
             }
             (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) })
             }
             (ManagedPtr(m), Int64(i)) => {
-                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — Pointer arithmetic is performed within the bounds of the managed object.
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 Ok(unsafe {
                     ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
                 })
             }
-            // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+            // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
             (UnmanagedPtr(u), Int32(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
             }))),
-            // SAFETY: This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+            // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
             (UnmanagedPtr(u), NativeInt(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-i))
             }))),

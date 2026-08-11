@@ -14,6 +14,13 @@ Threading is feature-gated with **two parallel implementations** that share a co
 The feature controls managed VM concurrency, not whether host code may create OS threads; the
 CLI's Rayon pool, tracer, and integration-test timeout harness can do so in either configuration.
 
+## Invariants
+
+- `F4.WidthAligned`: selected atomic widths have valid, correctly aligned storage and no conflicting non-atomic access; alignment checks and exclusion guards establish the local premise.
+- `F7.InitializationPublished`: immutable fields read without a lock are written before their owner is published. This happens-before edge is assumed and must remain a trust-register candidate.
+- `F8.LockOrderRespected`: all nested locking follows the `define_lock_order_dag!` order, with negative `AcquireAfter` assertions rejecting known inversions.
+- `F8.NoSafepointWhileHeapBorrowed`: a `GcScopeGuard` or `ThreadSafeLock` exclusion prevents safepoint polling and allocation while a heap borrow is held.
+
 ## Thread Lifecycle (`threading/`)
 
 ### `ThreadManagerOps` Trait (`threading/mod.rs`)

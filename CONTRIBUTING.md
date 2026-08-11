@@ -18,7 +18,11 @@ where it is relied on. Follow these rules when adding or changing unsafe code:
 
 - Put a `// SAFETY:` comment immediately above every `unsafe { ... }` block.
   The comment must explain the invariant that makes the operation valid; it
-  must not merely restate the operation.
+  must not merely restate the operation. It must also cite at least one named
+  predicate from [`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md),
+  for example `F4.WidthAligned`; retain the local prose explaining why that
+  predicate holds at this site. Adding a predicate requires adding its registry
+  row in the same commit.
 - Do not use a `where` clause as proof for `unsafe impl Send` or `unsafe impl
   Sync`: a bound only makes the implementation conditional. Use an
   unconditional implementation when it is valid (retaining any required
@@ -41,10 +45,7 @@ root `Cargo.toml`: `undocumented_unsafe_blocks = "deny"` and
 keep unsafe operations individually proved rather than weakening the workspace
 configuration.
 
-The longer-term plan for this policy — naming the invariants these comments
-cite, and the falsifiers that check them — is
-[`docs/plans/01-layer-invariant-specs.md`](docs/plans/01-layer-invariant-specs.md),
-part of the project's [plan queue](docs/plans/README.md).
+The registry and its drift check enforce the naming part of this policy.
 
 ## Panic-vs-Result policy
 

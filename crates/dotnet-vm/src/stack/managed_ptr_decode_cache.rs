@@ -96,7 +96,7 @@ impl<'gc> HeapManagedPtrDecodeCache<'gc> {
     }
 }
 
-// SAFETY: Every retained Heap ObjectRef is visited while the CallStack root is
+// SAFETY: F3.StackSlotMatchesView — Every retained Heap ObjectRef is visited while the CallStack root is
 // traced. Keys, counters, and insertion-order metadata contain no GC-managed data.
 unsafe impl<'gc> Collect<'gc> for HeapManagedPtrDecodeCache<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -186,7 +186,7 @@ mod tests {
             let gc_handle = GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                // SAFETY: The CallStack is the root of this test arena and retains
+                // SAFETY: F3.StackSlotMatchesView — The CallStack is the root of this test arena and retains
                 // its arena handle for the complete mutation closure.
                 unsafe {
                     engine.stack.arena_inner_gc()
@@ -250,7 +250,7 @@ mod tests {
             let mut source = ManagedPtr::serialization_buffer();
             ptr.write(&mut source);
 
-            // SAFETY: `source` was refreshed from the root-retained live object
+            // SAFETY: F1.GcHandleRooted — `source` was refreshed from the root-retained live object
             // after collection. A cache miss must recover its current storage
             // address rather than retaining any pre-collection data pointer.
             let decoded = unsafe {

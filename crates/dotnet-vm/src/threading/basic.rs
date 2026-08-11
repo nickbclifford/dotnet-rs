@@ -664,7 +664,7 @@ fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
             let generation_matches = recorded_gen == STW_TRACING_GENERATION_SENTINEL
                 || lease.generation() == recorded_gen;
             if generation_matches {
-                // SAFETY: The pointer was recorded from a live cross-arena reference.
+                // SAFETY: F6.NoEscapeAcrossArena — The pointer was recorded from a live cross-arena reference.
                 // We hold a lease for `target_id`, so teardown cannot complete while
                 // reconstructing `ObjectPtr`.
                 let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }
@@ -744,7 +744,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         arena.mutate(|_, c| {
                             let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
                             for ptr in ptrs {
-                                // SAFETY: `ptrs` originates from coordinator-owned object
+                                // SAFETY: F2.DescriptorMatchesEcmaLayout — `ptrs` originates from coordinator-owned object
                                 // pointers captured during marking. They are only consumed
                                 // during the same collection cycle while arenas are stopped.
                                 let ptr = unsafe { ObjectPtr::from_raw(ptr.as_ptr() as *const _) }

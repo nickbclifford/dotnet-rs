@@ -71,7 +71,7 @@ mod tests {
             let gc_handle = GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
+                // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
                 unsafe {
                     engine.stack.arena_inner_gc()
                 },
@@ -93,7 +93,7 @@ mod tests {
                 let gc_handle = GCHandle::new(
                     gc,
                     #[cfg(feature = "multithreading")]
-                    // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
+                    // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
                     unsafe {
                         engine.stack.arena_inner_gc()
                     },
@@ -176,7 +176,7 @@ mod tests {
             let gc_handle = GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
+                // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
                 unsafe {
                     engine.stack.arena_inner_gc()
                 },
@@ -203,7 +203,7 @@ mod tests {
                 let gc_handle = GCHandle::new(
                     gc,
                     #[cfg(feature = "multithreading")]
-                    // SAFETY: The test fixture keeps this arena and the referenced test data alive for the operation.
+                    // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
                     unsafe {
                         engine.stack.arena_inner_gc()
                     },
