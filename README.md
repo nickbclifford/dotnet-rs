@@ -58,9 +58,10 @@ Start with:
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
 - [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 
-For the plan behind the project's unsafe-code assurance work — invariant
-specifications, provenance discipline, falsifiers, and the trust register — see
-[`docs/ASSURANCE_ROADMAP.md`](docs/ASSURANCE_ROADMAP.md).
+For the project's full plan queue — unsafe-code assurance work (invariant
+specifications, provenance discipline, falsifiers, the trust register) plus
+the architecture and soundness backlog — see
+[`docs/plans/README.md`](docs/plans/README.md).
 
 See the `docs/` directory for additional deep dives.
 

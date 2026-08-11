@@ -1,11 +1,13 @@
-# Plan 01 — Provenance redesign
+# Plan 08 — Provenance redesign
 
 **Original gate:** `MIRIFLAGS="-Zmiri-strict-provenance"` runs green on at least the
 `dotnet-value` and `dotnet-runtime-memory` Miri legs, and the flag is added to
 `.github/workflows/miri.yml` for those legs.
 
 **Status (2026-08-06):** implementation complete; original CI gate explicitly
-closed by owner-directed deferral, not met.
+closed by owner-directed deferral, not met. **Parked, not queued** — last in
+[the plan sequence](README.md) because reopening it needs a new, explicitly
+authorized task, not because of any technical dependency on plans 01–07.
 
 ## Final disposition
 
@@ -294,7 +296,7 @@ cross-check (which is what the checksum word is already for).
    succeeds, that function should have zero callers outside the
    `Unmanaged`/P-Invoke path, where exposure is genuinely correct.
 7. **Extend the two existing fuzz targets** to assert provenance-preservation
-   round-trips, and promote both to blocking (see plan 03).
+   round-trips, and promote both to blocking (see plan 02).
 8. **Turn the flag on in CI** for the legs that pass, and rewrite
    `docs/CI.md:261` from an infeasibility note into a scope statement naming
    which legs run strict provenance and why the others do not.
@@ -316,7 +318,7 @@ cross-check (which is what the checksum word is already for).
 - **`Transient(Box<Object>)` origins have no stable handle** by construction —
   they are eval-stack-resident value types. These may need to stay in the
   exposure path, which is fine if documented and counted in the trust register
-  (plan 05).
+  (plan 06).
 
 ## Not in scope
 
@@ -328,9 +330,9 @@ cross-check (which is what the checksum word is already for).
 
 ## Related
 
-- [`docs/ASSURANCE_ROADMAP.md`](../ASSURANCE_ROADMAP.md)
+- [`docs/plans/README.md`](README.md)
 - [`docs/CI.md`](../CI.md) — the strict-provenance note this plan rewrites
-- [`docs/plans/03-falsifier-portfolio.md`](03-falsifier-portfolio.md) — where
+- [`docs/plans/02-falsifier-portfolio.md`](02-falsifier-portfolio.md) — where
   the fuzz targets get promoted
 - [`docs/ASSURANCE_BACKGROUND.md`](../ASSURANCE_BACKGROUND.md) — why this
   plan is first

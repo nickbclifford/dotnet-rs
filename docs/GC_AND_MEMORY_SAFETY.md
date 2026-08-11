@@ -277,9 +277,11 @@ Provides atomic-capable raw byte storage for object fields:
 - Backed uniformly by `dotnet_utils::sync::RwLock<Vec<u8>>` in every build configuration. The synchronization boundary selects `parking_lot::RwLock` with `multithreading` and the `RefCell`-based compatibility lock otherwise.
 - Supports synchronised/atomic field access (`get_field_atomic`, `set_field_atomic`) under various memory ordering models.
 - Provides `raw_data_ptr()` returning `*mut u8` for low-level or STW-GC tracing access.
-- **Width-generic atomic follow-up (S4):** The workspace currently has no const-generic function
-  precedent. A future width-generic atomic design must establish its justification and safety
-  invariants from first principles rather than assuming an existing template.
+- **Width-generic atomic follow-up:** tracked as
+  [`docs/plans/03-width-generic-atomics.md`](plans/03-width-generic-atomics.md). The workspace
+  currently has no const-generic function precedent. A future width-generic atomic design must
+  establish its justification and safety invariants from first principles rather than assuming an
+  existing template.
 
 ## Object Representation (`dotnet-value/src/object/`)
 

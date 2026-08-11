@@ -1,4 +1,4 @@
-# Plan 03 — Falsifier portfolio
+# Plan 02 — Falsifier portfolio
 
 **Gate:** a `loom` leg exercising the stop-the-world handshake is blocking in
 `ci.yml`; all four fuzz targets are blocking; Kani harnesses exist for the
@@ -77,10 +77,10 @@ at 2–3 threads loses the whole point.
 
 Three of four targets are `continue-on-error`, and two of them
 (`fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`) test precisely the
-code plan 01 rewrites. Promote all four to blocking. If a target is too flaky
+code plan 08 rewrites. Promote all four to blocking. If a target is too flaky
 or slow to block, that is a finding about the target, to be fixed or documented,
 not a reason to leave it advisory indefinitely. Extend the two managed-pointer
-targets with the provenance-preservation assertions from plan 01, step 7.
+targets with the provenance-preservation assertions from plan 08, step 7.
 
 ## Instrument 3 — Kani harnesses for the value-level facts
 
@@ -101,8 +101,9 @@ to. Worthwhile targets, in order:
   arm. Kani can, per arm.
 
 That last one is worth flagging: it is a *proof that a refactor is needed*
-rather than a permanent fixture. Once the width is a type parameter (backlog
-S4), the harness becomes redundant, which is the correct outcome.
+rather than a permanent fixture. Once the width is a type parameter
+([plan 03](03-width-generic-atomics.md)), the harness becomes redundant, which
+is the correct outcome.
 
 ## Instrument 4 — guard-off leg
 
@@ -134,14 +135,14 @@ plan 04.
 - RustMC / GenMC. Right shape for F1/F7/F8, but mixed-size atomic accesses
   require the MIXER extension, unmerged at publication, and this VM's atomics
   are 1/2/4/8-byte accesses into shared object memory. Revisit if MIXER lands.
-- Strict-provenance Miri legs — those are plan 01's gate, not this one's.
+- Strict-provenance Miri legs — those are plan 08's gate, not this one's.
 - Any attempt to make Kani cover the concurrent code. It will warn and compile
   threads sequentially, producing a green result that means nothing. If a Kani
   harness touches threading, that is a bug in the harness.
 
 ## Related
 
-- [`docs/ASSURANCE_ROADMAP.md`](../ASSURANCE_ROADMAP.md)
+- [`docs/plans/README.md`](README.md)
 - [`docs/CI.md`](../CI.md) — current gate inventory
 - [`docs/FUZZING.md`](../FUZZING.md) — existing fuzz workflow and corpus policy
 - [`docs/VALIDATION_FEATURES.md`](../VALIDATION_FEATURES.md) — the feature

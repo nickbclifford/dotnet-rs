@@ -43,7 +43,8 @@ configuration.
 
 The longer-term plan for this policy — naming the invariants these comments
 cite, and the falsifiers that check them — is
-[`docs/ASSURANCE_ROADMAP.md`](docs/ASSURANCE_ROADMAP.md).
+[`docs/plans/01-layer-invariant-specs.md`](docs/plans/01-layer-invariant-specs.md),
+part of the project's [plan queue](docs/plans/README.md).
 
 ## Panic-vs-Result policy
 

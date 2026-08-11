@@ -1,4 +1,4 @@
-# Plan 02 — Layer invariant specifications
+# Plan 01 — Layer invariant specifications
 
 **Gate:** every `// SAFETY:` comment in `dotnet-value`, `dotnet-runtime-memory`,
 `dotnet-utils` and `dotnet-vm` cites at least one named predicate from the
@@ -53,7 +53,7 @@ number keeps the taxonomy legible; the name carries the content.
    the nine family statements and the what-Rust-carries / what-it-doesn't split
    for each.
 2. **Mark the assumed ones honestly.** Any predicate whose "what establishes
-   it" column is *nothing* is a trust-register candidate (plan 05). Expect this
+   it" column is *nothing* is a trust-register candidate (plan 06). Expect this
    to be the interesting output of the whole exercise: the study found two such
    cases by manual review, and this pass is the systematic version.
 3. **Add the `## Invariants` sections** to the three subsystem docs, each
@@ -85,7 +85,7 @@ grep-based drift check in CI delivers at a fraction of the cost. What the token
 layer had and this does not is `cfg`-liveness checking — citing a predicate
 established by a guard that is compiled out is not a compile error here. That
 gap is covered instead by step 2 (the registry records what establishes each
-predicate, and a feature-gated guard is recorded as such) and by plan 03's
+predicate, and a feature-gated guard is recorded as such) and by plan 02's
 guard-off CI leg.
 
 ## Not in scope
@@ -96,15 +96,16 @@ guard-off CI leg.
   (one template repeated 67 times in `raw_memory_ops_impl/mod.rs`).
   Deduplicating those is a separate, purely editorial cleanup — though this
   plan makes it much easier, since after citation they differ only in prose.
-- The F4 width-generic refactor (backlog S4). That *eliminates* a predicate
-  rather than naming it, which is better, but it is a code change with its own
-  design question and should not be bundled into a documentation pass.
+- The F4 width-generic refactor ([plan 03](03-width-generic-atomics.md)). That
+  *eliminates* a predicate rather than naming it, which is better, but it is a
+  code change with its own design question and should not be bundled into a
+  documentation pass.
 
 ## Related
 
-- [`docs/ASSURANCE_ROADMAP.md`](../ASSURANCE_ROADMAP.md)
+- [`docs/plans/README.md`](README.md)
 - [`CONTRIBUTING.md` — Unsafe code policy](../../CONTRIBUTING.md#unsafe-code-policy)
 - [`docs/ASSURANCE_BACKGROUND.md`](../ASSURANCE_BACKGROUND.md) — the nine
   family statements this registry is seeded from
-- [`docs/plans/05-trust-register.md`](05-trust-register.md) — where step 2's
+- [`docs/plans/06-trust-register.md`](06-trust-register.md) — where step 2's
   unestablished predicates land

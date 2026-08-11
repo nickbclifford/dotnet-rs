@@ -1,11 +1,11 @@
-# Plan 05 — Trust register
+# Plan 06 — Trust register
 
 **Gate:** every register entry names a falsifier; the entry count is enforced by
 a CI ceiling script in the shape of `scripts/check_mt_cfg_ceiling.sh`; and
 `check_doc_drift.sh` verifies that every predicate marked *assumed* in the
 invariant registry has a matching register entry.
 
-**Status:** not started. Depends on plans 02 and 03.
+**Status:** not started. Depends on plans 01 and 02.
 
 ## Goal
 
@@ -84,7 +84,7 @@ a register entry only until that lands, with "Invalidated by" reading *any
 dotnetdll layout change*. Treat a long-lived `upstream` entry as a defect in the
 register, not a fact about the world.
 
-**Class `residual`** — assumptions surviving plan 01. Expect
+**Class `residual`** — assumptions surviving plan 08. Expect
 `Transient(Box<Object>)` origins, which have no stable serializable handle by
 construction, and the `UnmanagedPtr`/P-Invoke path where reconstructing a
 pointer from an integer *is* the semantics of the operation.
@@ -93,7 +93,7 @@ pointer from an integer *is* the semantics of the operation.
 
 1. Write the table with the entries above, leaving the falsifier column blank
    where no falsifier exists yet.
-2. **Any row with a blank falsifier is a work item for plan 03**, not a
+2. **Any row with a blank falsifier is a work item for plan 02**, not a
    permanent state. Resolve or document each before the gate is claimed.
 3. Add `scripts/check_trust_register.sh`: count rows, compare against a
    `CEILING` constant, print the count, exit 1 on excess. Mirror
@@ -115,10 +115,10 @@ pointer from an integer *is* the semantics of the operation.
 
 ## Related
 
-- [`docs/ASSURANCE_ROADMAP.md`](../ASSURANCE_ROADMAP.md)
+- [`docs/plans/README.md`](README.md)
 - [`scripts/check_mt_cfg_ceiling.sh`](../../scripts/check_mt_cfg_ceiling.sh) —
   the template to mirror
-- [`docs/plans/02-layer-invariant-specs.md`](02-layer-invariant-specs.md) —
+- [`docs/plans/01-layer-invariant-specs.md`](01-layer-invariant-specs.md) —
   supplies the *assumed* predicates
 - [`docs/plans/04-model-correspondence.md`](04-model-correspondence.md) —
   supplies the deviation rows

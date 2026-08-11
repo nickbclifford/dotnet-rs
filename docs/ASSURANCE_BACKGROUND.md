@@ -1,6 +1,7 @@
 # Assurance background
 
-Why [`ASSURANCE_ROADMAP.md`](ASSURANCE_ROADMAP.md) looks the way it does. This
+Why the assurance plans in [`docs/plans/`](plans/README.md) look the way they
+do. This
 is the distilled output of a feasibility study on machine-checking the project's
 `// SAFETY:` comments with a Lean 4-backed proof DSL, run 2026-08-01 → 2026-08-03
 and terminated. The full 44-page study and its five implemented Rust crates are
@@ -15,15 +16,15 @@ history, not documentation:
   `ves-tokens`, `ves-macros`, `ves-check`) and `~/Desktop/ves-proof-lean`, both
   archived read-only. No code from either is in this repository.
 
-Everything below is current: it is the rationale for the roadmap, not a record of
-an abandoned plan.
+Everything below is current: it is the rationale for the plan queue, not a
+record of an abandoned plan.
 
 ## The invariant families
 
 The study's durable finding. 620 prose `// SAFETY:` comments across 583 `unsafe`
 blocks do not represent 620 independent obligations — they factor into nine
 families, each one predicate stated once and instantiated per site. This is the
-skeleton [plan 02](plans/02-layer-invariant-specs.md) turns into a named
+skeleton [plan 01](plans/01-layer-invariant-specs.md) turns into a named
 predicate registry.
 
 | # | Family | Sites | The claim | What Rust already carries | What it doesn't |
@@ -47,7 +48,7 @@ specification-level function), and completeness facts.
 ### Two irreducible trust classes
 
 Neither is provable; both must be isolated and named. They are seed rows for
-[plan 05](plans/05-trust-register.md).
+[plan 06](plans/06-trust-register.md).
 
 - **The managed program as adversary.** ECMA-335 itself declares behavior
   undefined when unverifiable IL supplies invalid operands to `cpblk`,
@@ -77,8 +78,9 @@ The families carrying this project's novelty (F1, F2, F6) need premises no Rust
 verifier reaches; the families a verifier *would* close are the ones rated
 lowest-novelty. F4, third-largest by site count, has a cheaper correct fix than
 any proof: make the access width a type parameter so an `Int32` dispatch arm
-cannot pass `4` to a 2-byte operation (backlog item S4 in
-[`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md)).
+cannot pass `4` to a 2-byte operation — see
+[plan 03](plans/03-width-generic-atomics.md) and the same note in
+[`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md).
 
 **2. `cargo-anneal` is the same product, far better resourced.** Google's
 zerocopy team ([`0.1.0-alpha.24`](https://crates.io/crates/cargo-anneal), 7 June
@@ -127,14 +129,14 @@ Phase 0 of the study was due diligence, not verification, and it shipped
 (`208a6c8b`, 2026-08-01): two live soundness defects fixed, `miri-value` and
 `fuzz-raw-memory-access` promoted to blocking CI legs, and the differential
 harness expanded from one fixture to seven. That came from the *survey*, not
-from the proof layer — which is the observation the roadmap is built on.
+from the proof layer — which is the observation the plan queue is built on.
 
 Both defects were instances of one failure mode: **prose asserting a witness
 that no code establishes.** One cited a `cfg`-gated no-op as an alignment
 witness; the other justified a `Sync` implementation with a false claim. That
 failure mode is a failure of *naming*, not of proving — a comment saying
 "aligned" cannot be cross-checked, while one citing `F4.WidthAligned` can. Hence
-plan 02.
+plan 01.
 
 ## Process lessons
 

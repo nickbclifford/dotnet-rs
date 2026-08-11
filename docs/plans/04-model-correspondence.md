@@ -5,7 +5,7 @@
 unsafe corpus against MiniRust's UB list, recorded per site as *checked by X*,
 *assumed*, or *not applicable*.
 
-**Status:** not started. Depends on plan 02 for predicate names.
+**Status:** not started. Depends on plan 01 for predicate names.
 
 ## Goal
 
@@ -31,7 +31,7 @@ relation plus a differential oracle is the honest instrument.
   are `II.22` (6), `III.4.33` (4), `II.15.4.1.2` (4). For a 61k-line
   implementation of a specification, this is sparse — the knowledge is in the
   code and the author's head, not in citations.
-- **7 differential fixtures** of 475 C# fixtures (see plan 03, instrument 5).
+- **7 differential fixtures** of 475 C# fixtures (see plan 02, instrument 5).
 - **A rejected-candidate list** already exists in `diff_harness.rs`, naming
   known intentional divergences: an intentional ECMA alignment divergence in
   `structs/interlocked_misaligned_1`, unhandled-exception exit codes (real .NET
@@ -45,7 +45,7 @@ relation plus a differential oracle is the honest instrument.
 
 New `docs/ECMA335_CORRESPONDENCE.md`, one row per clause: clause number, its
 prescription in one line, the implementing site(s), the invariant-registry
-predicate that carries it (from plan 02), and its verification status
+predicate that carries it (from plan 01), and its verification status
 (differentially tested / unit-tested / assumed).
 
 Seed order, highest-value first:
@@ -71,9 +71,9 @@ one row per UB class:
 | UB class | Sites at risk | Checked by | Residual |
 | --- | --- | --- | --- |
 | Invalid pointer dereference (dangling, out-of-bounds) | … | Miri tree-borrows leg, `fuzz_raw_memory_access` | … |
-| Misaligned access | F4 sites | `debug_assert!` at call site, Kani harness (plan 03) | release builds |
-| Data race | F1/F7 sites | `loom` leg (plan 03) | non-modelled paths |
-| Pointer-integer provenance | 102 audited API sites plus 2 bare test casts → plan 01 | ordinary Miri only; Plan 01 strict-provenance CI was owner-deferred | documented managed-storage boundaries remain |
+| Misaligned access | F4 sites | `debug_assert!` at call site, Kani harness (plan 02) | release builds |
+| Data race | F1/F7 sites | `loom` leg (plan 02) | non-modelled paths |
+| Pointer-integer provenance | 102 audited API sites plus 2 bare test casts → plan 08 | ordinary Miri only; Plan 08 strict-provenance CI was owner-deferred | documented managed-storage boundaries remain |
 | Aliasing-model violation (Tree Borrows) | all `&mut` from raw | Miri `-Zmiri-tree-borrows` | untested paths |
 | Uninitialized read | 1 `MaybeUninit` site | — | … |
 
@@ -92,7 +92,7 @@ static semantics only, and MiniRust is the leading operational candidate.
 
 Extract the `diff_harness.rs` rejected-candidate list plus the study's named
 deviations — non-moving GC, single load context, stop-the-world-only collection
-— into rows destined for plan 05's trust register. Each needs: what the standard
+— into rows destined for plan 06's trust register. Each needs: what the standard
 says, what `dotnet-rs` does, why, and what would break if the deviation changed.
 The non-moving-GC entry is the one to write most carefully: it is correct today
 and is invalidated the day a compacting collector lands, and a great deal of F1
@@ -102,7 +102,7 @@ reasoning depends on it silently.
 
 - A mechanized or executable model of ECMA-335 in any prover. If that becomes
   attractive, build it as a reference interpreter differentially tested against
-  .NET, continuous with plan 03's fixture ratchet, with no proof obligations
+  .NET, continuous with plan 02's fixture ratchet, with no proof obligations
   attached — not as a verification substrate.
 - Auditing the standard for its own sake. Clauses enter the index because an
   unsafe premise depends on them.
@@ -110,10 +110,10 @@ reasoning depends on it silently.
 
 ## Related
 
-- [`docs/ASSURANCE_ROADMAP.md`](../ASSURANCE_ROADMAP.md)
-- [`docs/plans/02-layer-invariant-specs.md`](02-layer-invariant-specs.md) —
+- [`docs/plans/README.md`](README.md)
+- [`docs/plans/01-layer-invariant-specs.md`](01-layer-invariant-specs.md) —
   supplies the predicate names this index keys against
-- [`docs/plans/05-trust-register.md`](05-trust-register.md) — consumes Part C
+- [`docs/plans/06-trust-register.md`](06-trust-register.md) — consumes Part C
 - [`docs/ASSURANCE_BACKGROUND.md`](../ASSURANCE_BACKGROUND.md) — the
   families, and why no mechanized ECMA-335 model exists
 - Archived study on the representation relation and the model-fidelity gap:
