@@ -13,6 +13,8 @@ pub mod resolution;
 pub mod support;
 pub mod support_contract;
 #[cfg(test)]
+mod support_contract_slots;
+#[cfg(test)]
 mod support_contract_tests;
 #[cfg(test)]
 mod support_contract_validation_tests;

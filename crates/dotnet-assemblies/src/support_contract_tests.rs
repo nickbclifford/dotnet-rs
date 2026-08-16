@@ -1,6 +1,5 @@
 use crate::{
-    AssemblyLoader,
-    support_contract::{SlotDescriptor, SlotKind},
+    AssemblyLoader, support_contract::SlotDescriptor, support_contract_slots::EXPECTED_SLOTS,
 };
 use dotnet_types::{TypeDescription, WellKnown};
 use dotnetdll::prelude::{Module, Resolution, TypeDefinition};
@@ -11,122 +10,16 @@ fn bare_loader() -> AssemblyLoader {
 }
 
 fn expected_slots() -> Vec<SlotDescriptor> {
-    [
-        ("System.RuntimeTypeHandle", "_value", SlotKind::Handle),
-        ("System.RuntimeFieldHandle", "_value", SlotKind::Handle),
-        ("System.RuntimeMethodHandle", "_value", SlotKind::Handle),
-        ("System.RuntimeType", "index", SlotKind::Index),
-        ("DotnetRs.MethodInfo", "index", SlotKind::Index),
-        ("DotnetRs.ConstructorInfo", "index", SlotKind::Index),
-        ("DotnetRs.FieldInfo", "index", SlotKind::Index),
-        ("DotnetRs.ParameterInfo", "method_index", SlotKind::Index),
-        ("DotnetRs.ParameterInfo", "position", SlotKind::ScalarInt),
-        ("DotnetRs.PropertyInfo", "name", SlotKind::GcRef),
-        ("DotnetRs.PropertyInfo", "getter", SlotKind::GcRef),
-        ("DotnetRs.PropertyInfo", "setter", SlotKind::GcRef),
-        ("DotnetRs.PropertyInfo", "declaringType", SlotKind::GcRef),
-        ("DotnetRs.PropertyInfo", "propertyType", SlotKind::GcRef),
-        ("System.Delegate", "_target", SlotKind::GcRef),
-        ("System.Delegate", "_method", SlotKind::Index),
-        ("System.MulticastDelegate", "targets", SlotKind::GcRef),
-        ("System.Span`1", "_reference", SlotKind::Byref),
-        ("System.Span`1", "_length", SlotKind::ScalarInt),
-        ("System.ReadOnlySpan`1", "_reference", SlotKind::Byref),
-        ("System.ReadOnlySpan`1", "_length", SlotKind::ScalarInt),
-        ("DotnetRs.Module", "resolution", SlotKind::NativePtr),
-        ("DotnetRs.Assembly", "resolution", SlotKind::NativePtr),
-        ("System.Threading.Tasks.ValueTask", "_task", SlotKind::GcRef),
-        (
-            "System.Threading.Tasks.ValueTask`1",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Threading.Tasks.ValueTask`1",
-            "_result",
-            SlotKind::Generic,
-        ),
-        (
-            "System.Threading.Tasks.ValueTask`1",
-            "_hasResult",
-            SlotKind::ScalarBool,
-        ),
-        (
-            "System.Threading.Tasks.Task",
-            "_isCompleted",
-            SlotKind::ScalarBool,
-        ),
-        ("System.Threading.Tasks.Task", "_exception", SlotKind::GcRef),
-        (
-            "System.Threading.Tasks.Task",
-            "_continuation",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Threading.Tasks.Task`1",
-            "_result",
-            SlotKind::Generic,
-        ),
-        (
-            "System.Threading.Tasks.Task`1",
-            "_hasResult",
-            SlotKind::ScalarBool,
-        ),
-        (
-            "System.Threading.Tasks.TaskCompletionSource`1",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.TaskAwaiter",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.TaskAwaiter`1",
-            "_task",
-            SlotKind::GcRef,
-        ),
-        (
-            "System.Runtime.CompilerServices.ValueTaskAwaiter",
-            "_valueTask",
-            SlotKind::ValueType,
-        ),
-        (
-            "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
-            "_valueTask",
-            SlotKind::ValueType,
-        ),
-        ("DotnetRs.StubAttribute", "InPlaceOf", SlotKind::GcRef),
-    ]
-    .into_iter()
-    .map(|(type_name, field_name, kind)| SlotDescriptor {
-        type_name: type_name.into(),
-        field_name: field_name.into(),
-        kind,
-        is_static: false,
-    })
-    .collect()
+    EXPECTED_SLOTS
+        .iter()
+        .copied()
+        .map(|(type_name, field_name, kind)| SlotDescriptor {
+            type_name: type_name.into(),
+            field_name: field_name.into(),
+            kind,
+            is_static: false,
+        })
+        .collect()
 }
 
 fn sort_slots(slots: &mut [SlotDescriptor]) {
