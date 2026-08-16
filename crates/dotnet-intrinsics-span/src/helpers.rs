@@ -9,7 +9,8 @@ use dotnet_value::{
     object::{HeapStorage, Object},
     pointer::{ManagedPtr, ManagedPtrInfo, ManagedPtrResolver, PointerOrigin},
 };
-use dotnet_vm_ops::ops::{MemoryOps, RawMemoryOps};
+use dotnet_vm_ops::SupportSlotOps;
+use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, RawMemoryOps};
 
 /// Read the executable `_reference` ManagedPtr from a Span/ReadOnlySpan value type.
 ///
@@ -18,11 +19,10 @@ use dotnet_vm_ops::ops::{MemoryOps, RawMemoryOps};
 pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
     span: &Object<'gc>,
     resolver: &R,
+    slots: &impl SupportSlotOps,
 ) -> Result<ManagedPtrInfo<'gc>, IntrinsicError> {
-    let field = span
-        .instance_storage
-        .layout()
-        .get_field(span.description.clone(), "_reference")
+    let field = slots
+        .span_reference_layout(span.instance_storage.layout())
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     span.instance_storage.with_data(|data| {
         // SAFETY: The field layout identifies one complete ManagedPtr representation in `data`.
@@ -36,10 +36,9 @@ pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
 }
 
 /// Read the _length from a Span/ReadOnlySpan value type.
-pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
-    Ok(span
-        .instance_storage
-        .field::<i32>(span.description.clone(), "_length")
+pub fn read_span_length(span: &Object, slots: &impl SupportSlotOps) -> Result<i32, IntrinsicError> {
+    Ok(slots
+        .span_length_field(&span.instance_storage, span.description.clone())
         .ok_or(IntrinsicError::Static("Span must have _length field"))?
         .read())
 }
@@ -48,13 +47,14 @@ pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
 pub fn read_span_reference_from_ptr<'gc, T>(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
+    slots: &impl SupportSlotOps,
     ctx: &T,
 ) -> Result<ManagedPtr<'gc>, IntrinsicError>
 where
     T: RawMemoryOps<'gc> + MemoryOps<'gc> + ManagedPtrResolver<'gc>,
 {
-    let ref_field = layout
-        .get_field_by_name("_reference")
+    let ref_field = slots
+        .span_reference_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
 
     // Read the raw bytes of the _reference field and deserialize properly.
@@ -104,10 +104,11 @@ where
 pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
+    slots: &impl SupportSlotOps,
     ctx: &T,
 ) -> Result<i32, IntrinsicError> {
-    let length_field = layout
-        .get_field_by_name("_length")
+    let length_field = slots
+        .span_length_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
     // SAFETY: `_length` field offset/layout come from validated span layout metadata for `span_ptr`.
     let val = unsafe {
@@ -128,13 +129,14 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     managed: &ManagedPtr<'gc>,
     length: i32,
     layout: &FieldLayoutManager,
+    slots: &impl SupportSlotOps,
     ctx: &mut T,
 ) -> Result<(), IntrinsicError> {
-    let ref_field = layout
-        .get_field_by_name("_reference")
+    let ref_field = slots
+        .span_reference_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
-    let length_field = layout
-        .get_field_by_name("_length")
+    let length_field = slots
+        .span_length_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
 
     // Write _reference
@@ -166,7 +168,12 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     Ok(())
 }
 
-pub fn with_span_data<'gc, 'span, R, T: RawMemoryOps<'gc> + ManagedPtrResolver<'span>>(
+pub fn with_span_data<
+    'gc,
+    'span,
+    R,
+    T: RawMemoryOps<'gc> + ManagedPtrResolver<'span> + LoaderOps,
+>(
     ctx: &T,
     span: Object<'span>,
     element_type: TypeDescription,
@@ -177,8 +184,8 @@ pub fn with_span_data<'gc, 'span, R, T: RawMemoryOps<'gc> + ManagedPtrResolver<'
         ctx.as_borrow_scope(),
         ctx.as_borrow_scope().gc_ready_token(),
     );
-    let info = read_span_reference(&span, ctx)?;
-    let len = read_span_length(&span)? as usize;
+    let info = read_span_reference(&span, ctx, ctx.loader().as_ref())?;
+    let len = read_span_length(&span, ctx.loader().as_ref())? as usize;
 
     if len == 0 {
         return Ok(f(&[]));

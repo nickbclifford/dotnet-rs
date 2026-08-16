@@ -146,6 +146,24 @@ impl FieldStorage {
         })
     }
 
+    /// Gets a typed field reference at a layout-resolved byte offset.
+    ///
+    /// Callers must obtain `offset` from this storage's [`FieldLayoutManager`]
+    /// and verify the expected field size before calling this method. This is
+    /// used by validated semantic field registries that retain field identity
+    /// separately from lazily constructed object layouts.
+    pub fn field_at_offset<T: FieldType>(&self, offset: usize) -> Option<FieldRef<'_, T>> {
+        let end = offset.checked_add(T::SCALAR.size_const())?;
+        if end > self.layout.total_size {
+            return None;
+        }
+        Some(FieldRef {
+            storage: self,
+            offset,
+            _type: PhantomData,
+        })
+    }
+
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
         self.validate_magic();
 

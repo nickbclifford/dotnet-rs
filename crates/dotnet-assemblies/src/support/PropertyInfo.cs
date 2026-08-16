@@ -5,10 +5,15 @@ namespace DotnetRs;
 
 public class PropertyInfo : System.Reflection.PropertyInfo
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private string? name;
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private System.Reflection.MethodInfo? getter;
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private System.Reflection.MethodInfo? setter;
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Type? declaringType;
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Type? propertyType;
 
     public override System.Reflection.PropertyAttributes Attributes =>
@@ -90,8 +95,8 @@ public class PropertyInfo : System.Reflection.PropertyInfo
     public override object[] GetCustomAttributes(Type attributeType, bool inherit) =>
         System.Array.Empty<object>();
 
-    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
-        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+    public override IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new List<System.Reflection.CustomAttributeData>();
 
     public override bool IsDefined(Type attributeType, bool inherit) => false;
 

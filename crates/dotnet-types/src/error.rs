@@ -77,6 +77,19 @@ pub enum AssemblyLoadError {
     DllValidity(#[source] ValidityError),
     #[error("DLL resolve error: {0}")]
     DllResolve(#[source] ResolveError),
+    #[error("Support contract violation: type={type_name}, field={field_name}: {reason}")]
+    SupportContractViolation {
+        type_name: Box<str>,
+        field_name: Box<str>,
+        reason: Box<str>,
+    },
+    #[error(
+        "Unrecognized support slot: type={type_name}, field={field_name} has [RuntimeSlot] but no corresponding Rust consumer"
+    )]
+    UnrecognizedSupportSlot {
+        type_name: Box<str>,
+        field_name: Box<str>,
+    },
 }
 
 impl From<io::Error> for AssemblyLoadError {
@@ -99,7 +112,7 @@ impl From<DLLError> for AssemblyLoadError {
 #[cfg(feature = "fuzzing")]
 impl Arbitrary<'_> for AssemblyLoadError {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.arbitrary::<u8>()? % 6;
+        let tag = u.arbitrary::<u8>()? % 8;
         match tag {
             0 => Ok(Self::FileNotFound(
                 u.arbitrary::<String>()?.into_boxed_str(),
@@ -116,9 +129,18 @@ impl Arbitrary<'_> for AssemblyLoadError {
                 context: "arbitrary",
                 flags: 0,
             })),
-            _ => Ok(Self::DllResolve(ResolveError::LazyLookupFailed(
+            5 => Ok(Self::DllResolve(ResolveError::LazyLookupFailed(
                 "arbitrary",
             ))),
+            6 => Ok(Self::SupportContractViolation {
+                type_name: u.arbitrary::<String>()?.into_boxed_str(),
+                field_name: u.arbitrary::<String>()?.into_boxed_str(),
+                reason: u.arbitrary::<String>()?.into_boxed_str(),
+            }),
+            _ => Ok(Self::UnrecognizedSupportSlot {
+                type_name: u.arbitrary::<String>()?.into_boxed_str(),
+                field_name: u.arbitrary::<String>()?.into_boxed_str(),
+            }),
         }
     }
 }

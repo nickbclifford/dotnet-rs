@@ -17,6 +17,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::{
     Accessibility, AlwaysFailsResolver, BaseType, FixedArg, IntegralParam, MemberAccessibility,
@@ -60,6 +61,7 @@ pub fn intrinsic_runtime_assembly_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>
     ctx.register_new_object(&name_obj);
 
     assembly_name_obj.as_object_mut(gc, |instance| {
+        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(assembly_name_type.clone(), "_name")
@@ -1542,30 +1544,31 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx.register_new_object(&name_obj);
 
     property_info_obj.as_object_mut(gc, |instance| {
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(property_info_type.clone(), "name")
-            .expect("DotnetRs.PropertyInfo must declare a name field")
+        ctx.loader()
+            .property_info_name_field(&instance.instance_storage, property_info_type.clone())
+            .expect("validated DotnetRs.PropertyInfo name support slot")
             .write(name_obj);
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(property_info_type.clone(), "getter")
-            .expect("DotnetRs.PropertyInfo must declare a getter field")
+        ctx.loader()
+            .property_info_getter_field(&instance.instance_storage, property_info_type.clone())
+            .expect("validated DotnetRs.PropertyInfo getter support slot")
             .write(getter_obj);
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(property_info_type.clone(), "setter")
-            .expect("DotnetRs.PropertyInfo must declare a setter field")
+        ctx.loader()
+            .property_info_setter_field(&instance.instance_storage, property_info_type.clone())
+            .expect("validated DotnetRs.PropertyInfo setter support slot")
             .write(setter_obj);
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(property_info_type.clone(), "declaringType")
-            .expect("DotnetRs.PropertyInfo must declare a declaringType field")
+        ctx.loader()
+            .property_info_declaring_type_field(
+                &instance.instance_storage,
+                property_info_type.clone(),
+            )
+            .expect("validated DotnetRs.PropertyInfo declaring-type support slot")
             .write(declaring_type_obj);
-        instance
-            .instance_storage
-            .field::<ObjectRef<'gc>>(property_info_type.clone(), "propertyType")
-            .expect("DotnetRs.PropertyInfo must declare a propertyType field")
+        ctx.loader()
+            .property_info_property_type_field(
+                &instance.instance_storage,
+                property_info_type.clone(),
+            )
+            .expect("validated DotnetRs.PropertyInfo property-type support slot")
             .write(property_type_obj);
     });
 

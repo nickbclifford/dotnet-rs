@@ -138,6 +138,25 @@ For more details on caching and resolution pipelines, see [Type Resolution and C
 - **VM Ownership Boundary**: `dotnet-vm` uses `VmResolverService` as its VM-owned resolution facade; the free functions in `dotnet-vm/src/layout.rs` delegate layout requests to the resolver-owned layout engine.
 - **Generics**: Generic types and methods are instantiated on-demand, with metadata specialized for the specific type arguments.
 
+### Support-assembly slot annotation policy
+
+Fields in the dotnet-rs-owned C# support assembly that participate in the validated Rust ABI
+carry both `[RuntimeSlot(...)]` and `[UsedImplicitly]`. `RuntimeSlot` declares the field's
+load-time-validated slot kind and is consumed by Rust's support-slot registry. Validation checks
+the declaring type and field identity, uniqueness, staticness, and the ECMA-335 field shape that
+determines width and GC behavior; an annotation alone cannot bless an incompatible declaration.
+For example, the raw native-integer method index in `Delegate._method` is an `Index` slot, not a
+GC-traced `Handle` slot. `RuntimeSlot` supplements, rather than replaces, `UsedImplicitly`; keep
+both attributes on contract fields when changing the support assembly. This policy does not apply
+to metadata-driven probes of BCL or user-assembly layouts, which remain outside the support-slot
+contract.
+
+The `NativePtr` declarations on `DotnetRs.Module.resolution` and
+`DotnetRs.Assembly.resolution` remain validated registry entries, but the current VM associates
+runtime assembly objects with `ResolutionS` through its reflection registry rather than reading
+those managed fields. Consequently they have no `SupportSlotOps` accessor until a runtime path
+actually consumes their storage.
+
 ### Descriptor Ownership Model
 
 Metadata descriptors are index-based and owner-tied:

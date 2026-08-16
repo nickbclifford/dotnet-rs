@@ -17,6 +17,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::{
     prelude::{BaseType, Kind, MemberType, MethodType, TypeSource},
@@ -153,17 +154,17 @@ fn push_optional_runtime_type<'gc, T: ReflectionIntrinsicHost<'gc>>(
 }
 
 #[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
-pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
+pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let handle = ctx.pop_value_type();
-    let target = handle
-        .instance_storage
-        .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .expect("System.RuntimeTypeHandle must declare a _value field")
+    let target = ctx
+        .loader()
+        .rth_value_field(&handle.instance_storage, handle.description)
+        .expect("validated RuntimeTypeHandle support slot")
         .read();
     ctx.push_obj(target);
     StepResult::Continue
@@ -172,16 +173,16 @@ pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_type_handle_to_int_ptr<'gc, T: TypedStackOps<'gc>>(
+pub fn intrinsic_type_handle_to_int_ptr<'gc, T: TypedStackOps<'gc> + LoaderOps>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_value_type();
-    let target = handle
-        .instance_storage
-        .field::<usize>(handle.description, "_value")
-        .expect("System.RuntimeTypeHandle must declare a _value field")
+    let target = ctx
+        .loader()
+        .rth_value_usize_field(&handle.instance_storage, handle.description)
+        .expect("validated RuntimeTypeHandle support slot")
         .read();
     ctx.push_isize(target as isize);
     StepResult::Continue
@@ -508,10 +509,9 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
 
     let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
-    instance
-        .instance_storage
-        .field::<ObjectRef<'gc>>(rth, "_value")
-        .expect("System.RuntimeTypeHandle must declare a _value field")
+    ctx.loader()
+        .rth_value_field(&instance.instance_storage, rth)
+        .expect("validated RuntimeTypeHandle support slot")
         .write(obj);
 
     ctx.push_value_type(instance);
@@ -940,7 +940,10 @@ pub fn handle_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + MemoryOps
 
     let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rth.clone()));
-    obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
+    ctx.loader()
+        .rth_value_field(&instance.instance_storage, rth)
+        .expect("validated RuntimeTypeHandle support slot")
+        .write(obj);
 
     ctx.push(StackValue::ValueType(instance));
     StepResult::Continue

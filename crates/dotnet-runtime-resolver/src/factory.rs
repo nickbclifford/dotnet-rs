@@ -76,6 +76,7 @@ where
                 }
 
                 // HasValue is true, box the 'value' field.
+                // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
                 let value_field = layout
                     .fields
                     .iter()

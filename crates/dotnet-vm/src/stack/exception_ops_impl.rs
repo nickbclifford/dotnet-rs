@@ -26,6 +26,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         if !message.is_empty() {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);
+            // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
             obj_ref.as_object_mut(gc, |obj| {
                 if obj
                     .instance_storage

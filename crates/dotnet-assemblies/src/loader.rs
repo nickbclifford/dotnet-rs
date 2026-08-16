@@ -6,6 +6,7 @@ use crate::{
         nuget_global_packages_dir, parse_deps_json, parse_runtimeconfig,
         resolve_framework_from_runtimeconfig,
     },
+    support_contract::SupportSlotRegistry,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -107,6 +108,9 @@ pub struct AssemblyLoader {
     /// Used for name normalization during intrinsic dispatch.
     /// E.g., "DotnetRs.Delegate" → "System.Delegate"
     pub(crate) reverse_stubs: HashMap<String, String>,
+    /// Validated ABI slots exposed to runtime consumers through
+    /// [`SupportSlotOps`](crate::support_contract::SupportSlotOps).
+    pub(crate) support_slot_registry: SupportSlotRegistry,
     /// Lazily resolved descriptors indexed by [`WellKnown`] discriminant.
     pub(crate) wkt_table: Vec<std::sync::OnceLock<TypeDescription>>,
     /// String-keyed cache reserved for runtime-provided corlib names.
@@ -235,6 +239,7 @@ impl AssemblyLoader {
             native_search_dirs: RwLock::new(Vec::new()),
             stubs: HashMap::new(),
             reverse_stubs: HashMap::new(),
+            support_slot_registry: SupportSlotRegistry::default(),
             wkt_table: std::iter::repeat_with(std::sync::OnceLock::new)
                 .take(WellKnown::COUNT)
                 .collect(),

@@ -1,4 +1,5 @@
 use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
+use dotnet_assemblies::support_contract::SupportSlotOps;
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::WellKnown;
 use dotnet_value::StackValue;
@@ -68,7 +69,10 @@ pub fn ldtoken_type<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> St
     let res_ctx = ctx.current_context();
     let rth = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeTypeHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rth.clone()));
-    rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
+    ctx.loader()
+        .rth_value_field(&instance.instance_storage, rth)
+        .expect("validated RuntimeTypeHandle support slot")
+        .write(rt_obj);
 
     ctx.push(StackValue::ValueType(instance));
     StepResult::Continue
@@ -86,7 +90,10 @@ pub fn ldtoken_method<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodSource) -
     let res_ctx = ctx.current_context();
     let rmh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeMethodHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rmh.clone()));
-    method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
+    ctx.loader()
+        .rmh_value_field(&instance.instance_storage, rmh)
+        .expect("validated RuntimeMethodHandle support slot")
+        .write(method_obj);
 
     ctx.push(StackValue::ValueType(instance));
     StepResult::Continue
@@ -101,7 +108,10 @@ pub fn ldtoken_field<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> 
     let res_ctx = ctx.current_context();
     let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeFieldHandle));
     let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(rfh.clone()));
-    field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
+    ctx.loader()
+        .rfh_value_field(&instance.instance_storage, rfh)
+        .expect("validated RuntimeFieldHandle support slot")
+        .write(field_obj);
 
     ctx.push(StackValue::ValueType(instance));
     StepResult::Continue

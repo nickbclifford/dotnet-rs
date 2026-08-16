@@ -11,6 +11,11 @@ pub mod host;
 pub mod loader;
 pub mod resolution;
 pub mod support;
+pub mod support_contract;
+#[cfg(test)]
+mod support_contract_tests;
+#[cfg(test)]
+mod support_contract_validation_tests;
 #[cfg(all(test, not(miri)))]
 mod test_fixtures;
 pub mod validation;

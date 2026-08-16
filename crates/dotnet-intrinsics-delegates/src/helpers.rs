@@ -10,6 +10,7 @@ use dotnet_types::{
 };
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{DelegateIntrinsicHost, LoaderOps, MemoryOps, ResolutionOps};
 
 /// Check if a type is a delegate type (inherits from System.Delegate or
@@ -135,20 +136,20 @@ impl<'a, 'gc, T: LoaderOps> DelegateView<'a, 'gc, T> {
 
     pub(super) fn target(&self) -> ObjectRef<'gc> {
         self.obj.as_object(|instance| {
-            instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(self.delegate_type.clone(), "_target")
-                .unwrap_or_else(|| panic!("System.Delegate::_target must exist"))
+            self.ctx
+                .loader()
+                .delegate_target_field(&instance.instance_storage, self.delegate_type.clone())
+                .expect("validated System.Delegate target support slot")
                 .read()
         })
     }
 
     pub(super) fn method_index(&self) -> usize {
         self.obj.as_object(|instance| {
-            instance
-                .instance_storage
-                .field::<usize>(self.delegate_type.clone(), "_method")
-                .unwrap_or_else(|| panic!("System.Delegate::_method must exist"))
+            self.ctx
+                .loader()
+                .delegate_method_index_field(&instance.instance_storage, self.delegate_type.clone())
+                .expect("validated System.Delegate method-index support slot")
                 .read()
         })
     }
@@ -166,10 +167,11 @@ impl<'a, 'gc, T: LoaderOps> DelegateView<'a, 'gc, T> {
                 .loader()
                 .corlib_wkt(WellKnown::MulticastDelegate)
                 .expect("System.MulticastDelegate must exist");
-            let targets_ref = instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(multicast_type, "targets")
-                .unwrap_or_else(|| panic!("System.MulticastDelegate::targets must exist"))
+            let targets_ref = self
+                .ctx
+                .loader()
+                .multicast_delegate_targets_field(&instance.instance_storage, multicast_type)
+                .expect("validated System.MulticastDelegate targets support slot")
                 .read();
             if targets_ref.0.is_some() {
                 Some(targets_ref)
@@ -228,15 +230,15 @@ impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
     pub(super) fn set_target_method(&self, target: ObjectRef<'gc>, method_index: usize) {
         let gc = self.ctx.gc_with_token(&self.ctx.no_active_borrows_token());
         self.obj.as_object_mut(gc, |instance| {
-            instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(self.delegate_type.clone(), "_target")
-                .unwrap_or_else(|| panic!("System.Delegate::_target must exist"))
+            self.ctx
+                .loader()
+                .delegate_target_field(&instance.instance_storage, self.delegate_type.clone())
+                .expect("validated System.Delegate target support slot")
                 .write(target);
-            instance
-                .instance_storage
-                .field::<usize>(self.delegate_type.clone(), "_method")
-                .unwrap_or_else(|| panic!("System.Delegate::_method must exist"))
+            self.ctx
+                .loader()
+                .delegate_method_index_field(&instance.instance_storage, self.delegate_type.clone())
+                .expect("validated System.Delegate method-index support slot")
                 .write(method_index);
         });
     }
@@ -249,10 +251,10 @@ impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
                 .loader()
                 .corlib_wkt(WellKnown::MulticastDelegate)
                 .expect("System.MulticastDelegate must exist");
-            instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(multicast_type, "targets")
-                .unwrap_or_else(|| panic!("System.MulticastDelegate::targets must exist"))
+            self.ctx
+                .loader()
+                .multicast_delegate_targets_field(&instance.instance_storage, multicast_type)
+                .expect("validated System.MulticastDelegate targets support slot")
                 .write(targets);
         });
     }

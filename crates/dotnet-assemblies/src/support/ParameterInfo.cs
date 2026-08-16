@@ -6,7 +6,9 @@ namespace DotnetRs;
 
 public class ParameterInfo : System.Reflection.ParameterInfo
 {
+    [RuntimeSlot("Index")]
     [UsedImplicitly] private nint method_index;
+    [RuntimeSlot("ScalarInt")]
     [UsedImplicitly] private int position;
 
     [MethodImpl(MethodImplOptions.InternalCall)]
@@ -28,8 +30,8 @@ public class ParameterInfo : System.Reflection.ParameterInfo
     public override object[] GetCustomAttributes(Type attributeType, bool inherit) =>
         System.Array.Empty<object>();
 
-    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
-        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+    public override IList<CustomAttributeData> GetCustomAttributesData() =>
+        new List<CustomAttributeData>();
 
     public override bool IsDefined(Type attributeType, bool inherit) => false;
 }

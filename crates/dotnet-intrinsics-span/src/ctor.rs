@@ -101,7 +101,8 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
         return StepResult::not_implemented("Expected Field layout for Span");
     };
 
-    if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, ctx) {
+    let loader = ctx.loader_arc();
+    if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, loader.as_ref(), ctx) {
         return StepResult::Error(e.into());
     }
 
@@ -174,7 +175,8 @@ pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
         return StepResult::not_implemented("Expected Field layout for Span");
     };
 
-    if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, ctx) {
+    let loader = ctx.loader_arc();
+    if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, loader.as_ref(), ctx) {
         return StepResult::Error(e.into());
     }
 

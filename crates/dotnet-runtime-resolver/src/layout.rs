@@ -348,7 +348,12 @@ impl LayoutFactory {
                 continue;
             }
 
-            let layout = if f.by_ref {
+            let layout = if resolver.loader.is_handle_value_slot(&td, f.name.as_ref()) {
+                // SAFETY: F2.HandleValueOverride — the validated support-slot registry limits
+                // this reinterpretation to the three handle `_value` fields, which the VM
+                // writes as ObjectRef values even though their ECMA-335 signature is `nint`.
+                Arc::new(Scalar::ObjectRef.into())
+            } else if f.by_ref {
                 Arc::new(Scalar::ManagedPtr.into())
             } else {
                 let t = resolver.get_field_type(

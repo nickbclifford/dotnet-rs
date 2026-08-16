@@ -121,7 +121,7 @@ public class Task<TResult> : Task
 
     internal TResult GetResultCore()
     {
-        base.GetResult();
+        GetResult();
         return _hasResult ? _result! : default!;
     }
 

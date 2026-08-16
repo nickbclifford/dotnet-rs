@@ -151,6 +151,7 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                             });
 
                             // Set Value = data from boxed object.
+                            // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
                             let value_field = layout
                                 .fields
                                 .iter()
@@ -313,6 +314,7 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
             });
 
             // Set Value = data from boxed object.
+            // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
             let value_field = layout
                 .fields
                 .iter()

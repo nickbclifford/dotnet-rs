@@ -27,6 +27,8 @@ use dotnet_value::{
 use dotnet_vm_data::{MethodState, StepResult};
 use std::sync::Arc;
 
+pub use dotnet_assemblies::support_contract::SupportSlotOps;
+
 pub trait EvalStackOps<'gc> {
     /// Pushes `value` onto the evaluation stack.
     fn push(&mut self, value: StackValue<'gc>);

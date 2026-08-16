@@ -18,6 +18,6 @@ pub use ops::{
     ArgumentOps, CallArgumentBufferOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext,
     ExceptionOps, LoaderOps, LocalOps, MemoryOps, PInvokeContext, RawMemoryOps, ReflectionBaseOps,
     ReflectionOps, ResolutionOps, SimdCapabilityOps, SimdIntrinsicHost, SpanBaseOps, StackOps,
-    StaticsOps, StringIntrinsicHost, ThreadOps, ThreadingBaseOps, TypeLayoutOps, TypedStackOps,
-    UnsafeBaseOps, VariableOps, VesBaseOps, VesInternals,
+    StaticsOps, StringIntrinsicHost, SupportSlotOps, ThreadOps, ThreadingBaseOps, TypeLayoutOps,
+    TypedStackOps, UnsafeBaseOps, VariableOps, VesBaseOps, VesInternals,
 };

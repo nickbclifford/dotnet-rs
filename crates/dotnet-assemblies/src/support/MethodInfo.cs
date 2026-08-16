@@ -7,6 +7,7 @@ namespace DotnetRs;
 
 public class MethodInfo : System.Reflection.MethodInfo
 {
+    [RuntimeSlot("Index")]
     [UsedImplicitly] private nint index;
 
     [MethodImpl(MethodImplOptions.InternalCall)]
@@ -15,8 +16,8 @@ public class MethodInfo : System.Reflection.MethodInfo
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern object[] GetCustomAttributes(Type attributeType, bool inherit);
 
-    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
-        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+    public override IList<CustomAttributeData> GetCustomAttributesData() =>
+        new List<CustomAttributeData>();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern ICustomAttributeProvider GetReturnTypeAttributes();
@@ -38,8 +39,8 @@ public class MethodInfo : System.Reflection.MethodInfo
         public override object[] GetCustomAttributes(Type attributeType, bool inherit) =>
             System.Array.Empty<object>();
 
-        public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
-            new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+        public override IList<CustomAttributeData> GetCustomAttributesData() =>
+            new List<CustomAttributeData>();
 
         public override bool IsDefined(Type attributeType, bool inherit) => false;
 

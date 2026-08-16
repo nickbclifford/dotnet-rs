@@ -5,6 +5,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.MulticastDelegate")]
 public abstract class MulticastDelegate : Delegate
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Delegate[] targets;
 
     public MulticastDelegate(object target, nint method) : base(target, method)
@@ -22,9 +23,9 @@ public abstract class MulticastDelegate : Delegate
         MulticastDelegate other = (MulticastDelegate)d;
 
         MulticastDelegate newDelegate = (MulticastDelegate)MemberwiseClone();
-        Delegate[] newTargets = new Delegate[this.targets.Length + other.targets.Length];
-        System.Array.Copy(this.targets, 0, newTargets, 0, this.targets.Length);
-        System.Array.Copy(other.targets, 0, newTargets, this.targets.Length, other.targets.Length);
+        Delegate[] newTargets = new Delegate[targets.Length + other.targets.Length];
+        System.Array.Copy(targets, 0, newTargets, 0, targets.Length);
+        System.Array.Copy(other.targets, 0, newTargets, targets.Length, other.targets.Length);
         newDelegate.targets = newTargets;
         return newDelegate;
     }
@@ -80,6 +81,6 @@ public abstract class MulticastDelegate : Delegate
 
     private static bool InvocationEntryEquals(Delegate a, Delegate b)
     {
-        return a.Target == b.Target && a._method.Equals(b._method);
+        return a.Target == b.Target && a._method == b._method;
     }
 }

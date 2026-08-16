@@ -11,6 +11,7 @@ use dotnet_value::{
     object::{CTSValue, HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::Constant;
 
@@ -488,7 +489,10 @@ pub fn intrinsic_field_info_get_field_handle<
 
     let rfh = dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeFieldHandle));
     let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rfh.clone()));
-    obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
+    ctx.loader()
+        .rfh_value_field(&instance.instance_storage, rfh)
+        .expect("validated RuntimeFieldHandle support slot")
+        .write(obj_ref);
 
     ctx.push(StackValue::ValueType(instance));
     StepResult::Continue

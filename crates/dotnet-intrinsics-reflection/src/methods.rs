@@ -17,6 +17,7 @@ use dotnet_value::{
     object::{CTSValue, HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::{FrameReturnAction, StepResult};
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
 use dotnetdll::prelude::ParameterType;
 
@@ -38,10 +39,10 @@ pub fn intrinsic_method_base_get_method_from_handle<'gc, T: ReflectionIntrinsicH
 
     let handle_type =
         dotnet_vm_ops::vm_try!(ctx.loader().corlib_wkt(WellKnown::RuntimeMethodHandle));
-    let method_obj = handle
-        .instance_storage
-        .field::<ObjectRef<'gc>>(handle_type, "_value")
-        .expect("System.RuntimeMethodHandle must declare a _value field")
+    let method_obj = ctx
+        .loader()
+        .rmh_value_field(&handle.instance_storage, handle_type)
+        .expect("validated RuntimeMethodHandle support slot")
         .read();
     if method_obj.0.is_none() {
         return ctx.throw_by_name_with_message(
@@ -212,10 +213,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 .corlib_wkt(WellKnown::RuntimeMethodHandle)
                 .expect("System.RuntimeMethodHandle must exist");
             let instance = dotnet_vm_ops::vm_try!(ctx.new_object(rmh.clone()));
-            instance
-                .instance_storage
-                .field::<ObjectRef<'gc>>(rmh, "_value")
-                .expect("System.RuntimeMethodHandle must declare a _value field")
+            ctx.loader()
+                .rmh_value_field(&instance.instance_storage, rmh)
+                .expect("validated RuntimeMethodHandle support slot")
                 .write(obj);
 
             ctx.push(StackValue::ValueType(instance));
@@ -259,15 +259,16 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 ctx.register_new_object(&pi_ref);
                 let pi_type_inner = pi_type.clone();
                 pi_ref.as_object_mut(gc, |instance| {
-                    instance
-                        .instance_storage
-                        .field::<usize>(pi_type_inner.clone(), "method_index")
-                        .expect("DotnetRs.ParameterInfo must declare a method_index field")
+                    ctx.loader()
+                        .parameter_info_method_index_field(
+                            &instance.instance_storage,
+                            pi_type_inner.clone(),
+                        )
+                        .expect("validated ParameterInfo method-index support slot")
                         .write(method_index);
-                    instance
-                        .instance_storage
-                        .field::<i32>(pi_type_inner, "position")
-                        .expect("DotnetRs.ParameterInfo must declare a position field")
+                    ctx.loader()
+                        .parameter_info_position_field(&instance.instance_storage, pi_type_inner)
+                        .expect("validated ParameterInfo position support slot")
                         .write(i as i32);
                 });
                 pi_objs.push(pi_ref);
@@ -632,10 +633,10 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: ReflectionIntrinsicH
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let handle = ctx.pop_value_type();
-    let method_obj = handle
-        .instance_storage
-        .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .expect("System.RuntimeMethodHandle must declare a _value field")
+    let method_obj = ctx
+        .loader()
+        .rmh_value_field(&handle.instance_storage, handle.description)
+        .expect("validated RuntimeMethodHandle support slot")
         .read();
     let (method, lookup) =
         dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));

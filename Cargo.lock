@@ -367,6 +367,7 @@ dependencies = [
  "dotnet-build-tools",
  "dotnet-types",
  "dotnet-utils",
+ "dotnet-value",
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",

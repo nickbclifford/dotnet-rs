@@ -88,7 +88,7 @@ fn read_span_length_or_push_value_equality<'gc, T: SpanIntrinsicHost<'gc>>(
     span: &Object<'gc>,
     fallback_equal: i32,
 ) -> Result<i32, StepResult> {
-    match read_span_length(span) {
+    match read_span_length(span, ctx.loader().as_ref()) {
         Ok(length) => Ok(length),
         Err(_) => {
             ctx.drop_top(2);
@@ -159,13 +159,13 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>
         let element_desc =
             dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
-        let a_ptr_info = match read_span_reference(&a, ctx) {
+        let a_ptr_info = match read_span_reference(&a, ctx, ctx.loader().as_ref()) {
             Ok(info) => info,
             Err(e) => {
                 return StepResult::Error(e.into());
             }
         };
-        let b_ptr_info = match read_span_reference(&b, ctx) {
+        let b_ptr_info = match read_span_reference(&b, ctx, ctx.loader().as_ref()) {
             Ok(info) => info,
             Err(e) => {
                 return StepResult::Error(e.into());
@@ -224,7 +224,7 @@ pub fn intrinsic_span_get_length<'gc, T: SpanIntrinsicHost<'gc>>(
 ) -> StepResult {
     let this = ctx.pop();
     let len = match this {
-        StackValue::ValueType(span) => match read_span_length(&span) {
+        StackValue::ValueType(span) => match read_span_length(&span, ctx.loader().as_ref()) {
             Ok(l) => l,
             Err(e) => return StepResult::Error(e.into()),
         },
@@ -241,7 +241,7 @@ pub fn intrinsic_span_get_length<'gc, T: SpanIntrinsicHost<'gc>>(
                 }
             };
 
-            match read_span_length_from_ptr(&span_ptr, field_layout, ctx) {
+            match read_span_length_from_ptr(&span_ptr, field_layout, ctx.loader().as_ref(), ctx) {
                 Ok(l) => l,
                 Err(e) => return StepResult::Error(e.into()),
             }
@@ -277,11 +277,11 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let (base_ptr, len) = match this {
         StackValue::ValueType(span) => {
-            let len = match read_span_length(&span) {
+            let len = match read_span_length(&span, ctx.loader().as_ref()) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
-            let info = match read_span_reference(&span, ctx) {
+            let info = match read_span_reference(&span, ctx, ctx.loader().as_ref()) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
@@ -301,11 +301,21 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
                 }
             };
 
-            let len = match read_span_length_from_ptr(&span_ptr, field_layout, ctx) {
+            let len = match read_span_length_from_ptr(
+                &span_ptr,
+                field_layout,
+                ctx.loader().as_ref(),
+                ctx,
+            ) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
-            let raw_ref_ptr = match read_span_reference_from_ptr(&span_ptr, field_layout, ctx) {
+            let raw_ref_ptr = match read_span_reference_from_ptr(
+                &span_ptr,
+                field_layout,
+                ctx.loader().as_ref(),
+                ctx,
+            ) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
             };
@@ -355,11 +365,11 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, T: SpanIntrinsicHost<'g
         // Unsupported modes currently fall back to ordinal/case-sensitive semantics.
     }
 
-    let a_len = match read_span_length(&a) {
+    let a_len = match read_span_length(&a, ctx.loader().as_ref()) {
         Ok(l) => l,
         Err(e) => return StepResult::Error(e.into()),
     };
-    let b_len = match read_span_length(&b) {
+    let b_len = match read_span_length(&b, ctx.loader().as_ref()) {
         Ok(l) => l,
         Err(e) => return StepResult::Error(e.into()),
     };
@@ -374,11 +384,11 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, T: SpanIntrinsicHost<'g
         return StepResult::Continue;
     }
 
-    let a_ptr_info = match read_span_reference(&a, ctx) {
+    let a_ptr_info = match read_span_reference(&a, ctx, ctx.loader().as_ref()) {
         Ok(info) => info,
         Err(e) => return StepResult::Error(e.into()),
     };
-    let b_ptr_info = match read_span_reference(&b, ctx) {
+    let b_ptr_info = match read_span_reference(&b, ctx, ctx.loader().as_ref()) {
         Ok(info) => info,
         Err(e) => return StepResult::Error(e.into()),
     };

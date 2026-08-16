@@ -6,6 +6,7 @@ use dotnet_types::{
 };
 use dotnet_value::object::ObjectRef;
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{LoaderOps, TypedStackOps};
 use dotnetdll::resolved::signature::ParameterType;
 
@@ -62,15 +63,18 @@ pub(crate) fn resolve_runtime_parameter<'gc>(
     obj: ObjectRef<'gc>,
 ) -> Result<(MethodDescription, GenericLookup, usize), ExecutionError> {
     obj.try_as_object(|instance| {
-        let method_index = instance
-            .instance_storage
-            .field::<usize>(instance.description.clone(), "method_index")
-            .expect("DotnetRs.ParameterInfo must declare a method_index field")
+        let method_index = ctx
+            .loader()
+            .parameter_info_method_index_field(
+                &instance.instance_storage,
+                instance.description.clone(),
+            )
+            .expect("validated ParameterInfo method-index support slot")
             .read();
-        let position = instance
-            .instance_storage
-            .field::<i32>(instance.description.clone(), "position")
-            .expect("DotnetRs.ParameterInfo must declare a position field")
+        let position = ctx
+            .loader()
+            .parameter_info_position_field(&instance.instance_storage, instance.description.clone())
+            .expect("validated ParameterInfo position support slot")
             .read();
         let (m_desc, lookup) = ctx.reflection_runtime_method_by_index(method_index);
         (m_desc, lookup, position as usize)

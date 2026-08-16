@@ -114,6 +114,63 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the AssemblyLoader is confined to this single-threaded layout test"
+    )]
+    fn runtime_handle_value_slots_use_object_ref_layout() {
+        let loader = Arc::new(
+            AssemblyLoader::new(
+                find_dotnet_app_path()
+                    .expect("could not find .NET shared path")
+                    .display()
+                    .to_string(),
+            )
+            .unwrap(),
+        );
+        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+        let empty = GenericLookup::default();
+
+        for well_known in [
+            WellKnown::RuntimeTypeHandle,
+            WellKnown::RuntimeFieldHandle,
+            WellKnown::RuntimeMethodHandle,
+        ] {
+            let handle_type = loader.corlib_wkt(well_known).unwrap();
+            let ctx = ResolutionContext::new(
+                &empty,
+                loader.clone(),
+                handle_type.resolution.clone(),
+                shared.caches.clone(),
+                Some(Arc::downgrade(&shared)),
+            );
+            let layout = instance_field_layout_cached(handle_type.clone(), &ctx).unwrap();
+            let value_field = layout
+                .get_field(handle_type.clone(), "_value")
+                .expect("validated runtime-handle value slot has a layout entry");
+
+            assert!(
+                matches!(
+                    value_field.layout.as_ref(),
+                    LayoutManager::Scalar(Scalar::ObjectRef)
+                ),
+                "{}._value must be laid out as ObjectRef",
+                handle_type.type_name()
+            );
+            let mut traced_slots = Vec::new();
+            layout
+                .gc_desc
+                .for_each_word_index(|index| traced_slots.push(index));
+            assert!(
+                traced_slots
+                    .contains(&(value_field.position.as_usize() / std::mem::size_of::<usize>())),
+                "{}._value must be present in the GC descriptor",
+                handle_type.type_name()
+            );
+        }
+    }
+
+    #[test]
     fn gc_desc_tracks_unaligned_reference_offsets_without_word_rounding() {
         let mut desc = dotnet_value::layout::GcDesc::default();
         populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);

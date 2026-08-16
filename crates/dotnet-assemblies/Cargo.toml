@@ -9,6 +9,7 @@ hashbrown = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
+dotnet-value = { workspace = true, default-features = false }
 gc-arena = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

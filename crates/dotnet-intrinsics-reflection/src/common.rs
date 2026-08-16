@@ -11,6 +11,7 @@ use dotnet_value::{
     StackValue,
     object::{Object, ObjectRef},
 };
+use dotnet_vm_ops::SupportSlotOps;
 use dotnetdll::{
     binary::signature::kinds::StandAloneCallingConvention,
     prelude::{
@@ -90,37 +91,49 @@ pub fn pre_initialize_reflection<'gc>(ctx: &mut impl ReflectionIntrinsicHost<'gc
     }
 }
 
-/// Reads the opaque `index` field from a reflection wrapper object.
-///
-/// Reflection wrapper objects (RuntimeType, MethodInfo, FieldInfo, etc.)
-/// store a `usize` index into the VM's runtime registry under the field
-/// name `"index"`. This function centralizes that access.
-pub(crate) fn read_reflection_index(instance: &Object<'_>) -> Result<usize, ExecutionError> {
-    instance
-        .instance_storage
-        .field::<usize>(instance.description.clone(), "index")
-        .map(|f| f.read())
-        .ok_or_else(|| {
-            ExecutionError::InternalError(
-                format!(
-                    "reflection object {} missing required `index` field",
-                    instance.description.type_name()
-                )
-                .into(),
+/// Reads the validated runtime-registry index slot from a reflection wrapper object.
+pub(crate) fn read_reflection_index<'gc>(
+    ctx: &impl ReflectionIntrinsicHost<'gc>,
+    instance: &Object<'gc>,
+) -> Result<usize, ExecutionError> {
+    let description = instance.description.clone();
+    let index_field = match ctx.loader().canonical_type_name(&description.type_name()) {
+        "System.RuntimeType" => ctx
+            .loader()
+            .runtime_type_index_field(&instance.instance_storage, description),
+        "DotnetRs.MethodInfo" => ctx
+            .loader()
+            .method_info_index_field(&instance.instance_storage, description),
+        "DotnetRs.ConstructorInfo" => ctx
+            .loader()
+            .constructor_info_index_field(&instance.instance_storage, description),
+        "DotnetRs.FieldInfo" => ctx
+            .loader()
+            .field_info_index_field(&instance.instance_storage, description),
+        _ => None,
+    };
+
+    index_field.map(|f| f.read()).ok_or_else(|| {
+        ExecutionError::InternalError(
+            format!(
+                "reflection object {} missing a validated runtime-registry index slot",
+                instance.description.type_name()
             )
-        })
+            .into(),
+        )
+    })
 }
 
-/// Writes the `index` field on a freshly allocated reflection wrapper object.
-pub(crate) fn write_reflection_index(
-    instance: &mut Object<'_>,
+/// Writes the validated RuntimeType index slot on a freshly allocated reflection object.
+pub(crate) fn write_reflection_index<'gc>(
+    ctx: &impl ReflectionIntrinsicHost<'gc>,
+    instance: &mut Object<'gc>,
     owner: TypeDescription,
     index: usize,
 ) {
-    instance
-        .instance_storage
-        .field::<usize>(owner, "index")
-        .expect("reflection object must have an `index` field")
+    ctx.loader()
+        .runtime_type_index_field(&instance.instance_storage, owner)
+        .expect("validated RuntimeType index support slot")
         .write(index);
 }
 
@@ -140,7 +153,7 @@ fn alloc_reflection_obj<'gc>(
     let obj_ref = ctx.alloc_obj_ref(gc, rt_obj);
 
     obj_ref.as_object_mut(gc, |instance| {
-        write_reflection_index(instance, rt, index);
+        write_reflection_index(ctx, instance, rt, index);
     });
 
     obj_ref
@@ -166,7 +179,7 @@ pub fn resolve_runtime_type<'gc>(
     obj: ObjectRef<'gc>,
 ) -> Result<RuntimeType, ExecutionError> {
     obj.try_as_object(|instance| {
-        if let Ok(index) = read_reflection_index(instance) {
+        if let Ok(index) = read_reflection_index(ctx, instance) {
             return Ok(ctx.reflection_runtime_type_by_index(index));
         }
 
@@ -174,12 +187,16 @@ pub fn resolve_runtime_type<'gc>(
             .loader()
             .corlib_wkt(WellKnown::RuntimeType)
             .ok()
-            .and_then(|owner| instance.instance_storage.field::<usize>(owner, "index"));
+            .and_then(|owner| {
+                ctx.loader()
+                    .runtime_type_index_field(&instance.instance_storage, owner)
+            });
 
         if let Some(index_field) = index_field {
             return Ok(ctx.reflection_runtime_type_by_index(index_field.read()));
         }
 
+        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
         if let Some(type_impl) = ctx
             .loader()
             .corlib_wkt(WellKnown::ReflectionTypeDelegator)
@@ -222,7 +239,7 @@ pub fn resolve_runtime_method<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
 ) -> Result<(MethodDescription, GenericLookup), ExecutionError> {
-    let index = obj.try_as_object(read_reflection_index)??;
+    let index = obj.try_as_object(|instance| read_reflection_index(ctx, instance))??;
     Ok(ctx.reflection_runtime_method_by_index(index))
 }
 
@@ -230,7 +247,7 @@ pub fn resolve_runtime_field<'gc>(
     ctx: &impl ReflectionIntrinsicHost<'gc>,
     obj: ObjectRef<'gc>,
 ) -> Result<(FieldDescription, GenericLookup), ExecutionError> {
-    let index = obj.try_as_object(read_reflection_index)??;
+    let index = obj.try_as_object(|instance| read_reflection_index(ctx, instance))??;
     Ok(ctx.reflection_runtime_field_by_index(index))
 }
 

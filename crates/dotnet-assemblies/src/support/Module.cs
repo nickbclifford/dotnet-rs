@@ -4,8 +4,9 @@ namespace DotnetRs;
 
 public class Module : System.Reflection.Module
 {
+    [RuntimeSlot("NativePtr")]
     [UsedImplicitly] private IntPtr resolution;
 
-    public override System.Collections.Generic.IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
-        new System.Collections.Generic.List<System.Reflection.CustomAttributeData>();
+    public override IList<System.Reflection.CustomAttributeData> GetCustomAttributesData() =>
+        new List<System.Reflection.CustomAttributeData>();
 }

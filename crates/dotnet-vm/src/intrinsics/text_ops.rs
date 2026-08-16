@@ -92,7 +92,7 @@ fn write_i32_out_arg<'gc, T: ExceptionOps<'gc> + RawMemoryOps<'gc>>(
 
 fn try_write_utf16_to_span<
     'gc,
-    T: RawMemoryOps<'gc> + dotnet_value::pointer::ManagedPtrResolver<'gc>,
+    T: RawMemoryOps<'gc> + dotnet_value::pointer::ManagedPtrResolver<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     destination: &StackValue<'gc>,
@@ -108,7 +108,7 @@ fn try_write_utf16_to_span<
         }
     };
 
-    let span_len = dotnet_intrinsics_span::helpers::read_span_length(&span)
+    let span_len = dotnet_intrinsics_span::helpers::read_span_length(&span, ctx.loader().as_ref())
         .map_err(|e| StepResult::Error(e.into()))?;
     if span_len < 0 {
         return Ok(false);
@@ -123,8 +123,9 @@ fn try_write_utf16_to_span<
         return Ok(true);
     }
 
-    let span_ref = dotnet_intrinsics_span::helpers::read_span_reference(&span, ctx)
-        .map_err(|e| StepResult::Error(e.into()))?;
+    let span_ref =
+        dotnet_intrinsics_span::helpers::read_span_reference(&span, ctx, ctx.loader().as_ref())
+            .map_err(|e| StepResult::Error(e.into()))?;
     let span_ptr = ManagedPtr::from_info_full(span_ref, TypeDescription::NULL, false);
 
     let mut bytes = Vec::with_capacity(required_len * 2);

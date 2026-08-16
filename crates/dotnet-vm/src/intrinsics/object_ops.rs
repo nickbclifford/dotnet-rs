@@ -116,6 +116,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
     };
 
     match &*base {
+        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
         dotnetdll::prelude::BaseType::Int8 => Some((
             i128::from(
                 obj.instance_storage

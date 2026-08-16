@@ -62,7 +62,7 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     public virtual extern void SetValue(object? value, params int[] indices);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
-    public static extern System.Array CreateInstance(System.Type elementType, int length);
+    public static extern System.Array CreateInstance(Type elementType, int length);
 
     public object Clone() => MemberwiseClone();
 

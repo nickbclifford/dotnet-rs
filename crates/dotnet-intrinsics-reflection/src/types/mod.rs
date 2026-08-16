@@ -13,6 +13,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::{LoaderOps, MemoryOps, TypedStackOps};
 use dotnetdll::prelude::{BaseType, MemberType};
 
@@ -304,10 +305,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let pfn_allocator = ctx.pop_managed_ptr();
 
             let rt_obj = match ctx.pop() {
-                StackValue::ValueType(rth_handle) => rth_handle
-                    .instance_storage
-                    .field::<ObjectRef<'gc>>(rth_handle.description, "_value")
-                    .expect("System.RuntimeTypeHandle must declare a _value field")
+                StackValue::ValueType(rth_handle) => ctx
+                    .loader()
+                    .rth_value_field(&rth_handle.instance_storage, rth_handle.description)
+                    .expect("validated RuntimeTypeHandle support slot")
                     .read(),
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => {

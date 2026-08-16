@@ -7,13 +7,15 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Delegate")]
 public abstract class Delegate : ICloneable, ISerializable
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] internal object? _target;
-    [UsedImplicitly] internal RuntimeMethodHandle _method;
+    [RuntimeSlot("Index")]
+    [UsedImplicitly] internal nint _method;
 
     protected Delegate(object target, nint method)
     {
         _target = target;
-        _method = new RuntimeMethodHandle(method);
+        _method = method;
     }
 
     public extern object? Target { [MethodImpl(MethodImplOptions.InternalCall)] get; }
@@ -35,7 +37,7 @@ public abstract class Delegate : ICloneable, ISerializable
     [MethodImpl(MethodImplOptions.InternalCall)]
     public static extern Delegate? Remove(Delegate? source, Delegate? value);
 
-    protected virtual Delegate CombineImpl(Delegate? d) => throw new System.NotSupportedException();
+    protected virtual Delegate CombineImpl(Delegate? d) => throw new NotSupportedException();
 
     protected virtual Delegate? RemoveImpl(Delegate? d) => d == (object)this ? null : this;
     

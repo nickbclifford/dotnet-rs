@@ -11,6 +11,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::{FrameReturnAction, StepResult};
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::ops::TypedStackOps;
 use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
@@ -31,10 +32,10 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrins
         }));
     };
 
-    let target_obj = handle
-        .instance_storage
-        .field::<ObjectRef<'gc>>(handle.description, "_value")
-        .expect("System.RuntimeTypeHandle must declare a _value field")
+    let target_obj = ctx
+        .loader()
+        .rth_value_field(&handle.instance_storage, handle.description)
+        .expect("validated RuntimeTypeHandle support slot")
         .read();
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
     let target_ct = target_type.to_concrete(ctx.loader().as_ref());

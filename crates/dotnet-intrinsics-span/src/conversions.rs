@@ -14,6 +14,7 @@ use dotnet_value::{
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::SupportSlotOps;
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::NonNull;
 
@@ -254,25 +255,6 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     let span_type =
         dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(span_type_concrete.clone()));
 
-    let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(span_type_concrete.clone()));
-
-    let (_ref_offset_rel, _length_offset_rel) = match &*layout {
-        LayoutManager::Field(f) => {
-            let ref_off = match f.get_field_by_name("_reference") {
-                Some(field) => field.position,
-                None => return StepResult::internal_error("Span must have _reference field"),
-            };
-            let len_off = match f.get_field_by_name("_length") {
-                Some(field) => field.position,
-                None => return StepResult::internal_error("Span must have _length field"),
-            };
-            (ref_off, len_off)
-        }
-        _ => {
-            return StepResult::internal_error("Expected Field layout for Span");
-        }
-    };
-
     let span = dotnet_vm_ops::vm_try!(
         ctx.span_new_object_with_type_generics(span_type, vec![element_type.clone()],)
     );
@@ -285,13 +267,13 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         false,
         Some(offset),
     );
-    span.instance_storage
-        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
+    ctx.loader()
+        .span_reference_field(&span.instance_storage, span.description.clone())
+        .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(managed);
-    span.instance_storage
-        .field::<i32>(span.description.clone(), "_length")
-        .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
+    ctx.loader()
+        .span_length_field(&span.instance_storage, span.description.clone())
+        .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(len as i32);
 
     ctx.push_value_type(span);
@@ -312,32 +294,11 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let field_handle = ctx.pop_value_type();
 
-    let handle_layout = dotnet_vm_ops::vm_try!(
-        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
-    );
-    let _value_offset = match &*handle_layout {
-        LayoutManager::Field(f) => {
-            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::InternalError("RuntimeFieldHandle must have _value field".into())
-            }))
-            .position
-            .as_usize()
-        }
-        _ => {
-            return StepResult::Error(
-                ExecutionError::InternalError(
-                    "Expected Field layout for RuntimeFieldHandle".into(),
-                )
-                .into(),
-            );
-        }
-    };
-
     let (field_desc, lookup) = {
-        let obj_ref = field_handle
-            .instance_storage
-            .field::<ObjectRef<'gc>>(field_handle.description, "_value")
-            .expect("System.RuntimeFieldHandle must declare a _value field")
+        let obj_ref = ctx
+            .loader()
+            .rfh_value_field(&field_handle.instance_storage, field_handle.description)
+            .expect("validated RuntimeFieldHandle support slot")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
@@ -371,28 +332,6 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             ctx.span_new_object_with_type_generics(span_type.clone(), vec![element_type.clone()])
         );
 
-        let layout = dotnet_vm_ops::vm_try!(ctx.span_type_layout(ConcreteType::from(span_type)));
-        let (_ref_offset, _length_offset) = match &*layout {
-            LayoutManager::Field(f) => {
-                let ref_off =
-                    dotnet_vm_ops::vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
-                        ExecutionError::NotImplemented("Span must have _reference field".into())
-                    }))
-                    .position;
-                let len_off =
-                    dotnet_vm_ops::vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
-                        ExecutionError::NotImplemented("Span must have _length field".into())
-                    }))
-                    .position;
-                (ref_off, len_off)
-            }
-            _ => {
-                return StepResult::Error(
-                    ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
-                );
-            }
-        };
-
         let element_desc =
             dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
         let managed = ManagedPtr::new(
@@ -402,17 +341,21 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             false,
             None,
         );
-        span_instance
-            .instance_storage
-            .field::<ManagedPtr<'gc>>(span_instance.description.clone(), "_reference")
-            .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
+        ctx.loader()
+            .span_reference_field(
+                &span_instance.instance_storage,
+                span_instance.description.clone(),
+            )
+            .expect("validated Span<T>/ReadOnlySpan<T> support slot")
             .write(managed);
 
         let element_count = (array_size / element_size.as_usize()) as i32;
-        span_instance
-            .instance_storage
-            .field::<i32>(span_instance.description.clone(), "_length")
-            .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
+        ctx.loader()
+            .span_length_field(
+                &span_instance.instance_storage,
+                span_instance.description.clone(),
+            )
+            .expect("validated Span<T>/ReadOnlySpan<T> support slot")
             .write(element_count);
 
         ctx.push_value_type(span_instance);
@@ -441,64 +384,22 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
     let field_handle = ctx.pop_value_type();
 
     // Resolve field
-    let field_layout = dotnet_vm_ops::vm_try!(
-        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
-    );
-    let _field_value_offset = match &*field_layout {
-        LayoutManager::Field(f) => {
-            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::NotImplemented("RuntimeFieldHandle must have _value field".into())
-            }))
-            .position
-            .as_usize()
-        }
-        _ => {
-            return StepResult::Error(
-                ExecutionError::NotImplemented(
-                    "Expected Field layout for RuntimeFieldHandle".into(),
-                )
-                .into(),
-            );
-        }
-    };
-
     let (field_desc, _) = {
-        let obj_ref = field_handle
-            .instance_storage
-            .field::<ObjectRef<'gc>>(field_handle.description, "_value")
-            .expect("System.RuntimeFieldHandle must declare a _value field")
+        let obj_ref = ctx
+            .loader()
+            .rfh_value_field(&field_handle.instance_storage, field_handle.description)
+            .expect("validated RuntimeFieldHandle support slot")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_field(obj_ref))
     };
     let field = field_desc.field();
 
     // Resolve type
-    let runtime_type_layout = dotnet_vm_ops::vm_try!(
-        ctx.span_type_layout(ConcreteType::from(type_handle.description.clone()))
-    );
-    let _type_value_offset = match &*runtime_type_layout {
-        LayoutManager::Field(f) => {
-            dotnet_vm_ops::vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-                ExecutionError::NotImplemented("RuntimeTypeHandle must have _value field".into())
-            }))
-            .position
-            .as_usize()
-        }
-        _ => {
-            return StepResult::Error(
-                ExecutionError::NotImplemented(
-                    "Expected Field layout for RuntimeTypeHandle".into(),
-                )
-                .into(),
-            );
-        }
-    };
-
     let element_type_runtime = {
-        let obj_ref = type_handle
-            .instance_storage
-            .field::<ObjectRef<'gc>>(type_handle.description, "_value")
-            .expect("System.RuntimeTypeHandle must declare a _value field")
+        let obj_ref = ctx
+            .loader()
+            .rth_value_field(&type_handle.instance_storage, type_handle.description)
+            .expect("validated RuntimeTypeHandle support slot")
             .read();
         dotnet_vm_ops::vm_try!(ctx.span_resolve_runtime_type(obj_ref))
     };
@@ -564,39 +465,14 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
             .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
     };
 
-    let handle_layout = dotnet_vm_ops::vm_try!(
-        ctx.span_type_layout(ConcreteType::from(field_handle.description.clone()))
-    );
-    match &*handle_layout {
-        LayoutManager::Field(f) => {
-            if f.get_field_by_name("_value").is_none() {
-                return StepResult::Error(
-                    ExecutionError::InternalError(
-                        "RuntimeFieldHandle must have _value field".into(),
-                    )
-                    .into(),
-                );
-            }
-        }
-        _ => {
-            return StepResult::Error(
-                ExecutionError::InternalError(
-                    "Expected Field layout for RuntimeFieldHandle".into(),
-                )
-                .into(),
-            );
-        }
-    }
-
-    let field_obj_ref = dotnet_vm_ops::vm_try!(
-        field_handle
-            .instance_storage
-            .field::<ObjectRef<'gc>>(field_handle.description.clone(), "_value")
-            .ok_or_else(|| {
-                ExecutionError::InternalError("RuntimeFieldHandle missing _value slot".into())
-            })
-    )
-    .read();
+    let field_obj_ref = ctx
+        .loader()
+        .rfh_value_field(
+            &field_handle.instance_storage,
+            field_handle.description.clone(),
+        )
+        .expect("validated RuntimeFieldHandle support slot")
+        .read();
 
     if field_obj_ref.0.is_none() {
         return ctx
@@ -709,11 +585,11 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, T: SpanIntrinsicHost<'gc>>(
     };
 
     // Read fields using helpers
-    let managed_ref = match read_span_reference_from_ptr(&span, f, ctx) {
+    let managed_ref = match read_span_reference_from_ptr(&span, f, ctx.loader().as_ref(), ctx) {
         Ok(m) => m,
         Err(e) => return StepResult::Error(e.into()),
     };
-    let length = match read_span_length_from_ptr(&span, f, ctx) {
+    let length = match read_span_length_from_ptr(&span, f, ctx.loader().as_ref(), ctx) {
         Ok(l) => l,
         Err(e) => return StepResult::Error(e.into()),
     };
@@ -752,7 +628,7 @@ pub fn intrinsic_memory_marshal_get_reference<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let managed = match ctx.pop() {
         StackValue::ValueType(span) => {
-            let info = match read_span_reference(&span, ctx) {
+            let info = match read_span_reference(&span, ctx, ctx.loader().as_ref()) {
                 Ok(info) => info,
                 Err(err) => return StepResult::Error(err.into()),
             };
@@ -767,10 +643,11 @@ pub fn intrinsic_memory_marshal_get_reference<'gc, T: SpanIntrinsicHost<'gc>>(
                     ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
                 );
             };
-            let managed = match read_span_reference_from_ptr(&span_ptr, fields, ctx) {
-                Ok(managed) => managed,
-                Err(err) => return StepResult::Error(err.into()),
-            };
+            let managed =
+                match read_span_reference_from_ptr(&span_ptr, fields, ctx.loader().as_ref(), ctx) {
+                    Ok(managed) => managed,
+                    Err(err) => return StepResult::Error(err.into()),
+                };
             managed.with_inner_type(element_desc)
         }
         other => {
@@ -819,11 +696,11 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
 
     let (reference, total_length) = match ctx.pop() {
         StackValue::ValueType(span) => {
-            let reference = match read_span_reference(&span, ctx) {
+            let reference = match read_span_reference(&span, ctx, ctx.loader().as_ref()) {
                 Ok(info) => ManagedPtr::from_info_full(info, element_desc.clone(), false),
                 Err(err) => return StepResult::Error(err.into()),
             };
-            let length = match read_span_length(&span) {
+            let length = match read_span_length(&span, ctx.loader().as_ref()) {
                 Ok(length) => length,
                 Err(err) => return StepResult::Error(err.into()),
             };
@@ -835,14 +712,16 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
                     ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
                 );
             };
-            let reference = match read_span_reference_from_ptr(&span_ptr, fields, ctx) {
-                Ok(reference) => reference.with_inner_type(element_desc.clone()),
-                Err(err) => return StepResult::Error(err.into()),
-            };
-            let length = match read_span_length_from_ptr(&span_ptr, fields, ctx) {
-                Ok(length) => length,
-                Err(err) => return StepResult::Error(err.into()),
-            };
+            let reference =
+                match read_span_reference_from_ptr(&span_ptr, fields, ctx.loader().as_ref(), ctx) {
+                    Ok(reference) => reference.with_inner_type(element_desc.clone()),
+                    Err(err) => return StepResult::Error(err.into()),
+                };
+            let length =
+                match read_span_length_from_ptr(&span_ptr, fields, ctx.loader().as_ref(), ctx) {
+                    Ok(length) => length,
+                    Err(err) => return StepResult::Error(err.into()),
+                };
             (reference, length)
         }
         other => {
@@ -876,13 +755,13 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
     let span = dotnet_vm_ops::vm_try!(
         ctx.span_new_object_with_type_generics(method.parent.clone(), vec![element_type.clone()],)
     );
-    span.instance_storage
-        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .expect("Span<T>/ReadOnlySpan<T> must declare a _reference field")
+    ctx.loader()
+        .span_reference_field(&span.instance_storage, span.description.clone())
+        .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(reference);
-    span.instance_storage
-        .field::<i32>(span.description.clone(), "_length")
-        .expect("Span<T>/ReadOnlySpan<T> must declare a _length field")
+    ctx.loader()
+        .span_length_field(&span.instance_storage, span.description.clone())
+        .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(length);
 
     ctx.push_value_type(span);
@@ -896,10 +775,11 @@ fn span_reference_and_length<'gc, T: SpanIntrinsicHost<'gc>>(
 ) -> Result<(ManagedPtr<'gc>, i32), StepResult> {
     match span {
         StackValue::ValueType(span) => {
-            let reference = read_span_reference(&span, ctx)
+            let reference = read_span_reference(&span, ctx, ctx.loader().as_ref())
                 .map(|info| ManagedPtr::from_info_full(info, element_desc.clone(), false))
                 .map_err(|err| StepResult::Error(err.into()))?;
-            let length = read_span_length(&span).map_err(|err| StepResult::Error(err.into()))?;
+            let length = read_span_length(&span, ctx.loader().as_ref())
+                .map_err(|err| StepResult::Error(err.into()))?;
             Ok((reference, length))
         }
         StackValue::ManagedPtr(span_ptr) => {
@@ -911,10 +791,11 @@ fn span_reference_and_length<'gc, T: SpanIntrinsicHost<'gc>>(
                     ExecutionError::NotImplemented("Expected Field layout for Span".into()).into(),
                 ));
             };
-            let reference = read_span_reference_from_ptr(&span_ptr, fields, ctx)
-                .map(|reference| reference.with_inner_type(element_desc.clone()))
-                .map_err(|err| StepResult::Error(err.into()))?;
-            let length = read_span_length_from_ptr(&span_ptr, fields, ctx)
+            let reference =
+                read_span_reference_from_ptr(&span_ptr, fields, ctx.loader().as_ref(), ctx)
+                    .map(|reference| reference.with_inner_type(element_desc.clone()))
+                    .map_err(|err| StepResult::Error(err.into()))?;
+            let length = read_span_length_from_ptr(&span_ptr, fields, ctx.loader().as_ref(), ctx)
                 .map_err(|err| StepResult::Error(err.into()))?;
             Ok((reference, length))
         }
@@ -985,13 +866,13 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
     let span = dotnet_vm_ops::vm_try!(
         ctx.span_new_object_with_type_generics(return_span, vec![element_type.clone()],)
     );
-    span.instance_storage
-        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
-        .expect("ReadOnlySpan<T> must declare a _reference field")
+    ctx.loader()
+        .span_reference_field(&span.instance_storage, span.description.clone())
+        .expect("validated ReadOnlySpan<T> support slot")
         .write(reference);
-    span.instance_storage
-        .field::<i32>(span.description.clone(), "_length")
-        .expect("ReadOnlySpan<T> must declare a _length field")
+    ctx.loader()
+        .span_length_field(&span.instance_storage, span.description.clone())
+        .expect("validated ReadOnlySpan<T> support slot")
         .write(length);
 
     ctx.push_value_type(span);
