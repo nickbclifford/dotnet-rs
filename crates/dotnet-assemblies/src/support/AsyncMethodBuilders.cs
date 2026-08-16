@@ -6,6 +6,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.AsyncTaskMethodBuilder")]
 public struct AsyncTaskMethodBuilder
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Task? _task;
 
     public static AsyncTaskMethodBuilder Create() => new();
@@ -55,6 +56,7 @@ public struct AsyncTaskMethodBuilder
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1")]
 public struct AsyncTaskMethodBuilder<TResult>
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Task<TResult>? _task;
 
     public static AsyncTaskMethodBuilder<TResult> Create() => new();
@@ -104,6 +106,7 @@ public struct AsyncTaskMethodBuilder<TResult>
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder")]
 public struct AsyncValueTaskMethodBuilder
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Task? _task;
 
     public static AsyncValueTaskMethodBuilder Create() => new();
@@ -153,6 +156,7 @@ public struct AsyncValueTaskMethodBuilder
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1")]
 public struct AsyncValueTaskMethodBuilder<TResult>
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Task<TResult>? _task;
 
     public static AsyncValueTaskMethodBuilder<TResult> Create() => new();

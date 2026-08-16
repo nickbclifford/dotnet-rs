@@ -22,6 +22,12 @@ pub enum SlotKind {
     Byref,
     /// A fixed-width integer.
     ScalarInt,
+    /// A fixed-width boolean.
+    ScalarBool,
+    /// A field whose exact type is the declaring type's generic parameter.
+    Generic,
+    /// An embedded user-defined value type.
+    ValueType,
     /// An `nint` or `IntPtr` that stores an unmanaged pointer.
     NativePtr,
 }

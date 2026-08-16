@@ -5,6 +5,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Threading.Tasks.TaskCompletionSource`1")]
 public class TaskCompletionSource<TResult>
 {
+    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private readonly Task<TResult> _task = new();
 
     public Task<TResult> Task => _task;

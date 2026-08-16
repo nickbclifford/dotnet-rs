@@ -25,6 +25,89 @@ const EXPECTED_SLOTS: &[(&str, &str, SlotKind)] = &[
     ("System.ReadOnlySpan`1", "_length", SlotKind::ScalarInt),
     ("DotnetRs.Module", "resolution", SlotKind::NativePtr),
     ("DotnetRs.Assembly", "resolution", SlotKind::NativePtr),
+    ("System.Threading.Tasks.ValueTask", "_task", SlotKind::GcRef),
+    (
+        "System.Threading.Tasks.ValueTask`1",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Threading.Tasks.ValueTask`1",
+        "_result",
+        SlotKind::Generic,
+    ),
+    (
+        "System.Threading.Tasks.ValueTask`1",
+        "_hasResult",
+        SlotKind::ScalarBool,
+    ),
+    (
+        "System.Threading.Tasks.Task",
+        "_isCompleted",
+        SlotKind::ScalarBool,
+    ),
+    ("System.Threading.Tasks.Task", "_exception", SlotKind::GcRef),
+    (
+        "System.Threading.Tasks.Task",
+        "_continuation",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Threading.Tasks.Task`1",
+        "_result",
+        SlotKind::Generic,
+    ),
+    (
+        "System.Threading.Tasks.Task`1",
+        "_hasResult",
+        SlotKind::ScalarBool,
+    ),
+    (
+        "System.Threading.Tasks.TaskCompletionSource`1",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.TaskAwaiter",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.TaskAwaiter`1",
+        "_task",
+        SlotKind::GcRef,
+    ),
+    (
+        "System.Runtime.CompilerServices.ValueTaskAwaiter",
+        "_valueTask",
+        SlotKind::ValueType,
+    ),
+    (
+        "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
+        "_valueTask",
+        SlotKind::ValueType,
+    ),
+    ("DotnetRs.StubAttribute", "InPlaceOf", SlotKind::GcRef),
 ];
 
 fn bare_loader() -> AssemblyLoader {
@@ -39,16 +122,26 @@ fn kind_name(kind: SlotKind) -> &'static str {
         SlotKind::GcRef => "GcRef",
         SlotKind::Byref => "Byref",
         SlotKind::ScalarInt => "ScalarInt",
+        SlotKind::ScalarBool => "ScalarBool",
+        SlotKind::Generic => "Generic",
+        SlotKind::ValueType => "ValueType",
         SlotKind::NativePtr => "NativePtr",
     }
 }
 
-fn field_for_slot(field_name: &'static str, kind: SlotKind) -> Field<'static> {
+fn field_for_slot(
+    field_name: &'static str,
+    kind: SlotKind,
+    value_type: TypeIndex,
+) -> Field<'static> {
     let return_type = match kind {
         SlotKind::Handle | SlotKind::Index | SlotKind::NativePtr => BaseType::IntPtr.into(),
         SlotKind::GcRef => ctype! { object },
         SlotKind::Byref => MemberType::TypeGeneric(0),
         SlotKind::ScalarInt => ctype! { int },
+        SlotKind::ScalarBool => ctype! { bool },
+        SlotKind::Generic => MemberType::TypeGeneric(0),
+        SlotKind::ValueType => BaseType::valuetype(value_type).into(),
     };
     let mut field = Field::instance(Accessibility::Private, field_name, return_type);
     field.by_ref = kind == SlotKind::Byref;
@@ -68,6 +161,8 @@ fn synthetic_support_resolution_with_wrong_metadata(
     wrong_metadata_slot: Option<(&str, &str)>,
 ) -> Resolution<'static> {
     let mut resolution = Resolution::new(Module::new("fake-support.dll"));
+    let value_type =
+        resolution.push_type_definition(TypeDefinition::new(Some("Fixture".into()), "ValueType"));
     let attribute_type = resolution.push_type_definition(TypeDefinition::new(
         Some("DotnetRs".into()),
         "RuntimeSlotAttribute",
@@ -90,7 +185,7 @@ fn synthetic_support_resolution_with_wrong_metadata(
         let field = if wrong_metadata_slot == Some((type_name, field_name)) {
             Field::instance(Accessibility::Private, field_name, ctype! { int })
         } else {
-            field_for_slot(field_name, kind)
+            field_for_slot(field_name, kind, value_type)
         };
         let field_index = resolution.push_field(type_index, field);
         resolution[field_index].attributes.push(Attribute::new(
@@ -102,6 +197,34 @@ fn synthetic_support_resolution_with_wrong_metadata(
         ));
     }
 
+    resolution
+}
+
+fn synthetic_support_resolution_with_unannotated_used_implicitly_field() -> Resolution<'static> {
+    let mut resolution = synthetic_support_resolution(EXPECTED_SLOTS);
+    let attribute_type = resolution.push_type_definition(TypeDefinition::new(
+        Some("JetBrains.Annotations".into()),
+        "UsedImplicitlyAttribute",
+    ));
+    let attribute_constructor = resolution.push_method(
+        attribute_type,
+        Method::constructor(Accessibility::Public, vec![], None),
+    );
+    let type_index = resolution.push_type_definition(TypeDefinition::new(
+        Some("DotnetRs".into()),
+        "UnannotatedUsedImplicitlyField",
+    ));
+    let field_index = resolution.push_field(
+        type_index,
+        Field::instance(Accessibility::Private, "field", ctype! { int }),
+    );
+    resolution[field_index].attributes.push(Attribute::new(
+        attribute_constructor.into(),
+        CustomAttributeData {
+            constructor_args: vec![],
+            named_args: vec![],
+        },
+    ));
     resolution
 }
 
@@ -221,5 +344,26 @@ fn extra_annotated_slot_is_unrecognized() {
                 && field_name.as_ref() == "not_consumed_by_rust"
         ),
         "expected UnrecognizedSupportSlot for the synthetic extra field, got {result:?}"
+    );
+}
+
+#[test]
+fn used_implicitly_field_without_runtime_slot_is_a_contract_violation() {
+    let result = bare_loader().validate_support_contract(
+        &synthetic_support_resolution_with_unannotated_used_implicitly_field(),
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(AssemblyLoadError::SupportContractViolation {
+                ref type_name,
+                ref field_name,
+                ref reason,
+            }) if type_name.as_ref() == "DotnetRs.UnannotatedUsedImplicitlyField"
+                && field_name.as_ref() == "field"
+                && reason.contains("UsedImplicitly")
+        ),
+        "expected an unannotated UsedImplicitly field to violate the contract, got {result:?}"
     );
 }

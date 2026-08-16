@@ -154,6 +154,120 @@ const EXPECTED_SUPPORT_SLOTS: &[ExpectedSupportSlot] = &[
         kind: SlotKind::NativePtr,
         is_static: false,
     },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.ValueTask",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.ValueTask`1",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.ValueTask`1",
+        field_name: "_result",
+        kind: SlotKind::Generic,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.ValueTask`1",
+        field_name: "_hasResult",
+        kind: SlotKind::ScalarBool,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.Task",
+        field_name: "_isCompleted",
+        kind: SlotKind::ScalarBool,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.Task",
+        field_name: "_exception",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.Task",
+        field_name: "_continuation",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.Task`1",
+        field_name: "_result",
+        kind: SlotKind::Generic,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.Task`1",
+        field_name: "_hasResult",
+        kind: SlotKind::ScalarBool,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Threading.Tasks.TaskCompletionSource`1",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.TaskAwaiter",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.TaskAwaiter`1",
+        field_name: "_task",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.ValueTaskAwaiter",
+        field_name: "_valueTask",
+        kind: SlotKind::ValueType,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
+        field_name: "_valueTask",
+        kind: SlotKind::ValueType,
+        is_static: false,
+    },
+    ExpectedSupportSlot {
+        type_name: "DotnetRs.StubAttribute",
+        field_name: "InPlaceOf",
+        kind: SlotKind::GcRef,
+        is_static: false,
+    },
 ];
 
 fn validate_slot_metadata(kind: SlotKind, field: &Field<'_>) -> Result<(), Box<str>> {
@@ -180,6 +294,20 @@ fn validate_slot_metadata(kind: SlotKind, field: &Field<'_>) -> Result<(), Box<s
         }
         SlotKind::Byref => field.by_ref,
         SlotKind::ScalarInt => !field.by_ref && matches!(base, Some(BaseType::Int32)),
+        SlotKind::ScalarBool => !field.by_ref && matches!(base, Some(BaseType::Boolean)),
+        SlotKind::Generic => {
+            !field.by_ref && matches!(field.return_type, MemberType::TypeGeneric(_))
+        }
+        SlotKind::ValueType => {
+            !field.by_ref
+                && matches!(
+                    base,
+                    Some(BaseType::Type {
+                        value_kind: Some(ValueKind::ValueType),
+                        ..
+                    })
+                )
+        }
     };
 
     if matches {
@@ -192,6 +320,9 @@ fn validate_slot_metadata(kind: SlotKind, field: &Field<'_>) -> Result<(), Box<s
         SlotKind::GcRef => "a non-byref managed-reference field",
         SlotKind::Byref => "a managed byref field",
         SlotKind::ScalarInt => "a non-byref Int32 field",
+        SlotKind::ScalarBool => "a non-byref Boolean field",
+        SlotKind::Generic => "a non-byref type-generic field",
+        SlotKind::ValueType => "a non-byref user-defined value-type field",
         SlotKind::NativePtr => "a non-byref native-int field",
     };
     Err(format!(
@@ -334,7 +465,24 @@ impl AssemblyLoader {
                         format!("failed to read support field attributes: {e}").into(),
                     )
                 })?;
+                let mut used_implicitly = false;
+                let mut has_runtime_slot = false;
                 for a in attrs {
+                    used_implicitly |= match a.constructor {
+                        UserMethod::Definition(d) => {
+                            support_res[d.parent_type()].type_name()
+                                == "JetBrains.Annotations.UsedImplicitlyAttribute"
+                        }
+                        UserMethod::Reference(r) => {
+                            matches!(
+                                &support_res[r].parent,
+                                MethodReferenceParent::Type(parent)
+                                    if parent
+                                        .show(support_res)
+                                        .ends_with("JetBrains.Annotations.UsedImplicitlyAttribute")
+                            )
+                        }
+                    };
                     // Like StubAttribute above, RuntimeSlotAttribute is defined by the support
                     // assembly, so an attribute constructor reference must be a definition.
                     let parent = match a.constructor {
@@ -344,6 +492,7 @@ impl AssemblyLoader {
                     if parent.type_name() != "DotnetRs.RuntimeSlotAttribute" {
                         continue;
                     }
+                    has_runtime_slot = true;
 
                     let field_name = field.name.as_ref();
                     let data = a
@@ -361,6 +510,9 @@ impl AssemblyLoader {
                             "GcRef" => SlotKind::GcRef,
                             "Byref" => SlotKind::Byref,
                             "ScalarInt" => SlotKind::ScalarInt,
+                            "ScalarBool" => SlotKind::ScalarBool,
+                            "Generic" => SlotKind::Generic,
+                            "ValueType" => SlotKind::ValueType,
                             "NativePtr" => SlotKind::NativePtr,
                             other => {
                                 return Err(AssemblyLoadError::SupportContractViolation {
@@ -393,6 +545,14 @@ impl AssemblyLoader {
                         field_name: field_name.into(),
                         kind,
                         is_static: field.static_member,
+                    });
+                }
+                if used_implicitly && !has_runtime_slot {
+                    return Err(AssemblyLoadError::SupportContractViolation {
+                        type_name: type_name.into(),
+                        field_name: field.name.clone().into(),
+                        reason: "fields marked [UsedImplicitly] must carry [RuntimeSlot(...)]"
+                            .into(),
                     });
                 }
             }

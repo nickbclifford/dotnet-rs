@@ -35,6 +35,89 @@ fn expected_slots() -> Vec<SlotDescriptor> {
         ("System.ReadOnlySpan`1", "_length", SlotKind::ScalarInt),
         ("DotnetRs.Module", "resolution", SlotKind::NativePtr),
         ("DotnetRs.Assembly", "resolution", SlotKind::NativePtr),
+        ("System.Threading.Tasks.ValueTask", "_task", SlotKind::GcRef),
+        (
+            "System.Threading.Tasks.ValueTask`1",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Threading.Tasks.ValueTask`1",
+            "_result",
+            SlotKind::Generic,
+        ),
+        (
+            "System.Threading.Tasks.ValueTask`1",
+            "_hasResult",
+            SlotKind::ScalarBool,
+        ),
+        (
+            "System.Threading.Tasks.Task",
+            "_isCompleted",
+            SlotKind::ScalarBool,
+        ),
+        ("System.Threading.Tasks.Task", "_exception", SlotKind::GcRef),
+        (
+            "System.Threading.Tasks.Task",
+            "_continuation",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Threading.Tasks.Task`1",
+            "_result",
+            SlotKind::Generic,
+        ),
+        (
+            "System.Threading.Tasks.Task`1",
+            "_hasResult",
+            SlotKind::ScalarBool,
+        ),
+        (
+            "System.Threading.Tasks.TaskCompletionSource`1",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.TaskAwaiter",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.TaskAwaiter`1",
+            "_task",
+            SlotKind::GcRef,
+        ),
+        (
+            "System.Runtime.CompilerServices.ValueTaskAwaiter",
+            "_valueTask",
+            SlotKind::ValueType,
+        ),
+        (
+            "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
+            "_valueTask",
+            SlotKind::ValueType,
+        ),
+        ("DotnetRs.StubAttribute", "InPlaceOf", SlotKind::GcRef),
     ]
     .into_iter()
     .map(|(type_name, field_name, kind)| SlotDescriptor {
@@ -72,7 +155,7 @@ fn test_registry_slot_count() {
 
     // Keep this a literal census total so a deletion cannot be hidden by updating the
     // expected-slot table above at the same time.
-    assert_eq!(loader.support_slots().slots.len(), 23);
+    assert_eq!(loader.support_slots().slots.len(), 42);
 }
 
 #[test]
