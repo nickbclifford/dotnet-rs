@@ -2,334 +2,120 @@ use crate::{
     AssemblyLoader,
     error::AssemblyLoadError,
     loader::{SUPPORT_ASSEMBLY, SUPPORT_LIBRARY},
-    support_contract::{SlotDescriptor, SlotKind, SupportSlotRegistry},
+    support_contract::{
+        RUNTIME_SLOT_DESCRIPTORS, RuntimeSlotId, RuntimeSlotSignature, SupportSlotRegistry,
+    },
 };
 use dotnet_types::{TypeDescription, resolution::ResolutionS};
 use dotnetdll::prelude::*;
 use std::ptr;
 
-struct ExpectedSupportSlot {
-    type_name: &'static str,
-    field_name: &'static str,
-    kind: SlotKind,
-    is_static: bool,
+type StubMaps = (
+    std::collections::HashMap<String, TypeDescription>,
+    std::collections::HashMap<String, String>,
+);
+
+pub(crate) fn parse_runtime_slot_id(
+    constructor_args: &[FixedArg<'_>],
+) -> Result<RuntimeSlotId, Box<str>> {
+    match constructor_args {
+        // C# stores an enum-valued custom-attribute argument as its underlying integral value.
+        // The RuntimeSlotAttribute constructor itself declares RuntimeSlotId, while dotnetdll
+        // decodes its payload as Integral rather than retaining the enum type name.
+        [FixedArg::Integral(IntegralParam::Int32(value))] => RuntimeSlotId::from_i32(*value)
+            .ok_or_else(|| format!("unknown RuntimeSlot ID {value}").into()),
+        [FixedArg::Enum(enum_name, IntegralParam::Int32(value))]
+            if enum_name.as_ref() == "DotnetRs.RuntimeSlotId" => RuntimeSlotId::from_i32(*value)
+                .ok_or_else(|| format!("unknown RuntimeSlot ID {value}").into()),
+        [FixedArg::Enum(enum_name, _)] => Err(format!(
+            "RuntimeSlot enum argument must be DotnetRs.RuntimeSlotId with an Int32 payload, found {enum_name:?}"
+        )
+        .into()),
+        _ => Err(format!(
+            "RuntimeSlot requires one RuntimeSlotId Int32 argument, found {constructor_args:?}"
+        )
+        .into()),
+    }
 }
 
-const EXPECTED_SUPPORT_SLOTS: &[ExpectedSupportSlot] = &[
-    ExpectedSupportSlot {
-        type_name: "System.RuntimeTypeHandle",
-        field_name: "_value",
-        kind: SlotKind::Handle,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.RuntimeFieldHandle",
-        field_name: "_value",
-        kind: SlotKind::Handle,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.RuntimeMethodHandle",
-        field_name: "_value",
-        kind: SlotKind::Handle,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.RuntimeType",
-        field_name: "index",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.MethodInfo",
-        field_name: "index",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.ConstructorInfo",
-        field_name: "index",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.FieldInfo",
-        field_name: "index",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.ParameterInfo",
-        field_name: "method_index",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.ParameterInfo",
-        field_name: "position",
-        kind: SlotKind::ScalarInt,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.PropertyInfo",
-        field_name: "name",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.PropertyInfo",
-        field_name: "getter",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.PropertyInfo",
-        field_name: "setter",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.PropertyInfo",
-        field_name: "declaringType",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.PropertyInfo",
-        field_name: "propertyType",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Delegate",
-        field_name: "_target",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Delegate",
-        field_name: "_method",
-        kind: SlotKind::Index,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.MulticastDelegate",
-        field_name: "targets",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Span`1",
-        field_name: "_reference",
-        kind: SlotKind::Byref,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Span`1",
-        field_name: "_length",
-        kind: SlotKind::ScalarInt,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.ReadOnlySpan`1",
-        field_name: "_reference",
-        kind: SlotKind::Byref,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.ReadOnlySpan`1",
-        field_name: "_length",
-        kind: SlotKind::ScalarInt,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.Module",
-        field_name: "resolution",
-        kind: SlotKind::NativePtr,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.Assembly",
-        field_name: "resolution",
-        kind: SlotKind::NativePtr,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.ValueTask",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.ValueTask`1",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.ValueTask`1",
-        field_name: "_result",
-        kind: SlotKind::Generic,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.ValueTask`1",
-        field_name: "_hasResult",
-        kind: SlotKind::ScalarBool,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.Task",
-        field_name: "_isCompleted",
-        kind: SlotKind::ScalarBool,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.Task",
-        field_name: "_exception",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.Task",
-        field_name: "_continuation",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.Task`1",
-        field_name: "_result",
-        kind: SlotKind::Generic,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.Task`1",
-        field_name: "_hasResult",
-        kind: SlotKind::ScalarBool,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Threading.Tasks.TaskCompletionSource`1",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.TaskAwaiter",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.TaskAwaiter`1",
-        field_name: "_task",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.ValueTaskAwaiter",
-        field_name: "_valueTask",
-        kind: SlotKind::ValueType,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
-        field_name: "_valueTask",
-        kind: SlotKind::ValueType,
-        is_static: false,
-    },
-    ExpectedSupportSlot {
-        type_name: "DotnetRs.StubAttribute",
-        field_name: "InPlaceOf",
-        kind: SlotKind::GcRef,
-        is_static: false,
-    },
-];
-
-fn validate_slot_metadata(kind: SlotKind, field: &Field<'_>) -> Result<(), Box<str>> {
-    let base = field.return_type.as_base();
-    let matches = match kind {
-        SlotKind::Handle | SlotKind::Index | SlotKind::NativePtr => {
-            !field.by_ref && matches!(base, Some(BaseType::IntPtr))
-        }
-        SlotKind::GcRef => {
-            !field.by_ref
-                && matches!(
-                    base,
-                    Some(
-                        BaseType::Object
-                            | BaseType::String
-                            | BaseType::Vector(_, _)
-                            | BaseType::Array(_, _)
-                            | BaseType::Type {
-                                value_kind: Some(ValueKind::Class),
-                                ..
-                            }
-                    )
-                )
-        }
-        SlotKind::Byref => field.by_ref,
-        SlotKind::ScalarInt => !field.by_ref && matches!(base, Some(BaseType::Int32)),
-        SlotKind::ScalarBool => !field.by_ref && matches!(base, Some(BaseType::Boolean)),
-        SlotKind::Generic => {
-            !field.by_ref && matches!(field.return_type, MemberType::TypeGeneric(_))
-        }
-        SlotKind::ValueType => {
-            !field.by_ref
-                && matches!(
-                    base,
-                    Some(BaseType::Type {
-                        value_kind: Some(ValueKind::ValueType),
-                        ..
-                    })
-                )
-        }
-    };
-
-    if matches {
-        return Ok(());
-    }
-
-    let expected = match kind {
-        SlotKind::Handle => "a non-byref native-int field whose layout is overridden to ObjectRef",
-        SlotKind::Index => "a non-byref native-int field",
-        SlotKind::GcRef => "a non-byref managed-reference field",
-        SlotKind::Byref => "a managed byref field",
-        SlotKind::ScalarInt => "a non-byref Int32 field",
-        SlotKind::ScalarBool => "a non-byref Boolean field",
-        SlotKind::Generic => "a non-byref type-generic field",
-        SlotKind::ValueType => "a non-byref user-defined value-type field",
-        SlotKind::NativePtr => "a non-byref native-int field",
-    };
-    Err(format!(
-        "RuntimeSlot({kind:?}) requires {expected}; found by_ref={} metadata type {:?}",
-        field.by_ref, field.return_type
+fn runtime_slot_constructor_uses_generated_id(
+    constructor: &Method<'_>,
+    resolution: &Resolution<'_>,
+) -> bool {
+    matches!(
+        constructor.signature.parameters.as_slice(),
+        [Parameter(_, ParameterType::Value(MethodType::Base(base)))]
+            if matches!(
+                base.as_ref(),
+                BaseType::Type {
+                    source: TypeSource::User(id),
+                    ..
+                } if id.type_name(resolution) == "DotnetRs.RuntimeSlotId"
+            )
     )
-    .into())
+}
+
+fn user_type_matches(
+    source: &TypeSource<MemberType>,
+    expected: dotnet_types::WellKnown,
+    loader: &AssemblyLoader,
+    resolution: &Resolution<'_>,
+) -> bool {
+    matches!(
+        source,
+        TypeSource::User(id) if loader.canonical_type_name(&id.type_name(resolution)) == expected.name()
+    )
+}
+
+fn slot_signature_matches(
+    expected: RuntimeSlotSignature,
+    field: &Field<'_>,
+    loader: &AssemblyLoader,
+    resolution: &Resolution<'_>,
+) -> bool {
+    match (expected, field.by_ref, field.return_type.as_base()) {
+        (RuntimeSlotSignature::IntPtr, false, Some(BaseType::IntPtr))
+        | (RuntimeSlotSignature::Int32, false, Some(BaseType::Int32))
+        | (RuntimeSlotSignature::Object, false, Some(BaseType::Object))
+        | (RuntimeSlotSignature::String, false, Some(BaseType::String)) => true,
+        (
+            RuntimeSlotSignature::Class(expected),
+            false,
+            Some(BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                source,
+            }),
+        ) => user_type_matches(source, expected, loader, resolution),
+        (
+            RuntimeSlotSignature::SzArray(expected),
+            false,
+            Some(BaseType::Vector(modifiers, element)),
+        ) => {
+            modifiers.is_empty()
+                && matches!(
+                    element,
+                    MemberType::Base(base)
+                        if matches!(
+                            base.as_ref(),
+                            BaseType::Type {
+                                value_kind: Some(ValueKind::Class),
+                                source,
+                            } if user_type_matches(source, expected, loader, resolution)
+                        )
+                )
+        }
+        (RuntimeSlotSignature::ByRefTypeGeneric(expected), true, None) => {
+            matches!(field.return_type, MemberType::TypeGeneric(index) if index == expected as usize)
+        }
+        _ => false,
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct StubCandidate {
+    target: String,
+    support_type_name: String,
+    type_index: TypeIndex,
 }
 
 impl AssemblyLoader {
@@ -397,54 +183,206 @@ impl AssemblyLoader {
             external.insert(SUPPORT_ASSEMBLY.to_string(), Some(res_s.clone()));
         }
 
-        for (index, t) in support_res.type_definitions.iter().enumerate() {
-            let type_index = support_res.type_definition_index(index).ok_or_else(|| {
-                AssemblyLoadError::InvalidFormat("failed to find type definition index".into())
-            })?;
-            let attrs = support_res
-                .type_attributes(type_index)
-                .map_err(|e| AssemblyLoadError::InvalidFormat(format!("{e}").into()))?;
-            for a in attrs {
-                // the target stub attribute is internal to the support library,
-                // so the constructor reference will always be a Definition variant
-                let parent = match a.constructor {
-                    UserMethod::Definition(d) => &support_res[d.parent_type()],
-                    UserMethod::Reference(_) => {
-                        continue;
-                    }
-                };
-                if parent.type_name() == "DotnetRs.StubAttribute" {
-                    let data = a
-                        .instantiation_data(&(self as &AssemblyLoader), &*support_res)
-                        .map_err(|e| {
-                            AssemblyLoadError::InvalidFormat(
-                                format!("failed to parse stub attribute data: {}", e).into(),
-                            )
-                        })?;
-                    for n in data.named_args {
-                        match n {
-                            NamedArg::Field(name, FixedArg::String(Some(target)))
-                                if name == "InPlaceOf" =>
-                            {
-                                let support_type_name = t.type_name();
-                                self.stubs.insert(
-                                    target.to_string(),
-                                    TypeDescription::new(res_s.clone(), type_index),
-                                );
-                                self.reverse_stubs
-                                    .insert(support_type_name, target.to_string());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
+        let (stubs, reverse_stubs) = self.validate_stub_schema(support_res, res_s.clone())?;
+
+        // The schema validator builds both maps before this point, so malformed metadata cannot
+        // leave partially registered stubs behind.
+        self.stubs = stubs;
+        self.reverse_stubs = reverse_stubs;
 
         let support_slots = self.validate_support_contract(support_res)?;
 
         self.support_slot_registry = support_slots;
         Ok(())
+    }
+
+    fn collect_stub_candidates(
+        &self,
+        support_res: &Resolution<'_>,
+    ) -> Result<Vec<StubCandidate>, AssemblyLoadError> {
+        let mut stub_attribute_types = support_res
+            .enumerate_type_definitions()
+            .filter(|(_, ty)| ty.type_name() == "DotnetRs.StubAttribute");
+        let Some((stub_attribute_index, _)) = stub_attribute_types.next() else {
+            return Err(AssemblyLoadError::InvalidFormat(
+                "invalid StubAttribute schema: missing DotnetRs.StubAttribute".into(),
+            ));
+        };
+        if stub_attribute_types.next().is_some() {
+            return Err(AssemblyLoadError::InvalidFormat(
+                "invalid StubAttribute schema: multiple DotnetRs.StubAttribute definitions".into(),
+            ));
+        }
+
+        let fields: Vec<_> = support_res.enumerate_fields(stub_attribute_index).collect();
+        match fields.as_slice() {
+            [(_, field)]
+                if field.name == "InPlaceOf"
+                    && !field.static_member
+                    && !field.by_ref
+                    && matches!(field.return_type.as_base(), Some(BaseType::String)) => {}
+            _ => {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    "invalid StubAttribute schema for DotnetRs.StubAttribute: expected exactly one instance string field named InPlaceOf".into(),
+                ));
+            }
+        }
+
+        let mut candidates = Vec::new();
+        for (type_index, ty) in support_res.enumerate_type_definitions() {
+            let type_name = ty.type_name();
+            let attrs = support_res.type_attributes(type_index).map_err(|e| {
+                AssemblyLoadError::InvalidFormat(
+                    format!("failed to read [Stub] metadata on {type_name}: {e}").into(),
+                )
+            })?;
+            for attribute in attrs {
+                // StubAttribute is defined in this assembly, so a valid use must refer to its
+                // definition rather than an unrelated external attribute with the same name.
+                let is_stub_attribute = matches!(
+                    attribute.constructor,
+                    UserMethod::Definition(definition)
+                        if definition.parent_type() == stub_attribute_index
+                );
+                if !is_stub_attribute {
+                    continue;
+                }
+
+                let data = attribute
+                    .instantiation_data(&(self as &AssemblyLoader), support_res)
+                    .map_err(|e| {
+                        AssemblyLoadError::InvalidFormat(
+                            format!("failed to parse [Stub] metadata on {type_name}: {e}").into(),
+                        )
+                    })?;
+                let target = match data.named_args.as_slice() {
+                    [NamedArg::Field(name, FixedArg::String(Some(target)))]
+                        if name == "InPlaceOf" && !target.is_empty() =>
+                    {
+                        target.to_string()
+                    }
+                    [NamedArg::Field(name, FixedArg::String(Some(_)))] if name == "InPlaceOf" => {
+                        return Err(AssemblyLoadError::InvalidFormat(
+                            format!("invalid [Stub] metadata on {type_name}: InPlaceOf must be non-empty").into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(AssemblyLoadError::InvalidFormat(
+                            format!("invalid [Stub] metadata on {type_name}: expected exactly one non-null string field argument InPlaceOf").into(),
+                        ));
+                    }
+                };
+
+                candidates.push(StubCandidate {
+                    target,
+                    support_type_name: type_name.clone(),
+                    type_index,
+                });
+            }
+        }
+
+        let mut completed_stub_map = std::collections::HashMap::new();
+        let mut completed_reverse_stub_map = std::collections::HashMap::new();
+        for candidate in &candidates {
+            if let Some(previous) =
+                completed_stub_map.insert(candidate.target.as_str(), candidate.type_index)
+            {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "invalid [Stub] metadata on {}: InPlaceOf target {:?} is already mapped to type index {:?}",
+                        candidate.support_type_name, candidate.target, previous,
+                    )
+                    .into(),
+                ));
+            }
+            if completed_reverse_stub_map
+                .insert(
+                    candidate.support_type_name.as_str(),
+                    candidate.target.as_str(),
+                )
+                .is_some()
+            {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "invalid [Stub] metadata on {}: multiple [Stub] attributes are not allowed",
+                        candidate.support_type_name,
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    /// Validates the metadata schema used to register support-library stub types.
+    ///
+    /// This is deliberately independent from the runtime storage-slot contract: `InPlaceOf` is
+    /// custom-attribute metadata, not a field whose storage Rust accesses.
+    fn validate_stub_schema(
+        &self,
+        support_res: &Resolution<'_>,
+        support_resolution: ResolutionS,
+    ) -> Result<StubMaps, AssemblyLoadError> {
+        let candidates = self.collect_stub_candidates(support_res)?;
+        let mut stubs = std::collections::HashMap::new();
+        let mut reverse_stubs = std::collections::HashMap::new();
+
+        for candidate in &candidates {
+            let annotated_support_type =
+                TypeDescription::new(support_resolution.clone(), candidate.type_index);
+            if let Some(previous) = stubs.insert(candidate.target.clone(), annotated_support_type) {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "invalid [Stub] metadata on {}: InPlaceOf target {:?} is already mapped to {previous:?}",
+                        candidate.support_type_name, candidate.target,
+                    )
+                    .into(),
+                ));
+            }
+            if reverse_stubs
+                .insert(
+                    candidate.support_type_name.clone(),
+                    candidate.target.clone(),
+                )
+                .is_some()
+            {
+                return Err(AssemblyLoadError::InvalidFormat(
+                    format!(
+                        "invalid [Stub] metadata on {}: multiple [Stub] attributes are not allowed",
+                        candidate.support_type_name,
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        for candidate in &candidates {
+            let annotated_support_type =
+                TypeDescription::new(support_resolution.clone(), candidate.type_index);
+            match stubs.get(&candidate.target) {
+                Some(resolved) if resolved == &annotated_support_type => {}
+                _ => {
+                    return Err(AssemblyLoadError::InvalidFormat(
+                        format!(
+                            "invalid [Stub] metadata on {}: InPlaceOf target {:?} does not resolve to its annotated support type",
+                            candidate.support_type_name, candidate.target,
+                        )
+                        .into(),
+                    ));
+                }
+            }
+        }
+
+        Ok((stubs, reverse_stubs))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn validate_stub_schema_metadata(
+        &self,
+        support_res: &Resolution<'_>,
+    ) -> Result<(), AssemblyLoadError> {
+        self.collect_stub_candidates(support_res).map(|_| ())
     }
 
     /// Parses and validates the support-slot annotations in a support resolution.
@@ -455,7 +393,9 @@ impl AssemblyLoader {
         &self,
         support_res: &Resolution<'_>,
     ) -> Result<SupportSlotRegistry, AssemblyLoadError> {
-        let mut support_slots = SupportSlotRegistry::default();
+        let mut scanned_slots: [Option<(Box<str>, Box<str>)>; RuntimeSlotId::COUNT] =
+            std::array::from_fn(|_| None);
+
         for (type_index, t) in support_res.enumerate_type_definitions() {
             let raw_type_name = t.type_name();
             let type_name = self.canonical_type_name(&raw_type_name);
@@ -483,18 +423,30 @@ impl AssemblyLoader {
                             )
                         }
                     };
-                    // Like StubAttribute above, RuntimeSlotAttribute is defined by the support
-                    // assembly, so an attribute constructor reference must be a definition.
-                    let parent = match a.constructor {
-                        UserMethod::Definition(d) => &support_res[d.parent_type()],
+                    // RuntimeSlotAttribute is defined by the support assembly, so a valid use
+                    // must refer to its local constructor definition.
+                    let constructor = match a.constructor {
+                        UserMethod::Definition(definition) => definition,
                         UserMethod::Reference(_) => continue,
                     };
+                    let parent = &support_res[constructor.parent_type()];
                     if parent.type_name() != "DotnetRs.RuntimeSlotAttribute" {
                         continue;
                     }
                     has_runtime_slot = true;
 
                     let field_name = field.name.as_ref();
+                    if !runtime_slot_constructor_uses_generated_id(
+                        &support_res[constructor],
+                        support_res,
+                    ) {
+                        return Err(AssemblyLoadError::SupportContractViolation {
+                            type_name: type_name.into(),
+                            field_name: field_name.into(),
+                            reason: "RuntimeSlot constructor must take DotnetRs.RuntimeSlotId"
+                                .into(),
+                        });
+                    }
                     let data = a
                         .instantiation_data(&(self as &AssemblyLoader), support_res)
                         .map_err(|e| AssemblyLoadError::SupportContractViolation {
@@ -503,118 +455,119 @@ impl AssemblyLoader {
                             reason: format!("failed to parse RuntimeSlot attribute data: {e}")
                                 .into(),
                         })?;
-                    let kind = match data.constructor_args.as_slice() {
-                        [FixedArg::String(Some(kind))] => match kind.as_ref() {
-                            "Handle" => SlotKind::Handle,
-                            "Index" => SlotKind::Index,
-                            "GcRef" => SlotKind::GcRef,
-                            "Byref" => SlotKind::Byref,
-                            "ScalarInt" => SlotKind::ScalarInt,
-                            "ScalarBool" => SlotKind::ScalarBool,
-                            "Generic" => SlotKind::Generic,
-                            "ValueType" => SlotKind::ValueType,
-                            "NativePtr" => SlotKind::NativePtr,
-                            other => {
-                                return Err(AssemblyLoadError::SupportContractViolation {
-                                    type_name: type_name.into(),
-                                    field_name: field_name.into(),
-                                    reason: format!("unrecognized RuntimeSlot kind {other:?}")
-                                        .into(),
-                                });
-                            }
-                        },
-                        _ => {
-                            return Err(AssemblyLoadError::SupportContractViolation {
-                                type_name: type_name.into(),
-                                field_name: field_name.into(),
-                                reason:
-                                    "RuntimeSlot requires one non-null string constructor argument"
-                                        .into(),
-                            });
-                        }
-                    };
-                    if let Err(reason) = validate_slot_metadata(kind, field) {
-                        return Err(AssemblyLoadError::SupportContractViolation {
+                    let id = parse_runtime_slot_id(&data.constructor_args).map_err(|reason| {
+                        AssemblyLoadError::SupportContractViolation {
                             type_name: type_name.into(),
                             field_name: field_name.into(),
                             reason,
+                        }
+                    })?;
+                    let expected = id.descriptor();
+                    let expected_type = expected.declaring_well_known.name();
+                    if type_name != expected_type || field_name != expected.field_name {
+                        return Err(AssemblyLoadError::SupportContractViolation {
+                            type_name: type_name.into(),
+                            field_name: field_name.into(),
+                            reason: format!(
+                                "RuntimeSlot ID {} is misplaced: found {}.{}, expected {}.{}",
+                                expected.semantic_name,
+                                type_name,
+                                field_name,
+                                expected_type,
+                                expected.field_name,
+                            )
+                            .into(),
                         });
                     }
-                    support_slots.slots.push(SlotDescriptor {
-                        type_name: type_name.into(),
-                        field_name: field_name.into(),
-                        kind,
-                        is_static: field.static_member,
-                    });
+                    if field.static_member != expected.is_static {
+                        return Err(AssemblyLoadError::SupportContractViolation {
+                            type_name: type_name.into(),
+                            field_name: field_name.into(),
+                            reason: format!(
+                                "RuntimeSlot ID {} has wrong staticness at {}.{}: expected {} field, found {} field",
+                                expected.semantic_name,
+                                expected_type,
+                                expected.field_name,
+                                if expected.is_static { "static" } else { "instance" },
+                                if field.static_member { "static" } else { "instance" },
+                            )
+                            .into(),
+                        });
+                    }
+                    if !slot_signature_matches(expected.signature, field, self, support_res) {
+                        return Err(AssemblyLoadError::SupportContractViolation {
+                            type_name: type_name.into(),
+                            field_name: field_name.into(),
+                            reason: format!(
+                                "RuntimeSlot ID {} has an exact signature mismatch at {}.{}: expected {:?}, found by_ref={} type {:?}",
+                                expected.semantic_name,
+                                expected_type,
+                                expected.field_name,
+                                expected.signature,
+                                field.by_ref,
+                                field.return_type,
+                            )
+                            .into(),
+                        });
+                    }
+                    if let Some((previous_type, previous_field)) = &scanned_slots[id as usize - 1] {
+                        return Err(AssemblyLoadError::SupportContractViolation {
+                            type_name: type_name.into(),
+                            field_name: field_name.into(),
+                            reason: format!(
+                                "duplicate RuntimeSlot ID {}: found {}.{}, already used by {}.{}; expected {}.{}",
+                                expected.semantic_name,
+                                type_name,
+                                field_name,
+                                previous_type,
+                                previous_field,
+                                expected_type,
+                                expected.field_name,
+                            )
+                            .into(),
+                        });
+                    }
+                    scanned_slots[id as usize - 1] = Some((type_name.into(), field_name.into()));
                 }
-                if used_implicitly && !has_runtime_slot {
+                if has_runtime_slot && !used_implicitly {
                     return Err(AssemblyLoadError::SupportContractViolation {
                         type_name: type_name.into(),
                         field_name: field.name.clone().into(),
-                        reason: "fields marked [UsedImplicitly] must carry [RuntimeSlot(...)]"
+                        reason: "fields marked [RuntimeSlot(...)] must carry [UsedImplicitly]"
                             .into(),
                     });
                 }
             }
         }
 
-        for expected in EXPECTED_SUPPORT_SLOTS {
-            let matching_slots: Vec<_> = support_slots
-                .slots
-                .iter()
-                .filter(|slot| {
-                    slot.type_name.as_ref() == expected.type_name
-                        && slot.field_name.as_ref() == expected.field_name
-                })
-                .collect();
-            match matching_slots.as_slice() {
-                [] => {
-                    return Err(AssemblyLoadError::SupportContractViolation {
-                        type_name: expected.type_name.into(),
-                        field_name: expected.field_name.into(),
-                        reason: format!("missing required {:?} support slot", expected.kind).into(),
-                    });
-                }
-                [slot] if slot.kind == expected.kind && slot.is_static == expected.is_static => {}
-                [slot] => {
-                    return Err(AssemblyLoadError::SupportContractViolation {
-                        type_name: expected.type_name.into(),
-                        field_name: expected.field_name.into(),
-                        reason: format!(
-                            "expected {:?} {} field, found {:?} {} field",
-                            expected.kind,
-                            if expected.is_static {
-                                "static"
-                            } else {
-                                "instance"
-                            },
-                            slot.kind,
-                            if slot.is_static { "static" } else { "instance" },
-                        )
-                        .into(),
-                    });
-                }
-                slots => {
-                    return Err(AssemblyLoadError::SupportContractViolation {
-                        type_name: expected.type_name.into(),
-                        field_name: expected.field_name.into(),
-                        reason: format!("expected exactly one slot, found {}", slots.len()).into(),
-                    });
-                }
-            }
-        }
-
-        for slot in &support_slots.slots {
-            let is_known_slot = EXPECTED_SUPPORT_SLOTS.iter().any(|expected| {
-                slot.type_name.as_ref() == expected.type_name
-                    && slot.field_name.as_ref() == expected.field_name
-            });
-            if !is_known_slot {
-                return Err(AssemblyLoadError::UnrecognizedSupportSlot {
-                    type_name: slot.type_name.clone(),
-                    field_name: slot.field_name.clone(),
+        let mut support_slots = SupportSlotRegistry::default();
+        for expected in RUNTIME_SLOT_DESCRIPTORS {
+            if scanned_slots[expected.id as usize - 1].is_none() {
+                return Err(AssemblyLoadError::SupportContractViolation {
+                    type_name: expected.declaring_well_known.name().into(),
+                    field_name: expected.field_name.into(),
+                    reason: format!(
+                        "missing RuntimeSlot ID {}: expected {}.{} with signature {:?}",
+                        expected.semantic_name,
+                        expected.declaring_well_known.name(),
+                        expected.field_name,
+                        expected.signature,
+                    )
+                    .into(),
                 });
             }
+            let declaring_type =
+                self.corlib_wkt(expected.declaring_well_known)
+                    .map_err(|error| AssemblyLoadError::SupportContractViolation {
+                        type_name: expected.declaring_well_known.name().into(),
+                        field_name: expected.field_name.into(),
+                        reason: format!(
+                            "failed to resolve declaring descriptor for RuntimeSlot ID {}: {error}",
+                            expected.semantic_name,
+                        )
+                        .into(),
+                    })?;
+            support_slots.insert(expected.id, declaring_type);
         }
 
         Ok(support_slots)

@@ -268,11 +268,11 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
         Some(offset),
     );
     ctx.loader()
-        .span_reference_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_reference_field(&span.instance_storage, span.description.clone())
         .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(managed);
     ctx.loader()
-        .span_length_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_length_field(&span.instance_storage, span.description.clone())
         .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(len as i32);
 
@@ -342,7 +342,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
             None,
         );
         ctx.loader()
-            .span_reference_field(
+            .readonly_span_reference_field(
                 &span_instance.instance_storage,
                 span_instance.description.clone(),
             )
@@ -351,7 +351,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, T: SpanIntrinsicHost<'gc>>(
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         ctx.loader()
-            .span_length_field(
+            .readonly_span_length_field(
                 &span_instance.instance_storage,
                 span_instance.description.clone(),
             )
@@ -756,11 +756,11 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
         ctx.span_new_object_with_type_generics(method.parent.clone(), vec![element_type.clone()],)
     );
     ctx.loader()
-        .span_reference_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_reference_field(&span.instance_storage, span.description.clone())
         .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(reference);
     ctx.loader()
-        .span_length_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_length_field(&span.instance_storage, span.description.clone())
         .expect("validated Span<T>/ReadOnlySpan<T> support slot")
         .write(length);
 
@@ -867,11 +867,11 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
         ctx.span_new_object_with_type_generics(return_span, vec![element_type.clone()],)
     );
     ctx.loader()
-        .span_reference_field(&span.instance_storage, span.description.clone())
+        .readonly_span_reference_field(&span.instance_storage, span.description.clone())
         .expect("validated ReadOnlySpan<T> support slot")
         .write(reference);
     ctx.loader()
-        .span_length_field(&span.instance_storage, span.description.clone())
+        .readonly_span_length_field(&span.instance_storage, span.description.clone())
         .expect("validated ReadOnlySpan<T> support slot")
         .write(length);
 

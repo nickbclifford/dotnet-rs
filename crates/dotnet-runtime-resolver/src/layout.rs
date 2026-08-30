@@ -1,4 +1,5 @@
 use crate::{ResolverExecutionContext, ResolverService};
+use dotnet_assemblies::support_contract::RuntimeSlotId;
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -348,20 +349,28 @@ impl LayoutFactory {
                 continue;
             }
 
-            let layout = if resolver.loader.is_handle_value_slot(&td, f.name.as_ref()) {
-                // SAFETY: F2.HandleValueOverride — the validated support-slot registry limits
-                // this reinterpretation to the three handle `_value` fields, which the VM
-                // writes as ObjectRef values even though their ECMA-335 signature is `nint`.
-                Arc::new(Scalar::ObjectRef.into())
-            } else if f.by_ref {
-                Arc::new(Scalar::ManagedPtr.into())
-            } else {
-                let t = resolver.get_field_type(
-                    resolution.clone(),
-                    generics,
-                    FieldDescription::new(td.clone(), td.resolution.clone(), i),
-                )?;
-                resolver.type_layout_cached_with_lookup(t, resolution.clone(), generics)?
+            let layout = match resolver
+                .loader
+                .support_slot_id_for_field(&td, f.name.as_ref())
+            {
+                // SAFETY: F2.HandleValueOverride — only these three generated semantic IDs
+                // select the GC-traced ObjectRef representation for `nint` metadata fields.
+                // The registry maps field metadata only after exact declaring-descriptor
+                // equality, so a same-named field in another assembly cannot enter this arm.
+                Some(
+                    RuntimeSlotId::RuntimeTypeHandleValue
+                    | RuntimeSlotId::RuntimeFieldHandleValue
+                    | RuntimeSlotId::RuntimeMethodHandleValue,
+                ) => Arc::new(Scalar::ObjectRef.into()),
+                _ if f.by_ref => Arc::new(Scalar::ManagedPtr.into()),
+                _ => {
+                    let t = resolver.get_field_type(
+                        resolution.clone(),
+                        generics,
+                        FieldDescription::new(td.clone(), td.resolution.clone(), i),
+                    )?;
+                    resolver.type_layout_cached_with_lookup(t, resolution.clone(), generics)?
+                }
             };
 
             current_type_fields.push((td.clone(), f.name.as_ref(), f.offset, layout));

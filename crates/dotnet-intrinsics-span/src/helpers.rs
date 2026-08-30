@@ -22,7 +22,7 @@ pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
     slots: &impl SupportSlotOps,
 ) -> Result<ManagedPtrInfo<'gc>, IntrinsicError> {
     let field = slots
-        .span_reference_layout(span.instance_storage.layout())
+        .span_or_readonly_span_reference_layout(span.instance_storage.layout())
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     span.instance_storage.with_data(|data| {
         // SAFETY: The field layout identifies one complete ManagedPtr representation in `data`.
@@ -38,7 +38,7 @@ pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
 /// Read the _length from a Span/ReadOnlySpan value type.
 pub fn read_span_length(span: &Object, slots: &impl SupportSlotOps) -> Result<i32, IntrinsicError> {
     Ok(slots
-        .span_length_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_length_field(&span.instance_storage, span.description.clone())
         .ok_or(IntrinsicError::Static("Span must have _length field"))?
         .read())
 }
@@ -54,7 +54,7 @@ where
     T: RawMemoryOps<'gc> + MemoryOps<'gc> + ManagedPtrResolver<'gc>,
 {
     let ref_field = slots
-        .span_reference_layout(layout)
+        .span_or_readonly_span_reference_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
 
     // Read the raw bytes of the _reference field and deserialize properly.
@@ -108,7 +108,7 @@ pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
     ctx: &T,
 ) -> Result<i32, IntrinsicError> {
     let length_field = slots
-        .span_length_layout(layout)
+        .span_or_readonly_span_length_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
     // SAFETY: `_length` field offset/layout come from validated span layout metadata for `span_ptr`.
     let val = unsafe {
@@ -133,10 +133,10 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     ctx: &mut T,
 ) -> Result<(), IntrinsicError> {
     let ref_field = slots
-        .span_reference_layout(layout)
+        .span_or_readonly_span_reference_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     let length_field = slots
-        .span_length_layout(layout)
+        .span_or_readonly_span_length_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
 
     // Write _reference
