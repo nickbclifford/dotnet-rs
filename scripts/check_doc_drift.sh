@@ -96,6 +96,8 @@ CHECKS=(
   "BUILD_TIME_CODE_GENERATION.md|process_intrinsic_file|*.rs"
   "BUILD_TIME_CODE_GENERATION.md|generate_intrinsic_phf|*.rs"
   "BUILD_TIME_CODE_GENERATION.md|ParsedSignature|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|RuntimeSlotId|*.rs"
+  "BUILD_TIME_CODE_GENERATION.md|SupportSlotOps|*.rs"
 
   # --- FUZZING.md ---
   "FUZZING.md|FuzzProgram|*.rs"

@@ -385,35 +385,35 @@ are accepted operational risks rather than type-level guarantees.
 ### Runtime-handle `_value` layout override
 
 **Source:** `crates/dotnet-runtime-resolver/src/layout.rs` (`LayoutFactory::collect_fields`) and
-`crates/dotnet-assemblies/src/support_contract.rs` (`AssemblyLoader::is_handle_value_slot`).
+`crates/dotnet-assemblies/src/support_contract.rs` (`AssemblyLoader::support_slot_id_for_field`).
 
 - **Mechanism:** The support assembly declares `_value` as ECMA-335 `nint` on
   `RuntimeTypeHandle`, `RuntimeFieldHandle`, and `RuntimeMethodHandle`, preserving their public
   `IntPtr Value` API. The VM actually serializes an `ObjectRef` into each of those fields. After
-  load-time validation of the `RuntimeSlot("Handle")` contract, the layout factory verifies the
-  declaring descriptor is the loader's support stub and deliberately classifies only those three
-  `_value` fields as `Scalar::ObjectRef`. This makes the normal layout GC descriptor visit the
-  embedded reference. `ObjectRef` and `usize` have the same size, so the existing `ToIntPtr` read
-  remains valid.
+  load-time validation of their generated semantic IDs (`RuntimeTypeHandleValue`,
+  `RuntimeFieldHandleValue`, and `RuntimeMethodHandleValue`), the layout factory deliberately
+  classifies only those IDs as `Scalar::ObjectRef`. The ID lookup is bound to the loader's exact
+  support `TypeDescription`, rather than a type name, so a same-named user type cannot select the
+  override. The normal layout GC descriptor consequently visits the embedded reference.
+  `ObjectRef` and `usize` have the same size, so the explicit `rth_value_usize_field` view used by
+  the `IntPtr` API remains valid.
 - **Why this is an accepted boundary:** The managed signature and Rust representation intentionally
   differ, a fact the type system cannot express. Changing the C# field to `object` would break the
   BCL-compatible `IntPtr` surface; a separate GC handle table or explicit per-object rooting would
   be a substantially larger and more fragile subsystem.
 - **Invariant relied upon:** The validated support-slot registry limits the override to the three
-  `Handle`-kind `_value` slots. Every write to one of those slots must serialize an `ObjectRef`;
-  later code may interpret its bytes only as that `ObjectRef` or as a same-width `usize` for the
-  `IntPtr` view. Raw method indices are instead stored in the distinct native-int
-  `Delegate._method` `Index` slot, which is not a handle slot and is not GC-traced. The public
-  `FromIntPtr` APIs therefore carry the same provenance precondition as their native handle
+  generated IDs above. Every write through a handle slot must serialize an `ObjectRef`; later code
+  may interpret its bytes only as that `ObjectRef` or as the contract's same-width `usize` view
+  for `IntPtr`. Raw method indices are instead stored in the distinct `DelegateMethodIndex` slot
+  (`Delegate._method`), which is native-int storage rather than a handle and is not GC-traced. The
+  public `FromIntPtr` APIs therefore carry the same provenance precondition as their native handle
   surface: the argument must be null or the `IntPtr` view of a valid runtime handle; an arbitrary
   integer is not a valid `ObjectRef` payload.
 - **Violation detection:** The `runtime_handle_value_slots_use_object_ref_layout` unit test checks
   all three support descriptors for both `Scalar::ObjectRef` field layout and a matching GC
-  descriptor entry. The `runtime_type_handle_gc_survival_42` integration fixture additionally
-  keeps a `RuntimeTypeHandle` live across `GC.Collect()` and resolves it afterwards with
-  `Type.GetTypeFromHandle`; reflection caches can also retain that target, so this fixture is an
-  end-to-end regression test rather than a standalone proof of tracing. The
-  `F2.HandleValueOverride` registry invariant and metadata-shape validation reject incompatible
-  declarations and prevent the override from expanding to a same-named non-support type.
+  descriptor entry. Support-contract tests also round-trip a non-null `ObjectRef` through the
+  width-checked `usize` view. The `F2.HandleValueOverride` invariant, exact generated-contract
+  validation, and descriptor-identity lookup reject incompatible declarations and prevent the
+  override from expanding to a same-named non-support type.
 - **Scope:** This is deliberately limited to the support assembly's three runtime-handle value
   types. BCL and user-assembly `nint` fields retain their ECMA-335-derived layouts.

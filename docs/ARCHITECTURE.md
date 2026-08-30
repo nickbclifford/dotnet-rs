@@ -140,23 +140,34 @@ For more details on caching and resolution pipelines, see [Type Resolution and C
 
 ### Support-assembly slot annotation policy
 
-Every `[UsedImplicitly]` field in the dotnet-rs-owned C# support assembly carries
-`[RuntimeSlot(...)]`. `RuntimeSlot` declares the field's
-load-time-validated slot kind and is consumed by Rust's support-slot registry. Validation checks
-the declaring type and field identity, uniqueness, staticness, and the ECMA-335 field shape that
-determines width and GC behavior; an annotation alone cannot bless an incompatible declaration.
-For example, the raw native-integer method index in `Delegate._method` is an `Index` slot, not a
-GC-traced `Handle` slot. `RuntimeSlot` supplements, rather than replaces, `UsedImplicitly`; keep
-both attributes on contract fields when changing the support assembly. `[UsedImplicitly]` methods
-are runtime entry points rather than storage slots, so they remain outside this field-slot contract.
-This policy does not apply to metadata-driven probes of BCL or user-assembly layouts, which remain
-outside the support-slot contract.
+The embedded C# support assembly has three intentionally separate field/metadata concepts:
 
-The `NativePtr` declarations on `DotnetRs.Module.resolution` and
-`DotnetRs.Assembly.resolution` remain validated registry entries, but the current VM associates
-runtime assembly objects with `ResolutionS` through its reflection registry rather than reading
-those managed fields. Consequently they have no `SupportSlotOps` accessor until a runtime path
-actually consumes their storage.
+1. **Ordinary managed fields** implement normal C# state (including async/task state). They may
+   carry `[UsedImplicitly]`, but Rust neither assigns them a storage-ABI ID nor accesses them
+   through the support-slot registry.
+2. **Stub attribute schema** is metadata used to map a support type to its BCL name. Its
+   `[Stub(InPlaceOf = "...")]` named argument is validated as the exact `StubAttribute` schema
+   and is not a storage slot.
+3. **Runtime storage slots** are the fixed set of 21 fields Rust reads or writes. Each has both
+   `[RuntimeSlot(RuntimeSlotId.<SemanticId>)]` and `[UsedImplicitly]` annotations. The implication
+   is one-way: every runtime slot must be marked `UsedImplicitly`, while an ordinary managed field
+   need not be a runtime slot.
+
+`crates/dotnet-assemblies/support_slots.def` is the single declarative storage-ABI contract. It
+assigns stable, dense semantic `RuntimeSlotId` values (existing IDs must never be renumbered),
+declaring `WellKnown` owners, field names/staticness, exact ECMA-335 signatures, storage shapes,
+and the allowed typed or layout-only views. The loader validates the generated-ID constructor,
+each ID's unique presence, placement, staticness, and exact signature before registering a slot.
+It then binds every ID to its exact resolved `TypeDescription`; downstream access is by ID and
+descriptor identity, not a type/field-name lookup. A same-named user type therefore cannot obtain
+support-assembly behavior.
+
+`SupportSlotOps`, generated from that contract, is the only Rust accessor surface for these
+fields. The three runtime-handle `_value` IDs have their documented `ObjectRef`/`usize` views;
+the Span and ReadOnlySpan fields expose separate generated IDs and layout-only accessors, with
+bounded convenience helpers only where code accepts either span representation. This contract
+does not apply to metadata-driven BCL or user-assembly layout probes. `[UsedImplicitly]` methods
+remain runtime entry points rather than storage slots.
 
 ### Descriptor Ownership Model
 

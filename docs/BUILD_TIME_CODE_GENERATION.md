@@ -1,6 +1,6 @@
 # Build-Time Code Generation
 
-This document describes the two build-time code generation systems that wire up instruction dispatch and intrinsic method resolution without manual registration.
+This document describes the build-time code generation systems that wire up instruction dispatch, intrinsic method resolution, and the embedded support-assembly storage ABI without manual registration.
 
 ## Overview
 
@@ -10,6 +10,30 @@ The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`) scans source files at
 2. **Intrinsic PHF lookup table** — maps string keys to native handler IDs and generates ID-based dispatchers
 
 These are emitted as three generated files (`instruction_dispatch.rs`, `intrinsics_dispatch.rs`, `intrinsics_phf.rs`) into `$OUT_DIR/` and included via `include!()` in the compiled crate.
+
+`crates/dotnet-assemblies/build.rs` has a separate, contract-driven generator for the support assembly. It emits Rust and C# products from one committed definition before the C# support library is built.
+
+## Support-assembly storage ABI generation
+
+### Source: `support_slots.def`
+
+`crates/dotnet-assemblies/support_slots.def` is the authoritative declarative contract for the 21 support fields whose storage Rust accesses. Each row supplies a stable numeric semantic ID, a `WellKnown` declaring owner, field name and staticness, the exact ECMA-335 signature, its Rust storage representation, one required typed primary accessor, and any explicitly allowed alternate or layout-only view. The parser in `dotnet-build-tools::support_slots` rejects malformed records and contract inconsistencies.
+
+Numeric IDs are ABI values: new slots must receive a new ID and existing IDs must not be renumbered. The current schema requires a dense `1..N` sequence, so supporting a retired/reserved ID requires an explicit schema and generated-lookup migration before removing its row. The semantic name, rather than a string field-kind table or a type/field pair, is the identity carried by the generated `RuntimeSlotId` enum.
+
+### Generation order and products
+
+The assembly build script parses the definition and writes both products into `$OUT_DIR` **before** evaluating `DOTNET_SKIP_BUILD`:
+
+1. `support_slots.rs`, included by `support_contract.rs`, defines `RuntimeSlotId`, exact descriptor data, and the generated `SupportSlotOps` accessor trait and `AssemblyLoader` implementation.
+2. `support-generated/RuntimeSlotId.g.cs`, passed to MSBuild as `RuntimeSlotGeneratedFile`, defines the matching C# enum used by `[RuntimeSlot(RuntimeSlotId.<SemanticId>)]` annotations.
+3. A normal build invokes MSBuild with that generated C# file included by `support.csproj` and embeds the resulting `support.dll`.
+
+This ordering deliberately also generates the Rust/C# contract artifacts in analysis skip mode. Skip mode writes or retains an empty `support.dll` stub only so Rust's `include_bytes!` compiles; it does not compile the C# support assembly and must not be treated as C# or loader-contract validation.
+
+At loader initialization, the support assembly's annotations are checked against the generated descriptors: the attribute constructor must use generated `RuntimeSlotId`, every ID must occur once at its prescribed owner/field, staticness and the full signature must match, and all 21 IDs must be present. The resulting registry binds an ID to the exact resolved declaring descriptor. Generated accessors consequently cannot select a same-named field from another assembly.
+
+The contract distinguishes storage access from two intentional exceptions. The three runtime-handle `nint` fields have generated `ObjectRef` accessors (and one width-checked `usize` view) so layout can trace their actual runtime references. Span and ReadOnlySpan have separate generated IDs and layout-only accessors because their byref fields are consumed for layout rather than ordinary storage access.
 
 ## Instruction Table Generation
 

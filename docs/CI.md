@@ -21,7 +21,7 @@ Deterministic correctness checks are blocking, including the `dotnet-value` Miri
 
 Jobs:
 
-1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`, runs `scripts/check_doc_drift.sh` (doc-to-code drift detector), and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
 3. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
 4. `clippy`: feature matrix resolved from `xtask`
@@ -198,6 +198,23 @@ Run locally with:
 
 ```bash
 bash scripts/check_build_script_regressions.sh
+```
+
+### Support-slot Consumer Audit
+
+The generated support-assembly storage ABI has 21 primary accessors. `xtask verify-slots` parses
+the committed `crates/dotnet-assemblies/support_slots.def` contract and scans non-test authored
+Rust in the VM, reflection, delegate, and span intrinsic consumer roots. It fails closed if a
+configured root is missing, empty, unreadable, or unparsable; if a call names a stale/generated
+accessor outside the contract; or if any primary accessor has no real runtime consumer. The
+intentional bounded Span-or-ReadOnlySpan convenience accessors count as evidence for both of their
+separate primary accessors. Alternate generated views are permitted but do not replace required
+primary-consumer coverage.
+
+Run the same blocking source-policy check locally:
+
+```bash
+cargo run -p xtask -- verify-slots
 ```
 
 ### Documentation Drift Check
