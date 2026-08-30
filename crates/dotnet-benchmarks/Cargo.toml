@@ -58,6 +58,7 @@ harness = false
 
 [[bench]]
 name = "managed_ptr_serde"
+required-features = ["multithreading"]
 harness = false
 
 [[bench]]

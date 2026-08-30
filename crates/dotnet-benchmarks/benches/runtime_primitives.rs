@@ -31,6 +31,10 @@ impl<'gc> Trace<'gc> for NoopTrace {
     fn trace_gc_weak(&mut self, _gc: GcWeak<'gc, ()>) {}
 }
 
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the no-MT benchmark confines its one arena to the invoking thread"
+)]
 fn new_stack_arena() -> GCArena {
     let loader = Arc::new(
         AssemblyLoader::new_bare("runtime-primitives-benchmark".to_owned())

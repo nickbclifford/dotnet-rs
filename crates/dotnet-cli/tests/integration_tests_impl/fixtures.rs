@@ -40,6 +40,10 @@ fn delegate_dispatch_classification_is_cached_by_resolved_method() {
         .loader
         .load_resolution_from_file(&dll_path)
         .expect("delegate fixture must load");
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT integration test keeps shared state on its sole executor"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
 
     let result = harness.run_with_shared(resolution, Arc::clone(&shared));
@@ -67,6 +71,10 @@ fn static_constrained_dispatch_caches_only_exact_metadata() {
         .loader
         .load_resolution_from_file(&dll_path)
         .expect("static constrained fixture must load");
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT integration test keeps shared state on its sole executor"
+    )]
     let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
 
     let result = harness.run_with_shared(resolution, Arc::clone(&shared));

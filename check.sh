@@ -60,6 +60,9 @@ if [ "$FULL_MODE" -eq 1 ]; then
     bash scripts/check_build_script_regressions.sh
 fi
 
+echo "Verifying support-slot consumer coverage..."
+cargo run --quiet -p xtask -- verify-slots
+
 echo "Building .NET fixtures once..."
 cargo run --quiet -p xtask -- fixtures build
 export DOTNET_USE_PREBUILT_FIXTURES=1

@@ -1631,6 +1631,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "dotnet-build-tools",
+ "syn 2.0.117",
 ]
 
 [[package]]

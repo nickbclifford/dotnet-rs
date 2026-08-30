@@ -348,6 +348,10 @@ impl BenchHarness {
     /// Compiles a fixture if necessary and attaches the right dependency-aware loader to it.
     pub fn prepare_case(&self, case: BenchmarkCase) -> PreparedBenchmark {
         let dll_path = self.ensure_fixture_dll(case);
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT benchmark harness confines its feature-neutral loader to one run thread"
+        )]
         let loader = match case.fixture {
             BenchmarkFixture::SingleFile { .. } => Arc::clone(&self.loader),
             BenchmarkFixture::Project { .. } => Arc::new(

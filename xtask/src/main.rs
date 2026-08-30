@@ -1,15 +1,31 @@
 use dotnet_build_tools::{
     collect_files_with_extension, find_repo_root, fixture_cache_hash, fixture_output_base,
     hash_value_u64, shared_msbuild_input_candidates,
+    support_slots::{SlotView, SupportSlot, parse_support_slots},
 };
 use std::{
+    collections::{BTreeSet, HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
+use syn::visit::Visit;
 
 const DEFAULT_TARGET_DIR: &str = "target";
 const DEFAULT_PROFILE: &str = "debug";
+const SUPPORT_SLOTS_DEFINITION: &str = "crates/dotnet-assemblies/support_slots.def";
+const SLOT_CONSUMER_ROOTS: &[&str] = &[
+    "crates/dotnet-vm/src",
+    "crates/dotnet-intrinsics-reflection/src",
+    "crates/dotnet-intrinsics-delegates/src",
+    "crates/dotnet-intrinsics-span/src",
+];
+const SLOT_ACCESSOR_ALIASES: &[&str] = &[
+    "span_or_readonly_span_reference_field",
+    "span_or_readonly_span_length_field",
+    "span_or_readonly_span_reference_layout",
+    "span_or_readonly_span_length_layout",
+];
 const SHARED_FEATURE_MATRIX: &[&str] = &[
     "",
     "multithreading",
@@ -71,6 +87,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         [group, action, rest @ ..] if group == "matrix" && action == "test-features" => {
             matrix_features(rest, TEST_FEATURE_MATRIX)
         }
+        [command] if command == "verify-slots" => verify_slots(),
         _ => Err(format!(
             "unknown command: `{}`\n\n{}",
             args.join(" "),
@@ -183,6 +200,30 @@ fn matrix_features(args: &[String], features: &[&str]) -> Result<(), String> {
     }
     let format = parse_matrix_output_format(args)?;
     print_features(features, format);
+    Ok(())
+}
+
+fn verify_slots() -> Result<(), String> {
+    let repo_root = repo_root()?;
+    let definition_path = repo_root.join(SUPPORT_SLOTS_DEFINITION);
+    let definition = fs::read_to_string(&definition_path).map_err(|error| {
+        format!(
+            "failed to read support-slot definition `{}`: {error}",
+            definition_path.display()
+        )
+    })?;
+    let slots = parse_support_slots(&definition)
+        .map_err(|error| format!("failed to parse `{SUPPORT_SLOTS_DEFINITION}`: {error}"))?;
+    let roots = SLOT_CONSUMER_ROOTS
+        .iter()
+        .map(|root| repo_root.join(root))
+        .collect::<Vec<_>>();
+
+    verify_slot_consumers(&slots.slots, &roots)?;
+    println!(
+        "Verified {} support-slot primary accessors.",
+        slots.slots.len()
+    );
     Ok(())
 }
 
@@ -366,6 +407,187 @@ fn compute_fixture_content_hash(repo_root: &Path) -> Result<u64, String> {
         .map_err(|error| format!("failed to compute fixture cache hash: {error}"))
 }
 
+fn verify_slot_consumers(slots: &[SupportSlot], roots: &[PathBuf]) -> Result<(), String> {
+    let primary_accessors = slots
+        .iter()
+        .map(|slot| slot.accessor.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut allowed_accessors = slots
+        .iter()
+        .flat_map(|slot| {
+            std::iter::once(slot.accessor.name.as_str()).chain(slot.views.iter().map(|view| {
+                match view {
+                    SlotView::Alternate(accessor) => accessor.name.as_str(),
+                    SlotView::Layout { name } => name.as_str(),
+                }
+            }))
+        })
+        .collect::<HashSet<_>>();
+    let aliases = slot_consumer_aliases();
+    allowed_accessors.extend(SLOT_ACCESSOR_ALIASES.iter().copied());
+    let mut consumers = HashSet::new();
+    let mut unknown_calls = BTreeSet::new();
+    let mut files_scanned = 0usize;
+
+    for root in roots {
+        if !root.exists() {
+            return Err(format!(
+                "configured support-slot consumer root `{}` does not exist",
+                root.display()
+            ));
+        }
+        if !root.is_dir() {
+            return Err(format!(
+                "configured support-slot consumer root `{}` is not a directory",
+                root.display()
+            ));
+        }
+
+        let files = collect_files_with_extension(root, "rs").map_err(|error| {
+            format!(
+                "failed while walking support-slot consumer root `{}`: {error}",
+                root.display()
+            )
+        })?;
+        if files.is_empty() {
+            return Err(format!(
+                "no Rust source files were found in configured support-slot consumer root `{}`",
+                root.display()
+            ));
+        }
+
+        for file in files {
+            if is_test_source(&file) {
+                continue;
+            }
+            files_scanned += 1;
+            let source = fs::read_to_string(&file).map_err(|error| {
+                format!("failed to read Rust source `{}`: {error}", file.display())
+            })?;
+            let calls = scan_slot_accessor_calls(&source).map_err(|error| {
+                format!("failed to parse Rust source `{}`: {error}", file.display())
+            })?;
+            for call in calls {
+                if primary_accessors.contains(call.as_str()) {
+                    consumers.insert(call);
+                } else if let Some(accessors) = aliases.get(call.as_str()) {
+                    consumers.extend(accessors.iter().map(|accessor| (*accessor).to_string()));
+                } else if !allowed_accessors.contains(call.as_str()) {
+                    unknown_calls.insert(call);
+                }
+            }
+        }
+    }
+
+    if files_scanned == 0 {
+        return Err("no non-test Rust source files were found while scanning configured support-slot consumer roots".to_string());
+    }
+    if !unknown_calls.is_empty() {
+        return Err(format!(
+            "stale or unknown support-slot accessor call(s): {}",
+            unknown_calls.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    let mut missing = primary_accessors
+        .iter()
+        .filter(|accessor| !consumers.contains(**accessor))
+        .copied()
+        .collect::<Vec<_>>();
+    missing.sort_unstable();
+    if !missing.is_empty() {
+        return Err(format!(
+            "support-slot primary accessor(s) have no real runtime consumer: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Explicit bounded aliases used when the runtime knows only that a value is a
+/// Span or ReadOnlySpan. They count as reachability evidence for both primary
+/// accessors rather than allowing a name-based fallback.
+fn slot_consumer_aliases() -> HashMap<&'static str, &'static [&'static str]> {
+    HashMap::from([
+        (
+            "span_or_readonly_span_reference_field",
+            &["span_reference_field", "readonly_span_reference_field"][..],
+        ),
+        (
+            "span_or_readonly_span_length_field",
+            &["span_length_field", "readonly_span_length_field"][..],
+        ),
+    ])
+}
+
+fn is_test_source(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+}
+
+fn scan_slot_accessor_calls(source: &str) -> Result<Vec<String>, syn::Error> {
+    let file = syn::parse_file(source)?;
+    let mut visitor = SlotAccessorCallVisitor { calls: Vec::new() };
+    visitor.visit_file(&file);
+    Ok(visitor.calls)
+}
+
+struct SlotAccessorCallVisitor {
+    calls: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for SlotAccessorCallVisitor {
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let method = node.method.to_string();
+        if is_slot_accessor_receiver(&node.receiver)
+            && (method.ends_with("_field") || method.ends_with("_layout"))
+        {
+            self.calls.push(method);
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+}
+
+fn is_slot_accessor_receiver(receiver: &syn::Expr) -> bool {
+    match receiver {
+        syn::Expr::MethodCall(method) => method.method == "loader",
+        syn::Expr::Path(path) => path.path.is_ident("slots") || path.path.is_ident("loader"),
+        _ => false,
+    }
+}
+
+fn has_test_cfg(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("test")
+            || (attribute.path().is_ident("cfg") && meta_mentions_test(&attribute.meta))
+    })
+}
+
+fn meta_mentions_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|nested| nested.iter().any(meta_mentions_test)),
+        syn::Meta::NameValue(_) => false,
+    }
+}
+
 fn help_text() -> &'static str {
     "Usage:
   cargo run -p xtask -- fixtures build [options]
@@ -373,6 +595,7 @@ fn help_text() -> &'static str {
   cargo run -p xtask -- fixtures cache-key [options]
   cargo run -p xtask -- matrix clippy-features [--format lines|json]
   cargo run -p xtask -- matrix test-features [--format lines|json]
+  cargo run -p xtask -- verify-slots
 
 Commands:
   fixtures build       Build .NET test fixtures used by dotnet-cli integration tests.
@@ -380,6 +603,7 @@ Commands:
   fixtures cache-key   Print fixture cache key from build.rs-aligned inputs.
   matrix clippy-features  Print clippy feature matrix.
   matrix test-features    Print test feature matrix.
+  verify-slots            Verify every support-slot accessor has a real runtime consumer.
 
 Options:
   --output-dir <path>  Explicit fixture output dir (cannot be combined with layout flags)
@@ -397,9 +621,14 @@ fn print_help() {
 mod tests {
     use super::{
         FixturesOptions, MatrixOutputFormat, display_repo_relative_path, parse_fixtures_options,
-        parse_matrix_output_format, resolve_fixture_output_dir,
+        parse_matrix_output_format, resolve_fixture_output_dir, scan_slot_accessor_calls,
+        verify_slot_consumers,
     };
-    use std::path::{Path, PathBuf};
+    use dotnet_build_tools::support_slots::parse_support_slots;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     #[test]
     fn resolves_default_output_dir_using_convention() {
@@ -505,5 +734,67 @@ mod tests {
     fn matrix_format_rejects_unknown_value() {
         let args = vec!["--format".to_string(), "yaml".to_string()];
         assert!(parse_matrix_output_format(&args).is_err());
+    }
+
+    #[test]
+    fn slot_scanner_uses_accessor_calls_not_comments_or_test_modules() {
+        let calls = scan_slot_accessor_calls(
+            r#"
+                // loader.removed_slot_field();
+                // slots.removed_slot_layout();
+                fn production(loader: Loader, slots: Slots) {
+                    loader.real_slot_field();
+                    slots.other_slot_layout();
+                }
+                #[cfg(test)]
+                mod tests {
+                    fn only_a_test(loader: Loader) {
+                        loader.test_slot_field();
+                        loader.test_slot_layout();
+                    }
+                }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(calls, ["real_slot_field", "other_slot_layout"]);
+    }
+
+    #[test]
+    fn slot_scanner_ignores_non_slot_receivers() {
+        let calls = scan_slot_accessor_calls(
+            "fn production(ctx: Context) { ctx.span_resolve_runtime_field(); }",
+        )
+        .unwrap();
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn slot_verifier_rejects_unknown_accessor_calls() {
+        let root =
+            std::env::temp_dir().join(format!("dotnet-rs-verify-slots-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let slots = parse_support_slots(
+            "1 | Example | Owner | value | instance | intptr | usize | example_field:usize | none",
+        )
+        .unwrap();
+        let source = root.join("consumer.rs");
+        fs::write(
+            &source,
+            "fn production(loader: Loader) { loader.example_field(); }",
+        )
+        .unwrap();
+        assert!(verify_slot_consumers(&slots.slots, std::slice::from_ref(&root)).is_ok());
+
+        for removed_accessor in ["removed_field", "removed_layout"] {
+            fs::write(
+                &source,
+                format!("fn production(loader: Loader) {{ loader.{removed_accessor}(); }}"),
+            )
+            .unwrap();
+            let error =
+                verify_slot_consumers(&slots.slots, std::slice::from_ref(&root)).unwrap_err();
+            assert!(error.contains("stale or unknown"), "{error}");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

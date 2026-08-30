@@ -58,6 +58,25 @@ support_dll_path() {
     find target -path '*/build/dotnet-assemblies-*/out/support.dll' -type f | head -n1
 }
 
+assert_generated_support_slot_artifacts() {
+    local dll_path="$1"
+    local out_dir
+    out_dir="$(dirname "$dll_path")"
+    local rust_slots="$out_dir/support_slots.rs"
+    local csharp_slots="$out_dir/support-generated/RuntimeSlotId.g.cs"
+
+    [[ -f "$rust_slots" ]] || fail "generated Rust slot descriptors missing at $rust_slots"
+    [[ -f "$csharp_slots" ]] || fail "generated C# runtime-slot enum missing at $csharp_slots"
+    rg -q 'pub enum RuntimeSlotId' "$rust_slots" \
+        || fail "generated Rust slot IDs missing from $rust_slots"
+    rg -q 'RuntimeTypeHandleValue = 1' "$rust_slots" \
+        || fail "generated Rust slot IDs have unexpected contents in $rust_slots"
+    rg -q 'internal enum RuntimeSlotId' "$csharp_slots" \
+        || fail "generated C# runtime-slot enum missing from $csharp_slots"
+    rg -q 'ReadOnlySpanLength = 21' "$csharp_slots" \
+        || fail "generated C# slot IDs have unexpected contents in $csharp_slots"
+}
+
 assert_clippy_skips_dotnet() {
     local log_file="$LOG_DIR/clippy-clean.log"
     log_step "Probe 1/3: clean clippy should skip dotnet/MSBuild invocation paths"
@@ -83,6 +102,7 @@ assert_skip_toggle_invalidates_support_build() {
     [[ -n "$dll_path" ]] || fail "support.dll was not produced under skip mode"
     size="$(stat -c%s "$dll_path")"
     [[ "$size" == "0" ]] || fail "expected stub support.dll size 0 in skip mode, got $size at $dll_path"
+    assert_generated_support_slot_artifacts "$dll_path"
 
     cargo build -p dotnet-assemblies -vv 2>&1 | tee "$noskip_log"
     rg -n 'env variable DOTNET_SKIP_BUILD changed' "$noskip_log" >/dev/null \
@@ -92,13 +112,16 @@ assert_skip_toggle_invalidates_support_build() {
     [[ -n "$dll_path" ]] || fail "support.dll missing after non-skip rebuild"
     size="$(stat -c%s "$dll_path")"
     [[ "$size" -gt 0 ]] || fail "expected non-empty support.dll after unsetting skip, got $size at $dll_path"
+    assert_generated_support_slot_artifacts "$dll_path"
 }
 
 assert_vm_directory_rerun_invalidation() {
     local baseline_log="$LOG_DIR/vm-rerun-baseline.log"
     local add_log="$LOG_DIR/vm-rerun-add.log"
     local remove_log="$LOG_DIR/vm-rerun-remove.log"
-    local probe_file="crates/dotnet-vm/src/intrinsics/__rerun_probe.rs"
+    # Keep the tracked __rerun_probe.rs fixture intact; this distinct temporary
+    # filename exercises the same watched directory add/remove behavior.
+    local probe_file="crates/dotnet-vm/src/intrinsics/.build_script_rerun_probe.rs"
     local probe_dir
     probe_dir="$(dirname "$probe_file")"
 
