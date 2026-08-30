@@ -6,7 +6,7 @@ namespace DotnetRs;
 
 public class FieldInfo : System.Reflection.FieldInfo
 {
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.FieldInfoIndex)]
     [UsedImplicitly] private nint index;
 
     [MethodImpl(MethodImplOptions.InternalCall)]

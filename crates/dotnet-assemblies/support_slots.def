@@ -1,0 +1,32 @@
+# Runtime storage ABI for the embedded support assembly.
+#
+# Each record has nine `|`-separated columns:
+# id | SemanticId | WellKnown | field | instance|static | signature | storage | accessor:type | views
+#
+# Signatures: intptr, int32, object, string, class(WellKnown),
+#             szarray(WellKnown), byref-generic(index)
+# Storage:    handle-object-ref, object-ref, usize, i32, managed-ptr
+# Views:      none, alternate:accessor:type, layout:accessor
+#
+# IDs are stable semantic ABI values. Never renumber an existing ID.
+1 | RuntimeTypeHandleValue | RuntimeTypeHandle | _value | instance | intptr | handle-object-ref | rth_value_field:object-ref | alternate:rth_value_usize_field:usize
+2 | RuntimeFieldHandleValue | RuntimeFieldHandle | _value | instance | intptr | handle-object-ref | rfh_value_field:object-ref | none
+3 | RuntimeMethodHandleValue | RuntimeMethodHandle | _value | instance | intptr | handle-object-ref | rmh_value_field:object-ref | none
+4 | RuntimeTypeIndex | RuntimeType | index | instance | intptr | usize | runtime_type_index_field:usize | none
+5 | MethodInfoIndex | SupportMethodInfo | index | instance | intptr | usize | method_info_index_field:usize | none
+6 | ConstructorInfoIndex | SupportConstructorInfo | index | instance | intptr | usize | constructor_info_index_field:usize | none
+7 | FieldInfoIndex | SupportFieldInfo | index | instance | intptr | usize | field_info_index_field:usize | none
+8 | ParameterInfoMethodIndex | SupportParameterInfo | method_index | instance | intptr | usize | parameter_info_method_index_field:usize | none
+9 | ParameterInfoPosition | SupportParameterInfo | position | instance | int32 | i32 | parameter_info_position_field:i32 | none
+10 | PropertyInfoName | SupportPropertyInfo | name | instance | string | object-ref | property_info_name_field:object-ref | none
+11 | PropertyInfoGetter | SupportPropertyInfo | getter | instance | class(ReflectionMethodInfo) | object-ref | property_info_getter_field:object-ref | none
+12 | PropertyInfoSetter | SupportPropertyInfo | setter | instance | class(ReflectionMethodInfo) | object-ref | property_info_setter_field:object-ref | none
+13 | PropertyInfoDeclaringType | SupportPropertyInfo | declaringType | instance | class(Type) | object-ref | property_info_declaring_type_field:object-ref | none
+14 | PropertyInfoPropertyType | SupportPropertyInfo | propertyType | instance | class(Type) | object-ref | property_info_property_type_field:object-ref | none
+15 | DelegateTarget | Delegate | _target | instance | object | object-ref | delegate_target_field:object-ref | none
+16 | DelegateMethodIndex | Delegate | _method | instance | intptr | usize | delegate_method_index_field:usize | none
+17 | MulticastDelegateTargets | MulticastDelegate | targets | instance | szarray(Delegate) | object-ref | multicast_delegate_targets_field:object-ref | none
+18 | SpanReference | Span1 | _reference | instance | byref-generic(0) | managed-ptr | span_reference_field:managed-ptr | layout:span_reference_layout
+19 | SpanLength | Span1 | _length | instance | int32 | i32 | span_length_field:i32 | layout:span_length_layout
+20 | ReadOnlySpanReference | ReadOnlySpan1 | _reference | instance | byref-generic(0) | managed-ptr | readonly_span_reference_field:managed-ptr | layout:readonly_span_reference_layout
+21 | ReadOnlySpanLength | ReadOnlySpan1 | _length | instance | int32 | i32 | readonly_span_length_field:i32 | layout:readonly_span_length_layout

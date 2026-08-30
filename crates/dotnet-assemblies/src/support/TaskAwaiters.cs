@@ -6,7 +6,6 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.TaskAwaiter")]
 public readonly struct TaskAwaiter : ICriticalNotifyCompletion
 {
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private readonly Task _task;
 
     internal TaskAwaiter(Task task)
@@ -26,7 +25,6 @@ public readonly struct TaskAwaiter : ICriticalNotifyCompletion
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.TaskAwaiter`1")]
 public readonly struct TaskAwaiter<TResult> : ICriticalNotifyCompletion
 {
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private readonly Task<TResult> _task;
 
     internal TaskAwaiter(Task<TResult> task)
@@ -46,7 +44,6 @@ public readonly struct TaskAwaiter<TResult> : ICriticalNotifyCompletion
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.ValueTaskAwaiter")]
 public readonly struct ValueTaskAwaiter : ICriticalNotifyCompletion
 {
-    [RuntimeSlot("ValueType")]
     [UsedImplicitly] private readonly ValueTask _valueTask;
 
     internal ValueTaskAwaiter(ValueTask valueTask)
@@ -66,7 +63,6 @@ public readonly struct ValueTaskAwaiter : ICriticalNotifyCompletion
 [Stub(InPlaceOf = "System.Runtime.CompilerServices.ValueTaskAwaiter`1")]
 public readonly struct ValueTaskAwaiter<TResult> : ICriticalNotifyCompletion
 {
-    [RuntimeSlot("ValueType")]
     [UsedImplicitly] private readonly ValueTask<TResult> _valueTask;
 
     internal ValueTaskAwaiter(ValueTask<TResult> valueTask)

@@ -79,11 +79,14 @@ pub enum WellKnown {
     SupportParameterInfo,
     SupportPropertyInfo,
     SupportSZArrayHelper1,
+
+    // Appended to preserve every existing well-known discriminant.
+    Span1,
 }
 
 impl WellKnown {
     /// Number of well-known type handles.
-    pub const COUNT: usize = Self::SupportSZArrayHelper1 as usize + 1;
+    pub const COUNT: usize = Self::Span1 as usize + 1;
 
     /// Returns the canonical metadata name for this type.
     pub const fn name(self) -> &'static str {
@@ -151,6 +154,7 @@ impl WellKnown {
             Self::SupportParameterInfo => "DotnetRs.ParameterInfo",
             Self::SupportPropertyInfo => "DotnetRs.PropertyInfo",
             Self::SupportSZArrayHelper1 => "DotnetRs.SZArrayHelper`1",
+            Self::Span1 => "System.Span`1",
         }
     }
 
@@ -222,6 +226,7 @@ impl WellKnown {
             "DotnetRs.ParameterInfo" => Self::SupportParameterInfo,
             "DotnetRs.PropertyInfo" => Self::SupportPropertyInfo,
             "DotnetRs.SZArrayHelper`1" => Self::SupportSZArrayHelper1,
+            "System.Span`1" => Self::Span1,
             _ => return None,
         })
     }
@@ -297,6 +302,7 @@ mod tests {
         WellKnown::SupportParameterInfo,
         WellKnown::SupportPropertyInfo,
         WellKnown::SupportSZArrayHelper1,
+        WellKnown::Span1,
     ];
 
     #[test]
@@ -314,6 +320,13 @@ mod tests {
         }
 
         assert_eq!(names.len(), WellKnown::COUNT);
+    }
+
+    #[test]
+    fn span1_is_appended_without_renumbering_existing_variants() {
+        assert_eq!(WellKnown::SupportSZArrayHelper1 as usize, 58);
+        assert_eq!(WellKnown::Span1 as usize, 59);
+        assert_eq!(WellKnown::COUNT, 60);
     }
 
     #[test]

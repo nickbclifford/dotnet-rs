@@ -7,9 +7,9 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Delegate")]
 public abstract class Delegate : ICloneable, ISerializable
 {
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.DelegateTarget)]
     [UsedImplicitly] internal object? _target;
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.DelegateMethodIndex)]
     [UsedImplicitly] internal nint _method;
 
     protected Delegate(object target, nint method)

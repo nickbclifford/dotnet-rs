@@ -7,7 +7,7 @@ namespace DotnetRs;
 
 public class ConstructorInfo : System.Reflection.ConstructorInfo
 {
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.ConstructorInfoIndex)]
     [UsedImplicitly] private nint index;
 
     [MethodImpl(MethodImplOptions.InternalCall)]

@@ -7,7 +7,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.RuntimeFieldHandle")]
 public struct RuntimeFieldHandle : IEquatable<RuntimeFieldHandle>, ISerializable
 {
-    [RuntimeSlot("Handle")]
+    [RuntimeSlot(RuntimeSlotId.RuntimeFieldHandleValue)]
     [UsedImplicitly] private nint _value;
     public IntPtr Value => _value;
     

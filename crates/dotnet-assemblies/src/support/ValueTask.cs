@@ -5,7 +5,6 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Threading.Tasks.ValueTask")]
 public readonly struct ValueTask
 {
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private readonly Task? _task;
 
     public ValueTask(Task task)
@@ -23,11 +22,8 @@ public readonly struct ValueTask
 [Stub(InPlaceOf = "System.Threading.Tasks.ValueTask`1")]
 public readonly struct ValueTask<TResult>
 {
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private readonly Task<TResult>? _task;
-    [RuntimeSlot("Generic")]
     [UsedImplicitly] private readonly TResult _result;
-    [RuntimeSlot("ScalarBool")]
     [UsedImplicitly] private readonly bool _hasResult;
 
     public ValueTask(Task<TResult> task)

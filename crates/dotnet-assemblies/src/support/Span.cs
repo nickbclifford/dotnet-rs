@@ -19,10 +19,10 @@ namespace System
     [Stub(InPlaceOf = "System.Span`1")]
     public readonly ref struct Span<T>
     {
-        [RuntimeSlot("Byref")]
+        [RuntimeSlot(RuntimeSlotId.SpanReference)]
         [UsedImplicitly] internal readonly ref T _reference;
 
-        [RuntimeSlot("ScalarInt")]
+        [RuntimeSlot(RuntimeSlotId.SpanLength)]
         [UsedImplicitly] internal readonly int _length;
 
         public Span(T[] array)
@@ -148,10 +148,10 @@ namespace System
     [Stub(InPlaceOf = "System.ReadOnlySpan`1")]
     public readonly ref struct ReadOnlySpan<T>
     {
-        [RuntimeSlot("Byref")]
+        [RuntimeSlot(RuntimeSlotId.ReadOnlySpanReference)]
         [UsedImplicitly] internal readonly ref T _reference;
 
-        [RuntimeSlot("ScalarInt")]
+        [RuntimeSlot(RuntimeSlotId.ReadOnlySpanLength)]
         [UsedImplicitly] internal readonly int _length;
 
         public ReadOnlySpan(T[] array)

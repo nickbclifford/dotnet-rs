@@ -6,10 +6,15 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>CS0169,CS0649</NoWarn>
+    <DefineConstants>$(DefineConstants);JETBRAINS_ANNOTATIONS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="JetBrains.Annotations" Version="2025.2.2" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeSlotGeneratedFile)' != ''">
+    <Compile Include="$(RuntimeSlotGeneratedFile)" Link="RuntimeSlotId.g.cs" />
   </ItemGroup>
 
 </Project>

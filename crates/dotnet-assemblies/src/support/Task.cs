@@ -5,11 +5,8 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Threading.Tasks.Task")]
 public class Task
 {
-    [RuntimeSlot("ScalarBool")]
     [UsedImplicitly] private bool _isCompleted;
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Exception? _exception;
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] private Action? _continuation;
 
     internal Task() { }
@@ -107,9 +104,7 @@ public class Task
 [Stub(InPlaceOf = "System.Threading.Tasks.Task`1")]
 public class Task<TResult> : Task
 {
-    [RuntimeSlot("Generic")]
     [UsedImplicitly] private TResult? _result;
-    [RuntimeSlot("ScalarBool")]
     [UsedImplicitly] private bool _hasResult;
 
     internal Task() : base() { }

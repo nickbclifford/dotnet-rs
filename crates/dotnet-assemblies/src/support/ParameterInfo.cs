@@ -6,9 +6,9 @@ namespace DotnetRs;
 
 public class ParameterInfo : System.Reflection.ParameterInfo
 {
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.ParameterInfoMethodIndex)]
     [UsedImplicitly] private nint method_index;
-    [RuntimeSlot("ScalarInt")]
+    [RuntimeSlot(RuntimeSlotId.ParameterInfoPosition)]
     [UsedImplicitly] private int position;
 
     [MethodImpl(MethodImplOptions.InternalCall)]

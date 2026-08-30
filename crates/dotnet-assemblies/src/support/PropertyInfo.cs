@@ -5,15 +5,15 @@ namespace DotnetRs;
 
 public class PropertyInfo : System.Reflection.PropertyInfo
 {
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.PropertyInfoName)]
     [UsedImplicitly] private string? name;
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.PropertyInfoGetter)]
     [UsedImplicitly] private System.Reflection.MethodInfo? getter;
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.PropertyInfoSetter)]
     [UsedImplicitly] private System.Reflection.MethodInfo? setter;
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.PropertyInfoDeclaringType)]
     [UsedImplicitly] private Type? declaringType;
-    [RuntimeSlot("GcRef")]
+    [RuntimeSlot(RuntimeSlotId.PropertyInfoPropertyType)]
     [UsedImplicitly] private Type? propertyType;
 
     public override System.Reflection.PropertyAttributes Attributes =>

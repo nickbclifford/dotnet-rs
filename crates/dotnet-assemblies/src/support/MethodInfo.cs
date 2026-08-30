@@ -7,7 +7,7 @@ namespace DotnetRs;
 
 public class MethodInfo : System.Reflection.MethodInfo
 {
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.MethodInfoIndex)]
     [UsedImplicitly] private nint index;
 
     [MethodImpl(MethodImplOptions.InternalCall)]

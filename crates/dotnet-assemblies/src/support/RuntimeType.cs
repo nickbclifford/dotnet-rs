@@ -8,7 +8,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
-    [RuntimeSlot("Index")]
+    [RuntimeSlot(RuntimeSlotId.RuntimeTypeIndex)]
     [UsedImplicitly] private nint index;
     
     [MethodImpl(MethodImplOptions.InternalCall)]

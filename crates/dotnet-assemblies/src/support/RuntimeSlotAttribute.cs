@@ -3,13 +3,10 @@ namespace DotnetRs;
 [AttributeUsage(AttributeTargets.Field)]
 internal sealed class RuntimeSlotAttribute : Attribute
 {
-    // Valid values are Handle, Index, GcRef, Byref, ScalarInt, ScalarBool, Generic,
-    // ValueType, and NativePtr.
-    // They are validated by the Rust support-contract loader.
-    public RuntimeSlotAttribute(string kind)
+    public RuntimeSlotAttribute(RuntimeSlotId id)
     {
-        Kind = kind;
+        Id = id;
     }
 
-    public string Kind { get; }
+    public RuntimeSlotId Id { get; }
 }

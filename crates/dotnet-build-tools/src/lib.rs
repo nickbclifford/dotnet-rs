@@ -18,6 +18,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod support_slots;
+
 const SHARED_MSBUILD_INPUT_FILE_NAMES: &[&str] = &[
     "Directory.Build.props",
     "Directory.Build.targets",

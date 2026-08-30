@@ -7,6 +7,5 @@ namespace DotnetRs;
 ]
 public class StubAttribute : Attribute
 {
-    [RuntimeSlot("GcRef")]
     [UsedImplicitly] public required string InPlaceOf;
 }
