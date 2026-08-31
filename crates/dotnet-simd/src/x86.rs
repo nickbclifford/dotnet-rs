@@ -28,7 +28,7 @@ pub fn sequence_equal(lhs: &[u8], rhs: &[u8]) -> Option<bool> {
         return None;
     }
 
-    // SAFETY: SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
+    // SAFETY: F10.ArchIntrinsicPrecondition — SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
     Some(unsafe { sequence_equal_sse2(lhs, rhs) })
 }
 
@@ -36,13 +36,13 @@ pub fn sequence_equal(lhs: &[u8], rhs: &[u8]) -> Option<bool> {
 unsafe fn sequence_equal_sse2(lhs: &[u8], rhs: &[u8]) -> bool {
     let mut offset = 0usize;
     while offset + VECTOR_BYTES <= lhs.len() {
-        // SAFETY: The loop bounds guarantee at least 16 bytes remain for both slices.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 bytes remain for both slices.
         let left_ptr = unsafe { lhs.as_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: The loop bounds guarantee at least 16 readable bytes at `left_ptr`.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 readable bytes at `left_ptr`.
         let left = unsafe { _mm_loadu_si128(left_ptr) };
-        // SAFETY: The loop bounds guarantee at least 16 bytes remain for both slices.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 bytes remain for both slices.
         let right_ptr = unsafe { rhs.as_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: The loop bounds guarantee at least 16 readable bytes at `right_ptr`.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 readable bytes at `right_ptr`.
         let right = unsafe { _mm_loadu_si128(right_ptr) };
         let mask = _mm_movemask_epi8(_mm_cmpeq_epi8(left, right));
         if mask != 0xFFFF_i32 {
@@ -60,7 +60,7 @@ pub fn copy_nonoverlapping(dst: &mut [u8], src: &[u8]) -> bool {
         return false;
     }
 
-    // SAFETY: SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
+    // SAFETY: F10.ArchIntrinsicPrecondition — SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
     unsafe { copy_nonoverlapping_sse2(dst, src) };
     true
 }
@@ -70,23 +70,23 @@ unsafe fn copy_nonoverlapping_sse2(dst: &mut [u8], src: &[u8]) {
     let len = dst.len();
     let mut offset = 0usize;
     while offset + VECTOR_BYTES <= len {
-        // SAFETY: The loop bounds guarantee at least 16 bytes remain.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 bytes remain.
         let src_ptr = unsafe { src.as_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: The loop bounds guarantee at least 16 readable bytes at `src_ptr`.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 readable bytes at `src_ptr`.
         let value = unsafe { _mm_loadu_si128(src_ptr) };
-        // SAFETY: The loop bounds guarantee at least 16 bytes remain.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 bytes remain.
         let dst_ptr = unsafe { dst.as_mut_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: The loop bounds guarantee at least 16 writable bytes at `dst_ptr`.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 writable bytes at `dst_ptr`.
         unsafe { _mm_storeu_si128(dst_ptr, value) };
         offset += VECTOR_BYTES;
     }
 
     if offset < len {
-        // SAFETY: Tail copy stays in-bounds and does not overlap by contract.
+        // SAFETY: F10.RawMemoryAccessValid — Tail copy stays in-bounds and does not overlap by contract.
         let src_tail = unsafe { src.as_ptr().add(offset) };
-        // SAFETY: Tail copy stays in-bounds and does not overlap by contract.
+        // SAFETY: F10.RawMemoryAccessValid — Tail copy stays in-bounds and does not overlap by contract.
         let dst_tail = unsafe { dst.as_mut_ptr().add(offset) };
-        // SAFETY: Both tail pointers are valid for `len - offset` bytes and the source and
+        // SAFETY: F10.RawMemoryAccessValid — Both tail pointers are valid for `len - offset` bytes and the source and
         // destination slices do not overlap by this function's contract.
         unsafe { core::ptr::copy_nonoverlapping(src_tail, dst_tail, len - offset) };
     }
@@ -98,7 +98,7 @@ pub fn fill(dst: &mut [u8], value: u8) -> bool {
         return false;
     }
 
-    // SAFETY: SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
+    // SAFETY: F10.ArchIntrinsicPrecondition — SSE2 support is guaranteed on x86_64 and checked at runtime on x86.
     unsafe { fill_sse2(dst, value) };
     true
 }
@@ -109,9 +109,9 @@ unsafe fn fill_sse2(dst: &mut [u8], value: u8) {
     let pattern = _mm_set1_epi8(value as i8);
     let mut offset = 0usize;
     while offset + VECTOR_BYTES <= len {
-        // SAFETY: The loop bounds guarantee at least 16 bytes remain.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 bytes remain.
         let dst_ptr = unsafe { dst.as_mut_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: The loop bounds guarantee at least 16 writable bytes at `dst_ptr`.
+        // SAFETY: F10.RawMemoryAccessValid — The loop bounds guarantee at least 16 writable bytes at `dst_ptr`.
         unsafe { _mm_storeu_si128(dst_ptr, pattern) };
         offset += VECTOR_BYTES;
     }

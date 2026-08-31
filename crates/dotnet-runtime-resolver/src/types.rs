@@ -264,8 +264,9 @@ where
             }
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
-                // SAFETY: Cross-arena object pointers are live GC handles maintained by the
-                // thread manager; borrowing their lock yields the stable shared object view.
+                // SAFETY: F1.GcHandleRooted; F10.BorrowedStorageStable — Cross-arena object
+                // pointers are live GC handles maintained by the thread manager, and the lock
+                // guard keeps the shared object view stable for this traversal.
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
                 self.get_heap_description_inner(&guard)

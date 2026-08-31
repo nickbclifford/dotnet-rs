@@ -25,7 +25,7 @@ pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
         .span_or_readonly_span_reference_layout(span.instance_storage.layout())
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     span.instance_storage.with_data(|data| {
-        // SAFETY: The field layout identifies one complete ManagedPtr representation in `data`.
+        // SAFETY: F3.InteriorPointerRebased — The field layout identifies one complete ManagedPtr representation in `data`.
         unsafe { ManagedPtr::read_resolved_unchecked(&data[field.position.as_usize()..], resolver) }
             .map_err(|e| {
                 IntrinsicError::Message(
@@ -61,10 +61,10 @@ where
     // We MUST NOT use ctx.read_unaligned with span_ptr.origin because that would
     // incorrectly tag the ManagedPtr with the Span's origin (e.g., Stack) instead of
     // the actual origin stored in the serialized bytes (e.g., Heap).
-    // SAFETY: `span_ptr` points to a Span value validated by the caller and `ptr_bytes` matches
+    // SAFETY: F3.InteriorPointerRebased — `span_ptr` points to a Span value validated by the caller and `ptr_bytes` matches
     // the serialized `ManagedPtr` width expected for the `_reference` field.
     let mut ptr_bytes = ManagedPtr::serialization_buffer();
-    // SAFETY: The field position and serialization buffer were validated above; `read_bytes`
+    // SAFETY: F10.RawMemoryAccessValid — The field position and serialization buffer were validated above; `read_bytes`
     // accesses exactly that in-bounds `_reference` representation.
     unsafe {
         ctx.read_bytes(
@@ -78,7 +78,7 @@ where
     })?;
 
     // Deserialize the ManagedPtrInfo from bytes
-    // SAFETY: `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
+    // SAFETY: F3.InteriorPointerRebased — `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
     // we pass the current branded GC token for lifetime validation, and `ctx`
     // resolves live Stack and Static bases for executable pointer recovery.
     let info = unsafe {
@@ -110,7 +110,7 @@ pub fn read_span_length_from_ptr<'gc, T: RawMemoryOps<'gc>>(
     let length_field = slots
         .span_or_readonly_span_length_layout(layout)
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
-    // SAFETY: `_length` field offset/layout come from validated span layout metadata for `span_ptr`.
+    // SAFETY: F10.RawMemoryAccessValid — `_length` field offset/layout come from validated span layout metadata for `span_ptr`.
     let val = unsafe {
         ctx.read_unaligned(
             span_ptr.origin().clone(),
@@ -140,7 +140,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
         .ok_or(IntrinsicError::Static("Span must have _length field"))?;
 
     // Write _reference
-    // SAFETY: `_reference` offset/layout are resolved from the span layout, and the serialized
+    // SAFETY: F10.RawMemoryAccessValid — `_reference` offset/layout are resolved from the span layout, and the serialized
     // `ManagedPtr` value matches that field's storage contract.
     unsafe {
         ctx.write_unaligned(
@@ -153,7 +153,7 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     .map_err(|e| IntrinsicError::Message(format!("Failed to write _reference: {}", e).into()))?;
 
     // Write _length
-    // SAFETY: `_length` offset/layout are resolved from span metadata and we write a plain i32
+    // SAFETY: F10.RawMemoryAccessValid — `_length` offset/layout are resolved from span metadata and we write a plain i32
     // value in the expected representation for that field.
     unsafe {
         ctx.write_unaligned(
@@ -205,7 +205,7 @@ pub fn with_span_data<
             HeapStorage::Vec(v) => {
                 // Vector storage is external (on Rust heap), so we must check absolute addresses
                 // rather than offsets relative to the object header.
-                // SAFETY: We only read the vector's backing data pointer for bounds computation.
+                // SAFETY: F10.BorrowedStorageStable — We only read the vector's backing data pointer for bounds computation.
                 // `inner` borrow keeps the storage alive while this pointer is used.
                 let data_ptr = unsafe { v.raw_data_ptr() } as usize;
                 let elem_size = v.layout.element_layout.size().as_usize();
@@ -251,7 +251,7 @@ pub fn with_span_data<
         }
     }
 
-    // SAFETY: All size/offset bounds above guarantee the `[byte_offset, byte_offset + total_size)`
+    // SAFETY: F10.RawMemoryAccessValid — All size/offset bounds above guarantee the `[byte_offset, byte_offset + total_size)`
     // range is valid for `m_ptr`'s origin before exposing a byte slice to `f`.
     Ok(unsafe { m_ptr.with_data(total_size, f) })
 }

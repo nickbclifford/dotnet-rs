@@ -356,8 +356,9 @@ where
                     let ptr = CliToCts::convert_num::<usize>(data)?;
                     let inner_type = self.resolve_pointer_inner_type(inner)?;
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        // SAFETY: Scalar-to-ValuePointer conversion is the CLI
-                        // unmanaged-address boundary; no managed origin exists.
+                        // SAFETY: F10.RawMemoryAccessValid — Scalar-to-ValuePointer conversion is the CLI
+                        // unmanaged-address boundary; no managed origin exists, so the
+                        // producer supplies the resulting pointer's validity contract.
                         NonNull::new(unsafe { unmanaged_ptr_from_addr(ptr) }),
                         inner_type,
                         None,
@@ -542,8 +543,10 @@ where
                 let inner_type = self.resolve_pointer_inner_type(inner)?;
 
                 if data.len() >= ManagedPtr::SIZE {
-                    // SAFETY: `data.len() >= ManagedPtr::SIZE` is checked above, and the bytes
-                    // come from VM-managed storage that uses ManagedPtr's serialization format.
+                    // SAFETY: F3.InteriorPointerRebased; F6.NoEscapeAcrossArena —
+                    // `data.len() >= ManagedPtr::SIZE` is checked above, and VM-managed storage
+                    // supplies a complete ManagedPtr encoding whose recorded origin and offset
+                    // are resolved under `gc`'s arena brand.
                     let info = unsafe {
                         ManagedPtr::read_resolved_branded(
                             &data[..ManagedPtr::SIZE],
@@ -558,13 +561,14 @@ where
                     let mut ptr_bytes = [0u8; ObjectRef::SIZE];
                     ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
-                    // SAFETY: This legacy `ValuePointer` representation is a raw-address
-                    // storage boundary. `data` contains no owner or origin handle from which
-                    // provenance could be recovered, so its producer must ensure the address
-                    // remains valid for the resulting unmanaged pointer's use.
+                    // SAFETY: F10.RawMemoryAccessValid — This legacy `ValuePointer`
+                    // representation is a raw-address storage boundary. `data` contains no
+                    // owner or origin handle from which provenance could be recovered, so its
+                    // producer must ensure the address remains valid for the resulting unmanaged
+                    // pointer's use.
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        // SAFETY: The preceding raw-storage boundary contract
-                        // supplies the unmanaged pointer validity premise.
+                        // SAFETY: F10.RawMemoryAccessValid — The preceding raw-storage boundary
+                        // contract supplies the unmanaged pointer validity premise.
                         NonNull::new(unsafe { unmanaged_ptr_from_addr(ptr) }),
                         inner_type,
                         None,
@@ -577,16 +581,19 @@ where
             | BaseType::String
             | BaseType::Vector(_, _)
             | BaseType::Array(_, _) => {
-                // SAFETY: These reference-like CLR types are serialized as `ObjectRef` and `data`
-                // is provided by managed storage with the expected object-reference width.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout; F1.GcHandleRooted — These
+                // reference-like CLR types select the `ObjectRef` layout, and `data` is provided
+                // by managed storage with the expected object-reference width under `gc`'s arena
+                // brand.
                 Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }))
             }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
             } => {
-                // SAFETY: Class-typed values are represented as `ObjectRef` payloads in storage
-                // and use the same branded deserialization contract as other reference types.
+                // SAFETY: F2.DescriptorMatchesEcmaLayout; F1.GcHandleRooted — Class-typed values
+                // select `ObjectRef` payloads in managed storage and use the same `gc`-branded
+                // deserialization contract as other reference types.
                 Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }))
             }
             BaseType::Type {
@@ -598,8 +605,9 @@ where
                 let td = self.locate_type(resolution.clone(), ut)?;
 
                 if !self.is_value_type(td.clone())? {
-                    // SAFETY: Non-value `Type` instances are runtime object references serialized
-                    // as `ObjectRef` bytes in managed storage.
+                    // SAFETY: F2.DescriptorMatchesEcmaLayout; F1.GcHandleRooted — Non-value
+                    // `Type` instances select runtime object references serialized as `ObjectRef`
+                    // bytes in managed storage and decoded under `gc`'s arena brand.
                     return Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }));
                 }
 

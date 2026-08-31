@@ -207,7 +207,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
         StackValue::Int64(p) => Some(p as usize),
         _ => None,
     };
-    // SAFETY: The native `String(char*)` constructor contract requires a live,
+    // SAFETY: F10.RawMemoryAccessValid — The native `String(char*)` constructor contract requires a live,
     // null-terminated unmanaged UTF-16 address; the loop below owns that proof.
     let ptr = address.map_or(std::ptr::null(), |address| unsafe {
         unmanaged_ptr_from_addr(address).cast_const().cast::<u16>()
@@ -220,7 +220,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, T: TypedStackOps<'gc> + RawMemoryOps<
             clippy::multiple_unsafe_ops_per_block,
             reason = "walking the caller-provided C string requires pointer addition and dereference"
         )]
-        // SAFETY: The CLR pointer overload contract supplies a valid, null-terminated u16 string;
+        // SAFETY: F10.RawMemoryAccessValid — The CLR pointer overload contract supplies a valid, null-terminated u16 string;
         // each iteration remains within that string until the terminating zero is observed.
         unsafe {
             loop {

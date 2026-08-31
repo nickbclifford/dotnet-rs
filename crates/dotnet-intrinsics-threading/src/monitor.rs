@@ -153,7 +153,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
         if let Some(index) = success_flag_index {
             ctx.threading_set_stack_slot(StackSlotIndex::new(index), StackValue::Int32(1));
         } else {
-            // SAFETY: `success_ptr` was validated as writable before monitor entry and denotes
+            // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
             // the native `lockTaken` out parameter, which is one byte wide.
             unsafe {
                 ctx.write_bytes(
@@ -246,7 +246,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
                 StackValue::Int32(if success { 1 } else { 0 }),
             );
         } else {
-            // SAFETY: `success_ptr` was validated as writable before monitor entry and denotes
+            // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
             // the native `lockTaken` out parameter, which is one byte wide.
             unsafe {
                 ctx.write_bytes(

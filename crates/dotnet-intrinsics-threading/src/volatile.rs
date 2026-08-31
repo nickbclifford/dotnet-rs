@@ -52,8 +52,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     match volatile_atomic_dispatch(target_type.get()) {
         VolatileAtomicTypeDispatch::Byte => {
             let target_ptr = ctx.pop_managed_ptr();
-            // SAFETY: The intrinsic resolves `target_ptr` from a by-ref CLR argument and this
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — The intrinsic resolves `target_ptr` from a by-ref CLR argument and this
             // branch enforces a 1-byte atomic width that matches the target type dispatch.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -70,8 +71,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
         VolatileAtomicTypeDispatch::Int16 => {
             let target_ptr = ctx.pop_managed_ptr();
-            // SAFETY: The pointer came from managed by-ref argument materialization and this branch
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — The pointer came from managed by-ref argument materialization and this branch
             // performs a 2-byte atomic read consistent with the dispatch-selected type width.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -88,8 +90,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
         VolatileAtomicTypeDispatch::Word32 => {
             let target_ptr = ctx.pop_managed_ptr();
-            // SAFETY: `target_ptr` is a managed by-ref location and this dispatch arm guarantees a
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is a managed by-ref location and this dispatch arm guarantees a
             // 4-byte atomic read for 32-bit scalar/float payloads.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -110,8 +113,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
         VolatileAtomicTypeDispatch::Word64 => {
             let target_ptr = ctx.pop_managed_ptr();
-            // SAFETY: `target_ptr` is validated by the VM and this arm uses an 8-byte atomic read,
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is validated by the VM and this arm uses an 8-byte atomic read,
             // matching the resolved 64-bit payload kind.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -133,8 +137,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::PointerSized => {
             let target_ptr = ctx.pop_managed_ptr();
             let size = ObjectRef::SIZE;
-            // SAFETY: Pointer-sized volatile reads use the runtime's object-reference width and the
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — Pointer-sized volatile reads use the runtime's object-reference width and the
             // by-ref target pointer is sourced from managed stack state.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -152,8 +157,9 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef
             let target_ptr = ctx.pop_managed_ptr();
-            // SAFETY: This path is selected only for object-reference targets and reads exactly
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — This path is selected only for object-reference targets and reads exactly
             // one pointer-sized slot atomically from managed memory.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
                 RawMemoryOps::load_atomic(
                     ctx,
@@ -166,7 +172,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     "the by-ref pointer and size are dispatch-selected to match the target type",
                 )
             };
-            // SAFETY: `val` was read atomically from an object-reference slot and `gc`
+            // SAFETY: F1.GcHandleRooted — `val` was read atomically from an object-reference slot and `gc`
             // brands the reconstructed handle to the current arena lifetime.
             let obj = unsafe { ObjectRef::read_branded(&val.to_ne_bytes(), &gc) };
             ctx.push_obj(obj);
@@ -192,8 +198,10 @@ fn store_int_volatile<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
     };
 
-    // SAFETY: Byte and Int16 volatile write paths both convert from Int32 and perform
-    // an atomic store using the dispatch-selected integer width.
+    // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the materialized
+    // managed by-ref argument, and Byte and Int16 paths store the dispatch-selected integer
+    // width. The atomic subsystem uses that width for an aligned atomic operation or a
+    // synchronized fallback.
     unsafe {
         RawMemoryOps::store_atomic(
             ctx,
@@ -266,8 +274,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     }));
                 }
             };
-            // SAFETY: This branch is only for 32-bit payloads and stores exactly 4 bytes into the
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — This branch is only for 32-bit payloads and stores exactly 4 bytes into the
             // managed by-ref location selected by the intrinsic dispatch.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             unsafe {
                 RawMemoryOps::store_atomic(
                     ctx,
@@ -293,8 +302,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     }));
                 }
             };
-            // SAFETY: This arm handles only 64-bit payloads and performs an 8-byte atomic write
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — This arm handles only 64-bit payloads and performs an 8-byte atomic write
             // against a managed by-ref pointer validated by the VM.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             unsafe {
                 RawMemoryOps::store_atomic(
                     ctx,
@@ -320,8 +330,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 }
             };
             let size = ObjectRef::SIZE;
-            // SAFETY: Pointer-sized values are written using the runtime pointer width and the
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — Pointer-sized values are written using the runtime pointer width and the
             // destination pointer originates from a managed by-ref argument.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             unsafe {
                 RawMemoryOps::store_atomic(
                     ctx,
@@ -353,8 +364,9 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 }
             };
             let size = ObjectRef::SIZE;
-            // SAFETY: This branch stores one object-reference-sized slot atomically; ObjectRef values
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — This branch stores one object-reference-sized slot atomically; ObjectRef values
             // are serialized through `ObjectRef::write` to preserve any runtime tagging protocol.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             unsafe {
                 RawMemoryOps::store_atomic(
                     ctx,

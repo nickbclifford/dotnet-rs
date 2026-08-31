@@ -884,15 +884,15 @@ pub(crate) fn load_resolution_core(
     let len = file.metadata()?.len() as usize;
     let cap = len.div_ceil(8);
     let mut aligned: Vec<u64> = vec![0u64; cap];
-    // SAFETY: aligned has `cap * 8 >= len` bytes; the u8 slice is valid for that range.
+    // SAFETY: F10.RawMemoryAccessValid. aligned has `cap * 8 >= len` bytes; the u8 slice is valid for that range.
     let byte_buf = unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, len) };
     file.read_exact(byte_buf)?;
 
     let aligned_boxed = aligned.into_boxed_slice();
     let aligned_ptr = Box::into_raw(aligned_boxed);
-    // SAFETY: We manually track this leaked box to reclaim it later.
+    // SAFETY: F10.RawAllocationOwnership. We manually track this leaked box to reclaim it later.
     let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
-    // SAFETY: `aligned_ptr` is a live allocation just returned by `Box::into_raw`, and the arena
+    // SAFETY: F10.RawAllocationOwnership. `aligned_ptr` is a live allocation just returned by `Box::into_raw`, and the arena
     // records ownership to reclaim it without dereferencing the pointer at this call.
     unsafe {
         arena.add_u64_slice(aligned_ptr);
@@ -900,7 +900,7 @@ pub(crate) fn load_resolution_core(
 
     // Create the byte slice view
     let byte_slice =
-        // SAFETY: 'aligned_slice' is valid for its entire length; it contains 'len' bytes read
+        // SAFETY: F10.RawMemoryAccessValid. 'aligned_slice' is valid for its entire length; it contains 'len' bytes read
         // from the file.
         unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
@@ -915,7 +915,7 @@ pub(crate) fn load_resolution_core(
     crate::validation::validate_metadata(&res)?;
 
     let res_ptr = Box::into_raw(Box::new(res));
-    // SAFETY: We manually track this leaked box to reclaim it later.
+    // SAFETY: F10.RawAllocationOwnership. We manually track this leaked box to reclaim it later.
     unsafe {
         arena.add_resolution(res_ptr);
     }

@@ -47,7 +47,7 @@ fn chunk_equal_from_a_slice<'gc>(
     current_chunk: usize,
     a_slice: &[u8],
 ) -> bool {
-    // SAFETY: `b_chunk` was derived from the same validated extent as `a_slice`; this helper
+    // SAFETY: F10.RawMemoryAccessValid — `b_chunk` was derived from the same validated extent as `a_slice`; this helper
     // exposes exactly `current_chunk` bytes only while computing their read-only comparison.
     unsafe {
         b_chunk.with_data(current_chunk, |b_slice| {
@@ -65,13 +65,13 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     run_chunked_compare(
         total_bytes,
         |offset, current_chunk| {
-            // SAFETY: The chunk bounds come from `run_chunked_compare`, which limits every
+            // SAFETY: F10.RawMemoryAccessValid — The chunk bounds come from `run_chunked_compare`, which limits every
             // offset to `total_bytes`, the validated extent of both managed pointers.
             let a_chunk = unsafe { a.clone().offset(offset as isize) };
-            // SAFETY: As above, the validated chunk offset is within `b`'s shared extent.
+            // SAFETY: F10.RawMemoryAccessValid — As above, the validated chunk offset is within `b`'s shared extent.
             let b_chunk = unsafe { b.clone().offset(offset as isize) };
 
-            // SAFETY: `a_chunk` covers `current_chunk` validated bytes and `with_data` exposes
+            // SAFETY: F10.RawMemoryAccessValid — `a_chunk` covers `current_chunk` validated bytes and `with_data` exposes
             // those bytes only for the read-only comparison callback.
             unsafe {
                 a_chunk.with_data(current_chunk, |a_slice| {
@@ -336,7 +336,7 @@ pub fn intrinsic_span_get_item<'gc, T: SpanIntrinsicHost<'gc>>(
         );
     }
 
-    // SAFETY: The bounds check above proves `index` is in the span and `element_size` is the
+    // SAFETY: F10.RawMemoryAccessValid — The bounds check above proves `index` is in the span and `element_size` is the
     // validated layout stride used to construct `base_ptr`.
     let ptr = unsafe { base_ptr.offset((index as usize * element_size) as isize) };
     ctx.push(StackValue::ManagedPtr(ptr.into()));

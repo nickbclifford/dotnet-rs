@@ -842,7 +842,7 @@ mod constraint_cycle_tests {
         let type_index = resolution.push_type_definition(type_def);
         let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
         let arena = Arc::new(MetadataArena::new());
-        // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+        // SAFETY: F10.RawAllocationOwnership. `ptr` was just created with `Box::into_raw`; `arena` owns it and
         // converts it back exactly once in `MetadataArena::drop`.
         unsafe { arena.add_resolution(ptr) };
         (ResolutionS::new(ptr, arena), type_index)

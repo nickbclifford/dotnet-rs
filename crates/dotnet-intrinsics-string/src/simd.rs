@@ -8,9 +8,9 @@ pub fn probe_sequence_equal_u16(lhs: &[u16], rhs: &[u16]) -> Option<bool> {
     }
 
     let byte_len = core::mem::size_of_val(lhs);
-    // SAFETY: `u16` slices are contiguous; converting to an equal-size byte view is safe.
+    // SAFETY: F10.RawMemoryAccessValid — `u16` slices are contiguous; converting to an equal-size byte view is safe.
     let lhs_bytes = unsafe { core::slice::from_raw_parts(lhs.as_ptr().cast::<u8>(), byte_len) };
-    // SAFETY: Same as `lhs_bytes`.
+    // SAFETY: F10.RawMemoryAccessValid — Same as `lhs_bytes`.
     let rhs_bytes = unsafe { core::slice::from_raw_parts(rhs.as_ptr().cast::<u8>(), byte_len) };
     Some(dotnet_simd::sequence_equal(lhs_bytes, rhs_bytes))
 }
@@ -25,7 +25,7 @@ pub fn probe_index_of_char(chars: &[u16], _needle: u16) -> Option<Option<usize>>
     {
         let needle = _needle;
         if x86_sse2_available() {
-            // SAFETY: SSE2 support is checked at runtime above.
+            // SAFETY: F10.ArchIntrinsicPrecondition — SSE2 support is checked at runtime above.
             return Some(unsafe { index_of_char_sse2(chars, needle) });
         }
     }
@@ -33,7 +33,7 @@ pub fn probe_index_of_char(chars: &[u16], _needle: u16) -> Option<Option<usize>>
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     {
         let needle = _needle;
-        // SAFETY: NEON is baseline on aarch64.
+        // SAFETY: F10.ArchIntrinsicPrecondition — NEON is baseline on aarch64.
         return Some(unsafe { index_of_char_neon(chars, needle) });
     }
 
@@ -49,14 +49,14 @@ pub fn probe_all_ascii_whitespace(chars: &[u16]) -> Option<bool> {
     #[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
     {
         if x86_sse2_available() {
-            // SAFETY: SSE2 support is checked at runtime above.
+            // SAFETY: F10.ArchIntrinsicPrecondition — SSE2 support is checked at runtime above.
             return unsafe { all_ascii_whitespace_sse2(chars) };
         }
     }
 
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
     {
-        // SAFETY: NEON is baseline on aarch64.
+        // SAFETY: F10.ArchIntrinsicPrecondition — NEON is baseline on aarch64.
         return unsafe { all_ascii_whitespace_neon(chars) };
     }
 
@@ -100,9 +100,9 @@ unsafe fn index_of_char_sse2(chars: &[u16], needle: u16) -> Option<usize> {
     let needle_pattern = _mm_set1_epi16(needle as i16);
 
     while offset + X86_LANES_U16 <= chars.len() {
-        // SAFETY: Bounds guarantee at least 16 bytes from `offset`.
+        // SAFETY: F10.RawMemoryAccessValid — Bounds guarantee at least 16 bytes from `offset`.
         let chunk_ptr = unsafe { chars.as_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: `chunk_ptr` addresses at least 16 readable bytes in `chars`.
+        // SAFETY: F10.RawMemoryAccessValid — `chunk_ptr` addresses at least 16 readable bytes in `chars`.
         let chunk = unsafe { _mm_loadu_si128(chunk_ptr) };
         let cmp = _mm_cmpeq_epi16(chunk, needle_pattern);
         let mask = _mm_movemask_epi8(cmp);
@@ -130,9 +130,9 @@ unsafe fn all_ascii_whitespace_sse2(chars: &[u16]) -> Option<bool> {
     let fourteen = _mm_set1_epi16(14);
 
     while offset + X86_LANES_U16 <= chars.len() {
-        // SAFETY: Bounds guarantee at least 16 bytes from `offset`.
+        // SAFETY: F10.RawMemoryAccessValid — Bounds guarantee at least 16 bytes from `offset`.
         let chunk_ptr = unsafe { chars.as_ptr().add(offset) }.cast::<__m128i>();
-        // SAFETY: `chunk_ptr` addresses at least 16 readable bytes in `chars`.
+        // SAFETY: F10.RawMemoryAccessValid — `chunk_ptr` addresses at least 16 readable bytes in `chars`.
         let chunk = unsafe { _mm_loadu_si128(chunk_ptr) };
         let ascii_bits = _mm_and_si128(chunk, ascii_mask);
         if _mm_movemask_epi8(_mm_cmpeq_epi16(ascii_bits, zero)) != 0xFFFF_i32 {
@@ -188,14 +188,14 @@ unsafe fn index_of_char_neon(chars: &[u16], needle: u16) -> Option<usize> {
     let needle_pattern = vdupq_n_u16(needle);
 
     while offset + AARCH64_LANES_U16 <= chars.len() {
-        // SAFETY: Bounds guarantee at least 8 u16 lanes from `offset`.
+        // SAFETY: F10.RawMemoryAccessValid — Bounds guarantee at least 8 u16 lanes from `offset`.
         let chunk_ptr = unsafe { chars.as_ptr().add(offset) };
-        // SAFETY: `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
+        // SAFETY: F10.RawMemoryAccessValid — `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
         let chunk = unsafe { vld1q_u16(chunk_ptr) };
         let cmp = vceqq_u16(chunk, needle_pattern);
 
         let mut lane_matches = [0u16; AARCH64_LANES_U16];
-        // SAFETY: `lane_matches` is valid for 8 lanes.
+        // SAFETY: F10.RawMemoryAccessValid — `lane_matches` is valid for 8 lanes.
         unsafe { vst1q_u16(lane_matches.as_mut_ptr(), cmp) };
         if let Some(lane_idx) = lane_matches.iter().position(|&value| value == u16::MAX) {
             return Some(offset + lane_idx);
@@ -220,13 +220,13 @@ unsafe fn all_ascii_whitespace_neon(chars: &[u16]) -> Option<bool> {
     let thirteen = vdupq_n_u16(13);
 
     while offset + AARCH64_LANES_U16 <= chars.len() {
-        // SAFETY: Bounds guarantee at least 8 u16 lanes from `offset`.
+        // SAFETY: F10.RawMemoryAccessValid — Bounds guarantee at least 8 u16 lanes from `offset`.
         let chunk_ptr = unsafe { chars.as_ptr().add(offset) };
-        // SAFETY: `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
+        // SAFETY: F10.RawMemoryAccessValid — `chunk_ptr` addresses at least eight readable u16 lanes in `chars`.
         let chunk = unsafe { vld1q_u16(chunk_ptr) };
         let ascii_bits = vandq_u16(chunk, ascii_mask);
         let mut lanes = [0u16; AARCH64_LANES_U16];
-        // SAFETY: `lanes` is valid for 8 lanes.
+        // SAFETY: F10.RawMemoryAccessValid — `lanes` is valid for 8 lanes.
         unsafe { vst1q_u16(lanes.as_mut_ptr(), ascii_bits) };
         if lanes.iter().any(|&lane| lane != 0) {
             return None;

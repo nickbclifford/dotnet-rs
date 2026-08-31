@@ -56,13 +56,13 @@ impl Drop for MetadataArena {
     fn drop(&mut self) {
         // Drop resolutions first as they may contain references to the slices
         for res in self.resolutions.lock().drain(..) {
-            // SAFETY: The pointer was added via add_resolution, which requires it to be from Box::into_raw.
+            // SAFETY: F10.RawAllocationOwnership. The pointer was added via add_resolution, which requires it to be from Box::into_raw.
             unsafe {
                 drop(Box::from_raw(res));
             }
         }
         for slice in self.u64_slices.lock().drain(..) {
-            // SAFETY: The pointer was added via add_u64_slice, which requires it to be from Box::into_raw.
+            // SAFETY: F10.RawAllocationOwnership. The pointer was added via add_u64_slice, which requires it to be from Box::into_raw.
             unsafe {
                 drop(Box::from_raw(slice));
             }
@@ -70,13 +70,14 @@ impl Drop for MetadataArena {
     }
 }
 
-// SAFETY: MetadataArena contains raw pointers to metadata that are owned exclusively.
-// The metadata is immutable after construction. Access to the storage is guarded by Mutex.
-// The raw pointers themselves point to 'static data (leaked boxes), and the Arc ensures
-// the arena lives as long as any descriptor pointing into it.
+// SAFETY: F7.InitializationPublished; F9.MetadataArenaOutlivesDescriptors.
+// MetadataArena contains raw pointers to metadata that are owned exclusively. The metadata is
+// immutable after construction, access to the storage is guarded by Mutex, and the raw pointers
+// point to 'static data (leaked boxes). The Arc keeps the arena alive for every descriptor.
 unsafe impl Send for MetadataArena {}
-// SAFETY: See the immediately preceding `Send` proof; synchronized access and immutable
-// metadata also make shared references to this arena safe.
+// SAFETY: F7.InitializationPublished; F9.MetadataArenaOutlivesDescriptors.
+// The preceding `Send` proof's synchronized access and immutable metadata also make shared
+// references to this arena safe.
 unsafe impl Sync for MetadataArena {}
 
 #[derive(Clone)]
@@ -92,14 +93,14 @@ impl<'a> Arbitrary<'a> for ResolutionS {
 }
 static_collect!(ResolutionS);
 
-// SAFETY: ResolutionS carries an Arc<MetadataArena> alongside a raw pointer.
-// The Arc ensures the metadata arena (and thus all metadata) lives as long as
-// any ResolutionS exists. The raw pointer lifetime is guaranteed by the Arc.
-// Thread-safety is guaranteed by the Arc's ref-counting and the read-only nature
-// of metadata once loaded.
+// SAFETY: F7.InitializationPublished; F9.MetadataArenaOutlivesDescriptors.
+// ResolutionS carries an Arc<MetadataArena> alongside a raw pointer. The Arc keeps the
+// arena (and its metadata) alive for every ResolutionS, while Arc ref-counting and immutable
+// metadata after loading make it thread-safe.
 unsafe impl Send for ResolutionS {}
-// SAFETY: See the immediately preceding `Send` proof; the shared metadata is immutable
-// and the owning `Arc<MetadataArena>` remains synchronized.
+// SAFETY: F7.InitializationPublished; F9.MetadataArenaOutlivesDescriptors.
+// The preceding `Send` proof's immutable shared metadata and synchronized owning Arc make
+// shared ResolutionS references safe.
 unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
     pub const NULL: Self = Self(None);
@@ -122,9 +123,9 @@ impl ResolutionS {
     pub fn definition(&self) -> &'static Resolution<'static> {
         match &self.0 {
             Some((_, p)) => {
-                // SAFETY: The pointer in ResolutionS is kept alive by the Arc<MetadataArena>
-                // that is co-carried in the same Option variant. The arena owns the metadata
-                // and will not drop it until all ResolutionS instances are dropped.
+                // SAFETY: F9.MetadataArenaOutlivesDescriptors. The pointer in ResolutionS is
+                // kept alive by the Arc<MetadataArena> co-carried in the same Option variant.
+                // The arena owns the metadata and outlives all ResolutionS instances.
                 unsafe { &*p.as_ptr() }
             }
             None => {

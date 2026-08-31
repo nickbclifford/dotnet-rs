@@ -136,7 +136,7 @@ pub fn intrinsic_span_ctor_from_array<'gc, T: SpanIntrinsicHost<'gc>>(
                 let inner = handle.borrow();
                 match &inner.storage {
                     HeapStorage::Vec(v) => {
-                        // SAFETY: We only take the base pointer while holding `inner` borrow.
+                        // SAFETY: F10.BorrowedStorageStable, F10.RawMemoryAccessValid — We only take the base pointer while holding `inner` borrow.
                         // The owner handle is stored in `ManagedPtr`, so subsequent accesses are
                         // validated against this vector's lifetime and bounds.
                         (unsafe { v.raw_data_ptr() }, v.layout.length as i32)

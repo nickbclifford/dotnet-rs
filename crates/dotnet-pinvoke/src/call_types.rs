@@ -146,7 +146,7 @@ impl AlignedReturnBuffer {
             )
         })?;
 
-        // SAFETY: `layout` is validated above. A null return is handled as OOM.
+        // SAFETY: F10.RawMemoryAccessValid — `layout` is validated above. A null return is handled as OOM.
         let ptr = unsafe { alloc_zeroed(layout) };
         let ptr = NonNull::new(ptr).ok_or_else(|| {
             ExecutionError::InternalError(
@@ -166,7 +166,7 @@ impl AlignedReturnBuffer {
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `ptr` points to `layout.size()` bytes for this allocation; callers only read
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` points to `layout.size()` bytes for this allocation; callers only read
         // up to `len`, which is <= `layout.size()`.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
@@ -174,7 +174,7 @@ impl AlignedReturnBuffer {
 
 impl Drop for AlignedReturnBuffer {
     fn drop(&mut self) {
-        // SAFETY: `ptr` was allocated with `alloc_zeroed` using `layout` in `new_zeroed`.
+        // SAFETY: F10.RawAllocationOwnership — `ptr` was allocated with `alloc_zeroed` using `layout` in `new_zeroed`.
         unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
     }
 }
@@ -202,7 +202,7 @@ pub(crate) fn ffi_return_layout_from_raw(
 }
 
 pub(crate) fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), ExecutionError> {
-    // SAFETY: `Cif` owns a prepared `ffi_cif`; rtype is set by `ffi_prep_cif`.
+    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate) — `Cif` owns a prepared `ffi_cif`; rtype is set by `ffi_prep_cif`.
     let rtype = unsafe { (*cif.as_raw_ptr()).rtype };
     if rtype.is_null() {
         return Err(ExecutionError::InternalError(
@@ -212,7 +212,7 @@ pub(crate) fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), Executi
 
     // Use a conservative fallback when libffi leaves alignment unset for aggregate metadata.
     // This keeps return buffers safely over-aligned even when rtype alignment is unknown.
-    // SAFETY: null checked above.
+    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate) — null checked above.
     let raw = unsafe { &*rtype };
     ffi_return_layout_from_raw(raw, 64)
 }
@@ -283,7 +283,7 @@ where
                 write_managed(origin, *offset, &buf[..*len])?;
             }
             #[cfg(test)]
-            // SAFETY: `dest_ptr` originates from validated argument marshalling for this call and
+            // SAFETY: F10.RawMemoryAccessValid — `dest_ptr` originates from validated argument marshalling for this call and
             // we copy exactly `len` bytes from an owned temporary buffer.
             WriteBackSource::Raw(dest_ptr) => unsafe {
                 std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
@@ -300,7 +300,7 @@ pub(crate) fn apply_write_backs<'gc>(
     temp_buffers: &[TempBuffer],
 ) -> Result<(), dotnet_types::error::MemoryAccessError> {
     apply_write_backs_with(write_backs, temp_buffers, |origin, offset, data| {
-        // SAFETY: `origin` and `offset` were captured from validated managed pointers and `data`
+        // SAFETY: F10.RawMemoryAccessValid — `origin` and `offset` were captured from validated managed pointers and `data`
         // references owned temporary storage.
         unsafe { ctx.write_bytes(origin.clone(), offset, data) }
     })

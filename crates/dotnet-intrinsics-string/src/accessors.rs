@@ -77,7 +77,7 @@ pub fn intrinsic_string_get_raw_data<'gc, T: TypedStackOps<'gc> + ExceptionOps<'
         let (ptr, is_str) = {
             let heap = handle.borrow();
             if let HeapStorage::Str(_) = &heap.storage {
-                // SAFETY: The active immutable borrow keeps the string storage alive and this
+                // SAFETY: F10.BorrowedStorageStable — The active immutable borrow keeps the string storage alive and this
                 // branch establishes the storage variant required by `raw_data_ptr`.
                 (unsafe { heap.storage.raw_data_ptr() }, true)
             } else {

@@ -36,7 +36,7 @@ struct PinnedGuard<'gc> {
 
 impl<'gc> PinnedGuard<'gc> {
     pub unsafe fn new(handle: dotnet_value::object::ObjectHandle<'gc>) -> Self {
-        // SAFETY: `handle` is a live GC handle supplied by the marshaling path; its object lock
+        // SAFETY: F1.GcHandleRooted — `handle` is a live GC handle supplied by the marshaling path; its object lock
         // remains valid for `'gc`, and the resulting guard is retained by this PinnedGuard.
         let guard = unsafe {
             let lock_ref: &'gc dotnet_utils::gc::ThreadSafeLock<
@@ -321,7 +321,10 @@ fn invoke_ffi_call_with_write_backs<'gc>(
     call_data: &mut PInvokeCallData<'_, 'gc>,
     ret_ptr: *mut c_void,
 ) -> Result<(), StepResult> {
-    // SAFETY: `call_data.cif` is a prepared libffi CIF, `call_data.arg_ptrs` points to
+    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate); F10.RawMemoryAccessValid —
+    // the selected native function is assumed to use the prepared CIF's calling convention and
+    // complete parameter/return ABI. `call_data.cif` is a prepared libffi CIF,
+    // `call_data.arg_ptrs` points to
     // marshalling-owned argument storage valid for the duration of the call, and `ret_ptr`
     // points to writable storage matching the return ABI (or is null for void returns).
     unsafe {
@@ -345,7 +348,7 @@ fn read_pinvoke_return<'gc, T>(
 
     let mut ret = std::mem::MaybeUninit::<T>::uninit();
     invoke_ffi_call_with_write_backs(ctx, call_data, ret.as_mut_ptr() as *mut c_void)?;
-    // SAFETY: `ffi_call` initialized the entire return slot after ABI validation.
+    // SAFETY: F11.PInvokeAbiAgreement; F10.RawMemoryAccessValid (Plan 06 trust candidate) — `ffi_call` initialized the entire return slot after ABI validation.
     Ok(unsafe { ret.assume_init() })
 }
 
@@ -685,7 +688,7 @@ fn external_call_impl<'gc>(
     for (i, Parameter(_, p_type)) in method.signature().parameters.iter().enumerate() {
         let v = ctx.peek_stack_at(arg_count - 1 - i);
 
-        // SAFETY: `args` contains libffi Type values constructed for every signature parameter;
+        // SAFETY: F10.RawMemoryAccessValid — `args` contains libffi Type values constructed for every signature parameter;
         // their raw pointers remain valid for the duration of this marshaling loop.
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
         match &v {
@@ -738,7 +741,7 @@ fn external_call_impl<'gc>(
                 };
             }
             StackValue::UnmanagedPtr(val) => {
-                // SAFETY: The unmanaged pointer's validity contract is carried by StackValue;
+                // SAFETY: F10.RawMemoryAccessValid — The unmanaged pointer's validity contract is carried by StackValue;
                 // this helper only keeps the pointer-valued argument storage alive for the call.
                 if let Err(e) = unsafe {
                     push_ptr_arg(
@@ -774,10 +777,10 @@ fn external_call_impl<'gc>(
                 let ptr = if let Some(h) = obj.0 {
                     ctx.pin_object(*obj);
                     pinned_objects.push(*obj);
-                    // SAFETY: `h` is pinned above for the full call duration, so the underlying
+                    // SAFETY: F1.GcHandleRooted; F10.BorrowedStorageStable — `h` is pinned above for the full call duration, so the underlying
                     // object storage address remains stable while libffi uses this pointer.
                     let guard = unsafe { PinnedGuard::new(h) };
-                    // SAFETY: The pinned guard guarantees stable backing storage and a valid data
+                    // SAFETY: F10.BorrowedStorageStable — The pinned guard guarantees stable backing storage and a valid data
                     // pointer for the lifetime of `guard`.
                     let ptr = unsafe { guard.guard.storage.raw_data_ptr() };
                     local_guards.push(guard);
@@ -785,7 +788,7 @@ fn external_call_impl<'gc>(
                 } else {
                     std::ptr::null_mut()
                 };
-                // SAFETY: Non-null object storage is pinned and its guard remains in
+                // SAFETY: F10.RawMemoryAccessValid — Non-null object storage is pinned and its guard remains in
                 // `local_guards`; null is a valid pointer argument value.
                 if let Err(e) = unsafe {
                     push_ptr_arg(
@@ -805,12 +808,12 @@ fn external_call_impl<'gc>(
                     PointerOrigin::Heap(ObjectRef(Some(handle))) => {
                         ctx.pin_object(ObjectRef(Some(*handle)));
                         pinned_objects.push(ObjectRef(Some(*handle)));
-                        // SAFETY: The heap owner is pinned above, and this guard is retained in
+                        // SAFETY: F1.GcHandleRooted; F10.BorrowedStorageStable — The heap owner is pinned above, and this guard is retained in
                         // `local_guards` for the whole synchronous native call.
                         let guard = unsafe { PinnedGuard::new(*handle) };
-                        // SAFETY: `guard` holds the object storage lock until it is retained below.
+                        // SAFETY: F10.BorrowedStorageStable — `guard` holds the object storage lock until it is retained below.
                         let base = unsafe { guard.guard.storage.raw_data_ptr() };
-                        // SAFETY: The typed-reference slot's offset was established for this live
+                        // SAFETY: F10.BorrowedStorageStable; F10.RawMemoryAccessValid — The typed-reference slot's offset was established for this live
                         // object origin, whose storage remains pinned and guarded through the call.
                         let value = unsafe { base.add(p.byte_offset().as_usize()) };
                         local_guards.push(guard);
@@ -826,20 +829,20 @@ fn external_call_impl<'gc>(
                     }
                     #[cfg(feature = "multithreading")]
                     PointerOrigin::CrossArenaObjectRef(ptr, _) => {
-                        // SAFETY: `ptr` is an owned cross-arena lock handle retained by the slot.
+                        // SAFETY: F10.BorrowedStorageStable — `ptr` is an owned cross-arena lock handle retained by the slot.
                         let lock = unsafe { &*ptr.as_ptr() };
                         let guard = lock.borrow();
-                        // SAFETY: `guard` keeps the cross-arena object storage live and immobile
+                        // SAFETY: F10.BorrowedStorageStable — `guard` keeps the cross-arena object storage live and immobile
                         // until it is retained in `cross_arena_guards` below.
                         let base = unsafe { guard.storage.raw_data_ptr() };
-                        // SAFETY: The typed-reference slot's offset was established for this live
+                        // SAFETY: F10.BorrowedStorageStable; F10.RawMemoryAccessValid — The typed-reference slot's offset was established for this live
                         // cross-arena object origin and remains valid while `guard` is retained.
                         let value = unsafe { base.add(p.byte_offset().as_usize()) };
                         cross_arena_guards.push(guard);
                         value
                     }
                     _ => {
-                        // SAFETY: The slot retains the managed pointer's live origin. For stack,
+                        // SAFETY: F10.RawMemoryAccessValid — The slot retains the managed pointer's live origin. For stack,
                         // static, transient, and unmanaged origins, their established P/Invoke
                         // lifetime contract keeps the resolved pointer valid through this call.
                         unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) }
@@ -876,7 +879,7 @@ fn external_call_impl<'gc>(
                         clippy::multiple_unsafe_ops_per_block,
                         reason = "the managed read and copy into its equally sized owned buffer share one bounds proof"
                     )]
-                    // SAFETY: `p.with_data` validates access against the managed origin and we copy
+                    // SAFETY: F10.RawMemoryAccessValid — `p.with_data` validates access against the managed origin and we copy
                     // at most `buf_len` bytes into an owned buffer of the same length.
                     unsafe {
                         p.with_data(buf_len, |data| {
@@ -914,7 +917,7 @@ fn external_call_impl<'gc>(
                         reason = "obtaining and offsetting the pinned raw address is one heap-pointer marshaling proof"
                     )]
                     let ptr =
-                        // SAFETY: Heap pointers are pinned and their guards are kept alive in
+                        // SAFETY: F10.RawMemoryAccessValid — Heap pointers are pinned and their guards are kept alive in
                         // `local_guards`; non-heap pointers come from `ManagedPtr` origin data and are
                         // forwarded as-is for the duration of this call.
                         unsafe {
@@ -929,7 +932,7 @@ fn external_call_impl<'gc>(
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                // SAFETY: A handle-less Heap origin reaches this
+                                // SAFETY: F10.RawMemoryAccessValid — A handle-less Heap origin reaches this
                                 // branch only as the P/Invoke raw-address fallback;
                                 // native-call validity remains the caller's contract.
                                 unmanaged_ptr_from_addr(p.byte_offset().as_usize())
@@ -939,7 +942,7 @@ fn external_call_impl<'gc>(
                         }
                     };
 
-                    // SAFETY: Heap storage is pinned and its guard remains in `local_guards`;
+                    // SAFETY: F10.RawMemoryAccessValid — Heap storage is pinned and its guard remains in `local_guards`;
                     // non-heap ManagedPtr origins retain their backing storage through the call.
                     if let Err(e) = unsafe {
                         push_ptr_arg(
@@ -964,15 +967,15 @@ fn external_call_impl<'gc>(
             }
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
-                // SAFETY: `ptr` is an owned non-null handle to the cross-arena lock cell created
+                // SAFETY: F10.BorrowedStorageStable — `ptr` is an owned non-null handle to the cross-arena lock cell created
                 // by the VM; taking a shared reference here does not outlive the handle.
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
-                // SAFETY: The borrow guard keeps the object storage alive and immobile while this
+                // SAFETY: F10.BorrowedStorageStable — The borrow guard keeps the object storage alive and immobile while this
                 // pointer is used by libffi.
                 let p = unsafe { guard.storage.raw_data_ptr() };
                 cross_arena_guards.push(guard);
-                // SAFETY: `cross_arena_guards` retains the borrow that keeps this object storage
+                // SAFETY: F10.BorrowedStorageStable — `cross_arena_guards` retains the borrow that keeps this object storage
                 // alive and immobile through the FFI call.
                 if let Err(e) = unsafe {
                     push_ptr_arg(&mut temp_buffers, &mut arg_buffer_map, &mut arg_ptrs, i, p)

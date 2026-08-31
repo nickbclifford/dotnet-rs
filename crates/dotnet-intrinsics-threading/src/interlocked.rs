@@ -62,7 +62,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let value = ctx.pop_i32() as u8;
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width CAS.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches byte-width CAS.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -93,7 +94,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let value = ctx.pop_i32() as u16;
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit CAS.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches 16-bit CAS.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -123,8 +125,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match the selected primitive operation.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -150,8 +153,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match the selected primitive operation.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -178,8 +182,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let target_ptr = ctx.pop_managed_ptr();
 
             let size = ObjectRef::SIZE;
-            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument for this intrinsic,
             // and the size/orderings match pointer-width CAS.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -220,8 +225,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
 
             let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
             let size = ObjectRef::SIZE;
-            // SAFETY: `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
             // use the same tagged object representation as regular field writes.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev_raw = match unsafe {
                 RawMemoryOps::compare_exchange_atomic(
                     ctx,
@@ -243,7 +249,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             // Decode via read_branded so the tag bits are stripped correctly and
             // the GC lifetime is properly branded.  Gc::from_ptr(prev_raw) would
             // use the tagged value as a raw address, producing an invalid pointer.
-            // SAFETY: `prev_raw` came from VM-managed object slot bytes and `gc`
+            // SAFETY: F1.GcHandleRooted — `prev_raw` came from VM-managed object slot bytes and `gc`
             // brands the returned reference to the current arena lifetime.
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
@@ -279,7 +285,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i32() as u8;
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches byte-width exchange.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches byte-width exchange.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -305,7 +312,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i32() as u16;
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches 16-bit exchange.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches 16-bit exchange.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -330,7 +338,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches `i32`.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -351,7 +360,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches `i64`.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -373,7 +383,8 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let target_ptr = ctx.pop_managed_ptr();
 
             let size = ObjectRef::SIZE;
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches pointer width.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches pointer width.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -414,8 +425,9 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             };
 
             let size = ObjectRef::SIZE;
-            // SAFETY: `target_ptr` is the managed `ref T` argument and `val_raw`
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and `val_raw`
             // uses the VM tagged object representation.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev_raw = match unsafe {
                 RawMemoryOps::exchange_atomic(
                     ctx,
@@ -430,7 +442,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 Err(error) => return handle_interlocked_memory_access_error(ctx, error),
             };
 
-            // SAFETY: `prev_raw` came from VM-managed object slot bytes and `gc`
+            // SAFETY: F1.GcHandleRooted — `prev_raw` came from VM-managed object slot bytes and `gc`
             // brands the returned reference to the current arena lifetime.
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
@@ -467,7 +479,8 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches `i32`.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_add_atomic(
                     ctx,
@@ -493,7 +506,8 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and size matches `i64`.
+            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let prev = match unsafe {
                 RawMemoryOps::exchange_add_atomic(
                     ctx,

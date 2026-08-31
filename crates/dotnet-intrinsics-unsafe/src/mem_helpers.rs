@@ -32,11 +32,11 @@ pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
             while remaining > 0 {
                 let current_chunk = std::cmp::min(remaining, MEM_OP_CHUNK_SIZE);
                 let start = remaining - current_chunk;
-                // SAFETY: `start` is within the caller-validated source range.
+                // SAFETY: F10.RawMemoryAccessValid — `start` is within the caller-validated source range.
                 let src_chunk = unsafe { src.add(start) };
-                // SAFETY: `start` is within the caller-validated destination range.
+                // SAFETY: F10.RawMemoryAccessValid — `start` is within the caller-validated destination range.
                 let dst_chunk = unsafe { dst.add(start) };
-                // SAFETY: The two chunk pointers are valid for `current_chunk` bytes; `copy`
+                // SAFETY: F10.RawMemoryAccessValid — The two chunk pointers are valid for `current_chunk` bytes; `copy`
                 // preserves memmove semantics for the overlapping range.
                 unsafe { ptr::copy(src_chunk, dst_chunk, current_chunk) };
                 remaining = start;
@@ -50,11 +50,11 @@ pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
         let mut offset = 0usize;
         while offset < total_count {
             let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-            // SAFETY: `offset` is within the caller-validated source range.
+            // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated source range.
             let src_chunk = unsafe { src.add(offset) };
-            // SAFETY: `offset` is within the caller-validated destination range.
+            // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
             let dst_chunk = unsafe { dst.add(offset) };
-            // SAFETY: The two chunk pointers are valid for `current_chunk` bytes and may overlap.
+            // SAFETY: F10.RawMemoryAccessValid — The two chunk pointers are valid for `current_chunk` bytes and may overlap.
             unsafe { ptr::copy(src_chunk, dst_chunk, current_chunk) };
             offset += current_chunk;
             if offset < total_count && ctx.check_gc_safe_point() {
@@ -67,11 +67,11 @@ pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     let mut offset = 0usize;
     while offset < total_count {
         let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-        // SAFETY: `offset` is within the caller-validated destination range.
+        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
         let dst_chunk = unsafe { dst.add(offset) };
-        // SAFETY: `offset` is within the caller-validated source range.
+        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated source range.
         let src_chunk = unsafe { src.add(offset) };
-        // SAFETY: This branch proved the source and destination ranges do not overlap.
+        // SAFETY: F10.RawMemoryAccessValid — This branch proved the source and destination ranges do not overlap.
         unsafe { dotnet_simd::copy_nonoverlapping_raw(dst_chunk, src_chunk, current_chunk) };
         offset += current_chunk;
         if offset < total_count && ctx.check_gc_safe_point() {
@@ -91,9 +91,9 @@ pub(crate) fn chunked_fill_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     let mut offset = 0usize;
     while offset < total_count {
         let current_chunk = std::cmp::min(total_count - offset, MEM_OP_CHUNK_SIZE);
-        // SAFETY: `offset` is within the caller-validated destination range.
+        // SAFETY: F10.RawMemoryAccessValid — `offset` is within the caller-validated destination range.
         let dst_chunk = unsafe { dst.add(offset) };
-        // SAFETY: The destination chunk is valid for `current_chunk` bytes by intrinsic contract.
+        // SAFETY: F10.RawMemoryAccessValid — The destination chunk is valid for `current_chunk` bytes by intrinsic contract.
         unsafe { dotnet_simd::fill_raw(dst_chunk, current_chunk, value) };
         offset += current_chunk;
         if offset < total_count && ctx.check_gc_safe_point() {

@@ -40,7 +40,7 @@ impl AlignedAssembly {
         let len = buf.len();
         let cap = len.div_ceil(8);
         let mut backing = vec![0u64; cap];
-        // SAFETY: `backing` has `cap * 8 >= len` bytes; src/dst are valid and non-overlapping.
+        // SAFETY: F10.RawMemoryAccessValid — `backing` has `cap * 8 >= len` bytes; src/dst are valid and non-overlapping.
         unsafe {
             std::ptr::copy_nonoverlapping(buf.as_ptr(), backing.as_mut_ptr() as *mut u8, len);
         }
@@ -52,7 +52,7 @@ impl AlignedAssembly {
     }
 
     fn bytes(&self) -> &[u8] {
-        // SAFETY: `_backing` is valid for at least `len` bytes for the lifetime of `self`.
+        // SAFETY: F10.RawMemoryAccessValid — `_backing` is valid for at least `len` bytes for the lifetime of `self`.
         unsafe { std::slice::from_raw_parts(self._backing.as_ptr() as *const u8, self.len) }
     }
 }

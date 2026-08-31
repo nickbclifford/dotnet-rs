@@ -28,7 +28,7 @@ fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
 fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
     match value {
         StackValue::NativeInt(v) => {
-            // SAFETY: Unsafe buffer operations explicitly interpret NativeInt
+            // SAFETY: F10.RawMemoryAccessValid — Unsafe buffer operations explicitly interpret NativeInt
             // as an unmanaged address; their caller owns pointer validity.
             Some(unsafe { unmanaged_ptr_from_addr(*v as usize) })
         }
@@ -37,7 +37,7 @@ fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
             if ptr.is_null() {
                 None
             } else {
-                // SAFETY: The managed pointer is non-null and we only read the raw address.
+                // SAFETY: F10.RawMemoryAccessValid — The managed pointer is non-null and we only read the raw address.
                 Some(unsafe { ptr.with_data(0, |data| data.as_ptr() as *mut u8) })
             }
         }
@@ -57,7 +57,7 @@ fn chunked_clear_with_safe_point<'gc, T: UnsafeIntrinsicHost<'gc>>(
             clippy::multiple_unsafe_ops_per_block,
             reason = "forming the chunk pointer and clearing that chunk share one validated range proof"
         )]
-        // SAFETY: Destination pointer is valid for `total_count` bytes by intrinsic contract.
+        // SAFETY: F10.RawMemoryAccessValid — Destination pointer is valid for `total_count` bytes by intrinsic contract.
         unsafe {
             dotnet_simd::clear_raw(dst.add(offset), current_chunk);
         }
@@ -150,7 +150,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     for i in 0..len {
         let offset = base_offset + i * elem_size;
         if let Err(e) =
-            // SAFETY: `ptr_info` returned the managed origin and offset for `destination`; the
+            // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` returned the managed origin and offset for `destination`; the
             // layout was resolved for the generic element type before the write.
             unsafe { ctx.write_unaligned(origin.clone(), offset, value.clone(), &layout) }
         {

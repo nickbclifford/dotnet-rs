@@ -1546,11 +1546,11 @@ mod tests {
         let mut resolution = Resolution::new(Module::new("test.dll"));
         resolution.type_definitions.push(type_def);
 
-        // SAFETY: pointer comes from Box::into_raw; MetadataArena::drop calls
+        // SAFETY: F10.RawAllocationOwnership. Pointer comes from Box::into_raw; MetadataArena::drop calls
         // Box::from_raw on the same pointer, so ownership is correctly transferred.
         let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
         let arena = Arc::new(MetadataArena::new());
-        // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+        // SAFETY: F10.RawAllocationOwnership. `ptr` was just created with `Box::into_raw`; `arena` owns it and
         // converts it back exactly once in `MetadataArena::drop`.
         unsafe { arena.add_resolution(ptr) };
         let res_s = ResolutionS::new(ptr, arena);
@@ -1589,7 +1589,7 @@ mod tests {
 
             let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
             let arena = Arc::new(MetadataArena::new());
-            // SAFETY: `ptr` was just created with `Box::into_raw`; `arena` owns it and
+            // SAFETY: F10.RawAllocationOwnership. `ptr` was just created with `Box::into_raw`; `arena` owns it and
             // converts it back exactly once in `MetadataArena::drop`.
             unsafe { arena.add_resolution(ptr) };
             (ResolutionS::new(ptr, arena), type_index)

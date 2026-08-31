@@ -27,11 +27,11 @@ pub fn intrinsic_unsafe_as_pointer<
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = match val {
-        // SAFETY: `with_data(0, ...)` exposes no bytes and only obtains the address associated
+        // SAFETY: F10.RawMemoryAccessValid — `with_data(0, ...)` exposes no bytes and only obtains the address associated
         // with this live managed pointer for the Unsafe.AsPointer contract.
         StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
         StackValue::NativeInt(i) => {
-            // SAFETY: `Unsafe.AsPointer` explicitly interprets NativeInt as an
+            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsPointer` explicitly interprets NativeInt as an
             // unmanaged address; the intrinsic caller owns pointer validity.
             unsafe { unmanaged_ptr_from_addr(i as usize) }
         }
@@ -523,7 +523,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let val = ctx.pop();
     let (ptr, pinned, origin, offset_base) = match val {
         StackValue::NativeInt(p) => {
-            // SAFETY: `Unsafe.AsRef(void*)` explicitly interprets NativeInt as
+            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsRef(void*)` explicitly interprets NativeInt as
             // an unmanaged address; the intrinsic caller owns pointer validity.
             (
                 unsafe { unmanaged_ptr_from_addr(p as usize) },
@@ -533,7 +533,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
             )
         }
         StackValue::ManagedPtr(m) => (
-            // SAFETY: `with_data(0, ...)` only exposes the address represented by the live
+            // SAFETY: F10.RawMemoryAccessValid — `with_data(0, ...)` only exposes the address represented by the live
             // managed pointer; no data is read or written here.
             unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
             m.is_pinned(),
@@ -637,7 +637,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
-    // SAFETY: `ptr_info` validates the source pointer's origin and offset, and `layout` and
+    // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` validates the source pointer's origin and offset, and `layout` and
     // `target_type` were resolved for the requested generic type.
     match unsafe { ctx.read_unaligned(origin, offset, &layout, Some(target_type)) } {
         Ok(v) => {
@@ -687,7 +687,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
-    // SAFETY: `ptr_info` validates the destination pointer's origin and offset, while `layout`
+    // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` validates the destination pointer's origin and offset, while `layout`
     // was resolved for the requested generic type before this write.
     match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}

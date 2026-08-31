@@ -120,9 +120,9 @@ pub unsafe fn copy_nonoverlapping_raw(dst: *mut u8, src: *const u8, len: usize) 
         return;
     }
 
-    // SAFETY: The caller guarantees pointer validity and non-overlap for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity and non-overlap for `len` bytes.
     let dst_slice = unsafe { std::slice::from_raw_parts_mut(dst, len) };
-    // SAFETY: The caller guarantees pointer validity for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity for `len` bytes.
     let src_slice = unsafe { std::slice::from_raw_parts(src, len) };
     copy_nonoverlapping(dst_slice, src_slice);
 }
@@ -157,7 +157,7 @@ pub unsafe fn fill_raw(dst: *mut u8, len: usize, value: u8) {
         return;
     }
 
-    // SAFETY: The caller guarantees pointer validity for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity for `len` bytes.
     let dst_slice = unsafe { std::slice::from_raw_parts_mut(dst, len) };
     fill(dst_slice, value);
 }
@@ -174,7 +174,7 @@ pub fn clear(dst: &mut [u8]) {
 /// - `dst` must be valid for writes of `len` bytes.
 #[inline]
 pub unsafe fn clear_raw(dst: *mut u8, len: usize) {
-    // SAFETY: Same safety contract as `fill_raw`.
+    // SAFETY: F10.RawMemoryAccessValid — Same safety contract as `fill_raw`.
     unsafe { fill_raw(dst, len, 0) };
 }
 
@@ -214,15 +214,15 @@ mod tests {
     fn raw_copy_fill_and_clear_update_buffer_contents() {
         let src = *b"0123456789abcdef";
         let mut dst = [0u8; 16];
-        // SAFETY: Arrays are valid for 16 bytes and do not overlap.
+        // SAFETY: F10.RawMemoryAccessValid — Arrays are valid for 16 bytes and do not overlap.
         unsafe { copy_nonoverlapping_raw(dst.as_mut_ptr(), src.as_ptr(), src.len()) };
         assert_eq!(dst, src);
 
-        // SAFETY: `dst` is valid for all writes below.
+        // SAFETY: F10.RawMemoryAccessValid — `dst` is valid for all writes below.
         unsafe { fill_raw(dst.as_mut_ptr(), dst.len(), 0x3C) };
         assert!(dst.iter().all(|value| *value == 0x3C));
 
-        // SAFETY: `dst` is valid for all writes below.
+        // SAFETY: F10.RawMemoryAccessValid — `dst` is valid for all writes below.
         unsafe { clear_raw(dst.as_mut_ptr(), dst.len()) };
         assert!(dst.iter().all(|value| *value == 0));
     }

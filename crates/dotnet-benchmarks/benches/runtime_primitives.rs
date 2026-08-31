@@ -66,7 +66,7 @@ fn runtime_primitives(c: &mut Criterion) {
                 let gc_handle = GCHandle::new(
                     gc,
                     #[cfg(feature = "multithreading")]
-                    // SAFETY: the call stack is rooted in this arena and this benchmark mutates
+                    // SAFETY: F1.GcHandleRooted — the call stack is rooted in this arena and this benchmark mutates
                     // it only through this arena's `mutate_root` callback.
                     unsafe {
                         engine.stack.arena_inner_gc()

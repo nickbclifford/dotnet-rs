@@ -70,7 +70,7 @@ fn with_benchmark_gc_context<R>(f: impl for<'gc> FnOnce(GCHandle<'gc>) -> R) -> 
     let _arena_registration = ArenaRegistrationGuard::register(BENCH_ARENA_ID);
     let _thread_id = ManagedThreadIdGuard::set(BENCH_ARENA_ID);
     let arena_handle_owner = ArenaHandle::new(BENCH_ARENA_ID);
-    // SAFETY: `arena_handle_owner` is retained until after `arena.mutate` returns, and the
+    // SAFETY: F1.GcHandleRooted — `arena_handle_owner` is retained until after `arena.mutate` returns, and the
     // transmuted reference is used only to construct the GCHandle passed within that closure.
     let arena_handle = unsafe {
         std::mem::transmute::<&ArenaHandleInner, &'static ArenaHandleInner>(
@@ -115,7 +115,7 @@ fn read_cached_heap_handle<'gc>(
     resolver: &BenchmarkManagedPtrResolver,
     cache: &mut HeapManagedPtrDecodeCache<'gc>,
 ) -> Option<ManagedPtrInfo<'gc>> {
-    // SAFETY: The source was produced from a live Heap ManagedPtr and the VM
+    // SAFETY: F3.InteriorPointerRebased — The source was produced from a live Heap ManagedPtr and the VM
     // cache type models the traced, collection-epoch-invalidated production owner.
     unsafe { ManagedPtr::read_resolved_with_heap_cache_unchecked(source, resolver, cache).ok() }
 }
@@ -250,7 +250,7 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
             ptr.write(&mut source);
             read_group.bench_function(*origin, |b| {
                 b.iter(|| {
-                    // SAFETY: `source` was produced by `ManagedPtr::write` from a live benchmark
+                    // SAFETY: F3.InteriorPointerRebased — `source` was produced by `ManagedPtr::write` from a live benchmark
                     // case and remains unchanged for the duration of this benchmark iteration; the
                     // resolver supplies the live Stack and Static bases.
                     black_box(unsafe {

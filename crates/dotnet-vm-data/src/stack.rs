@@ -116,7 +116,7 @@ impl<'gc> StackFrame<'gc> {
     }
 }
 
-// SAFETY: `StackFrame` traces all GC-managed fields it can contain:
+// SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
 // `exception_stack` entries and optional `multicast_state`.
 // `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has no GC references.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
@@ -135,7 +135,7 @@ pub struct EvaluationStack<'gc> {
     suspended_locations_scratch: Vec<NonNull<u8>>,
 }
 
-// SAFETY: `EvaluationStack` traces all GC-managed fields (`stack` and `suspended_stack`).
+// SAFETY: F5.TracesEveryGcRef — `EvaluationStack` traces all GC-managed fields (`stack` and `suspended_stack`).
 // Scratch pointer caches are raw addresses derived from stack values and contain no GC references.
 unsafe impl<'gc> Collect<'gc> for EvaluationStack<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -224,10 +224,10 @@ impl<'gc> EvaluationStack<'gc> {
             if let PointerOrigin::Stack(idx) = m.origin() {
                 let off = m.byte_offset();
                 let slot_ptr = resolve_slot_ptr(*idx);
-                // SAFETY: `slot_ptr` identifies the start of the live stack slot and
+                // SAFETY: F3.InteriorPointerRebased — `slot_ptr` identifies the start of the live stack slot and
                 // `off` was recorded from that slot when the pointer was created.
                 let raw_ptr = unsafe { slot_ptr.as_ptr().add(off.as_usize()) };
-                // SAFETY: adding the recorded offset to a non-null stack-slot pointer
+                // SAFETY: F3.InteriorPointerRebased — adding the recorded offset to a non-null stack-slot pointer
                 // preserves non-nullness.
                 let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
                 m.update_cached_ptr(new_ptr);
@@ -248,7 +248,7 @@ impl<'gc> EvaluationStack<'gc> {
                         if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
                             let offset_val = offset.as_usize();
                             let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
-                            // SAFETY: `slice` is exactly one serialized ManagedPtr field,
+                            // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `slice` is exactly one serialized ManagedPtr field,
                             // selected by the layout manager from storage it previously wrote.
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
                             if let PointerOrigin::Stack(idx) = info.origin {

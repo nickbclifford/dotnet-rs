@@ -124,7 +124,7 @@ impl AssemblyLoader {
         let len = SUPPORT_LIBRARY.len();
         let cap = len.div_ceil(8);
         let mut aligned: Vec<u64> = vec![0u64; cap];
-        // SAFETY: The source and destination are both valid for 'len' bytes.
+        // SAFETY: F10.RawMemoryAccessValid. The source and destination are both valid for 'len' bytes.
         // The destination buffer 'aligned' has enough capacity as it's allocated with 'div_ceil(8)'.
         // Both buffers are non-overlapping as 'aligned' is newly allocated.
         unsafe {
@@ -136,18 +136,18 @@ impl AssemblyLoader {
         }
         let aligned_boxed = aligned.into_boxed_slice();
         let aligned_ptr = Box::into_raw(aligned_boxed);
-        // SAFETY: `aligned_ptr` came from `Box::into_raw` immediately above. AssemblyLoader owns
+        // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawAllocationOwnership. `aligned_ptr` came from `Box::into_raw` immediately above. AssemblyLoader owns
         // the `Arc<MetadataArena>` that tracks and eventually reclaims the allocation, so this
         // mutable slice remains live for every metadata user given the `'static` reference.
         let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
-        // SAFETY: `aligned_ptr` is a live allocation from `Box::into_raw`; MetadataArena takes
+        // SAFETY: F10.RawAllocationOwnership. `aligned_ptr` is a live allocation from `Box::into_raw`; MetadataArena takes
         // ownership of reclaiming it and does not dereference it here.
         unsafe {
             self.metadata.add_u64_slice(aligned_ptr);
         }
 
         let byte_slice =
-            // SAFETY: 'aligned_slice' is a leaked Box<[u64]> which is valid for its entire length.
+            // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawMemoryAccessValid. 'aligned_slice' is a leaked Box<[u64]> which is valid for its entire length.
             // Converting it to a *const u8 slice of length 'len' is safe because it was initialized
             // with exactly 'len' bytes from SUPPORT_LIBRARY.
             unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
@@ -167,11 +167,11 @@ impl AssemblyLoader {
         .map_err(AssemblyLoadError::from)?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
-        // SAFETY: `support_res_ptr` came from `Box::into_raw` immediately above. MetadataArena
+        // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawAllocationOwnership. `support_res_ptr` came from `Box::into_raw` immediately above. MetadataArena
         // tracks and eventually reclaims it, and its owning Arc outlives every ResolutionS that
         // receives this `'static` reference.
         let support_res: &'static mut Resolution<'static> = unsafe { &mut *support_res_ptr };
-        // SAFETY: `support_res_ptr` is the live allocation just produced by `Box::into_raw`, and
+        // SAFETY: F10.RawAllocationOwnership. `support_res_ptr` is the live allocation just produced by `Box::into_raw`, and
         // MetadataArena records responsibility for reclaiming it without accessing it now.
         unsafe {
             self.metadata.add_resolution(support_res_ptr);

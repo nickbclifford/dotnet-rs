@@ -545,7 +545,7 @@ impl AssemblyLoader {
         let res_ptr = Box::into_raw(res_box);
         let res_s = ResolutionS::new(res_ptr, self.metadata.clone());
 
-        // SAFETY: `res_ptr` was obtained from `Box::into_raw(Box::new(res))` two
+        // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawAllocationOwnership. `res_ptr` was obtained from `Box::into_raw(Box::new(res))` two
         // lines above.  Ownership is transferred to `self.metadata`; the `MetadataArena`
         // will call `Box::from_raw` on it in its `Drop` impl.  `res_s` holds an
         // `Arc<MetadataArena>` ensuring the arena (and thus `res_ptr`) remains live

@@ -47,7 +47,9 @@ fn read_exception_string_field<'gc>(
     let field_bytes = obj
         .instance_storage
         .get_field_local(exception_type.clone(), field_name);
-    // SAFETY: field_bytes contains a valid ObjectRef from the object's storage.
+    // SAFETY: F2.DescriptorMatchesEcmaLayout; F1.GcHandleRooted — The exception descriptor
+    // selects this named field as an ObjectRef-sized payload in the object's managed storage,
+    // and `gc` supplies the arena brand that roots the decoded reference for this access.
     let field_ref = unsafe { ObjectRef::read_branded(&field_bytes, gc) };
     let field_inner = field_ref.0?;
 
@@ -82,8 +84,9 @@ fn write_exception_string_field<'gc>(
         .instance_storage
         .get_field_mut_local(exception_type.clone(), field_name);
     let val = StackValue::ObjectRef(str_obj);
-    // SAFETY: field_data is a valid mutable slice of the object's instance storage,
-    // and val is a valid StackValue::ObjectRef.
+    // SAFETY: F10.RawMemoryAccessValid — `get_field_mut_local` returns the resolved,
+    // ObjectRef-sized field range as an exclusive mutable slice of the live instance storage,
+    // and `val` is an initialized ObjectRef payload for the selected StoreType.
     unsafe {
         val.store(field_data.as_mut_ptr(), StoreType::Object);
     }

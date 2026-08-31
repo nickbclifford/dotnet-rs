@@ -72,7 +72,7 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
                     let element_type = make_char_element_type(ctx)?;
 
                     Ok(SpanSourceData {
-                        // SAFETY: `heap` borrow pins the string storage for this scope; we only
+                        // SAFETY: F10.BorrowedStorageStable — `heap` borrow pins the string storage for this scope; we only
                         // use the pointer to build a managed reference with validated bounds below.
                         base_ptr: unsafe { heap.storage.raw_data_ptr() },
                         total_len: s.len(),
@@ -81,7 +81,7 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
                     })
                 }
                 HeapStorage::Vec(a) => Ok(SpanSourceData {
-                    // SAFETY: `heap` borrow keeps vector storage alive and we only derive an
+                    // SAFETY: F10.BorrowedStorageStable — `heap` borrow keeps vector storage alive and we only derive an
                     // offset pointer after explicit start/length range checks.
                     base_ptr: unsafe { a.raw_data_ptr() },
                     total_len: a.layout.length,
@@ -222,7 +222,7 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     let ptr = if base_ptr.is_null() {
         base_ptr
     } else {
-        // SAFETY: `start <= total_len` and `actual_length` checks above ensure this computed
+        // SAFETY: F10.RawMemoryAccessValid — `start <= total_len` and `actual_length` checks above ensure this computed
         // element offset remains within the source span's backing allocation.
         unsafe { base_ptr.add(byte_start) }
     };
@@ -418,7 +418,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, T: SpanIntrinsicHost<'g
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         dotnet_vm_ops::vm_try!(
-            // SAFETY: `length_ref` points to Span `_length` field and we write exactly 4 bytes
+            // SAFETY: F10.RawMemoryAccessValid — `length_ref` points to Span `_length` field and we write exactly 4 bytes
             // (`i32`) to that location.
             unsafe {
                 ctx.write_bytes(
@@ -531,7 +531,7 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
         if let HeapStorage::Vec(v) = &inner.storage {
-            // SAFETY: `inner` borrow keeps vector backing storage alive while deriving a pointer to
+            // SAFETY: F10.BorrowedStorageStable — `inner` borrow keeps vector backing storage alive while deriving a pointer to
             // its first element.
             let ptr = unsafe { v.raw_data_ptr() };
 
@@ -750,7 +750,7 @@ pub fn intrinsic_span_slice<'gc, T: SpanIntrinsicHost<'gc>>(
         return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
     };
 
-    // SAFETY: bounds checks above prove the byte adjustment stays within the source span.
+    // SAFETY: F10.RawMemoryAccessValid — bounds checks above prove the byte adjustment stays within the source span.
     let reference = unsafe { reference.offset(byte_offset) };
     let span = dotnet_vm_ops::vm_try!(
         ctx.span_new_object_with_type_generics(method.parent.clone(), vec![element_type.clone()],)
@@ -830,7 +830,7 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
                         format!("{:?}", object.storage),
                     );
                 };
-                // SAFETY: the owning handle is retained by the ManagedPtr below, and the vector
+                // SAFETY: F10.BorrowedStorageStable — the owning handle is retained by the ManagedPtr below, and the vector
                 // borrow keeps its backing storage live while deriving the data pointer.
                 (
                     unsafe { vector.raw_data_ptr() },
@@ -921,7 +921,7 @@ pub fn intrinsic_span_copy_to<'gc, T: SpanIntrinsicHost<'gc>>(
     let mut values = Vec::with_capacity(source_length);
     for index in 0..source_length {
         let offset = ByteOffset::new(index * element_size);
-        // SAFETY: source span metadata supplied the managed origin and base offset; the length
+        // SAFETY: F10.RawMemoryAccessValid — source span metadata supplied the managed origin and base offset; the length
         // check above and element-size stride keep this read within the source span.
         let value = unsafe {
             ctx.read_unaligned(
@@ -943,7 +943,7 @@ pub fn intrinsic_span_copy_to<'gc, T: SpanIntrinsicHost<'gc>>(
 
     for (index, value) in values.into_iter().enumerate() {
         let offset = ByteOffset::new(index * element_size);
-        // SAFETY: destination span metadata supplied the managed origin and base offset; its
+        // SAFETY: F10.RawMemoryAccessValid — destination span metadata supplied the managed origin and base offset; its
         // validated length is at least the source length, so this write is in bounds.
         let result = unsafe {
             ctx.write_unaligned(

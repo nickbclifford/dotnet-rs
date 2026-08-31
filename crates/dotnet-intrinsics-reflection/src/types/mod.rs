@@ -334,7 +334,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let val = StackValue::NativeInt(0);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
-            // SAFETY: The intrinsic decoded these managed-pointer out parameters from the CLR
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
             // call frame; their origins, offsets, and scalar layouts match the values written.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
@@ -346,7 +346,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             let val = StackValue::NativeInt(0);
-            // SAFETY: The intrinsic decoded these managed-pointer out parameters from the CLR
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
             // call frame; their origins, offsets, and scalar layouts match the values written.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
@@ -381,7 +381,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let method_val = StackValue::NativeInt(method_idx as isize);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
-            // SAFETY: The intrinsic decoded these managed-pointer out parameters from the CLR
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
             // call frame; their origins, offsets, and scalar layouts match the values written.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
@@ -394,7 +394,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let public_val = StackValue::Int32(1);
             let byte_layout = LayoutManager::Scalar(Scalar::Int8);
-            // SAFETY: The intrinsic decoded these managed-pointer out parameters from the CLR
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
             // call frame; their origins, offsets, and scalar layouts match the values written.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
