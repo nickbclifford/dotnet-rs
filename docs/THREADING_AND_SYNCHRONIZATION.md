@@ -21,7 +21,7 @@ CLI's Rayon pool, tracer, and integration-test timeout harness can do so in eith
 - `F8.LockOrderRespected`: all nested locking follows the `define_lock_order_dag!` order, with negative `AcquireAfter` assertions rejecting known inversions.
 - `F8.NoSafepointWhileHeapBorrowed`: a `GcScopeGuard` or `ThreadSafeLock` exclusion prevents safepoint polling and allocation while a heap borrow is held.
 - `F11.ObjectPointerThreadSafe`: `ObjectPtr` may be sent or shared only because it points to `ThreadSafeLock<ObjectInner>` satisfying the required `Send`/`Sync` bounds.
-- `F11.PInvokeLastErrorSerialized`: callers serialize access to the process-global P/Invoke last-error slot, as required by its unsafe host-operation contract.
+- `F11.PInvokeLastErrorArenaLocal`: each executor initializes its runtime-cached P/Invoke last-error value to zero in `ArenaLocalState`, and Marshal Get/Set access only that current context's cell.
 
 ## Thread Lifecycle (`threading/`)
 
@@ -217,6 +217,8 @@ In both branches, `wait_graph` cleanup must already be complete before control r
 
 ### Threading ↔ Executor
 Each `Executor` owns a `GCArena` in thread-local storage. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
+
+`CallStack` owns the executor's `ArenaLocalState`, including the cached P/Invoke last-error scalar; `VesContext` borrows it directly, so no ThreadManager lookup or shared lock is involved. Native `errno`/`GetLastError` capture at the P/Invoke boundary is not implemented by this state migration.
 
 ### SyncBlock ↔ Object Identity
 Monitor locks are keyed by a lazily allocated sync block index stored in the object layout. This means:

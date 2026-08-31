@@ -13,8 +13,6 @@
 //! - `DenySandbox` (feature `fuzzing`): sandbox implementation that rejects
 //!   all native calls so fuzz targets can exercise managed code paths without
 //!   executing host-native functions.
-//! - [`LAST_ERROR`]: process-global compatibility slot for `GetLastError`/`errno`-style
-//!   interop. Its unsafe API requires external serialization; it is not thread-local.
 
 mod call;
 mod call_types;
@@ -22,7 +20,7 @@ mod loader;
 mod marshal;
 mod sandbox;
 
-pub use call::{LAST_ERROR, external_call};
+pub use call::external_call;
 pub use loader::NativeLibraries;
 #[cfg(feature = "fuzzing")]
 pub use sandbox::DenySandbox;

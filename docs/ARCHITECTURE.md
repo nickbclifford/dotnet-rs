@@ -119,6 +119,8 @@ The VM supports multi-threading (feature-gated via `multithreading`). For detail
 - **Safe Points**: Execution periodically checks if a GC or suspension has been requested via `ctx.check_gc_safe_point()`.
 - **Synchronization**: .NET `Monitor` (lock/unlock) is implemented using `SyncBlockManager`, providing thread-safe access to objects with monitor-style semantics.
 
+Each executor's `CallStack` owns `ArenaLocalState` for arena/thread-private heap, reflection, and cached P/Invoke last-error state; cross-thread services remain in `SharedGlobalState`.
+
 ## Exception Handling
 
 `dotnet-rs` implements the ECMA-335 structured exception handling (SEH) model using a two-pass approach.

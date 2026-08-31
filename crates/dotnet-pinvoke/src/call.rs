@@ -28,14 +28,6 @@ use gc_arena::Gc;
 use libffi::middle::*;
 use std::{ffi::c_void, marker::PhantomPinned, ptr::NonNull, sync::Arc};
 
-/// Process-global compatibility slot for the VM's P/Invoke last-error intrinsics.
-///
-/// # Safety
-/// All reads and writes must be externally serialized. This is not thread-local and therefore
-/// cannot be accessed concurrently without a data race; replacing it with per-thread state is a
-/// separate runtime-behavior change.
-pub static mut LAST_ERROR: i32 = 0;
-
 type ObjectReadGuard<'a, 'gc> = ThreadSafeReadGuard<'a, dotnet_value::object::ObjectInner<'gc>>;
 struct PinnedGuard<'gc> {
     guard: ObjectReadGuard<'gc, 'gc>,

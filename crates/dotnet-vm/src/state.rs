@@ -658,6 +658,7 @@ pub struct ArenaLocalState<'gc> {
     pub heap: HeapManager<'gc>,
     pub reflection: ReflectionLocalState<'gc>,
     pub active_borrows: Cell<usize>,
+    pub pinvoke_last_error: i32,
 }
 
 // SAFETY: F5.TracesEveryGcRef — `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
@@ -675,6 +676,7 @@ impl<'gc> ArenaLocalState<'gc> {
             heap: HeapManager::new(),
             reflection: ReflectionLocalState::new(),
             active_borrows: Cell::new(0),
+            pinvoke_last_error: 0,
         }
     }
 }
