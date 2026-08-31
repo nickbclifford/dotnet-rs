@@ -21,7 +21,7 @@ Deterministic correctness checks are blocking, including the `dotnet-value` Miri
 
 Jobs:
 
-1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
 3. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
 4. `clippy`: feature matrix resolved from `xtask`

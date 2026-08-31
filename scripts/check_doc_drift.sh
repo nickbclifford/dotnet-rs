@@ -231,12 +231,20 @@ for predicate in "${REGISTRY_PREDICATES[@]}"; do
   fi
 done
 
+# The numbered plan files own their detailed status; the queue must present the
+# same canonical state so dependency and priority discussions start from facts.
+if bash "$REPO_ROOT/scripts/check_plan_queue.sh"; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "doc-drift check: $PASS passed, $FAIL failed."
 
 if [[ $FAIL -gt 0 ]]; then
   echo ""
-  echo "Fix the mismatches above: update the doc to match the current identifier name,"
-  echo "or update the check table in scripts/check_doc_drift.sh if a rename was intentional."
+  echo "Fix the mismatches above: reconcile source and docs, or the numbered plan"
+  echo "status and queue row. Update this script's check table after intentional renames."
   exit 1
 fi

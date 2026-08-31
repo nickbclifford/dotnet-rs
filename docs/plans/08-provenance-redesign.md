@@ -4,10 +4,11 @@
 `dotnet-value` and `dotnet-runtime-memory` Miri legs, and the flag is added to
 `.github/workflows/miri.yml` for those legs.
 
-**Status (2026-08-06):** implementation complete; original CI gate explicitly
-closed by owner-directed deferral, not met. **Parked, not queued** — last in
-[the plan sequence](README.md) because reopening it needs a new, explicitly
-authorized task, not because of any technical dependency on plans 01–07.
+**Status:** parked — implementation complete; original CI gate explicitly
+closed by owner-directed deferral, not met (2026-08-06). **Parked, not queued**
+— last in [the plan sequence](README.md) because reopening it needs a new,
+explicitly authorized task, not because of any technical dependency on plans
+01–07.
 
 ## Final disposition
 

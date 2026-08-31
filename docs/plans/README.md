@@ -1,14 +1,15 @@
 # Plan queue
 
-This directory holds every open, actionable plan for `dotnet-rs`, in one
-dependency-respecting queue. It replaces the old standalone
+This directory holds the numbered plan series for `dotnet-rs` and indexes its
+active, complete, and explicitly parked work in one dependency-respecting
+queue. It replaces the old standalone
 `docs/ASSURANCE_ROADMAP.md`, which indexed only the unsafe-code assurance
 plans (now 01, 02, 04, 06, 08 below); this file folds in the architecture and
 soundness backlog that used to live only in review notes, and drops the
 separate document.
 
-The plans here come from two lineages, merged into one queue by dependency
-order rather than kept as two parallel lists:
+The plans here come from three lineages, merged into one queue by dependency
+order rather than kept as parallel lists:
 
 - **Assurance lineage** (01, 02, 04, 06, 08) — successor to a terminated
   proof-DSL feasibility study. Keeps that study's goal — make the invariants
@@ -22,6 +23,9 @@ order rather than kept as two parallel lists:
 - **Architecture/soundness lineage** (03, 05, 07) — items from the 2026-07-25
   and 2026-07-31 whole-codebase architecture reviews that were tracked only in
   review notes until this consolidation gave them plan files.
+- **Legibility-review lineage** (09) — the accepted 2026-08-30 bottom-up and
+  top-down review. It integrates new proposals with plans 01–08 without
+  renaming their work or changing plan 08's parked disposition.
 
 The premise shared across the assurance plans: **the highest-value work is
 eliminating obligations, not proving them** — an invariant carried by a type
@@ -40,24 +44,21 @@ condition objectively met or not — so progress is not self-assessed.
 
 | # | Plan | Gate | Status | Depends on |
 | --- | --- | --- | --- | --- |
-| 01 | [Layer invariant specs](01-layer-invariant-specs.md) | Every `// SAFETY:` comment in the four core crates cites a named predicate from the registry; drift-checked in CI | Not started | — |
-| 02 | [Falsifier portfolio](02-falsifier-portfolio.md) | A `loom` leg exercising the STW handshake is blocking in CI; all four fuzz targets blocking; Kani harnesses for the F3/F4/F9 value facts | Not started | — (runs beside 01) |
+| 01 | [Layer invariant specs](01-layer-invariant-specs.md) | Every `// SAFETY:` comment in the four core crates cites a named predicate from the registry; drift-checked in CI | Complete | — |
+| 02 | [Falsifier portfolio](02-falsifier-portfolio.md) | A `loom` leg exercising the STW handshake is blocking in CI; all four fuzz targets blocking; Kani harnesses for the F3/F4/F9 value facts | Not started | — |
 | 03 | [Width-generic atomics](03-width-generic-atomics.md) | The nine `match size` ladders in `dotnet-utils/src/atomic.rs` are replaced by one width-generic implementation | Not started | — |
 | 04 | [Model correspondence](04-model-correspondence.md) | Clause→site index covers every family-F2 site; differential fixture count ratcheted upward from 7 | Not started | 01 (predicate names) |
 | 05 | [Descriptor interning, phase 2](05-descriptor-interning.md) | Zero `mutable_key_type` allows remain for `ConcreteType`/`GenericLookup` keys; `record_key_clones` reads zero in production | Not started | — |
 | 06 | [Trust register](06-trust-register.md) | Every entry names a falsifier; count is CI-ceilinged | Not started | 01, 02 |
 | 07 | [Fixture exit-code oracle](07-fixture-exit-code-oracle.md) | Harness-level outcomes occupy a reserved code band distinct from fixture-authored codes; opt-in exit-code-only differential mode exists | Not started | — |
 | 08 | [Provenance redesign](08-provenance-redesign.md) | `-Zmiri-strict-provenance` runs green on at least the `dotnet-value` and `dotnet-runtime-memory` legs | **Parked** — implementation complete, gate closed unmet by owner-directed deferral (2026-08-05) | — |
+| 09 | [Whole-codebase legibility review](09-codebase-legibility-review.md) | Every active Phase-4 row reaches its objective gate or moves to a separately tracked successor plan without duplicate scope | In progress — review accepted; queue bookkeeping complete | Mixed; see plan |
 
-Plans 01, 02, 03, 05, and 07 have no dependency and can run in any order or
-concurrently. 01 is listed first because it is the precondition for the most
-downstream work (04 and 06 both need it) and because `CONTRIBUTING.md`'s
-unsafe-code policy names it as the standing long-term plan for that policy.
-03 is sequenced early relative to 01's retrofit work for a soft reason, not a
-hard dependency: 01's own scoping decision defers the F4 width-generic
-refactor precisely because eliminating a predicate is better than naming it,
-so doing 03 before 01 retrofits `dotnet-utils`'s `// SAFETY:` comments avoids
-annotating call sites that 03 is about to delete.
+Plan 01 is complete, so its dependencies no longer block plan 04 and satisfy
+that half of plan 06's prerequisites. Plans 02, 03, 04, 05, and 07 therefore
+have no unmet dependency and can run in any order or concurrently; plan 06
+still waits on plan 02. Plan 09 is the integrated review backlog, and the
+per-row dependencies in its Phase 4 table control the work it adds or extends.
 
 08 is parked, not queued: its gate was closed by an explicit owner decision,
 and reopening it requires a new, explicitly authorized task beginning with a
@@ -80,7 +81,7 @@ not infer any strict-provenance coverage from the other plans' Miri legs; see
   continuous with plan 04, with no proof obligations attached.
 - **No new parallel doc tree.** Plan 01 extends the existing subsystem docs
   (`GC_AND_MEMORY_SAFETY.md`, `THREADING_AND_SYNCHRONIZATION.md`, …) rather
-  than duplicating them, and plans 03/05/07 land their findings in this same
+  than duplicating them, and plans 03/05/07/09 land their findings in this same
   `docs/plans/` tree rather than a separate backlog document.
 
 ## Re-entry conditions for a proof-assistant approach
