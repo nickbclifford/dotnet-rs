@@ -1,7 +1,7 @@
 use crate::{heap::HeapManager, validation::*};
 use dotnet_types::{
     TypeDescription,
-    error::{CompareExchangeError, MemoryAccessError},
+    error::{CompareExchangeError, MemoryAccessError, PointerDeserializationError},
     generics::GenericLookup,
     resolution::ResolutionS,
 };
@@ -1468,11 +1468,22 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         StackValue::ObjectRef(ObjectRef::read_branded(&buf, &gc))
                     }
                     Scalar::ManagedPtr => {
-                        let info = ManagedPtr::read_resolved_branded(
-                            std::slice::from_raw_parts(ptr, ManagedPtr::SIZE),
+                        let bytes = std::slice::from_raw_parts(ptr, ManagedPtr::SIZE);
+                        // Heap and unmanaged pointers can be resolved here. Stack and static
+                        // pointers require VM-owned live bases, so retain their stable origin
+                        // metadata for the VM to resolve when they are dereferenced.
+                        let info = match ManagedPtr::read_resolved_branded(
+                            bytes,
                             &gc,
                             &NoManagedPtrResolver,
-                        )
+                        ) {
+                            Ok(info) => Ok(info),
+                            Err(
+                                PointerDeserializationError::UnresolvedStackSlot(_)
+                                | PointerDeserializationError::UnresolvedStaticStorage,
+                            ) => ManagedPtr::read_metadata_branded(bytes, &gc),
+                            Err(error) => Err(error),
+                        }
                         .map_err(|e| {
                             MemoryAccessError::TypeMismatch(
                                 format!("ManagedPtr read failed: {:?}", e).into(),

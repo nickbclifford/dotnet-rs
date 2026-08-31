@@ -78,7 +78,14 @@ fn with_benchmark_gc_context<R>(f: impl for<'gc> FnOnce(GCHandle<'gc>) -> R) -> 
         )
     };
 
-    arena.mutate(|gc, _root| f(GCHandle::new(gc, arena_handle)))
+    arena.mutate(|gc, _root| {
+        f(GCHandle::new(
+            gc,
+            arena_handle,
+            #[cfg(feature = "memory-validation")]
+            BENCH_ARENA_ID,
+        ))
+    })
 }
 
 fn non_null_at(bytes: &mut [u8], offset: usize) -> NonNull<u8> {

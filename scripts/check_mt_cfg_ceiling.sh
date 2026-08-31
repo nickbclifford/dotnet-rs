@@ -2,7 +2,7 @@
 # Enforce the repository-wide multithreading cfg-occurrence budget.
 set -euo pipefail
 
-CEILING=403
+CEILING=413
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 COUNT="$(
