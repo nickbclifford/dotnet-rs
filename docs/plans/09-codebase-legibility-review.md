@@ -3,17 +3,19 @@
 **Review date:** 2026-08-30
 **Gate:** every active Phase-4 row reaches its objective gate or moves to a
 separately tracked successor plan without duplicate scope.
-**Status:** in progress — review accepted 2026-08-30; priority 2's queue
-bookkeeping repair completed during promotion; remaining engineering work is
-not started.
+**Status:** in progress — review accepted 2026-08-30; priorities 1's P/Invoke
+last-error migration, 2's queue-bookkeeping repair, 3's workspace-wide Plan-01
+citation extension, and 4's Plan-03 atomic refactor are complete; remaining
+engineering work is not started.
 **Depends on:** mixed; each Phase-4 row states its own prerequisites. Plan 08
 remains parked.
 **Scope:** every member of the root Cargo workspace, the VM's internal module
 boundaries, the managed fixture suite, in-crate tests, fuzz targets, and
 benchmarks.
-**Disposition:** accepted planning document. It reports findings and proposes
-gated work; except for the explicit queue-bookkeeping repair, it does not mark
-implementation work complete and does not replace [`README.md`](README.md).
+**Disposition:** accepted planning document. It preserves the review-date
+findings and proposes the remaining gated work; the explicitly marked
+priorities 1–4 record completed follow-up work. It does not replace
+[`README.md`](README.md).
 
 ## 1. Summary
 
@@ -37,9 +39,9 @@ and `dotnet-vm-data`'s duplicate knowledge of the private three-word
 `ManagedPtr` encoding. The clearest policy failure is that plan 01 and
 `check_doc_drift.sh` enforce predicate citations in only four crates even
 though `CONTRIBUTING.md` states the policy for every unsafe site: 223
-`// SAFETY:` comments in other `src/` trees currently have no registry
-citation. The drift suite remains green because passing reflects its configured
-four-crate scope, not workspace-wide policy coverage.
+`// SAFETY:` comments in other `src/` trees had no registry citation at review
+time. The expanded drift suite now mechanically covers every package-owned Rust
+target and verifies the same bidirectional registry policy across the workspace.
 
 There is also a substantial difference between the conceptual and physical
 architecture. `dotnet-vm-ops` is described and drawn like a foundational trait
@@ -203,8 +205,9 @@ own owner, and type-member selection deserves a focused module.
 Reflection uses several narrow host traits, all implemented only by
 `VesContext`/`ResolutionContext`; there are no direct Rust unit tests in this
 crate. The abstraction buys crate separation but has not yet bought fake-host
-tests. Four local safety comments are uncited by the predicate registry. The
-seven deleted-`REVIEW.md` references include two reflection sites.
+tests. Its four local safety comments were predicate-cited by the completed
+workspace-wide gate extension. The seven deleted-`REVIEW.md` references include
+two reflection sites.
 
 #### `dotnet-assemblies`
 
@@ -311,8 +314,8 @@ value-type return alignment have direct tests.
 The public `LAST_ERROR: static mut i32` is neither justified complexity nor an
 acceptable simplification. It exports a race-capable representation, contradicts
 the managed per-thread semantics of `Marshal.Get/SetLastPInvokeError`, and
-requires an external premise no caller establishes. Thirty-one safety comments
-are not predicate-cited. Existing managed coverage exercises five Linux
+requires an external premise no caller establishes. Its thirty-one safety comments were predicate-cited by the completed
+workspace-wide gate extension. Existing managed coverage exercises five Linux
 `libc`/`libm` shapes but not last-error isolation, strings, arrays, callbacks,
 calling-convention variation, or non-Linux ABIs.
 
@@ -332,8 +335,9 @@ String/span/unsafe/threading handlers still hand-roll many equivalent pops,
 matches, null cases, and type errors. This is an incomplete abstraction
 adoption, not evidence that all argument handling can be one generic macro.
 
-Span has two direct Rust tests and 24 uncited safety comments. String has six
-direct tests and 19 uncited safety comments. The generic environment parser
+Span has two direct Rust tests and 24 safety comments now cited by the
+workspace-wide gate. String has six direct tests and 19 likewise-cited safety
+comments. The generic environment parser
 and three duplicated GC-pointer trace flags belong outside string/value
 subdomains.
 
@@ -342,14 +346,14 @@ subdomains.
 | Crate | Actual role and API assessment | Structure, duplication, unsafe, and residue |
 | --- | --- | --- |
 | `dotnet-intrinsics-core` | Array, math, and conservative hardware-intrinsic handlers. “Core” is broad but the graph position and public generated-handler surface are appropriate. | Clear three-module split and two direct SIMD tests. It is one of only two users of the shared intrinsic argument-policy helpers; no notable unsafe-policy gap. |
-| `dotnet-intrinsics-delegates` | Delegate construction/combine/remove/equality and multicast invocation state. Public host traits and `try_delegate_dispatch` connect generated dispatch to the VM. | Cohesive three-module structure. One uncited safety comment and no direct tests; coverage is entirely through 14 managed fixtures and VM integration. Accepted dispatch duplication is not re-flagged. |
-| `dotnet-intrinsics-threading` | Interlocked, volatile, monitor, and thread BCL handlers. Public monitor/stack-slot host ports are implemented only by `VesContext`. | Files map cleanly to concepts. Thirty uncited safety comments and no direct tests. `Monitor.Wait`, `Pulse`, and `PulseAll` return explicit not-implemented errors and have no fixtures; this is compatibility scope, not dead code. |
-| `dotnet-intrinsics-unsafe` | `Unsafe.*`, `Buffer`, and `Marshal` handlers over raw-memory and layout ports. | Module split is sensible. Twenty-three uncited safety comments and no direct tests despite dense raw-memory behavior. `#[allow(unused_variables)]` mostly reflects the generated intrinsic signature contract rather than dead computation. |
-| `dotnet-vm-data` | Shared execution data: step results, continuations, method/frame/evaluation stacks, and exception-state records. It is mutable data, not passive DTOs. | The name is accurate but most fields are public, so state invariants are convention-based. Five direct layout/stack tests, six uncited safety comments. `normalize_reserve_target(x) -> x` is a dead extension seam. Its module doc still implies exception logic is in VM, while that logic now lives in `dotnet-exceptions`. The duplicated managed-pointer encoder is its serious boundary violation. |
+| `dotnet-intrinsics-delegates` | Delegate construction/combine/remove/equality and multicast invocation state. Public host traits and `try_delegate_dispatch` connect generated dispatch to the VM. | Cohesive three-module structure. Its one safety comment is now cited, and coverage is otherwise entirely through 14 managed fixtures and VM integration. Accepted dispatch duplication is not re-flagged. |
+| `dotnet-intrinsics-threading` | Interlocked, volatile, monitor, and thread BCL handlers. Public monitor/stack-slot host ports are implemented only by `VesContext`. | Files map cleanly to concepts. All thirty safety comments are now cited. `Monitor.Wait`, `Pulse`, and `PulseAll` return explicit not-implemented errors and have no fixtures; this is compatibility scope, not dead code. |
+| `dotnet-intrinsics-unsafe` | `Unsafe.*`, `Buffer`, and `Marshal` handlers over raw-memory and layout ports. | Module split is sensible. All twenty-three safety comments are now cited despite dense raw-memory behavior. `#[allow(unused_variables)]` mostly reflects the generated intrinsic signature contract rather than dead computation. |
+| `dotnet-vm-data` | Shared execution data: step results, continuations, method/frame/evaluation stacks, and exception-state records. It is mutable data, not passive DTOs. | The name is accurate but most fields are public, so state invariants are convention-based. Five direct layout/stack tests, six now-cited safety comments. `normalize_reserve_target(x) -> x` is a dead extension seam. Its module doc still implies exception logic is in VM, while that logic now lives in `dotnet-exceptions`. The duplicated managed-pointer encoder is its serious boundary violation. |
 | `dotnet-vm-ops` | Cross-crate runtime ports, intrinsic argument helpers, prepared calls, and trait aliases. | The API is intentionally all-public for downstream intrinsic crates, but “foundational operations” is misleading because it imports concrete `AssemblyLoader` and `Tracer`. There are no direct tests. The generated trait aliases avoid repetitive composite impls and are justified; the fine-grained host ecosystem should be evaluated by whether it gains direct tests. |
-| `dotnet-exceptions` | Parses ECMA exception regions and executes the two-pass search/filter/unwind state machine using VM ports and VM-data state. | Small, cohesive, accurately named, and appropriately extracted. Two uncited safety comments and no direct tests; all behavior is exercised indirectly. The state machine's complexity is specified, not accidental. |
-| `dotnet-simd` | Six portable byte operations with architecture-specific implementations and scalar fallback. | Compact API and five tests. Thirty-nine uncited safety comments. Architecture-specific duplication was explicitly accepted by the prior dedup pass and remains justified by instruction-set differences. |
-| `dotnet-metrics` | Runtime/cache/GC instrumentation, snapshots, active-metrics TLS forwarding, and benchmark-only counters. | The name is accurate; one 1,453-line file obscures models versus counters versus snapshots, but behavior remains straightforward. Feature-gated real/no-op method pairs are repetitive yet transparent; a macro may make them less legible. Nine tests and nine uncited safety comments. Low structural priority. |
+| `dotnet-exceptions` | Parses ECMA exception regions and executes the two-pass search/filter/unwind state machine using VM ports and VM-data state. | Small, cohesive, accurately named, and appropriately extracted. Its two safety comments are now cited; all behavior is exercised indirectly. The state machine's complexity is specified, not accidental. |
+| `dotnet-simd` | Six portable byte operations with architecture-specific implementations and scalar fallback. | Compact API and five tests. All thirty-nine safety comments are now cited. Architecture-specific duplication was explicitly accepted by the prior dedup pass and remains justified by instruction-set differences. |
+| `dotnet-metrics` | Runtime/cache/GC instrumentation, snapshots, active-metrics TLS forwarding, and benchmark-only counters. | The name is accurate; one 1,453-line file obscures models versus counters versus snapshots, but behavior remains straightforward. Feature-gated real/no-op method pairs are repetitive yet transparent; a macro may make them less legible. Nine tests and nine cited safety comments. Low structural priority. |
 | `dotnet-tracer` | Structured tracing configuration plus bounded asynchronous delivery/flushing. | Cohesive public `Tracer`/sink/span API and five tests. Backpressure/drop behavior and a flusher thread are deliberate. The undocumented legacy `DOTNET_RS_TRACE_LEVEL` path should enter the configuration inventory. |
 | `dotnet-cli` | CLI parsing, host startup, process exit, and the main integration harness. | Small production API with no production unsafe block. Tests reach deeply into VM internals and therefore help explain the VM's broad public surface; their unsafe uses are platform/test glue and the compile-only cross-arena probe. The harness oracle flaw is existing plan 07. |
 | `dotnet-macros-core` | Shared parsers and expansion models for intrinsic/instruction signatures and trait aliases. | Correctly prevents the proc macros and VM build script from independently interpreting the mini-syntax. Thirteen tests; no unsafe. Complexity is build-time consistency, not runtime abstraction. |
@@ -360,21 +364,23 @@ subdomains.
 
 ### Unsafe-predicate coverage by crate
 
-The following counts are `// SAFETY:` comments under each production `src/`
-tree, not counts of unsafe expressions. Plan 01 intentionally gated only four
-core crates. That gate is complete as scoped; the workspace-wide contribution
-policy is not.
+The following counts are `// SAFETY:` comments, not counts of unsafe
+expressions. The workspace-wide gate now discovers every Cargo workspace package
+beneath `crates/` and scans all of its Rust targets (including package-owned
+benchmarks and fuzz targets, excluding `target/`). Plan 01 intentionally gated
+only its four core crates; that completed historical scope remains unchanged.
 
 | Group | Cited / total | Finding |
 | --- | ---: | --- |
-| `dotnet-value`, `dotnet-runtime-memory`, `dotnet-utils`, `dotnet-vm` | 465 / 465 | Completed plan-01 scope; do not redo |
-| assemblies, exceptions, delegate/reflection/span/string/threading/unsafe intrinsics, metrics, P/Invoke, resolver, SIMD, types, VM data | 1 / 224 | 223 local safety comments lack a named predicate; `check_doc_drift.sh` does not enforce these crates |
+| `dotnet-value`, `dotnet-runtime-memory`, `dotnet-utils`, `dotnet-vm` | 482 / 482 | Completed plan-01 core crates, including eight package-owned fuzz comments; do not redo |
+| Other production workspace crates | 221 / 221 | All production `src/` comments cite an applicable named predicate |
+| `dotnet-benchmarks` package-owned targets | 6 / 6 | All benchmark comments are covered by the same policy |
+| **All discovered package-owned Rust targets** | **709 / 709** | `check_doc_drift.sh` mechanically verifies missing, undefined, and orphan citations bidirectionally |
 
-The largest uncovered groups are SIMD (39), P/Invoke (31), threading
-intrinsics (30), span (24), unsafe intrinsics (23), and string (19). The right
-follow-up is not to paste the nearest existing predicate mechanically. Some
-sites, especially libffi and architecture intrinsics, may require new narrowly
-named predicates or an explicit plan-06 trust entry.
+The largest formerly uncovered groups were SIMD (39), P/Invoke (31), threading
+intrinsics (30), span (24), unsafe intrinsics (23), and string (19). Their
+citations retain local witnesses; architecture intrinsic and P/Invoke ABI sites
+use the narrowly scoped predicates introduced for those facts.
 
 ## 3. Phase 2 — architectural findings
 
@@ -621,10 +627,10 @@ uses “reviewer is satisfied” as completion.
 
 | Priority | Proposed change and why | Category | Objective gate | Effort / risk / dependencies | Relation to plans 01–08 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | **Eliminate the process-global P/Invoke last-error slot.** Replace `pub static mut LAST_ERROR` and its externally serialized contract with state scoped to the managed/OS thread that executes `Marshal.GetLastPInvokeError` and `SetLastPInvokeError`. This adds the state the semantics require and removes a Rust data-race premise rather than documenting it more strongly. | complexity-justification | No mutable static stores last-error state; two concurrently executing managed threads can set distinct values and repeatedly read only their own value; the concurrency fixture is blocking under `multithreading`; `F11.PInvokeLastErrorSerialized` has no remaining source citation and is removed or replaced by a factual thread-state predicate. | **S–M / high correctness risk, low migration breadth.** No prerequisite. Coordinate the later ABI matrix with priority 14. | **New.** Do not add this premise to plan 06; eliminate it. |
+| 1 | **Completed 2026-08-31 — eliminate the process-global P/Invoke last-error slot.** `ArenaLocalState` now owns an initialized `pinvoke_last_error: i32`, and Marshal Get/Set access only the current executor's `self.local` cell. This removes the shared mutable-static/data-race premise rather than documenting it more strongly. | complexity-justification | **Met.** No mutable static stores the runtime cache; `F11.PInvokeLastErrorArenaLocal` records the factual arena-local invariant. The normal `pinvoke_last_error_isolation` managed-Thread fixture is `#[cfg(feature = "multithreading")]`, and CI's blocking test matrix includes that feature. This migration concerns the runtime cache only, not native `errno`/`GetLastError` capture. | **S–M / high correctness risk, low migration breadth. Completed.** No prerequisite. The later ABI matrix remains priority 14. | **New, now complete.** Do not add the eliminated premise to plan 06. |
 | 2 | **Completed 2026-08-30 — repair queue status drift and check it mechanically.** The README now reports plan 01 as complete, plan 08 uses the canonical status-header form, and the blocking doc-drift job compares every queue row with its plan file. This keeps dependency and priority discussions anchored to one state. | intelligibility/structure | `docs/plans/README.md` and all numbered plan files report the same canonical status; CI fails on a deliberately introduced mismatch. **Met during plan-09 promotion.** | **XS / low. Completed.** No prerequisite. Documentation/tooling only. | **New queue-maintenance finding, now complete;** it did not reopen or change any plan gate. |
-| 3 | **Extend plan 01's predicate-citation gate to every production crate.** Preserve the completed four-crate work and classify the 223 currently uncited safety comments elsewhere. Add new predicates only where existing statements do not fit, especially for architecture intrinsics and libffi. This aligns CI with the standing workspace policy. | intelligibility/structure | Every `// SAFETY:` comment under every workspace member's `src/` cites a registry predicate; `check_doc_drift.sh` discovers workspace crates rather than using a four-name allowlist; all cited predicates exist and all registry predicates remain cited; the check is blocking. | **M / medium review risk** because wrong citations are worse than absent ones. No prerequisite; completing it supplies names to 04/06. | **Extends completed plan 01.** It must be recorded as phase 2 or widened scope, not misreported as unfinished original work. |
-| 4 | **Execute width-generic atomic access.** The nine width ladders still encode a safety relationship as matching literals and `usize` dispatch. Carry out the already-scoped type- or marker-based refactor so width mismatch becomes unrepresentable. | complexity-justification | The exact gate in plan 03: nine ladders replaced by one width-generic implementation whose call sites cannot pair the wrong literal width with a representation; existing atomic tests pass. | **M / medium**, contained to the files inventoried by plan 03. No hard prerequisite. Prefer before the workspace citation pass reaches F4 sites if scheduling permits, but it need not block priority 3. | **Existing plan 03, unchanged.** This review agrees with its priority and scope. |
+| 3 | **Completed 2026-08-31 — extend plan 01's predicate-citation gate across the workspace.** The completed four-crate Plan-01 work remains intact; 220 retained formerly uncited production comments and six package-owned benchmark comments now carry predicates whose local witnesses establish the cited claim, while three unprovable environment-mutation sites were eliminated. `check_doc_drift.sh` mechanically discovers package-owned Rust targets and has a blocking negative-drift harness. | intelligibility/structure | **Met.** Every discovered package-owned `// SAFETY:` comment is cited (709 / 709); every cited predicate is registered and every registry predicate is cited. The top-level gate and independent negative harness pass, as do the queried xtask feature-matrix configurations, including `multithreading,validation-all` and `fuzzing`. | **M / medium review risk, completed.** No prerequisite; supplies names to 04/06. | **Workspace-wide extension of completed plan 01.** It widens the policy without changing Plan 01's completed historical four-crate scope. |
+| 4 | **Completed 2026-08-31 — width-generic atomic access was completed by [plan 03](03-width-generic-atomics.md).** Its sealed `W1`/`W2`/`W4`/`W8` markers and one dynamic bridge replace the nine width ladders, making an inconsistent width/representation pair unrepresentable at the typed API boundary. | complexity-justification | **Met in plan 03.** The plan's completion evidence records the sealed width-marker implementation, dynamic CTS-size bridge, and passing typed atomic tests across all four widths and both feature configurations. | **M / medium, completed.** No prerequisite. No atomic implementation is re-executed by this review. | **Existing plan 03, complete and unchanged.** This status reconciliation neither reopens nor duplicates its scope. |
 | 5 | **Make `dotnet-value` the sole owner of managed-pointer serialization and rebasing.** Add an encoding/rebase operation that `EvaluationStack` can call instead of reconstructing Stack tag bits, slot masks, packed offsets, and checksums. The stack must still repair pointers; it should not know their wire format. | code quality (repetition / abstraction / maintainability) | No production file outside `dotnet-value/src/pointer/` contains managed-pointer tag/mask/shift/checksum encoding literals; VM-data's value-type fixup calls the value-layer API; pointer serde/fixup/fuzz regression suites cover stack offsets before and after stack reallocation. | **S–M / high representation risk**, so preserve the existing serialized format. No prerequisite. | **New and compatible with parked plan 08.** It refines ownership of the completed redesign and does not reopen strict-provenance testing. |
 | 6 | **Close the `GenericLookup` mutation hole, then run plan 05.** Privatize `type_generics` and `method_generics` immediately (read-only accessors are sufficient for all current external reads) so no caller can desynchronize `Hash` from equality. Treat this as plan 05's first safety/correctness step before replacing cloned structural keys with interned IDs. | code quality (abstraction / maintainability) | Zero external direct field accesses; the argument slices are private and replaceable only through hash-refreshing constructors/setters; hash/equality mutation regression tests pass; then plan 05's original gates reach zero mutable-key allows and zero production key-clone counters. | **S** for privatization, **L / medium-high** for full interning. No hard prerequisite. | **Extends existing plan 05;** does not supersede its identity/performance work. |
 | 7 | **Run plan 07 before expanding differential coverage.** Reserve unambiguous harness outcomes and add exit-code-only comparison first; otherwise a larger differential corpus inherits an oracle known to conflate managed assertion failures, unhandled exceptions, and setup/executor failures. This is a sequencing refinement, not disagreement with plan 07's technical scope. | test-coverage-prep | The exact plan-07 gate: harness outcomes use a reserved high code band and opt-in exit-code-only CoreCLR comparison exists. Plan-02/04 differential floors consume that mode. | **S / low.** No implementation prerequisite. Make it a practical prerequisite for plan 02 instrument 5 and plan 04's differential ratchet. | **Existing plan 07.** README calls it independent; this review agrees technically but recommends sequencing it before differential expansion. |

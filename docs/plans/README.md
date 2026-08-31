@@ -52,7 +52,7 @@ condition objectively met or not — so progress is not self-assessed.
 | 06 | [Trust register](06-trust-register.md) | Every entry names a falsifier; count is CI-ceilinged | Not started | 01, 02 |
 | 07 | [Fixture exit-code oracle](07-fixture-exit-code-oracle.md) | Harness-level outcomes occupy a reserved code band distinct from fixture-authored codes; opt-in exit-code-only differential mode exists | Not started | — |
 | 08 | [Provenance redesign](08-provenance-redesign.md) | `-Zmiri-strict-provenance` runs green on at least the `dotnet-value` and `dotnet-runtime-memory` legs | **Parked** — implementation complete, gate closed unmet by owner-directed deferral (2026-08-05) | — |
-| 09 | [Whole-codebase legibility review](09-codebase-legibility-review.md) | Every active Phase-4 row reaches its objective gate or moves to a separately tracked successor plan without duplicate scope | In progress — review accepted; queue bookkeeping complete | Mixed; see plan |
+| 09 | [Whole-codebase legibility review](09-codebase-legibility-review.md) | Every active Phase-4 row reaches its objective gate or moves to a separately tracked successor plan without duplicate scope | In progress — review accepted; priorities 1 (arena-local P/Invoke last-error cache and blocking `multithreading` isolation fixture), 3 (workspace-wide extension of Plan 01's predicate-citation coverage and drift gate), and 4 (Plan 03's sealed width markers and dynamic bridge) complete | Mixed; see plan |
 
 Plan 01 is complete, so its dependencies no longer block plan 04 and satisfy
 that half of plan 06's prerequisites. Plans 02, 03, 04, 05, and 07 therefore

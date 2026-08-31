@@ -22,12 +22,45 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CRATES_DIR="$REPO_ROOT/crates"
 DOCS_DIR="$REPO_ROOT/docs"
 REGISTRY_PATH="$DOCS_DIR/INVARIANT_REGISTRY.md"
-SAFETY_CRATES=(
-  "$CRATES_DIR/dotnet-value"
-  "$CRATES_DIR/dotnet-runtime-memory"
-  "$CRATES_DIR/dotnet-utils"
-  "$CRATES_DIR/dotnet-vm"
-)
+
+# Limit invariant-citation checks to Rust files owned by workspace packages
+# beneath crates/. Cargo metadata is authoritative for workspace membership;
+# do not fall back to a partial hand-maintained list if discovery fails.
+if ! SAFETY_CRATE_ROOTS_TEXT="$(
+  cargo metadata --no-deps --format-version 1 |
+    python3 -c '
+import json
+import os
+import sys
+
+crates_dir = os.path.realpath(sys.argv[1])
+metadata = json.load(sys.stdin)
+workspace_members = set(metadata["workspace_members"])
+roots = set()
+
+for package in metadata["packages"]:
+    if package["id"] not in workspace_members:
+        continue
+    root = os.path.realpath(os.path.dirname(package["manifest_path"]))
+    if os.path.commonpath((crates_dir, root)) == crates_dir:
+        roots.add(root)
+
+if not roots:
+    raise RuntimeError("cargo metadata found no workspace packages under crates/")
+
+print("\n".join(sorted(roots)))
+' "$CRATES_DIR"
+)"; then
+  echo "[INVARIANT] failed to discover workspace package roots with cargo metadata"
+  exit 1
+fi
+
+if [[ -z "$SAFETY_CRATE_ROOTS_TEXT" ]]; then
+  echo "[INVARIANT] cargo metadata found no workspace packages under crates/"
+  exit 1
+fi
+
+mapfile -t SAFETY_CRATE_ROOTS <<< "$SAFETY_CRATE_ROOTS_TEXT"
 
 # ---------------------------------------------------------------------------
 # Check table
@@ -207,10 +240,10 @@ while IFS= read -r safety_site; do
     FAIL=$((FAIL + 1))
     echo "[INVARIANT] SAFETY comment lacks a registry citation: $safety_site"
   fi
-done < <(grep -rnE '^[[:space:]]*// SAFETY:' "${SAFETY_CRATES[@]}" 2>/dev/null || true)
+done < <(grep -rnE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null || true)
 
 mapfile -t CITED_PREDICATES < <(
-  grep -rhE '^[[:space:]]*// SAFETY:' "$CRATES_DIR" 2>/dev/null \
+  grep -rhE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null \
     | grep -oE 'F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]*' \
     | sort -u
 )
@@ -230,6 +263,25 @@ for predicate in "${REGISTRY_PREDICATES[@]}"; do
     echo "[INVARIANT] registry predicate '$predicate' has no source citation"
   fi
 done
+
+# Only the harness's live, randomly named probe file can suppress recursion.
+# In particular, an unrelated inherited DOC_DRIFT_NEGATIVE_PROBE value (such
+# as `1`) must not silently skip the blocking negative test.
+is_negative_probe_child() {
+  local probe="${DOC_DRIFT_NEGATIVE_PROBE:-}"
+  [[ "$probe" == "$REPO_ROOT"/crates/*/.check_doc_drift_negative.*.rs ]] &&
+    [[ -f "$probe" ]]
+}
+
+# Exercise the real gate's negative invariant paths. The harness invokes this
+# script with its live probe path, so that child invocation remains non-recursive.
+if ! is_negative_probe_child; then
+  if bash "$REPO_ROOT/scripts/tests/check_doc_drift_negative.sh"; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+  fi
+fi
 
 # The numbered plan files own their detailed status; the queue must present the
 # same canonical state so dependency and priority discussions start from facts.
