@@ -13,7 +13,7 @@
 //!
 //! VM contexts integrate this crate through [`ThreadingIntrinsicHost<'gc>`],
 //! which composes [`ThreadingBaseOps<'gc>`], [`MonitorHost<'gc>`],
-//! [`RawMemoryOps<'gc>`], and [`StackSlotWriteHost<'gc>`].
+//! [`RawMemoryOps<'gc>`], [`StackSlotWriteHost<'gc>`], and [`ManagedThreadHost<'gc>`].
 //!
 //! [`MonitorHost<'gc>`] defines the monitor-specific synchronization hooks used
 //! by `Monitor.Enter`/`TryEnter`/`Exit` handlers: sync-block lookup/creation
@@ -25,6 +25,7 @@
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how intrinsic handlers are
 //! discovered and wired into generated dispatch tables.
 
+use dotnet_types::TypeDescription;
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingBaseOps};
@@ -80,10 +81,34 @@ pub trait StackSlotWriteHost<'gc> {
     );
 }
 
+/// VM-local lifecycle operations for the deliberately small managed-`Thread` subset.
+///
+/// The intrinsic crate owns the public stack contract while the VM owns the parent-arena
+/// registry and worker-executor lifecycle. In particular, implementations must not transfer
+/// either object reference to a worker arena.
+pub trait ManagedThreadHost<'gc> {
+    fn threading_new_managed_thread(
+        &mut self,
+        thread_type: TypeDescription,
+        thread_start: ObjectRef<'gc>,
+    ) -> dotnet_vm_data::StepResult;
+
+    fn threading_start_managed_thread(
+        &mut self,
+        thread: ObjectRef<'gc>,
+    ) -> dotnet_vm_data::StepResult;
+
+    /// Joins the receiver still retained on the evaluation stack.
+    ///
+    /// The host must leave it in place while yielding so it remains rooted across safepoints.
+    fn threading_join_managed_thread(&mut self) -> dotnet_vm_data::StepResult;
+}
+
 dotnet_vm_ops::trait_alias! {
     pub trait ThreadingIntrinsicHost<'gc> =
         ThreadingBaseOps<'gc>
         + MonitorHost<'gc>
         + RawMemoryOps<'gc>
-        + StackSlotWriteHost<'gc>;
+        + StackSlotWriteHost<'gc>
+        + ManagedThreadHost<'gc>;
 }

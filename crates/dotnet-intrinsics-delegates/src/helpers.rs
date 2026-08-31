@@ -260,7 +260,12 @@ impl<'a, 'gc, T: LoaderOps + MemoryOps<'gc>> DelegateViewMut<'a, 'gc, T> {
     }
 }
 
-pub(super) fn get_delegate_info<'gc, T: LoaderOps>(
+/// Returns the delegate's target and owned method-table index.
+///
+/// Consumers that schedule execution on another OS thread must reject a non-null target before
+/// crossing that boundary: the target is an arena-branded managed reference, while the index can
+/// be resolved to owned metadata in the parent VM.
+pub fn get_delegate_info<'gc, T: LoaderOps>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> (ObjectRef<'gc>, usize) {

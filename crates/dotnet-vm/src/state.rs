@@ -6,7 +6,7 @@ use crate::{
     gc::GCCoordinator,
     intrinsics::IntrinsicRegistry,
     sync::SyncBlockManager,
-    threading::ThreadManager,
+    threading::{ThreadManager, local::ManagedThreadLocalState},
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
@@ -659,14 +659,20 @@ pub struct ArenaLocalState<'gc> {
     pub reflection: ReflectionLocalState<'gc>,
     pub active_borrows: Cell<usize>,
     pub pinvoke_last_error: i32,
+    pub(crate) managed_threads: ManagedThreadLocalState<'gc>,
 }
 
-// SAFETY: F5.TracesEveryGcRef — `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
-// This includes the `heap` and the nested `reflection` cache state.
+// SAFETY: F5.TracesEveryGcRef and F11.PInvokeLastErrorArenaLocal — `ArenaLocalState` correctly
+// traces all GC-managed fields in its `trace` implementation.
+// This includes the `heap`, nested `reflection` cache state, and parent-arena-local
+// `managed_threads` registry. The `active_borrows` and `pinvoke_last_error` fields are non-GC
+// scalars with no GC references. The arena-owned `pinvoke_last_error` `i32` is therefore
+// intentionally not traced.
 unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.heap.trace(cc);
         self.reflection.trace(cc);
+        self.managed_threads.trace(cc);
     }
 }
 
@@ -677,6 +683,7 @@ impl<'gc> ArenaLocalState<'gc> {
             reflection: ReflectionLocalState::new(),
             active_borrows: Cell::new(0),
             pinvoke_last_error: 0,
+            managed_threads: ManagedThreadLocalState::new(),
         }
     }
 }

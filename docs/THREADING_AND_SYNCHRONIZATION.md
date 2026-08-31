@@ -103,6 +103,23 @@ sequenceDiagram
 - `safe_point` does nothing
 - Compiles out managed-thread coordination overhead for single-threaded mode
 
+### Scoped managed `Thread` support
+
+With the `multithreading` feature, dotnet-rs supports the narrow lifecycle required by
+this runtime: `Thread(ThreadStart)`, parameterless `Thread.Start()`, and parameterless
+`Thread.Join()`. The `ThreadStart` must be an explicit static, parameterless method with
+a `void` return type; a supported managed thread may be started once and joined once.
+These handlers bypass CoreLib's QCall initialization for this subset.
+
+This is not complete `System.Threading.Thread` compatibility. Unsupported cases include
+other constructors, `Start(object)`, timeout-bearing `Join` overloads, and ThreadStart
+delegates with an instance target (including capturing lambdas), non-static targets,
+parameters, or a non-`void` return type. Background, priority, culture, and other thread
+configuration APIs, ThreadPool scheduling, and full foreground-thread process-lifetime
+semantics are also outside this subset. In builds without `multithreading`, managed
+`Thread(ThreadStart)` construction and `Start()` explicitly report unsupported rather
+than spawning a worker.
+
 ## Safe Points
 
 Safe points are checked at:

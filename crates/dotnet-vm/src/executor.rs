@@ -349,6 +349,65 @@ impl Executor {
         Ok(())
     }
 
+    /// Runs an already-resolved managed `ThreadStart` target in a fresh worker executor.
+    ///
+    /// `method` and `generic_inst` are owned resolution metadata. In particular, this boundary
+    /// deliberately accepts no `ObjectRef`: the delegate and managed `Thread` object remain
+    /// rooted in their parent arena, while the worker constructs its own arena around the shared
+    /// VM-global state.
+    #[allow(
+        dead_code,
+        reason = "Only the multithreaded managed-Thread intrinsic calls this seam; it remains deliberately unavailable in no-MT builds"
+    )]
+    pub(crate) fn run_thread_start(
+        shared: Arc<SharedGlobalState>,
+        method: MethodDescription,
+        generic_inst: dotnet_types::generics::GenericLookup,
+    ) -> ExecutorResult {
+        let mut executor = Self::new(shared);
+        match executor.install_thread_start(method, generic_inst) {
+            Ok(()) => executor.run(),
+            Err(error) => ExecutorResult::Error(error),
+        }
+    }
+
+    /// Installs a `ThreadStart` target without applying CLI entrypoint argument rules.
+    fn install_thread_start(
+        &mut self,
+        method: MethodDescription,
+        generic_inst: dotnet_types::generics::GenericLookup,
+    ) -> Result<(), VmError> {
+        #[cfg(feature = "memory-validation")]
+        let thread_id = self.thread_id;
+        self.with_arena(|arena| {
+            arena.mutate_root(|gc, c| -> Result<(), VmError> {
+                let gc_handle = GCHandle::new(
+                    gc,
+                    #[cfg(feature = "multithreading")]
+                    // SAFETY: F1.GcHandleRooted — `arena_inner_gc` is only used while mutating this worker's
+                    // root in its owning arena context.
+                    unsafe {
+                        c.stack.arena_inner_gc()
+                    },
+                    #[cfg(feature = "memory-validation")]
+                    thread_id,
+                );
+                let shared = c.stack.shared.clone();
+                let info = shared
+                    .caches
+                    .get_method_info(method, &generic_inst, shared.clone())?;
+                let mut ctx = c.ves_context(gc_handle);
+
+                if let Some(err) = ctx.managed_frame_abort_error(&info) {
+                    return Err(err);
+                }
+                ctx.entrypoint_frame(info, generic_inst, vec![])?;
+                Ok(())
+            })
+        })??;
+        Ok(())
+    }
+
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         #[cfg(feature = "bench-instrumentation")]

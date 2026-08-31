@@ -6,6 +6,47 @@ use dotnet_vm_data::StepResult;
 use std::time::Duration;
 
 const PROCESSOR_ID_FALLBACK: i32 = 0;
+const NULL_THREAD_START_MSG: &str = "Thread(ThreadStart) requires a non-null ThreadStart delegate.";
+
+/// System.Threading.Thread::.ctor(System.Threading.ThreadStart)
+///
+/// This direct intercept deliberately bypasses CoreLib's QCall initialization. It supports only
+/// the `ThreadStart` constructor; overloads remain on their existing unsupported paths.
+#[dotnet_intrinsic("void System.Threading.Thread::.ctor(System.Threading.ThreadStart)")]
+pub fn intrinsic_thread_ctor_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread_start = ctx.pop_obj();
+    if thread_start.0.is_none() {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", NULL_THREAD_START_MSG);
+    }
+
+    ctx.threading_new_managed_thread(method.parent.clone(), thread_start)
+}
+
+/// System.Threading.Thread::Start()
+#[dotnet_intrinsic("void System.Threading.Thread::Start()")]
+pub fn intrinsic_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread = ctx.pop_obj();
+    ctx.threading_start_managed_thread(thread)
+}
+
+/// System.Threading.Thread::Join()
+#[dotnet_intrinsic("void System.Threading.Thread::Join()")]
+pub fn intrinsic_thread_join<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.threading_join_managed_thread()
+}
 
 /// System.Threading.Thread::Sleep(int millisecondsTimeout)
 ///
@@ -32,9 +73,9 @@ pub fn intrinsic_thread_sleep<'gc, T: ThreadingIntrinsicHost<'gc>>(
 /// System.Threading.Thread::get_CurrentThread()
 ///
 /// The CoreLib implementation is `[Intrinsic]` and typically uses runtime-managed
-/// thread state. dotnet-rs currently runs managed execution on a single host thread,
-/// so returning a managed `System.Threading.Thread` instance is sufficient to
-/// unblock framework call sites that require a non-null current-thread object.
+/// thread state. dotnet-rs does not yet model the current managed `Thread` object's identity,
+/// so returning a managed `System.Threading.Thread` instance is sufficient to unblock framework
+/// call sites that require a non-null current-thread object.
 #[dotnet_intrinsic("static System.Threading.Thread System.Threading.Thread::get_CurrentThread()")]
 pub fn intrinsic_thread_get_current_thread<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -68,9 +109,9 @@ pub fn intrinsic_thread_get_current_processor_fallback<'gc, T: ThreadingIntrinsi
 
 /// System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)
 ///
-/// dotnet-rs currently runs managed code on a single interpreter thread and does
-/// not provide a background worker pool. Queue requests from DI warm-up paths
-/// are therefore treated as accepted no-ops.
+/// dotnet-rs does not implement general ThreadPool work-item scheduling. Queue requests from DI
+/// warm-up paths are therefore treated as accepted no-ops; this is separate from the narrowly
+/// supported explicit `Thread(ThreadStart)` lifecycle.
 #[dotnet_intrinsic(
     "static bool System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)"
 )]

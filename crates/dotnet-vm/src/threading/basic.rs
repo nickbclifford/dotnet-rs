@@ -2,6 +2,7 @@
 use crate::gc::coordinator::debug_assert_collection_lock_held;
 
 use crate::{
+    Executor, ExecutorResult, SharedGlobalState,
     gc::coordinator::{
         CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,
     },
@@ -33,6 +34,22 @@ use tracing::warn;
 
 #[cfg(feature = "deadlock-diagnostics")]
 use parking_lot::deadlock;
+
+/// The multithreaded backend can host a fresh executor for a managed ThreadStart.
+pub(crate) const fn managed_thread_workers_supported() -> bool {
+    true
+}
+
+/// Starts a VM worker using only owned resolution metadata and shared global state.
+pub(crate) fn spawn_thread_start(
+    shared: Arc<SharedGlobalState>,
+    method: dotnet_types::members::MethodDescription,
+    lookup: dotnet_types::generics::GenericLookup,
+) -> Option<std::thread::JoinHandle<ExecutorResult>> {
+    Some(thread::spawn(move || {
+        Executor::run_thread_start(shared, method, lookup)
+    }))
+}
 
 #[cfg(debug_assertions)]
 macro_rules! debug_assert_top_level_gc_lock_order {

@@ -1,10 +1,25 @@
 use crate::{
+    ExecutorResult, SharedGlobalState,
     gc::coordinator::{GCCommand, GCCoordinator},
     threading::STWGuardOps,
 };
 use dotnet_tracer::Tracer;
 use dotnet_utils::ArenaId;
 use std::sync::Arc;
+
+/// The single-threaded backend cannot host a fresh executor for managed ThreadStart.
+pub(crate) const fn managed_thread_workers_supported() -> bool {
+    false
+}
+
+/// Matches the multithreaded worker-entry seam without spawning in this backend.
+pub(crate) fn spawn_thread_start(
+    _shared: Arc<SharedGlobalState>,
+    _method: dotnet_types::members::MethodDescription,
+    _lookup: dotnet_types::generics::GenericLookup,
+) -> Option<std::thread::JoinHandle<ExecutorResult>> {
+    None
+}
 
 pub struct ThreadManager;
 
