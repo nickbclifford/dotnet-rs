@@ -245,9 +245,17 @@ fn main() {
             _ => None,
         };
 
+        // This fixture exercises two managed Threads within one CLI execution, so it needs
+        // the custom cfg-gated `run_cli` registration in integration_tests_impl/fixtures.rs.
+        // Keep it in the normal fixture list above for build, hash, and prebuilt validation.
+        let is_manually_registered = file_name == "pinvoke_last_error_isolation_42";
+
         let source_path = path.strip_prefix(manifest_dir).unwrap().to_str().unwrap();
 
-        if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled) {
+        if is_manually_registered {
+            // The custom test below owns this fixture's registration.
+        } else if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled)
+        {
             writeln!(
                 f,
                 "#[cfg(feature = \"multithreading\")] multi_arena_test!({}, {:?}, {}, {}, {:?});",

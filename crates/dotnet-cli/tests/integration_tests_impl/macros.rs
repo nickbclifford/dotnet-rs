@@ -31,7 +31,6 @@ macro_rules! fixture_test {
 }
 
 /// Macro for multi-arena tests that run the same fixture across multiple threads.
-#[cfg(feature = "multithreading")]
 macro_rules! multi_arena_test {
     ($name:ident, $fixture:expr, $thread_count:expr, $expected:expr) => {
         multi_arena_test!($name, $fixture, $thread_count, $expected, $fixture);

@@ -115,7 +115,37 @@ fn hello_world() {
     assert_eq!(stdout.trim(), "Hello, World!");
 }
 
-#[cfg(feature = "multithreading")]
+#[test]
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+fn managed_thread_lifecycle() {
+    let harness = TestHarness::get();
+    let dll_path = harness
+        .build(Path::new(
+            "tests/debug_fixtures/managed_thread_lifecycle_42.cs",
+        ))
+        .expect("managed Thread lifecycle fixture must build");
+    let (exit_code, stdout) = harness.run_cli(&dll_path);
+
+    assert_eq!(exit_code, 42, "managed Thread lifecycle fixture failed");
+    assert!(stdout.trim().is_empty(), "unexpected stdout: {stdout:?}");
+}
+
+#[test]
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+fn pinvoke_last_error_isolation() {
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/pinvoke/pinvoke_last_error_isolation_42.cs",
+    ));
+    let (exit_code, stdout) = harness.run_cli(&dll_path);
+
+    assert_eq!(
+        exit_code, 42,
+        "P/Invoke last-error isolation fixture failed"
+    );
+    assert!(stdout.trim().is_empty(), "unexpected stdout: {stdout:?}");
+}
+
 multi_arena_test!(
     test_multiple_arenas_static_ref,
     "tests/fixtures/fields/static_ref_42.cs",
@@ -123,7 +153,6 @@ multi_arena_test!(
     42
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_multiple_arenas_allocation_stress,
     "tests/fixtures/gc/cache_test_0.cs",
@@ -131,24 +160,6 @@ multi_arena_test!(
     0
 );
 
-// #[cfg(feature = "multithreading")]
-// #[test]
-// fn test_thread_manager_lifecycle() {
-//     use dotnet_vm::threading::ThreadManagerOps;
-//     let harness = TestHarness::get();
-//     let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
-//         harness.loader.clone(),
-//     ));
-//
-//     let handle = std::thread::spawn(move || {
-//         let _id = shared.thread_manager.register_thread();
-//         // Do nothing
-//     });
-//
-//     handle.join().unwrap();
-// }
-
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_multiple_arenas_simple,
     "tests/fixtures/basic/basic_42.cs",
@@ -156,7 +167,6 @@ multi_arena_test!(
     42
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_reflection_race_condition,
     "tests/fixtures/reflection/reflection_stress_0.cs",
@@ -164,7 +174,6 @@ multi_arena_test!(
     0
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_gc_coordinator_multi_arena_tracking,
     "tests/fixtures/gc/cache_test_0.cs",
@@ -172,7 +181,6 @@ multi_arena_test!(
     0
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_volatile_sharing,
     "tests/fixtures/threading/volatile_sharing_42.cs",
@@ -180,7 +188,6 @@ multi_arena_test!(
     42
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_cross_arena_reference_tracking,
     "tests/fixtures/fields/static_ref_42.cs",
@@ -188,7 +195,6 @@ multi_arena_test!(
     42
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_allocation_pressure_triggers_collection,
     "tests/fixtures/gc/cache_test_0.cs",
@@ -196,10 +202,8 @@ multi_arena_test!(
     0
 );
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(test_stw_stress, "tests/fixtures/gc/cache_test_0.cs", 6, 0);
 
-#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_statics_circular_init_mt,
     "tests/fixtures/statics/circular_init_mt_42.cs",
