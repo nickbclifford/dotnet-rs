@@ -67,7 +67,7 @@ impl SupportSlotRegistry {
         id: RuntimeSlotId,
     ) -> Option<FieldRef<'storage, T>> {
         let slot = self.slot(id)?;
-        if *slot != desc {
+        if !Self::accessor_accepts_descriptor(slot, &desc) {
             return None;
         }
         let field = storage
@@ -90,7 +90,7 @@ impl SupportSlotRegistry {
         id: RuntimeSlotId,
     ) -> Option<FieldRef<'storage, T>> {
         let slot = self.slot(id)?;
-        if *slot != desc {
+        if !Self::accessor_accepts_descriptor(slot, &desc) {
             return None;
         }
         let field = storage
@@ -102,13 +102,30 @@ impl SupportSlotRegistry {
         storage.field_at_offset(field.position.as_usize())
     }
 
+    /// Runtime accessors may receive a framework descriptor for a type replaced by an
+    /// embedded support stub. The field still has to be owned by the same declared
+    /// metadata type name and satisfy the slot's exact storage shape below. Layout
+    /// registration remains exact-descriptor-only in `id_for_field`, so an unrelated
+    /// same-named type cannot acquire a support layout override.
+    fn accessor_accepts_descriptor(slot: &TypeDescription, desc: &TypeDescription) -> bool {
+        slot == desc || slot.type_name() == desc.type_name()
+    }
+
     fn layout_field<'layout>(
         &self,
         layout: &'layout FieldLayoutManager,
         id: RuntimeSlotId,
     ) -> Option<&'layout FieldLayout> {
         let slot = self.slot(id)?;
-        layout.get_field(slot.clone(), id.descriptor().field_name)
+        layout
+            .get_field(slot.clone(), id.descriptor().field_name)
+            .or_else(|| {
+                layout.fields.iter().find_map(|(key, field)| {
+                    (key.name == id.descriptor().field_name
+                        && key.owner.type_name() == slot.type_name())
+                    .then_some(field)
+                })
+            })
     }
 }
 

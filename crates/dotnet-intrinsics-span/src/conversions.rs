@@ -867,11 +867,11 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
         ctx.span_new_object_with_type_generics(return_span, vec![element_type.clone()],)
     );
     ctx.loader()
-        .readonly_span_reference_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_reference_field(&span.instance_storage, span.description.clone())
         .expect("validated ReadOnlySpan<T> support slot")
         .write(reference);
     ctx.loader()
-        .readonly_span_length_field(&span.instance_storage, span.description.clone())
+        .span_or_readonly_span_length_field(&span.instance_storage, span.description.clone())
         .expect("validated ReadOnlySpan<T> support slot")
         .write(length);
 

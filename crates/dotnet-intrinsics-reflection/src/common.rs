@@ -131,9 +131,25 @@ pub(crate) fn write_reflection_index<'gc>(
     owner: TypeDescription,
     index: usize,
 ) {
-    ctx.loader()
-        .runtime_type_index_field(&instance.instance_storage, owner)
-        .expect("validated RuntimeType index support slot")
+    let owner_name = owner.type_name();
+    let index_field = match ctx.loader().canonical_type_name(&owner_name) {
+        "System.RuntimeType" => ctx
+            .loader()
+            .runtime_type_index_field(&instance.instance_storage, owner),
+        "DotnetRs.MethodInfo" => ctx
+            .loader()
+            .method_info_index_field(&instance.instance_storage, owner),
+        "DotnetRs.ConstructorInfo" => ctx
+            .loader()
+            .constructor_info_index_field(&instance.instance_storage, owner),
+        "DotnetRs.FieldInfo" => ctx
+            .loader()
+            .field_info_index_field(&instance.instance_storage, owner),
+        _ => None,
+    };
+
+    index_field
+        .expect("validated reflection runtime-registry index support slot")
         .write(index);
 }
 
