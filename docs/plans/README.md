@@ -46,7 +46,7 @@ condition objectively met or not — so progress is not self-assessed.
 | --- | --- | --- | --- | --- |
 | 01 | [Layer invariant specs](01-layer-invariant-specs.md) | Every `// SAFETY:` comment in the four core crates cites a named predicate from the registry; drift-checked in CI | Complete | — |
 | 02 | [Falsifier portfolio](02-falsifier-portfolio.md) | A `loom` leg exercising the STW handshake is blocking in CI; all four fuzz targets blocking; Kani harnesses for the F3/F4/F9 value facts | Not started | — |
-| 03 | [Width-generic atomics](03-width-generic-atomics.md) | The nine `match size` ladders in `dotnet-utils/src/atomic.rs` are replaced by one width-generic implementation | Not started | — |
+| 03 | [Width-generic atomics](03-width-generic-atomics.md) | The nine `match size` ladders in `dotnet-utils/src/atomic.rs` are replaced by one width-generic implementation | Complete | — |
 | 04 | [Model correspondence](04-model-correspondence.md) | Clause→site index covers every family-F2 site; differential fixture count ratcheted upward from 7 | Not started | 01 (predicate names) |
 | 05 | [Descriptor interning, phase 2](05-descriptor-interning.md) | Zero `mutable_key_type` allows remain for `ConcreteType`/`GenericLookup` keys; `record_key_clones` reads zero in production | Not started | — |
 | 06 | [Trust register](06-trust-register.md) | Every entry names a falsifier; count is CI-ceilinged | Not started | 01, 02 |

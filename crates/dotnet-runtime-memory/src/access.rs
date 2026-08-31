@@ -7,7 +7,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{
     ArenaId, ByteOffset,
-    atomic::{Atomic, AtomicAccess, StandardAtomicAccess, validate_atomic_access},
+    atomic::{Atomic, StandardAtomicAccess, validate_atomic_access},
     gc::GCHandle,
 };
 use dotnet_value::{
@@ -68,7 +68,7 @@ unsafe fn load_atomic_with_unaligned_fallback(
 
     if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
         // SAFETY: F4.WidthAligned — The caller guarantees validity, and the branch proves alignment for `size`.
-        return unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
+        return unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, ordering) };
     }
 
     validate_atomic_access(ptr, false);
@@ -96,7 +96,7 @@ unsafe fn store_atomic_with_unaligned_fallback(
 
     if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
         // SAFETY: F4.WidthAligned — The caller guarantees validity, and the branch proves alignment for `size`.
-        unsafe { StandardAtomicAccess::store_atomic(ptr, size, value, ordering) };
+        unsafe { StandardAtomicAccess::store_atomic_sized(ptr, size, value, ordering) };
         return;
     }
 
@@ -451,7 +451,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
                 unsafe {
-                    StandardAtomicAccess::compare_exchange_atomic(
+                    StandardAtomicAccess::compare_exchange_atomic_sized(
                         ptr, size, expected, new, success, failure,
                     )
                 }
@@ -476,7 +476,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity, and the preceding check proves alignment.
             unsafe {
-                StandardAtomicAccess::compare_exchange_atomic(
+                StandardAtomicAccess::compare_exchange_atomic_sized(
                     ptr, size, expected, new, success, failure,
                 )
             }
@@ -511,7 +511,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
         // proves that `ptr` is aligned for `size`.
         unsafe {
-            StandardAtomicAccess::compare_exchange_atomic(
+            StandardAtomicAccess::compare_exchange_atomic_sized(
                 ptr, size, expected, new, success, failure,
             )
         }
@@ -546,7 +546,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
 
                 // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
-                Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
+                Ok(unsafe {
+                    StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering)
+                })
             });
 
             if result.is_ok() {
@@ -567,7 +569,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
-            Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
+            Ok(unsafe { StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering) })
         }
     }
 
@@ -592,7 +594,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
         // proves that `ptr` is aligned for `size`.
-        Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
+        Ok(unsafe { StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering) })
     }
 
     /// Atomically adds a value to a memory location.
@@ -625,7 +627,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(
                     // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
                     unsafe {
-                        StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering)
+                        StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering)
                     },
                 )
             })
@@ -642,7 +644,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
-            Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
+            Ok(unsafe {
+                StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering)
+            })
         }
     }
 
@@ -667,7 +671,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
         // proves that `ptr` is aligned for `size`.
-        Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
+        Ok(unsafe { StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering) })
     }
 
     /// Loads a value atomically when aligned, with synchronized memcpy for misaligned storage.

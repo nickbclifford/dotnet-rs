@@ -1,5 +1,5 @@
 #![no_main]
-use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+use dotnet_utils::atomic::StandardAtomicAccess;
 use libfuzzer_sys::fuzz_target;
 use std::sync::atomic::Ordering;
 
@@ -29,16 +29,16 @@ fuzz_target!(|data: (u16, u8, u64, u8)| {
         Ordering::Release | Ordering::AcqRel => {}
         _ => {
             // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
-            let _loaded = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
+            let _loaded = unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, ordering) };
         }
     }
 
     // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
     unsafe {
-        StandardAtomicAccess::store_atomic(ptr, size, value, Ordering::Relaxed);
+        StandardAtomicAccess::store_atomic_sized(ptr, size, value, Ordering::Relaxed);
     }
     // SAFETY: F4.WidthAligned — `ptr` is live and aligned for the selected width.
-    let loaded = unsafe { StandardAtomicAccess::load_atomic(ptr, size, Ordering::Relaxed) };
+    let loaded = unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, Ordering::Relaxed) };
 
     let mask = if size == 8 {
         !0u64

@@ -6,7 +6,7 @@ width-generic implementation shaped so that a call site cannot pass a literal
 width inconsistent with the type it dispatches for; existing atomic-access
 tests continue to pass with no behavior change.
 
-**Status:** not started. Both former blockers are cleared: the default-build
+**Status:** complete (2026-08-31). Both former blockers are cleared: the default-build
 alignment-validation soundness defects closed for real on 2026-08-01
 (`208a6c8b`), and the `pop_args` sweep that was meant to supply a const-generic
 precedent closed 2026-07-31 by deletion — the function had zero production
@@ -48,8 +48,7 @@ width-generic design makes it a type error, not a runtime match arm, for an
 
 ## Design question
 
-*(Open — this is what "not started" means here.)* Two shapes are worth costing
-against each other before writing code:
+Two shapes were costed before implementation:
 
 1. **`const WIDTH: usize` on the trait methods**, with a `[u8; WIDTH]`-shaped
    return replacing `u64`, and the five `StandardAtomicAccess` entry points
@@ -62,9 +61,30 @@ against each other before writing code:
    with an associated `Repr` type. Avoids const generics at the cost of a
    small trait hierarchy and more boilerplate per call site.
 
-Record the chosen shape and the reason for it in this file before starting
-implementation — do not let the choice happen implicitly inside a supervised
-refactor branch.
+**Chosen: sealed `AtomicWidth` markers.** `W1`, `W2`, `W4`, and `W8` each
+have one associated integer representation, so the core `AtomicAccess` methods
+take a width marker and the matching representation rather than an independent
+`usize` width and `u64` value. This makes an inconsistent literal width/
+representation pair unrepresentable at the typed API boundary. Dynamic CTS
+sizes are converted only by narrow runtime boundary helpers, which dispatch to
+the marker-typed core.
+
+Const generics would also carry width in the type system, but would establish
+the workspace's first const-generic function without a local precedent and
+would still need a type-level mapping from a width to its atomic representation.
+The sealed-marker design makes that mapping explicit, limits implementors to
+the four supported widths, and keeps the refactor aligned with existing
+associated-type idioms.
+
+## Completion evidence
+
+`AtomicAccess` now accepts a sealed width marker and its associated
+representation. The former nine `match size` ladders are replaced by one
+runtime dispatcher, which binds each dynamic supported size to exactly one
+marker before executing the width-generic implementation. Runtime-memory,
+`StackValue`, and the raw-memory fuzz target use the dynamic bridge; typed
+tests exercise load, store, compare-exchange (success and mismatch), exchange,
+and exchange-add for all four supported widths in both feature configurations.
 
 ## Not in scope
 

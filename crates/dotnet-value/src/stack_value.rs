@@ -11,11 +11,8 @@ use crate::{
 };
 use dotnet_types::{TypeDescription, error::ExecutionError};
 use dotnet_utils::{
-    ByteOffset, StackSlotIndex,
-    atomic::{AtomicAccess, StandardAtomicAccess},
-    gc::GCHandle,
-    is_ptr_aligned_to_field,
-    sync::Ordering as AtomicOrdering,
+    ByteOffset, StackSlotIndex, atomic::StandardAtomicAccess, gc::GCHandle,
+    is_ptr_aligned_to_field, sync::Ordering as AtomicOrdering,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Gc, collect::Trace};
@@ -830,7 +827,7 @@ impl<'gc> StackValue<'gc> {
         };
 
         // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-        let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
+        let val = unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, ordering) };
 
         // SAFETY: F4.WidthAligned — `val` was atomically loaded from the valid, aligned storage
         // required by this method's safety contract.
@@ -883,7 +880,7 @@ impl<'gc> StackValue<'gc> {
 
         // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
-            StandardAtomicAccess::store_atomic(ptr, size, val, ordering);
+            StandardAtomicAccess::store_atomic_sized(ptr, size, val, ordering);
         }
     }
 }
