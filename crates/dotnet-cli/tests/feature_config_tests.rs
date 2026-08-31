@@ -101,15 +101,12 @@ fn test_multithreading_arena_handle() {
 fn test_multithreading_cross_arena_value() {
     use dotnet_value::StackValue;
 
-    // Test that CrossArenaObjectRef variant exists. This compile-only value is
-    // never dereferenced, so an address-only pointer with no provenance is sufficient.
-    let raw = std::ptr::without_provenance::<
-        dotnet_utils::gc::ThreadSafeLock<dotnet_value::object::ObjectInner<'static>>,
-    >(0x1000);
-    // SAFETY: `raw` is non-null and used only to construct the compile-time variant probe.
-    let ptr = unsafe { dotnet_value::object::ObjectPtr::from_raw(raw) }.unwrap();
-    let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId::new(1));
-    // If this compiles, the variant exists and works
+    // The constructor's function type verifies the variant and its payload types without
+    // fabricating an ObjectPtr that lacks a valid, program-lifetime pointee.
+    let _constructor: fn(
+        dotnet_value::object::ObjectPtr,
+        dotnet_utils::ArenaId,
+    ) -> StackValue<'static> = StackValue::CrossArenaObjectRef;
 }
 
 // ============================================================================

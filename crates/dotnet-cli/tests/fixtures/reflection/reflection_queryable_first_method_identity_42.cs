@@ -19,9 +19,6 @@ public static class Program
         bool opEq = viaGetMethods == viaDelegate;
         bool refEq = object.ReferenceEquals(viaGetMethods, viaDelegate);
 
-        Console.WriteLine($"Queryable.First<T> == : {opEq}");
-        Console.WriteLine($"Queryable.First<T> ReferenceEquals: {refEq}");
-
         return opEq && refEq ? 42 : 1;
     }
 }

@@ -412,15 +412,11 @@ pub fn select_framework_version(
     selected.map(|candidate| candidate.path.clone())
 }
 
-fn framework_base_candidates(framework_name: &str) -> Vec<PathBuf> {
+fn framework_base_candidates(framework_name: &str, dotnet_root: Option<&Path>) -> Vec<PathBuf> {
     let mut base_paths = Vec::new();
 
-    if let Some(dotnet_root) = std::env::var_os("DOTNET_ROOT") {
-        base_paths.push(
-            PathBuf::from(dotnet_root)
-                .join("shared")
-                .join(framework_name),
-        );
+    if let Some(dotnet_root) = dotnet_root {
+        base_paths.push(dotnet_root.join("shared").join(framework_name));
     }
 
     if cfg!(target_os = "windows") {
@@ -439,6 +435,19 @@ pub fn resolve_framework_from_runtimeconfig(
     config: &RuntimeConfig,
     override_base: Option<&Path>,
 ) -> Option<PathBuf> {
+    let dotnet_root = std::env::var_os("DOTNET_ROOT").map(PathBuf::from);
+    resolve_framework_from_runtimeconfig_with_dotnet_root(
+        config,
+        override_base,
+        dotnet_root.as_deref(),
+    )
+}
+
+fn resolve_framework_from_runtimeconfig_with_dotnet_root(
+    config: &RuntimeConfig,
+    override_base: Option<&Path>,
+    dotnet_root: Option<&Path>,
+) -> Option<PathBuf> {
     let framework = config.runtime_options.framework.as_ref()?;
     let policy = config.runtime_options.roll_forward.unwrap_or_default();
 
@@ -446,7 +455,7 @@ pub fn resolve_framework_from_runtimeconfig(
         return select_framework_version(base_dir, framework, policy);
     }
 
-    framework_base_candidates(&framework.name)
+    framework_base_candidates(&framework.name, dotnet_root)
         .into_iter()
         .find_map(|base_dir| select_framework_version(&base_dir, framework, policy))
 }
@@ -582,14 +591,13 @@ mod tests {
         EntryKind, FrameworkRef, RollForwardPolicy, SINGLE_FILE_BUNDLE_SIGNATURE,
         classify_entry_bytes, derive_managed_probing_paths, derive_native_search_dirs,
         parse_deps_json, parse_runtimeconfig, resolve_framework_from_runtimeconfig,
-        select_framework_version,
+        resolve_framework_from_runtimeconfig_with_dotnet_root, select_framework_version,
     };
     #[cfg(not(miri))]
     use crate::test_fixtures::fixture_probe_path;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -735,11 +743,6 @@ mod tests {
         }
     }
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
     #[test]
     #[cfg(not(miri))]
     fn resolves_framework_from_fixture_runtimeconfig_with_override_base() {
@@ -764,10 +767,6 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn resolves_framework_from_fixture_runtimeconfig_using_dotnet_root_override() {
-        let _guard = env_lock()
-            .lock()
-            .expect("environment lock should not be poisoned");
-
         let path = fixture_probe_path("SingleFile.runtimeconfig.json");
         assert!(
             path.exists(),
@@ -783,25 +782,11 @@ mod tests {
         fs::create_dir_all(framework_base.join("10.0.9"))
             .expect("framework version subdirectory should be created");
 
-        let previous_dotnet_root = std::env::var_os("DOTNET_ROOT");
-        // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
-        unsafe {
-            std::env::set_var("DOTNET_ROOT", &dotnet_root);
-        }
-
-        let resolved = resolve_framework_from_runtimeconfig(&config, None);
-
-        if let Some(previous) = previous_dotnet_root {
-            // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
-            unsafe {
-                std::env::set_var("DOTNET_ROOT", previous);
-            }
-        } else {
-            // SAFETY: Access is serialized by env_lock(), preventing concurrent mutation during this test.
-            unsafe {
-                std::env::remove_var("DOTNET_ROOT");
-            }
-        }
+        let resolved = resolve_framework_from_runtimeconfig_with_dotnet_root(
+            &config,
+            None,
+            Some(&dotnet_root),
+        );
 
         assert_eq!(resolved, Some(framework_base.join("10.0.9")));
 
