@@ -66,6 +66,11 @@ boundary. One entry per imported function shape, not per function. The pinning
 and liveness obligations *around* the call are F1 and are not part of this
 entry. Falsifier: the P/Invoke integration fixtures.
 
+Current candidates for this class are `F11.PInvokeAbiAgreement`, covering a
+selected symbol's agreement with its prepared libffi CIF and marshalling ABI,
+and `F11.NativeLibraryLoadTrusted`, covering host-permitted native-library
+initializer/finalizer behavior. Both remain Plan 06 trust candidates.
+
 **Class `deviation`** — the standard says one thing, `dotnet-rs` does another,
 deliberately:
 - **Non-moving GC.** Correct today; invalidated the day a compacting collector
