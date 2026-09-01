@@ -230,7 +230,9 @@ impl Executor {
         #[cfg(not(feature = "fuzzing"))]
         let argv: Vec<String> = std::env::args().skip(1).collect();
         #[cfg(feature = "bench-instrumentation")]
-        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
+        let metrics = self.shared.metrics.clone();
+        #[cfg(feature = "bench-instrumentation")]
+        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&metrics);
         #[cfg(feature = "memory-validation")]
         let thread_id = self.thread_id;
         self.with_arena(|arena| {
@@ -411,7 +413,9 @@ impl Executor {
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         #[cfg(feature = "bench-instrumentation")]
-        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&self.shared.metrics);
+        let metrics = self.shared.metrics.clone();
+        #[cfg(feature = "bench-instrumentation")]
+        let _metrics_scope = dotnet_metrics::ActiveRuntimeMetricsGuard::enter(&metrics);
         let result = loop {
             if self.shared.is_abort_requested() {
                 break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(
