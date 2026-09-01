@@ -133,24 +133,6 @@ impl<'a> Arbitrary<'a> for UnmanagedPtr {
 }
 static_collect!(UnmanagedPtr);
 
-/// Stack-related metadata for a [`ManagedPtr`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagedPtrStackInfo {
-    /// The offset from the base of the owner (either an object on the heap or a stack slot).
-    pub offset: ByteOffset,
-    pub origin: PointerOrigin<'static>,
-}
-
-#[cfg(feature = "fuzzing")]
-impl<'a> Arbitrary<'a> for ManagedPtrStackInfo {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Self {
-            offset: u.arbitrary()?,
-            origin: u.arbitrary()?,
-        })
-    }
-}
-
 /// Detailed information about a [`ManagedPtr`] read from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPtrInfo<'gc> {

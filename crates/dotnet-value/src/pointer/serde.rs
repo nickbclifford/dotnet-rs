@@ -2,8 +2,8 @@ use crate::{
     ByteOffset, StackSlotIndex,
     object::ObjectRef,
     pointer::{
-        HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver,
-        ManagedPtrStackInfo, PointerOrigin, unmanaged_ptr_from_addr,
+        HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver, PointerOrigin,
+        unmanaged_ptr_from_addr,
     },
 };
 use dotnet_types::error::PointerDeserializationError;
@@ -12,6 +12,128 @@ use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
 use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_addr};
+
+const STACK_TAG: usize = 1;
+const STACK_SLOT_MASK: usize = 0x3FFF_FFFF;
+const STACK_OFFSET_MIRROR_MASK: usize = 0x7FFF_FFFF;
+const STACK_SLOT_SHIFT: usize = 3;
+const STACK_OFFSET_SHIFT: usize = 33;
+
+/// The complete native-word representation of a serialized managed pointer.
+///
+/// This is deliberately private: callers must use the pointer APIs rather
+/// than reimplementing any part of the wire format.
+#[derive(Copy, Clone)]
+struct SerializedManagedPtrWords {
+    word0: usize,
+    word1: usize,
+    word2: usize,
+}
+
+struct SerializedStackManagedPtr {
+    slot: StackSlotIndex,
+    offset: ByteOffset,
+}
+
+fn read_serialized_managed_ptr_words(
+    source: &[u8],
+) -> Result<SerializedManagedPtrWords, PointerDeserializationError> {
+    if source.len() < ManagedPtr::SIZE {
+        return Err(PointerDeserializationError::BufferTooSmall {
+            expected: ManagedPtr::SIZE,
+            actual: source.len(),
+        });
+    }
+
+    let ptr_size = ObjectRef::SIZE;
+    Ok(SerializedManagedPtrWords {
+        word0: usize::from_ne_bytes(source[..ptr_size].try_into().expect("slice length checked")),
+        word1: usize::from_ne_bytes(
+            source[ptr_size..ptr_size * 2]
+                .try_into()
+                .expect("slice length checked"),
+        ),
+        word2: usize::from_ne_bytes(
+            source[ptr_size * 2..ptr_size * 3]
+                .try_into()
+                .expect("slice length checked"),
+        ),
+    })
+}
+
+fn validate_serialized_managed_ptr_checksum(
+    words: SerializedManagedPtrWords,
+) -> Result<(), PointerDeserializationError> {
+    if words.word2 == words.word0 ^ words.word1 {
+        Ok(())
+    } else {
+        Err(PointerDeserializationError::ChecksumMismatch)
+    }
+}
+
+fn parse_serialized_stack_managed_ptr(
+    words: SerializedManagedPtrWords,
+) -> Result<Option<SerializedStackManagedPtr>, PointerDeserializationError> {
+    if words.word0 & 7 != STACK_TAG {
+        return Ok(None);
+    }
+
+    let packed_offset = words.word0 >> STACK_OFFSET_SHIFT;
+    if words.word1 > u32::MAX as usize || packed_offset != (words.word1 & STACK_OFFSET_MIRROR_MASK)
+    {
+        return Err(PointerDeserializationError::OffsetMismatch);
+    }
+
+    Ok(Some(SerializedStackManagedPtr {
+        slot: StackSlotIndex::new((words.word0 >> STACK_SLOT_SHIFT) & STACK_SLOT_MASK),
+        offset: ByteOffset::new(words.word1),
+    }))
+}
+
+fn canonical_stack_managed_ptr_words(
+    slot: StackSlotIndex,
+    offset: ByteOffset,
+) -> SerializedManagedPtrWords {
+    let word0 = STACK_TAG
+        | ((slot.as_usize() & STACK_SLOT_MASK) << STACK_SLOT_SHIFT)
+        | (offset.as_usize() << STACK_OFFSET_SHIFT);
+    let word1 = offset.as_usize();
+    SerializedManagedPtrWords {
+        word0,
+        word1,
+        word2: word0 ^ word1,
+    }
+}
+
+/// Resolves a Stack pointer's executable address from its stable logical slot
+/// and compact offset.
+///
+/// Both serialized and cached Stack-pointer rebasing use this operation so
+/// that a base supplied by a caller is always combined with the same offset
+/// semantics. The caller's base must be currently live for the duration of
+/// the operation.
+fn resolve_stack_address(
+    slot: StackSlotIndex,
+    offset: ByteOffset,
+    resolve_slot: impl FnOnce(StackSlotIndex) -> Option<NonNull<u8>>,
+) -> Result<NonNull<u8>, PointerDeserializationError> {
+    resolve_slot(slot)
+        .and_then(|base| NonNull::new(base.as_ptr().wrapping_add(offset.as_usize())))
+        .ok_or(PointerDeserializationError::UnresolvedStackSlot(
+            slot.as_usize(),
+        ))
+}
+
+/// Writes a complete serialized managed-pointer representation.
+///
+/// Callers must first establish that `dest` contains at least
+/// [`ManagedPtr::SIZE`] bytes.
+fn write_serialized_managed_ptr_words(dest: &mut [u8], words: SerializedManagedPtrWords) {
+    let ptr_size = ObjectRef::SIZE;
+    dest[..ptr_size].copy_from_slice(&words.word0.to_ne_bytes());
+    dest[ptr_size..ptr_size * 2].copy_from_slice(&words.word1.to_ne_bytes());
+    dest[ptr_size * 2..ptr_size * 3].copy_from_slice(&words.word2.to_ne_bytes());
+}
 
 #[cfg(feature = "multithreading")]
 fn cross_arena_storage_base_with_lease(ptr: crate::object::ObjectPtr) -> *mut u8 {
@@ -76,70 +198,91 @@ impl<'gc> ManagedPtr<'gc> {
         [0u8; ObjectRef::SIZE * 3]
     }
 
-    /// Read stack-related metadata without constructing an executable pointer.
+    /// Validates and rebases one serialized Stack managed pointer.
     ///
-    /// Stack reallocation uses this to preserve the encoded slot and offset.
-    /// Call [`ManagedPtr::read_resolved_unchecked`] when an executable pointer
-    /// is required.
+    /// Serialized Stack pointers contain a stable logical [`StackSlotIndex`]
+    /// and compact [`ByteOffset`], not an address. For a valid Stack encoding,
+    /// `resolve_slot` must return the current live base for that logical slot.
+    /// This method derives the current address from that base and the encoded
+    /// offset, then rewrites the three words solely through the canonical
+    /// pointer codec. Consequently, Stack bytes remain relocation-invariant:
+    /// this operation preserves their established three-word representation
+    /// rather than storing a current address in it.
     ///
-    /// # Safety
+    /// The returned value distinguishes the two successful cases:
     ///
-    /// The `source` slice must contain one complete serialized `ManagedPtr`.
-    pub unsafe fn read_stack_info(source: &[u8]) -> ManagedPtrStackInfo {
-        let ptr_size = ObjectRef::SIZE;
-        if source.len() < Self::SIZE {
-            panic!("ManagedPtr::read_stack_info: buffer too small");
-        }
+    /// - `Ok(true)` means `source` held a valid Stack encoding and its slot
+    ///   resolved to a current live base.
+    /// - `Ok(false)` means `source` held a checksum-valid non-Stack encoding.
+    ///   In this case the callback is not called and `source` is left
+    ///   byte-for-byte unchanged. In particular, this method does not decode
+    ///   Heap handles or acquire CrossArena leases merely to classify bytes.
+    ///
+    /// Truncated, corrupt, offset-mismatched, or unresolved Stack encodings
+    /// return the corresponding [`PointerDeserializationError`] and are not
+    /// rewritten. There is intentionally no old-base parameter: serialized
+    /// Stack pointers do not retain an old address, and only the resolver can
+    /// supply a currently live base after stack relocation.
+    pub fn rebase_stack_pointer(
+        source: &mut [u8],
+        resolve_slot: impl FnOnce(StackSlotIndex) -> Option<NonNull<u8>>,
+    ) -> Result<bool, PointerDeserializationError> {
+        let words = read_serialized_managed_ptr_words(source)?;
+        validate_serialized_managed_ptr_checksum(words)?;
+        let Some(stack) = parse_serialized_stack_managed_ptr(words)? else {
+            return Ok(false);
+        };
 
-        let word0 = usize::from_ne_bytes(
-            source[..ptr_size]
-                .try_into()
-                .expect("slice length was checked above"),
+        // The representation deliberately does not serialize this derived
+        // address, but deriving it proves that the encoded logical slot has a
+        // current live base before canonicalizing the Stack words.
+        resolve_stack_address(stack.slot, stack.offset, resolve_slot)?;
+        write_serialized_managed_ptr_words(
+            source,
+            canonical_stack_managed_ptr_words(stack.slot, stack.offset),
         );
-        let word1 = usize::from_ne_bytes(
-            source[ptr_size..ptr_size * 2]
-                .try_into()
-                .expect("slice length was checked above"),
-        );
-        let word2 = usize::from_ne_bytes(
-            source[ptr_size * 2..ptr_size * 3]
-                .try_into()
-                .expect("slice length was checked above"),
-        );
-        if word2 != word0 ^ word1 {
-            panic!("ManagedPtr::read_stack_info: checksum mismatch");
-        }
+        Ok(true)
+    }
 
-        if word0 & 1 != 0 {
-            match word0 & 7 {
-                1 => {
-                    let packed_offset = word0 >> 33;
-                    if word1 > u32::MAX as usize || packed_offset != (word1 & 0x7FFF_FFFF) {
-                        panic!("ManagedPtr::read_stack_info: encoded offset mismatch");
-                    }
-                    let idx = (word0 >> 3) & 0x3FFF_FFFF;
-                    return ManagedPtrStackInfo {
-                        offset: ByteOffset::new(word1),
-                        origin: PointerOrigin::Stack(StackSlotIndex::new(idx)),
-                    };
-                }
-                7 if ((word0 >> 3) & 7) == 2 => {
-                    return ManagedPtrStackInfo {
-                        offset: ByteOffset::new(word0 >> 6),
-                        // A transient origin has no recoverable metadata owner.
-                        origin: PointerOrigin::Unmanaged,
-                    };
-                }
-                _ => {}
-            }
-        }
+    /// Refreshes the cached executable address of this Stack managed pointer.
+    ///
+    /// A cached Stack pointer retains its stable logical [`StackSlotIndex`]
+    /// and compact [`ByteOffset`] in addition to its derived address. When
+    /// stack storage moves, `resolve_slot` must return the current live base
+    /// for that logical slot. This method derives the replacement cached
+    /// address from that base and the recorded offset using the same
+    /// Stack-address operation as [`ManagedPtr::rebase_stack_pointer`].
+    ///
+    /// This operation is available through the `DerefMut` implementation of
+    /// boxed [`crate::StackManagedPtr`] values, including the pointer retained
+    /// by a `typedref` slot. It deliberately does not alter the origin or
+    /// offset, so an unresolved Stack pointer remains unchanged if resolution
+    /// fails.
+    ///
+    /// The returned value distinguishes the two successful cases:
+    ///
+    /// - `Ok(true)` means this was a Stack pointer and its slot resolved to a
+    ///   current live base, so its cached address was refreshed.
+    /// - `Ok(false)` means this was not a Stack pointer. The callback is not
+    ///   called and this pointer is unchanged.
+    ///
+    /// An unresolved Stack slot returns
+    /// [`PointerDeserializationError::UnresolvedStackSlot`] without changing
+    /// the cached address. There is intentionally no old-base parameter:
+    /// only the resolver can supply the current live base after stack
+    /// relocation.
+    pub fn rebase_cached_stack_pointer(
+        &mut self,
+        resolve_slot: impl FnOnce(StackSlotIndex) -> Option<NonNull<u8>>,
+    ) -> Result<bool, PointerDeserializationError> {
+        self.validate_magic();
+        let Some((slot, offset)) = self.stack_slot_origin() else {
+            return Ok(false);
+        };
 
-        // This helper is intentionally metadata-only. Its only consumer is
-        // stack reallocation, which acts solely on the Stack case above.
-        ManagedPtrStackInfo {
-            offset: ByteOffset::new(word1),
-            origin: PointerOrigin::Unmanaged,
-        }
+        let address = resolve_stack_address(slot, offset, resolve_slot)?;
+        self.update_cached_ptr(address);
+        Ok(true)
     }
 
     /// Read only the serialized origin and offset metadata.
@@ -465,15 +608,13 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn write(&self, dest: &mut [u8]) {
         self.validate_magic();
 
-        let ptr_size = ObjectRef::SIZE;
         let byte_offset = self.byte_offset();
 
         let (word0, word1) = match &self.origin {
             PointerOrigin::Stack(slot_idx) => {
-                let w0: usize =
-                    1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (byte_offset.as_usize() << 33);
-                let w1 = byte_offset.as_usize();
-                (w0, w1)
+                let words = canonical_stack_managed_ptr_words(*slot_idx, byte_offset);
+                debug_assert_eq!(words.word2, words.word0 ^ words.word1);
+                (words.word0, words.word1)
             }
             PointerOrigin::Heap(owner) => {
                 let w0 = match owner.0 {
@@ -521,10 +662,14 @@ impl<'gc> ManagedPtr<'gc> {
             }
         };
 
-        dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
-        dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
-        let word2 = word0 ^ word1;
-        dest[ptr_size * 2..ptr_size * 3].copy_from_slice(&word2.to_ne_bytes());
+        write_serialized_managed_ptr_words(
+            dest,
+            SerializedManagedPtrWords {
+                word0,
+                word1,
+                word2: word0 ^ word1,
+            },
+        );
 
         #[cfg(debug_assertions)]
         if !matches!(self.origin, PointerOrigin::Transient(_)) {

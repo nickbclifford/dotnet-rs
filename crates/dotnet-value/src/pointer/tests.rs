@@ -5,6 +5,7 @@ use crate::{
 };
 use gc_arena::{Arena, Gc, Rootable};
 use std::{
+    cell::Cell,
     ptr::NonNull,
     sync::{Mutex, OnceLock},
 };
@@ -402,32 +403,85 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
 }
 
 #[test]
-fn test_serialized_offsets_preserve_full_compact_range() {
+fn test_stack_rebase_preserves_golden_three_word_encoding_and_full_offset() {
     let _guard = static_reg_test_lock().lock().unwrap();
     reset_static_registry();
 
-    let address = NonNull::new(std::ptr::without_provenance_mut(0x4000)).unwrap();
     let stack_offset = (1usize << 31) + 17;
+    let stack_slot = StackSlotIndex::new(9);
+    let mut old_stack_storage = [0u8; 1];
+    let old_stack_base = NonNull::new(old_stack_storage.as_mut_ptr()).unwrap();
+    let mut new_stack_storage = [0u8; 1];
+    let new_stack_base = NonNull::new(new_stack_storage.as_mut_ptr()).unwrap();
+    assert_ne!(old_stack_base, new_stack_base);
     let stack = ManagedPtr::new(
-        Some(address),
+        NonNull::new(old_stack_base.as_ptr().wrapping_add(stack_offset)),
         TypeDescription::NULL,
         None,
         false,
         Some(ByteOffset::new(stack_offset)),
     )
-    .with_origin(PointerOrigin::Stack(StackSlotIndex::new(9)));
+    .with_origin(PointerOrigin::Stack(stack_slot));
     let mut buffer = ManagedPtr::serialization_buffer();
     stack.write(&mut buffer);
+
+    let ptr_size = ObjectRef::SIZE;
+    let expected_word0 = 1 | ((stack_slot.as_usize() & 0x3FFF_FFFF) << 3) | (stack_offset << 33);
+    let expected_word1 = stack_offset;
+    let expected_word2 = expected_word0 ^ expected_word1;
+    assert_eq!(
+        usize::from_ne_bytes(buffer[..ptr_size].try_into().unwrap()),
+        expected_word0
+    );
+    assert_eq!(
+        usize::from_ne_bytes(buffer[ptr_size..ptr_size * 2].try_into().unwrap()),
+        expected_word1,
+        "Stack word1 must retain the full compact offset"
+    );
+    assert_eq!(
+        usize::from_ne_bytes(buffer[ptr_size * 2..ptr_size * 3].try_into().unwrap()),
+        expected_word2,
+        "Stack word2 must remain the word0 XOR word1 checksum"
+    );
+    let golden_bytes = buffer;
+
+    assert!(
+        ManagedPtr::rebase_stack_pointer(&mut buffer, |slot| {
+            assert_eq!(slot, stack_slot);
+            Some(new_stack_base)
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        buffer, golden_bytes,
+        "Stack rebase must preserve the canonical three-word representation"
+    );
+
+    // SAFETY: F3.InteriorPointerRebased — The canonical bytes are complete and the resolver
+    // supplies the distinct current base for their stable logical slot.
+    let rebased = unsafe {
+        ManagedPtr::read_resolved_unchecked(
+            &buffer,
+            &TestManagedPtrResolver {
+                stack_base: Some(new_stack_base),
+                static_base: None,
+            },
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        rebased.address,
+        NonNull::new(new_stack_base.as_ptr().wrapping_add(stack_offset))
+    );
+    assert_eq!(rebased.origin, PointerOrigin::Stack(stack_slot));
+    assert_eq!(rebased.offset, ByteOffset::new(stack_offset));
+
     // SAFETY: F3.InteriorPointerRebased — `buffer` was just written as one complete Stack ManagedPtr.
     let stack_info = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) }.unwrap();
     assert_eq!(stack_info.offset, ByteOffset::new(stack_offset));
-    // SAFETY: F3.InteriorPointerRebased — The same complete encoding is valid for the stack-reallocation reader.
-    let stack_rewrite_info = unsafe { ManagedPtr::read_stack_info(&buffer) };
-    assert_eq!(stack_rewrite_info.offset, ByteOffset::new(stack_offset));
 
     // A self-consistent XOR alone must not permit the canonical word-1 offset
     // to disagree with the legacy packed mirror in word 0.
-    let ptr_size = ObjectRef::SIZE;
     let word0 = usize::from_ne_bytes(buffer[..ptr_size].try_into().unwrap());
     let mismatched_word1 = stack_offset + 1;
     buffer[ptr_size..ptr_size * 2].copy_from_slice(&mismatched_word1.to_ne_bytes());
@@ -439,6 +493,7 @@ fn test_serialized_offsets_preserve_full_compact_range() {
         Err(dotnet_types::error::PointerDeserializationError::OffsetMismatch)
     ));
 
+    let address = NonNull::new(std::ptr::without_provenance_mut(0x4000)).unwrap();
     let static_offset = (1usize << 26) + 23;
     let static_ptr = ManagedPtr::new_static(
         Some(address),
@@ -500,22 +555,219 @@ fn test_static_registry_deduplication() {
 }
 
 #[test]
-fn test_read_stack_info_miri() {
+fn test_stack_rebase_roundtrip_miri() {
     let mut buf = [0u8; ManagedPtr::SIZE];
     let slot_idx = StackSlotIndex::new(42);
     let offset = 8;
-
     let w0: usize = 1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (offset << 33);
     let w1 = offset;
+    let ptr_size = ObjectRef::SIZE;
 
-    buf[0..8].copy_from_slice(&w0.to_ne_bytes());
-    buf[8..16].copy_from_slice(&w1.to_ne_bytes());
-    buf[16..24].copy_from_slice(&(w0 ^ w1).to_ne_bytes());
+    buf[..ptr_size].copy_from_slice(&w0.to_ne_bytes());
+    buf[ptr_size..ptr_size * 2].copy_from_slice(&w1.to_ne_bytes());
+    buf[ptr_size * 2..ptr_size * 3].copy_from_slice(&(w0 ^ w1).to_ne_bytes());
+    let original = buf;
 
-    // SAFETY: F3.InteriorPointerRebased — This test supplies one checksum-valid serialized ManagedPtr.
-    let info = unsafe { ManagedPtr::read_stack_info(&buf) };
-    assert_eq!(info.offset.as_usize(), offset);
+    let mut old_stack_storage = [0u8; 16];
+    let old_stack_base = NonNull::new(old_stack_storage.as_mut_ptr()).unwrap();
+    let mut new_stack_storage = [0u8; 16];
+    let new_stack_base = NonNull::new(new_stack_storage.as_mut_ptr()).unwrap();
+    assert_ne!(old_stack_base, new_stack_base);
+
+    assert!(
+        ManagedPtr::rebase_stack_pointer(&mut buf, |slot| {
+            assert_eq!(slot, slot_idx);
+            Some(new_stack_base)
+        })
+        .unwrap()
+    );
+    assert_eq!(buf, original);
+
+    // SAFETY: F3.InteriorPointerRebased — The hand-written canonical bytes are complete and
+    // the resolver supplies the current base for their stable slot.
+    let info = unsafe {
+        ManagedPtr::read_resolved_unchecked(
+            &buf,
+            &TestManagedPtrResolver {
+                stack_base: Some(new_stack_base),
+                static_base: None,
+            },
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        info.address,
+        NonNull::new(new_stack_base.as_ptr().wrapping_add(offset))
+    );
     assert_eq!(info.origin, PointerOrigin::Stack(slot_idx));
+    assert_eq!(info.offset.as_usize(), offset);
+}
+
+#[test]
+fn test_safe_stack_rebase_rejects_invalid_input_without_mutation() {
+    let _guard = static_reg_test_lock().lock().unwrap();
+    reset_static_registry();
+    let slot = StackSlotIndex::new(27);
+    let offset = 24usize;
+    let ptr_size = ObjectRef::SIZE;
+    let word0 = 1 | ((slot.as_usize() & 0x3FFF_FFFF) << 3) | (offset << 33);
+    let word1 = offset;
+    let mut valid_stack = ManagedPtr::serialization_buffer();
+    valid_stack[..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+    valid_stack[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+    valid_stack[ptr_size * 2..ptr_size * 3].copy_from_slice(&(word0 ^ word1).to_ne_bytes());
+
+    for actual in [0, ManagedPtr::SIZE - 1] {
+        let mut truncated = vec![0xA5; actual];
+        let original = truncated.clone();
+        let resolver_called = Cell::new(false);
+        assert_eq!(
+            ManagedPtr::rebase_stack_pointer(&mut truncated, |_| {
+                resolver_called.set(true);
+                None
+            }),
+            Err(
+                dotnet_types::error::PointerDeserializationError::BufferTooSmall {
+                    expected: ManagedPtr::SIZE,
+                    actual,
+                }
+            )
+        );
+        assert_eq!(truncated, original);
+        assert!(!resolver_called.get());
+    }
+
+    let mut bad_checksum = valid_stack;
+    bad_checksum[ManagedPtr::SIZE - 1] ^= 1;
+    let original = bad_checksum;
+    let resolver_called = Cell::new(false);
+    assert_eq!(
+        ManagedPtr::rebase_stack_pointer(&mut bad_checksum, |_| {
+            resolver_called.set(true);
+            None
+        }),
+        Err(dotnet_types::error::PointerDeserializationError::ChecksumMismatch)
+    );
+    assert_eq!(bad_checksum, original);
+    assert!(!resolver_called.get());
+
+    let mut offset_mismatch = valid_stack;
+    let mismatched_word1 = word1 + 1;
+    offset_mismatch[ptr_size..ptr_size * 2].copy_from_slice(&mismatched_word1.to_ne_bytes());
+    offset_mismatch[ptr_size * 2..ptr_size * 3]
+        .copy_from_slice(&(word0 ^ mismatched_word1).to_ne_bytes());
+    let original = offset_mismatch;
+    let resolver_called = Cell::new(false);
+    assert_eq!(
+        ManagedPtr::rebase_stack_pointer(&mut offset_mismatch, |_| {
+            resolver_called.set(true);
+            None
+        }),
+        Err(dotnet_types::error::PointerDeserializationError::OffsetMismatch)
+    );
+    assert_eq!(offset_mismatch, original);
+    assert!(!resolver_called.get());
+
+    let mut unresolved = valid_stack;
+    let original = unresolved;
+    let resolved_slot = Cell::new(None);
+    assert_eq!(
+        ManagedPtr::rebase_stack_pointer(&mut unresolved, |resolved| {
+            resolved_slot.set(Some(resolved));
+            None
+        }),
+        Err(dotnet_types::error::PointerDeserializationError::UnresolvedStackSlot(slot.as_usize()))
+    );
+    assert_eq!(unresolved, original);
+    assert_eq!(resolved_slot.get(), Some(slot));
+
+    let unmanaged = ManagedPtr::new(
+        Some(NonNull::new(std::ptr::without_provenance_mut(0x5000)).unwrap()),
+        TypeDescription::NULL,
+        None,
+        false,
+        None,
+    );
+    let mut non_stack = ManagedPtr::serialization_buffer();
+    unmanaged.write(&mut non_stack);
+    let mut static_storage = [0u8; 1];
+    let static_ptr = ManagedPtr::new_static(
+        NonNull::new(static_storage.as_mut_ptr()),
+        TypeDescription::NULL,
+        TypeDescription::NULL,
+        GenericLookup::default(),
+        false,
+        ByteOffset::ZERO,
+    );
+    let mut static_non_stack = ManagedPtr::serialization_buffer();
+    static_ptr.write(&mut static_non_stack);
+
+    for non_stack in [&mut non_stack, &mut static_non_stack] {
+        let original = *non_stack;
+        let resolver_called = Cell::new(false);
+        assert_eq!(
+            ManagedPtr::rebase_stack_pointer(non_stack, |_| {
+                resolver_called.set(true);
+                None
+            }),
+            Ok(false)
+        );
+        assert_eq!(*non_stack, original);
+        assert!(!resolver_called.get());
+    }
+}
+
+#[test]
+fn test_cached_stack_rebase_updates_address_and_preserves_unresolved_or_non_stack_pointers() {
+    let slot = StackSlotIndex::new(12);
+    let offset = ByteOffset::new(4);
+    let mut old_storage = [0u8; 16];
+    let old_base = NonNull::new(old_storage.as_mut_ptr()).unwrap();
+    let old_address = NonNull::new(old_base.as_ptr().wrapping_add(offset.as_usize())).unwrap();
+    let mut new_storage = [0u8; 16];
+    let new_base = NonNull::new(new_storage.as_mut_ptr()).unwrap();
+    let new_address = NonNull::new(new_base.as_ptr().wrapping_add(offset.as_usize())).unwrap();
+    assert_ne!(old_base, new_base);
+
+    let mut stack_pointer = ManagedPtr::new(
+        Some(old_address),
+        TypeDescription::NULL,
+        None,
+        false,
+        Some(offset),
+    )
+    .with_stack_origin(slot);
+    assert_eq!(
+        stack_pointer.rebase_cached_stack_pointer(|resolved_slot| {
+            assert_eq!(resolved_slot, slot);
+            Some(new_base)
+        }),
+        Ok(true)
+    );
+
+    assert_eq!(
+        stack_pointer.rebase_cached_stack_pointer(|_| None),
+        Err(dotnet_types::error::PointerDeserializationError::UnresolvedStackSlot(slot.as_usize()))
+    );
+    let stack_info = stack_pointer.into_info();
+    assert_eq!(stack_info.address, Some(new_address));
+    assert_eq!(stack_info.origin, PointerOrigin::Stack(slot));
+    assert_eq!(stack_info.offset, offset);
+
+    let mut non_stack_pointer = ManagedPtr::null();
+    let resolver_called = Cell::new(false);
+    assert_eq!(
+        non_stack_pointer.rebase_cached_stack_pointer(|_| {
+            resolver_called.set(true);
+            None
+        }),
+        Ok(false)
+    );
+    assert!(!resolver_called.get());
+    let non_stack_info = non_stack_pointer.into_info();
+    assert_eq!(non_stack_info.address, None);
+    assert_eq!(non_stack_info.origin, PointerOrigin::Unmanaged);
+    assert_eq!(non_stack_info.offset, ByteOffset::ZERO);
 }
 
 #[test]

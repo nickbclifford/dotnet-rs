@@ -32,6 +32,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "fuzz_managed_ptr_rebase"
+path = "fuzz_targets/fuzz_managed_ptr_rebase.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "fuzz_raw_memory_access"
 path = "fuzz_targets/fuzz_raw_memory_access.rs"
 test = false
