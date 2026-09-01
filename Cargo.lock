@@ -544,6 +544,7 @@ name = "dotnet-metrics"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "static_assertions",
 ]
 
 [[package]]

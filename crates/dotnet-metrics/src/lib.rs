@@ -1107,10 +1107,14 @@ fn active_runtime_metrics() -> Option<*const RuntimeMetrics> {
 /// ```
 ///
 /// The guard retains the borrow supplied to [`Self::enter`], so it cannot outlive the
-/// `RuntimeMetrics` whose address is active in this thread's TLS slot.
+/// `RuntimeMetrics` whose address is active in this thread's TLS slot. It is also
+/// deliberately thread-affine and cannot be sent to another thread.
 pub struct ActiveRuntimeMetricsGuard<'metrics> {
     scope_id: usize,
     _metrics: std::marker::PhantomData<&'metrics RuntimeMetrics>,
+    // `Drop` must remove this ID from the TLS state in which `enter` registered it.
+    // `Rc` makes the guard !Send and !Sync without changing its runtime representation.
+    _thread_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 #[cfg(feature = "bench-instrumentation")]
@@ -1121,6 +1125,7 @@ impl<'metrics> ActiveRuntimeMetricsGuard<'metrics> {
         Self {
             scope_id,
             _metrics: std::marker::PhantomData,
+            _thread_affinity: std::marker::PhantomData,
         }
     }
 }
@@ -1248,6 +1253,11 @@ fn percentile_sorted(samples: &[u64], percentile: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "bench-instrumentation")]
+    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard<'static>: Send);
+    #[cfg(feature = "bench-instrumentation")]
+    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard<'static>: Sync);
 
     fn empty_cache_sizes() -> CacheSizes {
         CacheSizes {
@@ -1454,6 +1464,7 @@ mod tests {
             }
             record_active_eval_stack_reallocation(Duration::ZERO);
         }
+        assert!(ACTIVE_RUNTIME_METRICS.with(|state| state.borrow().current_metrics().is_none()));
         record_active_eval_stack_reallocation(Duration::ZERO);
 
         assert_eq!(
@@ -1472,7 +1483,7 @@ mod tests {
 
     #[cfg(feature = "bench-instrumentation")]
     #[test]
-    fn active_metrics_guard_skips_an_out_of_order_dropped_scope() {
+    fn active_metrics_guard_skips_an_out_of_order_dropped_scope_and_cleans_up_tls() {
         let outer_metrics = RuntimeMetrics::new();
         let inner_metrics = RuntimeMetrics::new();
 

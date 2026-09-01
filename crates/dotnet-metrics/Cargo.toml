@@ -11,5 +11,8 @@ bench-instrumentation = []
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 
+[dev-dependencies]
+static_assertions = "1"
+
 [lints]
 workspace = true
