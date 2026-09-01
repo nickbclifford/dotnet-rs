@@ -12,6 +12,9 @@ dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 smallvec = { workspace = true }
 
+[dev-dependencies]
+hashbrown = { workspace = true }
+
 [features]
 default = ["multithreading"]
 multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]

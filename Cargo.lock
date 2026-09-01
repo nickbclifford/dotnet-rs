@@ -700,6 +700,7 @@ dependencies = [
  "dotnet-value",
  "dotnetdll",
  "gc-arena",
+ "hashbrown 0.17.1",
  "smallvec",
 ]
 

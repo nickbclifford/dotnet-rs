@@ -122,11 +122,6 @@ impl<'gc> HeapManagedPtrDecodeCacheTrait<'gc> for HeapManagedPtrDecodeCache<'gc>
 
     fn insert_heap_handle(&mut self, serialized_handle: usize, owner: ObjectRef<'gc>) {
         debug_assert_ne!(serialized_handle, 0, "Heap cache keys must be non-null");
-        debug_assert_eq!(
-            serialized_handle & 7,
-            0,
-            "Heap cache keys must be untagged Heap words"
-        );
         debug_assert!(
             owner.0.is_some(),
             "Heap cache values must be non-null handles"

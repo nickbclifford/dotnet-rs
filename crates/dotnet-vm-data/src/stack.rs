@@ -10,7 +10,7 @@ use dotnet_utils::{ByteOffset, StackSlotIndex};
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::ManagedPtr,
 };
 use gc_arena::{Collect, collect::Trace};
 use smallvec::SmallVec;
@@ -214,24 +214,15 @@ impl<'gc> EvaluationStack<'gc> {
         let resolve_slot_ptr = |idx: StackSlotIndex| {
             let idx = idx.as_usize();
             if idx < stack_len {
-                slot_locations[idx]
+                slot_locations.get(idx).copied()
             } else {
-                suspended_locations[idx - stack_len]
+                suspended_locations.get(idx - stack_len).copied()
             }
         };
 
         let update_managed_ptr = |m: &mut dotnet_value::StackManagedPtr<'gc>| {
-            if let PointerOrigin::Stack(idx) = m.origin() {
-                let off = m.byte_offset();
-                let slot_ptr = resolve_slot_ptr(*idx);
-                // SAFETY: F3.InteriorPointerRebased — `slot_ptr` identifies the start of the live stack slot and
-                // `off` was recorded from that slot when the pointer was created.
-                let raw_ptr = unsafe { slot_ptr.as_ptr().add(off.as_usize()) };
-                // SAFETY: F3.InteriorPointerRebased — adding the recorded offset to a non-null stack-slot pointer
-                // preserves non-nullness.
-                let new_ptr = unsafe { NonNull::new_unchecked(raw_ptr) };
-                m.update_cached_ptr(new_ptr);
-            }
+            m.rebase_cached_stack_pointer(resolve_slot_ptr)
+                .expect("Stack managed pointer must resolve to a live evaluation-stack slot");
         };
 
         let update_val = |val: &mut StackValue<'gc>| match val {
@@ -248,21 +239,9 @@ impl<'gc> EvaluationStack<'gc> {
                         if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
                             let offset_val = offset.as_usize();
                             let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
-                            // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `slice` is exactly one serialized ManagedPtr field,
-                            // selected by the layout manager from storage it previously wrote.
-                            let info = unsafe { ManagedPtr::read_stack_info(slice) };
-                            if let PointerOrigin::Stack(idx) = info.origin {
-                                let ptr_size = ObjectRef::SIZE;
-                                let word0: usize = 1
-                                    | ((idx.as_usize() & 0x3FFFFFFF) << 3)
-                                    | (info.offset.as_usize() << 33);
-                                let word1 = info.offset.as_usize();
-                                let word2 = word0 ^ word1;
-                                slice[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
-                                slice[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
-                                slice[ptr_size * 2..ptr_size * 3]
-                                    .copy_from_slice(&word2.to_ne_bytes());
-                            }
+                            ManagedPtr::rebase_stack_pointer(slice, resolve_slot_ptr).expect(
+                                "Serialized Stack managed pointer must resolve to a live evaluation-stack slot",
+                            );
                         }
                     });
                 });
@@ -469,6 +448,54 @@ mod tests {
         values.iter().map(StackValue::as_i32).collect()
     }
 
+    fn value_type_with_managed_ptr(
+        pointer_bytes: [u8; ManagedPtr::SIZE],
+    ) -> ObjectInstance<'static> {
+        use dotnet_types::generics::GenericLookup;
+        use dotnet_utils::sync::Arc;
+        use dotnet_value::{
+            layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager, Scalar},
+            storage::FieldStorage,
+        };
+        use hashbrown::HashMap;
+
+        let layout = Arc::new(FieldLayoutManager {
+            fields: {
+                let mut fields = HashMap::new();
+                fields.insert(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "byref".to_owned(),
+                    },
+                    FieldLayout {
+                        position: ByteOffset::new(0),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                    },
+                );
+                fields
+            },
+            total_size: ManagedPtr::SIZE,
+            alignment: std::mem::align_of::<usize>(),
+            gc_desc: GcDesc::default(),
+            has_ref_fields: true,
+        });
+
+        ObjectInstance::new(
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            FieldStorage::new(layout, pointer_bytes.to_vec()),
+        )
+    }
+
+    fn value_type_managed_ptr_bytes(value: &StackValue<'static>) -> [u8; ManagedPtr::SIZE] {
+        let StackValue::ValueType(value_type) = value else {
+            panic!("expected a ValueType stack value");
+        };
+        value_type
+            .instance_storage
+            .with_data(|data| data[..ManagedPtr::SIZE].try_into().unwrap())
+    }
+
     #[test]
     fn copy_slots_into_copies_requested_slice() {
         let stack = int_stack(&[10, 20, 30, 40, 50]);
@@ -482,20 +509,180 @@ mod tests {
     #[test]
     fn stack_pointer_fixup_updates_cached_ptr_on_reallocation() {
         let mut stack = int_stack(&[11, 22]);
-        let slot0_ptr = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
+        let interior_offset = ByteOffset::new(1);
+        let slot0_before = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
+        let expected_before = slot0_before.wrapping_add(interior_offset.as_usize());
         stack.push(StackValue::managed_stack_ptr(
             StackSlotIndex::new(0),
-            ByteOffset::new(0),
-            slot0_ptr,
+            interior_offset,
+            expected_before,
             TypeDescription::NULL,
             false,
         ));
 
+        assert_eq!(stack.peek_stack().as_ptr(), expected_before);
+
         stack.reserve_slots(512);
 
-        let expected_ptr = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
-        let actual_ptr = stack.peek_stack().as_ptr();
-        assert_eq!(actual_ptr, expected_ptr);
+        let slot0_after = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
+        let expected_after = slot0_after.wrapping_add(interior_offset.as_usize());
+        assert_eq!(stack.peek_stack().as_ptr(), expected_after);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_rebases_serialized_value_type_pointer_on_reserve() {
+        let target_slot = StackSlotIndex::new(0);
+        let mut stack = int_stack(&[11, 22]);
+        let target_base = stack.get_slot_address(target_slot);
+        let pointer = ManagedPtr::new(
+            Some(target_base),
+            TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(0)),
+        )
+        .with_stack_origin(target_slot);
+        let mut canonical_bytes = ManagedPtr::serialization_buffer();
+        pointer.write(&mut canonical_bytes);
+
+        stack.push_value_type(value_type_with_managed_ptr(canonical_bytes));
+        assert_eq!(
+            value_type_managed_ptr_bytes(&stack.peek_stack()),
+            canonical_bytes,
+            "the embedded pointer starts in the canonical Stack representation"
+        );
+
+        let capacity_before = stack.stack.capacity();
+        stack.reserve_slots(capacity_before + 1);
+        assert!(stack.stack.capacity() > capacity_before);
+
+        let embedded_bytes = value_type_managed_ptr_bytes(&stack.peek_stack());
+        assert_eq!(
+            embedded_bytes, canonical_bytes,
+            "the reallocation fixup must preserve the canonical serialized representation"
+        );
+
+        let current_target_base = stack.get_slot_address(target_slot);
+        let mut resolved_bytes = embedded_bytes;
+        assert_eq!(
+            ManagedPtr::rebase_stack_pointer(&mut resolved_bytes, |slot| {
+                (slot == target_slot).then_some(current_target_base)
+            }),
+            Ok(true),
+            "the embedded Stack pointer must resolve against the post-reserve slot base"
+        );
+        assert_eq!(resolved_bytes, canonical_bytes);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_preserves_unresolved_static_pointer() {
+        let static_offset = ByteOffset::new(7);
+        let static_pointer = ManagedPtr::new_static(
+            None,
+            TypeDescription::NULL,
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            false,
+            static_offset,
+        );
+        let expected_origin = static_pointer.origin().clone();
+        let mut stack = int_stack(&[11, 22]);
+        stack.push_managed_ptr(static_pointer);
+
+        stack.update_stack_pointers();
+
+        let StackValue::ManagedPtr(pointer) = stack.peek_stack() else {
+            panic!("expected a managed pointer stack value");
+        };
+        let info = pointer.into_inner().into_info();
+        assert_eq!(info.origin, expected_origin);
+        assert_eq!(info.offset, static_offset);
+        assert_eq!(info.address, None);
+    }
+
+    #[test]
+    fn stack_pointer_fixup_preserves_serialized_non_stack_value_type_bytes() {
+        let static_offset = ByteOffset::new(3);
+        let mut static_storage = [0u8; 8];
+        let static_base = NonNull::new(static_storage.as_mut_ptr()).unwrap();
+        let static_pointer = ManagedPtr::new_static(
+            NonNull::new(static_base.as_ptr().wrapping_add(static_offset.as_usize())),
+            TypeDescription::NULL,
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            false,
+            static_offset,
+        );
+        let mut serialized_static = ManagedPtr::serialization_buffer();
+        static_pointer.write(&mut serialized_static);
+
+        let mut stack = int_stack(&[11, 22]);
+        stack.push_value_type(value_type_with_managed_ptr(serialized_static));
+        stack.update_stack_pointers();
+
+        assert_eq!(
+            value_type_managed_ptr_bytes(&stack.peek_stack()),
+            serialized_static,
+            "a valid serialized non-Stack field must pass through fixup unchanged"
+        );
+    }
+
+    #[test]
+    fn stack_pointer_fixup_rebases_serialized_value_type_pointer_to_suspended_slot() {
+        let target_slot = StackSlotIndex::new(1);
+        let mut stack = int_stack(&[11, 22]);
+        let target_base = stack.get_slot_address(target_slot);
+        let pointer = ManagedPtr::new(
+            Some(target_base),
+            TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(0)),
+        )
+        .with_stack_origin(target_slot);
+        let mut canonical_bytes = ManagedPtr::serialization_buffer();
+        pointer.write(&mut canonical_bytes);
+
+        stack.push_value_type(value_type_with_managed_ptr(canonical_bytes));
+
+        // The target (logical slot 1) and the ValueType containing its
+        // serialized pointer (logical slot 2) both move to the suspended
+        // stack. The active slot at logical index 0 ensures this requires the
+        // resolver to subtract the active-stack length before indexing the
+        // suspended locations.
+        stack.suspend_above(target_slot);
+        assert_eq!(stack.stack.len(), 1);
+        assert_eq!(stack.suspended_stack.len(), 2);
+        let suspended_target_base = stack.suspended_stack[0].data_location();
+        let suspended_bytes = value_type_managed_ptr_bytes(&stack.suspended_stack[1]);
+        assert_eq!(suspended_bytes, canonical_bytes);
+
+        let mut resolved_suspended_bytes = suspended_bytes;
+        assert_eq!(
+            ManagedPtr::rebase_stack_pointer(&mut resolved_suspended_bytes, |slot| {
+                (slot == target_slot).then_some(suspended_target_base)
+            }),
+            Ok(true),
+            "the embedded pointer must resolve through the suspended portion of the concatenated slots"
+        );
+        assert_eq!(resolved_suspended_bytes, canonical_bytes);
+
+        stack.restore_suspended();
+        assert_eq!(stack.stack.len(), 3);
+        assert!(stack.suspended_stack.is_empty());
+        let restored_target_base = stack.get_slot_address(target_slot);
+        let restored_bytes = value_type_managed_ptr_bytes(&stack.stack[2]);
+        assert_eq!(restored_bytes, canonical_bytes);
+
+        let mut resolved_restored_bytes = restored_bytes;
+        assert_eq!(
+            ManagedPtr::rebase_stack_pointer(&mut resolved_restored_bytes, |slot| {
+                (slot == target_slot).then_some(restored_target_base)
+            }),
+            Ok(true),
+            "the embedded pointer must resolve through the active portion after restoration"
+        );
+        assert_eq!(resolved_restored_bytes, canonical_bytes);
     }
 
     #[test]
