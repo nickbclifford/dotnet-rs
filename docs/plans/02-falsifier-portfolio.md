@@ -5,7 +5,7 @@
 F3/F4/F9 value-level facts; and a guard-off leg proves the feature-gated
 validation hooks are not silently load-bearing.
 
-**Status:** in progress — instrument 1 complete (2026-09-18), instruments 2–5 pending.
+**Status:** in progress — instruments 1–2 complete (2026-09-18), instruments 3–5 pending.
 
 ## Premise
 
@@ -22,17 +22,18 @@ Systematic interleaving exploration reaches the same invariants, on the actual
 code, this week. It proves nothing and finds bugs — which at this project's
 scale is the better trade.
 
-## Current state (measured at `6ebda249`)
+## Current state (Instrument 2 completed 2026-09-18)
 
 - **Miri**: `miri-value` is blocking in `ci.yml`. `miri.yml` runs a matrix with
   `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`;
   its multithreading leg runs `--no-default-features --features multithreading
   -- --test-threads=1` over four named test groups. Interleavings explored are
   whatever those tests happen to produce — nothing systematic.
-- **Fuzzing**: four targets — `fuzz_managed_ptr_roundtrip`,
+- **Fuzzing**: all four targets — `fuzz_managed_ptr_roundtrip`,
   `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access` (in `dotnet-value`) and
-  `fuzz_executor` (in `dotnet-vm`). Only `fuzz_raw_memory_access` is blocking;
-  the other three are `continue-on-error`.
+  `fuzz_executor` (in `dotnet-vm`) — replay committed, nonempty corpora in a
+  blocking pinned-nightly `ci.yml` matrix with `-runs=0`. Exploratory
+  duration-based fuzzing remains advisory in `fuzz.yml`.
 - **Differential**: 7 `diff_test!` fixtures in
   `crates/dotnet-cli/tests/integration_tests_impl/diff_harness.rs`, against 475
   C# fixtures in the tree.
@@ -81,12 +82,13 @@ Instruments 2–5 below are independent portfolio work and remain pending.
 
 ## Instrument 2 — promote the existing fuzz targets
 
-Three of four targets are `continue-on-error`, and two of them
-(`fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`) test precisely the
-code plan 08 rewrites. Promote all four to blocking. If a target is too flaky
-or slow to block, that is a finding about the target, to be fixed or documented,
-not a reason to leave it advisory indefinitely. Extend the two managed-pointer
-targets with the provenance-preservation assertions from plan 08, step 7.
+Complete (2026-09-18). All four targets replay committed, nonempty corpora in
+a blocking `ci.yml` matrix using cargo-fuzz 0.13.1 and
+`nightly-2026-05-27`; each command uses `-runs=0`. The two managed-pointer
+targets now construct their assertion subjects from live storage, assert origin
+and derived-address preservation, and cover checksum-valid unsupported serde
+subtags as `UnknownSubtag` errors. This is Plan 08 step 7 coverage only; it
+does not add a strict-provenance Miri leg or reopen Plan 08's parked gate.
 
 ## Instrument 3 — Kani harnesses for the value-level facts
 

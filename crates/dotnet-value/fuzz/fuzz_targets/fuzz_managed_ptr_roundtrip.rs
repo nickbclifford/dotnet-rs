@@ -100,6 +100,10 @@ fn with_fuzz_gc_context<R>(f: impl for<'gc> FnOnce(GCHandle<'gc>) -> R) -> R {
 /// outside this success-roundtrip target.
 #[derive(Arbitrary, Debug)]
 enum RoundtripInput {
+    /// Exercises recovery from a self-consistent but unsupported serialized
+    /// origin. This must be an ordinary deserialization error, not a target
+    /// crash.
+    InvalidSerializedSubtag { subtag: u8 },
     Unmanaged { address: usize },
     Stack { slot: u16, offset: u8 },
     Static { offset: u8 },
@@ -108,6 +112,41 @@ enum RoundtripInput {
 }
 
 fuzz_target!(|input: RoundtripInput| {
+    if let RoundtripInput::InvalidSerializedSubtag { subtag } = input {
+        // Subtag 1 is the Static encoding and subtag 2 is the intentionally
+        // non-deserializable Transient encoding. Keep this case in the truly
+        // unknown portion of the tag space.
+        let subtag = match subtag % 6 {
+            0 => 0,
+            1 => 3,
+            2 => 4,
+            3 => 5,
+            4 => 6,
+            _ => 7,
+        };
+        let mut buf = ManagedPtr::serialization_buffer();
+        let word0 = 7 | (usize::from(subtag) << 3);
+        let word1 = 0usize;
+        let word2 = word0 ^ word1;
+        let ptr_size = ObjectRef::SIZE;
+        buf[..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+        buf[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+        buf[ptr_size * 2..ptr_size * 3].copy_from_slice(&word2.to_ne_bytes());
+
+        // SAFETY: F10.RawMemoryAccessValid — `buf` contains one complete,
+        // checksum-valid deliberately unsupported ManagedPtr encoding.
+        let decoded = unsafe { ManagedPtr::read_metadata_unchecked(&buf) };
+        assert!(
+            matches!(
+                decoded,
+                Err(dotnet_types::error::PointerDeserializationError::UnknownSubtag(actual))
+                    if actual == subtag
+            ),
+            "unsupported serialized subtag must be reported without recovery"
+        );
+        return;
+    }
+
     with_fuzz_gc_context(|gc| {
         let mut buf = [0u8; ManagedPtr::SIZE];
         let mut storage = [0u8; STORAGE_LEN];
@@ -121,6 +160,7 @@ fuzz_target!(|input: RoundtripInput| {
             .expect("live fuzz object must have an arena-backed pointer");
 
         let ptr = match input {
+            RoundtripInput::InvalidSerializedSubtag { .. } => unreachable!("handled above"),
             RoundtripInput::Unmanaged { address } => ManagedPtr::new(
                 NonNull::new(std::ptr::without_provenance_mut(address)),
                 dotnet_types::TypeDescription::NULL,
@@ -218,6 +258,11 @@ fuzz_target!(|input: RoundtripInput| {
         let read_info_norm = read_info.origin.normalize();
 
         assert_eq!(read_info_norm, info_norm, "Origin mismatch");
+        assert_eq!(
+            read_info_norm.discriminant(),
+            info_norm.discriminant(),
+            "Serialization must preserve the provenance-carrying origin class"
+        );
 
         // Offset is reconstructed correctly for non-unmanaged origins.
         // For Unmanaged, offset is reconstructed from word1 (address).
@@ -239,7 +284,7 @@ fuzz_target!(|input: RoundtripInput| {
             assert_eq!(
                 resolved_ptr.into_info().address.map(|address| address.as_ptr().addr()),
                 info.address.map(|address| address.as_ptr().addr()),
-                "Resolved address mismatch"
+                "Resolved address must remain derived from the live provenance-carrying base"
             );
         }
     });

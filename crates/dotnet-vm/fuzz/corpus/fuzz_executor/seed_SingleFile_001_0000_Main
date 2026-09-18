@@ -1,0 +1,32 @@
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(1) })) }
+StoreLocal(0)
+LoadLocal(0)
+LoadConstantInt32(42)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(1)
+LoadLocal(1)
+BranchFalsy(14)
+LoadLocal(0)
+StoreLocal(2)
+Branch(30)
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(2) })) }
+StoreLocal(0)
+LoadLocal(0)
+LoadConstantInt32(42)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(3)
+LoadLocal(3)
+BranchFalsy(27)
+LoadLocal(0)
+StoreLocal(2)
+Branch(30)
+LoadConstantInt32(42)
+StoreLocal(2)
+Branch(30)
+LoadLocal(2)
+Return

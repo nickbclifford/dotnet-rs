@@ -1,0 +1,6 @@
+NoOperation
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(4) })) }
+NoOperation
+Return

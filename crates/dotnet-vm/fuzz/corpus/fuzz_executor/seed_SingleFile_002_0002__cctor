@@ -1,0 +1,3 @@
+LoadConstantInt32(42)
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+Return

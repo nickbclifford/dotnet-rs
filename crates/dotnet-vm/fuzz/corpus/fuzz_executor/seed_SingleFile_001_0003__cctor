@@ -1,0 +1,11 @@
+LoadConstantInt32(0)
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+NewObject(Reference(MethodRefIndex(19)))
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadConstantInt32(0)
+StoreStaticField { volatile: true, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 2 }) }
+LoadConstantInt32(0)
+StoreStaticField { volatile: true, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 3 }) }
+LoadConstantInt32(0)
+StoreStaticField { volatile: true, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 4 }) }
+Return

@@ -1,0 +1,101 @@
+NoOperation
+LoadConstantInt32(3)
+NewArray(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+StoreLocal(0)
+LoadLocal(0)
+LoadConstantInt32(0)
+LoadLocalAddress(2)
+InitializeForObject(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+LoadLocalAddress(2)
+LoadConstantInt32(10)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadLocalAddress(2)
+LoadConstantInt32(11)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadLocal(2)
+StoreElement { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+LoadLocal(0)
+LoadConstantInt32(1)
+LoadLocalAddress(2)
+InitializeForObject(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+LoadLocalAddress(2)
+LoadConstantInt32(20)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadLocalAddress(2)
+LoadConstantInt32(21)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadLocal(2)
+StoreElement { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+LoadLocal(0)
+LoadConstantInt32(2)
+LoadLocalAddress(2)
+InitializeForObject(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+LoadLocalAddress(2)
+LoadConstantInt32(30)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadLocalAddress(2)
+LoadConstantInt32(31)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadLocal(2)
+StoreElement { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+LoadLocal(0)
+LoadConstantInt32(1)
+LoadElementAddress { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+StoreLocal(1)
+LoadLocal(1)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(20)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(3)
+LoadLocal(3)
+BranchFalsy(56)
+LoadConstantInt32(1)
+StoreLocal(4)
+Branch(99)
+LoadLocal(1)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadConstantInt32(21)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(5)
+LoadLocal(5)
+BranchFalsy(68)
+LoadConstantInt32(2)
+StoreLocal(4)
+Branch(99)
+LoadLocal(0)
+LoadConstantInt32(2)
+LoadElementAddress { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(30)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(6)
+LoadLocal(6)
+BranchFalsy(82)
+LoadConstantInt32(3)
+StoreLocal(4)
+Branch(99)
+LoadLocal(0)
+LoadConstantInt32(2)
+LoadElementAddress { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }) }
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+LoadConstantInt32(31)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(7)
+LoadLocal(7)
+BranchFalsy(96)
+LoadConstantInt32(4)
+StoreLocal(4)
+Branch(99)
+LoadConstantInt32(42)
+StoreLocal(4)
+Branch(99)
+LoadLocal(4)
+Return

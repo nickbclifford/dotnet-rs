@@ -1,0 +1,30 @@
+NoOperation
+LoadNull
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(5), member: Method(0) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(0) }))
+StoreLocal(0)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(1) })) }
+StoreLocal(1)
+LoadLocal(1)
+LoadNull
+CompareEqual
+StoreLocal(3)
+LoadLocal(3)
+BranchFalsy(17)
+LoadConstantInt32(1)
+StoreLocal(4)
+Branch(28)
+LoadNull
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(5), member: Method(1) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(4), member: Method(0) }))
+StoreLocal(2)
+LoadLocal(2)
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+CallVirtual { skip_null_check: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(4), member: Method(1) })) }
+NoOperation
+LoadConstantInt32(42)
+StoreLocal(4)
+Branch(28)
+LoadLocal(4)
+Return

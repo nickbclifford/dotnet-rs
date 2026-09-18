@@ -1,0 +1,5 @@
+NoOperation
+LoadArgument(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(15))) }
+Pop
+Return

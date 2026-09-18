@@ -1,101 +1,106 @@
 #![no_main]
-use arbitrary::{Arbitrary, Unstructured};
-use dotnet_value::pointer::{ManagedPtr, ManagedPtrInfo, PointerOrigin};
+use arbitrary::Arbitrary;
+use dotnet_utils::{ByteOffset, StackSlotIndex};
+use dotnet_value::pointer::ManagedPtr;
 use libfuzzer_sys::fuzz_target;
+use std::ptr::NonNull;
+
+const STORAGE_LEN: usize = 256;
 
 /// A `ManagedPtr` together with an offset delta that can be safely applied by
 /// this target.
 ///
-/// Managed origins store their offsets in a compact `u32` representation.
-/// Malformed fuzz input exceeding that range must be rejected before
-/// `ManagedPtr::from_info_full` attempts to construct the pointer.
-#[derive(Debug)]
+/// The input selects an origin class, but never supplies an address or a GC
+/// handle. The target builds every pointer from live local storage, so an
+/// assertion failure cannot format or otherwise dereference a fuzz-crafted
+/// pointer while reporting the failure.
+#[derive(Arbitrary, Debug)]
 struct OffsetInput {
-    ptr: ManagedPtr<'static>,
-    offset_delta_i32: i32,
+    origin: OffsetOrigin,
+    initial_offset: u8,
+    offset_delta: i16,
 }
 
-impl<'a> Arbitrary<'a> for OffsetInput {
-    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let info: ManagedPtrInfo<'static> = u.arbitrary()?;
-        let pinned = u.arbitrary()?;
-
-        if !matches!(&info.origin, PointerOrigin::Unmanaged)
-            && info.offset.as_usize() > u32::MAX as usize
-        {
-            return Err(arbitrary::Error::IncorrectFormat);
-        }
-
-        Ok(Self {
-            ptr: ManagedPtr::from_info_full(info, u.arbitrary()?, pinned),
-            offset_delta_i32: u.arbitrary()?,
-        })
-    }
+#[derive(Arbitrary, Debug)]
+enum OffsetOrigin {
+    Unmanaged,
+    Stack { slot: u16 },
+    Static,
 }
 
 fuzz_target!(|input: OffsetInput| {
-    let OffsetInput {
-        ptr,
-        offset_delta_i32,
-    } = input;
-    let offset_delta = offset_delta_i32 as isize;
-
-    let initial_offset = ptr.byte_offset().as_usize() as isize;
-
-    // Avoid expected panics.
-    let Some(new_offset) = initial_offset.checked_add(offset_delta) else {
+    let initial_offset = usize::from(input.initial_offset);
+    let offset_delta = isize::from(input.offset_delta);
+    let Some(new_offset) = initial_offset.checked_add_signed(offset_delta) else {
         return;
     };
-    if new_offset < 0 {
-        return;
-    }
-    if !matches!(ptr.origin(), PointerOrigin::Unmanaged) && new_offset > u32::MAX as isize {
+    // Keep the whole operation within this live allocation. This makes the
+    // provenance assertion below meaningful without dereferencing the result.
+    if new_offset >= STORAGE_LEN {
         return;
     }
 
-    // `ManagedPtr::offset` rejects wrapping an address to null.
-    if let Some(address) = ptr.clone().into_info().address
-        && address.as_ptr().wrapping_offset(offset_delta).is_null()
-    {
-        return;
-    }
+    let mut storage = [0u8; STORAGE_LEN];
+    let base = NonNull::new(storage.as_mut_ptr()).expect("array pointers are non-null");
+    let address = NonNull::new(base.as_ptr().wrapping_add(initial_offset))
+        .expect("in-bounds array offset is non-null");
+    let ptr = match input.origin {
+        OffsetOrigin::Unmanaged => ManagedPtr::new(
+            Some(address),
+            dotnet_types::TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(initial_offset)),
+        ),
+        OffsetOrigin::Stack { slot } => ManagedPtr::new(
+            Some(address),
+            dotnet_types::TypeDescription::NULL,
+            None,
+            false,
+            Some(ByteOffset::new(initial_offset)),
+        )
+        .with_stack_origin(StackSlotIndex::new(usize::from(slot))),
+        OffsetOrigin::Static => ManagedPtr::new_static(
+            Some(address),
+            dotnet_types::TypeDescription::NULL,
+            dotnet_types::TypeDescription::NULL,
+            dotnet_types::generics::GenericLookup::default(),
+            false,
+            ByteOffset::new(initial_offset),
+        ),
+    };
 
     let original_ptr = ptr.clone();
-    // SAFETY: F3.InteriorPointerRebased — the target prevalidates offset and address arithmetic, while
-    // `ManagedPtr::offset` uses wrapping pointer arithmetic.
+    // SAFETY: F3.InteriorPointerRebased — `ptr` was derived from `storage`, and
+    // the checked result remains within that allocation for this target.
     let new_ptr = unsafe { ptr.offset(offset_delta) };
 
     assert_eq!(
         new_ptr.origin(),
         original_ptr.origin(),
-        "Origin must be preserved across offset"
+        "Offset must preserve the provenance-carrying origin"
     );
-
-    let expected_offset = if matches!(original_ptr.origin(), PointerOrigin::Unmanaged)
-        && new_offset > u32::MAX as isize
-    {
-        original_ptr
-            .clone()
-            .into_info()
-            .address
-            .map_or(0, |address| {
-                address.as_ptr().wrapping_offset(offset_delta).addr()
-            })
-    } else {
-        new_offset as usize
-    };
     assert_eq!(
         new_ptr.byte_offset().as_usize(),
-        expected_offset,
+        new_offset,
         "Offset mismatch"
     );
 
-    if let Some(orig_addr) = original_ptr.into_info().address {
-        let expected_addr = orig_addr.as_ptr().wrapping_offset(offset_delta).addr();
-        assert_eq!(
-            new_ptr.into_info().address.map(|p| p.as_ptr() as usize),
-            Some(expected_addr),
-            "Address mismatch"
-        );
-    }
+    let expected_addr = original_ptr
+        .into_info()
+        .address
+        .expect("fixture pointer has an address")
+        .as_ptr()
+        .wrapping_offset(offset_delta)
+        .addr();
+    assert_eq!(
+        new_ptr
+            .into_info()
+            .address
+            .expect("offset pointer has an address")
+            .as_ptr()
+            .addr(),
+        expected_addr,
+        "Offset must retain the live allocation's address provenance"
+    );
 });

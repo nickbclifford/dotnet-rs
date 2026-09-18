@@ -1,0 +1,3 @@
+NoOperation
+NewObject(Reference(MethodRefIndex(13)))
+Throw

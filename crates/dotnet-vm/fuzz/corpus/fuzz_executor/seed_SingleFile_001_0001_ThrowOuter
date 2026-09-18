@@ -1,0 +1,4 @@
+NoOperation
+LoadString([79, 117, 116, 101, 114])
+NewObject(Reference(MethodRefIndex(13)))
+Throw

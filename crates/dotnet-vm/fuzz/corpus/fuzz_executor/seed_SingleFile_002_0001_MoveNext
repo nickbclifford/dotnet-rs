@@ -1,0 +1,69 @@
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(6)
+Branch(7)
+Branch(33)
+NoOperation
+LoadString([102, 97, 117, 108, 116, 101, 100, 45, 116, 97, 115, 107])
+NewObject(Reference(MethodRefIndex(28)))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(29))) }
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(30))) }
+StoreLocal(2)
+LoadLocalAddress(2)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(31))) }
+BranchTruthy(44)
+LoadArgument(0)
+LoadConstantInt32(0)
+Duplicate
+StoreLocal(0)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadArgument(0)
+LoadLocal(2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }) }
+LoadArgument(0)
+StoreLocal(3)
+LoadArgument(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }))
+LoadLocalAddress(2)
+LoadLocalAddress(3)
+Call { tail_call: false, param0: Generic(GenericMethodInstantiation { base: Reference(MethodRefIndex(32)), parameters: [Base(Type { value_kind: Some(ValueType), source: User(Reference(TypeRefIndex(24))) }), Base(Type { value_kind: Some(Class), source: User(Definition(TypeIndex(2))) })] }) }
+NoOperation
+Leave(68)
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }) }
+StoreLocal(2)
+LoadArgument(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }))
+InitializeForObject(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(24))) }))
+LoadArgument(0)
+LoadConstantInt32(-1)
+Duplicate
+StoreLocal(0)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadLocalAddress(2)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(33))) }
+NoOperation
+LoadConstantInt32(0)
+StoreLocal(1)
+Leave(60)
+StoreLocal(4)
+LoadArgument(0)
+LoadConstantInt32(-2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadArgument(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }))
+LoadLocal(4)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(34))) }
+NoOperation
+Leave(68)
+LoadArgument(0)
+LoadConstantInt32(-2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadArgument(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }))
+LoadLocal(1)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(35))) }
+NoOperation
+Return

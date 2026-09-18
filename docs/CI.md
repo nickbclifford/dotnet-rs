@@ -4,13 +4,13 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Design Principle
 
-Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, and the `fuzz_raw_memory_access` corpus replay. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Other instrumentation-heavy checks (the remaining fuzzing and Miri legs, and Valgrind) are informative and non-blocking.
+Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, and corpus replay for all four fuzz targets. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the remaining Miri legs, and Valgrind are informative and non-blocking.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value`, and `fuzz-raw-memory-access` gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value`, and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -32,7 +32,7 @@ Jobs:
 7. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
 8. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
 9. `miri-value`: pinned-nightly, blocking Miri test suite for `dotnet-value`
-10. `fuzz-raw-memory-access`: pinned-nightly, blocking replay of the committed `fuzz_raw_memory_access` corpus (`-runs=0`) with `cargo-fuzz` 0.13.1
+10. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 
 Hang probes use tighter timeouts and run these filters individually:
 
@@ -269,18 +269,24 @@ Run it locally with:
 bash scripts/check_std_sync_ceiling.sh
 ```
 
-The blocking `miri-value` and `fuzz-raw-memory-access` jobs above are also available as local commands in their respective sections below. The latter replays the committed corpus only; exploratory fuzzing remains advisory in `fuzz.yml`.
+The blocking `miri-value` and fuzz-corpus replay jobs above are also available as local commands in their respective sections below. The latter replays committed corpora only; exploratory fuzzing remains advisory in `fuzz.yml`.
 
-## `fuzz-raw-memory-access` — Blocking Corpus Replay
+## Fuzz corpus replay — Blocking Regression Checks
 
-The gate pins `nightly-2026-05-27` and `cargo-fuzz` 0.13.1, then replays the tracked
-`crates/dotnet-value/fuzz/corpus/fuzz_raw_memory_access` inputs without generating new cases:
+The `fuzz-corpus-replay` matrix pins `nightly-2026-05-27` and cargo-fuzz 0.13.1, verifies each
+tracked corpus is nonempty, then replays every target without generating new cases:
 
 ```bash
 cd crates/dotnet-value
-cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+
+cd ../dotnet-vm/fuzz
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
 ```
 
+`ASAN_OPTIONS=detect_leaks=0` avoids LeakSanitizer's ptrace incompatibility on sandboxed runners.
 The duration-based targets in `fuzz.yml`, including a second exploratory run of
 `fuzz_raw_memory_access`, remain advisory.
 

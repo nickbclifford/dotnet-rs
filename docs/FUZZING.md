@@ -89,13 +89,19 @@ The harness (`execute_cil_program`) constructs a complete but minimal .NET assem
 
 **Location:** `crates/dotnet-value/fuzz/fuzz_targets/fuzz_managed_ptr_offset.rs`
 
-Fuzzes `ManagedPtr::offset()` with arbitrary pointer state and offset deltas. Validates that the resulting offset and address are computed correctly, filtering out expected overflow/underflow cases.
+Fuzzes `ManagedPtr::offset()` over unmanaged, Stack, and Static origin classes and offset deltas.
+The harness derives every pointer from live target-local storage, then asserts that origin, offset,
+and the address derived from that allocation are preserved; it filters deltas outside the fixture.
 
 ### `fuzz_managed_ptr_roundtrip` (dotnet-value)
 
 **Location:** `crates/dotnet-value/fuzz/fuzz_targets/fuzz_managed_ptr_roundtrip.rs`
 
-Fuzzes the `ManagedPtr` write/read serialization roundtrip. Creates a `ManagedPtr` from arbitrary `ManagedPtrInfo`, serializes it to a byte buffer, reads it back, and asserts that origin and offset survive the roundtrip.
+Fuzzes the `ManagedPtr` write/read serialization roundtrip using live fixture-backed origins.
+It asserts origin, offset, and resolved-address preservation, and verifies that checksum-valid unknown
+serialized subtags return `PointerDeserializationError::UnknownSubtag` rather than crashing.
+The decoded representation is `ManagedPtrInfo`; fuzz input never supplies one with a fabricated GC
+handle or executable pointer.
 
 ### `fuzz_raw_memory_access` (dotnet-value)
 
@@ -103,31 +109,22 @@ Fuzzes the `ManagedPtr` write/read serialization roundtrip. Creates a `ManagedPt
 
 Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, sizes (1/2/4/8 bytes), values, and memory orderings. Validates that a store followed by a load returns the correctly masked value.
 
-## Known Target Failures
-
-The following `dotnet-value` targets have live crash artifacts and remain
-advisory while their underlying issues are investigated:
-
-- `fuzz_managed_ptr_roundtrip` reaches `UnknownSubtag(7)` during serde recovery
-  at `pointer/serde.rs:359`. Promotion is deferred pending a fix for the serde
-  error handling.
-- `fuzz_managed_ptr_offset` can trigger an AddressSanitizer SEGV in panic
-  handling at `pointer/mod.rs:255`. Its `Arbitrary` implementation for
-  `ManagedPtr` synthesizes fuzz-crafted GC pointers, and panic formatting
-  dereferences one of those pointers. Promotion is deferred pending a fuzz
-  harness fix.
-
 ## Blocking Corpus Regression
 
-The committed `fuzz_raw_memory_access` corpus is a blocking `ci.yml` gate. CI pins
-`nightly-2026-05-27` and `cargo-fuzz` 0.13.1 and replays those inputs without generating new
-ones:
+Every target has a committed, nonempty corpus and is a blocking `ci.yml` gate. CI pins
+`nightly-2026-05-27` and cargo-fuzz 0.13.1, and replays only those inputs (`-runs=0`):
 
 ```bash
 cd crates/dotnet-value
-cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+
+cd ../dotnet-vm/fuzz
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
 ```
 
+`ASAN_OPTIONS=detect_leaks=0` avoids LeakSanitizer's ptrace incompatibility on sandboxed runners.
 The duration-based jobs in `fuzz.yml` remain advisory and may generate new local inputs.
 
 ## Seed Corpus & Dictionary
@@ -150,9 +147,9 @@ Pre-built seed inputs live in `crates/dotnet-vm/fuzz/corpus/fuzz_executor/` and 
 | `seed_stack_dup`             | Duplicate + arithmetic             |
 | `seed_stack_underflow`       | Pop from empty stack               |
 
-The `fuzz_raw_memory_access` inputs under `crates/dotnet-value/fuzz/corpus/` are tracked for the
-blocking replay. Corpora generated for the other `dotnet-value` targets remain ignored local
-artifacts.
+All four target corpus directories are tracked. Keep a corpus nonempty: the CI replay explicitly
+checks this before invoking libFuzzer. Crash artifacts remain local under `artifacts/`; minimize a
+relevant one and add the minimized input to its target's corpus before relying on it as a regression.
 
 ### Corpus Generation Tools
 

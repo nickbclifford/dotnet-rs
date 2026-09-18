@@ -1,0 +1,99 @@
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+StoreLocal(0)
+LoadLocal(0)
+Switch([6, 7, 8, 9, 10, 11, 12, 13])
+Branch(14)
+Branch(16)
+Branch(28)
+Branch(39)
+Branch(50)
+Branch(61)
+Branch(72)
+Branch(83)
+Branch(94)
+LoadConstantInt32(0)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+NoOperation
+LoadArgument(0)
+LoadConstantInt32(5)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(3)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(5)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(3)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(4)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(3)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(5)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(6)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadArgument(0)
+LoadConstantInt32(5)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 1 }) }
+LoadArgument(0)
+LoadConstantInt32(7)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(1)
+Return
+LoadArgument(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+LoadConstantInt32(0)
+Return

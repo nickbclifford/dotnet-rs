@@ -1,0 +1,3 @@
+LoadArgument(0)
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(5), member: Method(5) })) }
+Return

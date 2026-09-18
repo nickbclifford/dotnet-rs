@@ -1,0 +1,3 @@
+LoadConstantInt32(-2)
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(4), member: Method(0) }))
+Return

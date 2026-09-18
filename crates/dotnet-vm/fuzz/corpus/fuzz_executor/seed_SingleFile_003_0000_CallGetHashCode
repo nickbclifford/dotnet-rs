@@ -1,0 +1,7 @@
+NoOperation
+LoadArgumentAddress(0)
+CallVirtualConstrained(MethodGeneric(0), User(Reference(MethodRefIndex(15))))
+StoreLocal(0)
+Branch(5)
+LoadLocal(0)
+Return

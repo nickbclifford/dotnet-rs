@@ -1,0 +1,34 @@
+NoOperation
+LoadString([])
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(18))) }
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(11)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(32)
+LoadNull
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(18))) }
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(2)
+LoadLocal(2)
+BranchFalsy(21)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(32)
+LoadString([97])
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(18))) }
+StoreLocal(3)
+LoadLocal(3)
+BranchFalsy(29)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(32)
+LoadConstantInt32(1)
+StoreLocal(1)
+Branch(32)
+LoadLocal(1)
+Return

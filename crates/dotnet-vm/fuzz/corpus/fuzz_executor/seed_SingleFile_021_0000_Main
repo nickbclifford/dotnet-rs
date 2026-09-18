@@ -1,0 +1,12 @@
+NoOperation
+LoadTokenType(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+StoreLocal(0)
+LoadTokenType(Base(Type { value_kind: None, source: User(Definition(TypeIndex(2))) }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+StoreLocal(1)
+LoadConstantInt32(0)
+StoreLocal(2)
+Branch(10)
+LoadLocal(2)
+Return

@@ -1,0 +1,8 @@
+NoOperation
+NoOperation
+LoadArgument(0)
+ConvertOverflow(Int8, Signed)
+StoreLocal(0)
+Branch(6)
+LoadLocal(0)
+Return

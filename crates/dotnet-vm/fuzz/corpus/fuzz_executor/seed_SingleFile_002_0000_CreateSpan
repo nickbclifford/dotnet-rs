@@ -1,0 +1,13 @@
+NoOperation
+LoadLocalAddress(0)
+InitializeForObject(Base(Type { value_kind: None, source: User(Definition(TypeIndex(1))) }))
+LoadLocalAddress(0)
+LoadArgument(0)
+LoadConstantInt32(0)
+LoadElementAddress { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(21))) }) }
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadLocal(0)
+StoreLocal(1)
+Branch(11)
+LoadLocal(1)
+Return

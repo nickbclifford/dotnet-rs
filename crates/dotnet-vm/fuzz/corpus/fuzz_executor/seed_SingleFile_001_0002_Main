@@ -1,0 +1,132 @@
+NoOperation
+LoadStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+Duplicate
+BranchTruthy(10)
+Pop
+LoadNull
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(0) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+Duplicate
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+StoreLocal(0)
+LoadStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+Duplicate
+BranchTruthy(20)
+Pop
+LoadNull
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(0) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+Duplicate
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+StoreLocal(1)
+LoadLocal(0)
+StoreLocal(2)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(14))) }
+LoadNull
+CompareGreater(Unsigned)
+StoreLocal(7)
+LoadLocal(7)
+BranchFalsy(33)
+LoadConstantInt32(1)
+StoreLocal(8)
+Branch(168)
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(3) }))
+StoreLocal(3)
+LoadLocal(3)
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(1) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+StoreLocal(4)
+LoadLocal(4)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(14))) }
+LoadLocal(3)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(9)
+LoadLocal(9)
+BranchFalsy(51)
+LoadConstantInt32(2)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(15))) }
+LoadNull
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(16))) }
+StoreLocal(10)
+LoadLocal(10)
+BranchFalsy(61)
+LoadConstantInt32(3)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(15))) }
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(17))) }
+LoadString([68, 111, 117, 98, 108, 101])
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(18))) }
+StoreLocal(11)
+LoadLocal(11)
+BranchFalsy(72)
+LoadConstantInt32(4)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+LoadLocal(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(19))) }
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(12)
+LoadLocal(12)
+BranchFalsy(83)
+LoadConstantInt32(5)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+LoadLocal(2)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(19))) }
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(13)
+LoadLocal(13)
+BranchFalsy(94)
+LoadConstantInt32(6)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+LoadLocal(4)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(19))) }
+StoreLocal(14)
+LoadLocal(14)
+BranchFalsy(103)
+LoadConstantInt32(7)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(20))) }
+LoadLocal(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(20))) }
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(15)
+LoadLocal(15)
+BranchFalsy(116)
+LoadConstantInt32(8)
+StoreLocal(8)
+Branch(168)
+LoadLocal(0)
+StoreLocal(5)
+LoadLocal(5)
+LoadLocal(4)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(21))) }
+CastClass { skip_type_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(2))) }) }
+StoreLocal(5)
+LoadLocal(1)
+StoreLocal(6)
+LoadLocal(6)
+LoadLocal(3)
+LoadMethodPointer(User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(1) })))
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(21))) }
+CastClass { skip_type_check: false, param0: Base(Type { value_kind: None, source: User(Definition(TypeIndex(2))) }) }
+StoreLocal(6)

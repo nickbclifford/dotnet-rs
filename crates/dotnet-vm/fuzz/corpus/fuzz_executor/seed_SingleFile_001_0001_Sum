@@ -1,0 +1,32 @@
+NoOperation
+LoadConstantInt32(0)
+StoreLocal(0)
+NoOperation
+LoadArgument(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(22))) }
+StoreLocal(1)
+Branch(17)
+LoadLocal(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(19))) }
+StoreLocal(2)
+NoOperation
+LoadLocal(0)
+LoadLocal(2)
+Add
+StoreLocal(0)
+NoOperation
+LoadLocal(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(18))) }
+BranchTruthy(8)
+Leave(27)
+LoadLocal(1)
+BranchFalsy(26)
+LoadLocal(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(17))) }
+NoOperation
+EndFinally
+LoadLocal(0)
+StoreLocal(3)
+Branch(30)
+LoadLocal(3)
+Return

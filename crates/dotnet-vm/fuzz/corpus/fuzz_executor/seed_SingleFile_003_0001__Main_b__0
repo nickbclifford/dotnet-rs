@@ -1,0 +1,5 @@
+LoadArgument(1)
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }) }
+CompareGreater(Signed)
+Return

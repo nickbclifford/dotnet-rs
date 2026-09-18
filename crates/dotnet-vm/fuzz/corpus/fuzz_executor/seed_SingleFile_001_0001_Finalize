@@ -1,0 +1,12 @@
+NoOperation
+NoOperation
+LoadStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(1)
+Add
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+Leave(11)
+LoadArgument(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+NoOperation
+EndFinally
+Return

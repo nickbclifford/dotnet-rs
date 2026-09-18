@@ -1,0 +1,15 @@
+NoOperation
+LoadStaticFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+Pop
+Branch(7)
+NoOperation
+NoOperation
+LoadStaticFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+LoadConstantInt32(2)
+CompareLess(Signed)
+StoreLocal(0)
+LoadLocal(0)
+BranchTruthy(5)
+Return

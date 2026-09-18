@@ -1,0 +1,16 @@
+NoOperation
+LoadString([72, 101, 108, 108, 111])
+StoreLocal(0)
+LoadString([32, 87, 111, 114, 108, 100])
+StoreLocal(1)
+LoadLocal(0)
+LoadLocal(1)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(17))) }
+StoreLocal(2)
+LoadLocal(2)
+LoadString([72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100])
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(16))) }
+StoreLocal(3)
+Branch(14)
+LoadLocal(3)
+Return

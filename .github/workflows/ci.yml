@@ -305,23 +305,54 @@ jobs:
       - uses: Swatinem/rust-cache@v2.8.2
       - run: cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
 
-  fuzz-raw-memory-access:
-    name: Fuzz Raw Memory Access Corpus
+  fuzz-corpus-replay:
+    name: Fuzz ${{ matrix.target }} Corpus
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       CARGO_FUZZ_VERSION: "0.13.1"
+      # Corpus replay checks target behavior, not process-exit leak reporting.
+      # This also keeps libFuzzer replay usable under sandboxed runners.
+      ASAN_OPTIONS: "detect_leaks=0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: fuzz_managed_ptr_roundtrip
+            working-directory: crates/dotnet-value
+            corpus: fuzz/corpus/fuzz_managed_ptr_roundtrip
+            fuzz-workspace: crates/dotnet-value/fuzz
+          - target: fuzz_managed_ptr_offset
+            working-directory: crates/dotnet-value
+            corpus: fuzz/corpus/fuzz_managed_ptr_offset
+            fuzz-workspace: crates/dotnet-value/fuzz
+          - target: fuzz_raw_memory_access
+            working-directory: crates/dotnet-value
+            corpus: fuzz/corpus/fuzz_raw_memory_access
+            fuzz-workspace: crates/dotnet-value/fuzz
+          - target: fuzz_executor
+            working-directory: crates/dotnet-vm/fuzz
+            corpus: corpus/fuzz_executor
+            fuzz-workspace: crates/dotnet-vm/fuzz
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           workspaces: |
             .
-            crates/dotnet-value/fuzz
+            ${{ matrix.fuzz-workspace }}
       - name: Cache cargo-fuzz
         id: cache-cargo-fuzz
         uses: actions/cache@v4
@@ -331,8 +362,8 @@ jobs:
       - name: Install cargo-fuzz
         if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
         run: cargo +nightly-2026-05-27 install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
-      - name: Replay fuzz_raw_memory_access corpus
+      - name: Replay ${{ matrix.target }} corpus
         run: |
-          test -n "$(find fuzz/corpus/fuzz_raw_memory_access -type f -print -quit)"
-          cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
-        working-directory: crates/dotnet-value
+          test -n "$(find "${{ matrix.corpus }}" -type f -print -quit)"
+          cargo +nightly-2026-05-27 fuzz run ${{ matrix.target }} -- -runs=0
+        working-directory: ${{ matrix.working-directory }}

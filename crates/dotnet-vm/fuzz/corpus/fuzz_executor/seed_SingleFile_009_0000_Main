@@ -1,0 +1,60 @@
+NoOperation
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(9), member: Method(1) })) }
+NoOperation
+LoadConstantInt32(1)
+StoreLocal(0)
+Leave(58)
+Pop
+NoOperation
+NoOperation
+Leave(11)
+NoOperation
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(9), member: Method(2) })) }
+NoOperation
+LoadConstantInt32(1)
+StoreLocal(0)
+Leave(58)
+Pop
+NoOperation
+NoOperation
+Leave(22)
+NoOperation
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(9), member: Method(3) })) }
+NoOperation
+LoadConstantInt32(1)
+StoreLocal(0)
+Leave(58)
+Pop
+NoOperation
+NoOperation
+Leave(33)
+NoOperation
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(9), member: Method(4) })) }
+NoOperation
+LoadConstantInt32(1)
+StoreLocal(0)
+Leave(58)
+Pop
+NoOperation
+NoOperation
+Leave(44)
+NoOperation
+NoOperation
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(9), member: Method(5) })) }
+NoOperation
+LoadConstantInt32(1)
+StoreLocal(0)
+Leave(58)
+Pop
+NoOperation
+NoOperation
+Leave(55)
+LoadConstantInt32(0)
+StoreLocal(0)
+Branch(58)
+LoadLocal(0)
+Return

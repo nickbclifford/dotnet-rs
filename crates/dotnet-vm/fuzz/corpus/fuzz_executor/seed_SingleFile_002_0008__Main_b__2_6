@@ -1,0 +1,3 @@
+LoadArgument(1)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(29))) }
+Return

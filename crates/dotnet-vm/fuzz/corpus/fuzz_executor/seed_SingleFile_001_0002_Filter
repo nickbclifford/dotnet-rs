@@ -1,0 +1,8 @@
+NoOperation
+LoadStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(1)
+Add
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadString([70, 105, 108, 116, 101, 114])
+NewObject(Reference(MethodRefIndex(14)))
+Throw

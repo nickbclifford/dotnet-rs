@@ -1,0 +1,16 @@
+NoOperation
+NewObject(Reference(MethodRefIndex(15)))
+Pop
+NewObject(Reference(MethodRefIndex(16)))
+Pop
+NewObject(Reference(MethodRefIndex(17)))
+Pop
+NewObject(Reference(MethodRefIndex(18)))
+Pop
+NewObject(Reference(MethodRefIndex(19)))
+Pop
+LoadConstantInt32(0)
+StoreLocal(0)
+Branch(14)
+LoadLocal(0)
+Return

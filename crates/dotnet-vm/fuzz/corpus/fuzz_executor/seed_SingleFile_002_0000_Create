@@ -1,0 +1,4 @@
+NoOperation
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(1) }))
+Pop
+Return

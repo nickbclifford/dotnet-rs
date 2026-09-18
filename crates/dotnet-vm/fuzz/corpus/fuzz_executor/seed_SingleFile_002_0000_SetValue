@@ -1,0 +1,12 @@
+NoOperation
+LoadArgument(1)
+IsInstance(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(18))) }))
+LoadNull
+CompareGreater(Unsigned)
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(11)
+LoadArgument(0)
+LoadConstantInt32(42)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+Return

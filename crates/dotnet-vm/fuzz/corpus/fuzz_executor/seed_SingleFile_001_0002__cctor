@@ -1,0 +1,3 @@
+NewObject(Reference(MethodRefIndex(16)))
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+Return

@@ -1,0 +1,77 @@
+NoOperation
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(0) }))
+StoreLocal(0)
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadConstantInt32(123)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadConstantInt32(1)
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(0) }))
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadConstantInt32(456)
+Convert(Int64)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadConstantInt32(2)
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(0) }))
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 3 }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadConstantInt32(7)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 4 }) }
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(38)
+NoOperation
+LoadConstantInt32(100)
+NewArray(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(15))) }))
+StoreLocal(2)
+NoOperation
+LoadLocal(1)
+LoadConstantInt32(1)
+Add
+StoreLocal(1)
+LoadLocal(1)
+LoadConstantInt32(1000)
+CompareLess(Signed)
+StoreLocal(3)
+LoadLocal(3)
+BranchTruthy(29)
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }) }
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(1)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(4)
+LoadLocal(4)
+BranchFalsy(58)
+LoadConstantInt32(1)
+StoreLocal(5)
+Branch(75)
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(3), field: 0 }))
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 3 }) }
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadConstantInt32(2)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(6)
+LoadLocal(6)
+BranchFalsy(72)
+LoadConstantInt32(2)
+StoreLocal(5)
+Branch(75)
+LoadConstantInt32(0)
+StoreLocal(5)
+Branch(75)
+LoadLocal(5)
+Return

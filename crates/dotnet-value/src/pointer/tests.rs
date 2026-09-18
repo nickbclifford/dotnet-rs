@@ -112,6 +112,25 @@ fn test_managed_ptr_offset_valid() {
 }
 
 #[test]
+fn test_managed_ptr_metadata_rejects_unknown_static_subtag() {
+    let mut buffer = ManagedPtr::serialization_buffer();
+    let ptr_size = ObjectRef::SIZE;
+    let word0 = 7usize | (3 << 3);
+    let word1 = 0usize;
+    buffer[..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+    buffer[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+    buffer[ptr_size * 2..ptr_size * 3].copy_from_slice(&(word0 ^ word1).to_ne_bytes());
+
+    // SAFETY: F10.RawMemoryAccessValid — `buffer` is a complete, checksum-valid
+    // ManagedPtr encoding deliberately carrying an unsupported subtag.
+    let decoded = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) };
+    assert!(matches!(
+        decoded,
+        Err(dotnet_types::error::PointerDeserializationError::UnknownSubtag(3))
+    ));
+}
+
+#[test]
 fn test_heap_decode_cache_hit_miss_and_integrity() {
     with_test_gc_context(|gc_handle| {
         let object = ObjectRef::new(

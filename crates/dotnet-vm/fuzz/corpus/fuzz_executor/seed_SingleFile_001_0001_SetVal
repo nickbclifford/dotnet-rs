@@ -1,0 +1,6 @@
+NoOperation
+LoadArgument(0)
+LoadArgument(1)
+LoadArgument(2)
+StoreElementPrimitive { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Object }
+Return

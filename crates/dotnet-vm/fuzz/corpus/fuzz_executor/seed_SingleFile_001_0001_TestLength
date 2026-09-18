@@ -1,0 +1,11 @@
+NoOperation
+LoadString([72, 101, 108, 108, 111])
+StoreLocal(0)
+LoadLocal(0)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(13))) }
+LoadConstantInt32(5)
+CompareEqual
+StoreLocal(1)
+Branch(9)
+LoadLocal(1)
+Return

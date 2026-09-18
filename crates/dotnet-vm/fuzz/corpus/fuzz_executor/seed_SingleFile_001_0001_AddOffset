@@ -1,0 +1,5 @@
+LoadArgument(1)
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+Add
+Return

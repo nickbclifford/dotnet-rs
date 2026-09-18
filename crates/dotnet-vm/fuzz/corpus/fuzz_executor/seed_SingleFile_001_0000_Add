@@ -1,0 +1,4 @@
+LoadArgument(0)
+LoadArgument(1)
+Add
+Return

@@ -1,0 +1,9 @@
+NoOperation
+NoOperation
+NewObject(Reference(MethodRefIndex(13)))
+Throw
+NoOperation
+LoadConstantInt32(42)
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+NoOperation
+EndFinally

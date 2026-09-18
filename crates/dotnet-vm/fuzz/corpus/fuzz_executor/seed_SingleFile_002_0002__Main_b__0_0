@@ -1,0 +1,4 @@
+LoadArgument(1)
+LoadConstantInt32(2)
+Multiply
+Return

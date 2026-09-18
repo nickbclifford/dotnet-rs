@@ -1,0 +1,31 @@
+NoOperation
+LoadConstantInt32(1)
+NewArray(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(21))) }))
+StoreLocal(0)
+LoadLocal(0)
+LoadConstantInt32(0)
+LoadConstantInt32(42)
+StoreElementPrimitive { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Int32 }
+LoadLocal(0)
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) })) }
+StoreLocal(1)
+LoadNull
+StoreLocal(0)
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(1) })) }
+NoOperation
+LoadLocal(1)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+LoadIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadConstantInt32(42)
+CompareEqual
+StoreLocal(2)
+LoadLocal(2)
+BranchFalsy(26)
+LoadConstantInt32(42)
+StoreLocal(3)
+Branch(29)
+LoadConstantInt32(0)
+StoreLocal(3)
+Branch(29)
+LoadLocal(3)
+Return

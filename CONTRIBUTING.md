@@ -142,16 +142,21 @@ the pin records the attempted toolchain rather than known-passing Miri results.
 
 ## Blocking fuzz corpus replay
 
-Changes to atomic-memory code should also replay the tracked `fuzz_raw_memory_access` corpus with
-the CI-pinned toolchain:
+Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchain. All four
+replays are blocking CI gates:
 
 ```bash
 cd crates/dotnet-value
-cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+
+cd ../dotnet-vm/fuzz
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
 ```
 
-The other fuzz targets remain advisory; their known failures are documented in
-[`docs/FUZZING.md`](docs/FUZZING.md).
+`ASAN_OPTIONS=detect_leaks=0` makes the deterministic libFuzzer replay usable on sandboxed
+runners; exploratory duration-based fuzzing remains advisory.
 
 ## Documentation drift check
 

@@ -1,5 +1,9 @@
 target/
 corpus/*
+!corpus/fuzz_managed_ptr_offset/
+!corpus/fuzz_managed_ptr_offset/**
+!corpus/fuzz_managed_ptr_roundtrip/
+!corpus/fuzz_managed_ptr_roundtrip/**
 !corpus/fuzz_raw_memory_access/
 !corpus/fuzz_raw_memory_access/**
 artifacts/

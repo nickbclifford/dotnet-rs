@@ -1,0 +1,17 @@
+NoOperation
+NoOperation
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }) }
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(11)
+NoOperation
+LoadArgument(0)
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+NoOperation
+Leave(16)
+LoadArgument(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+NoOperation
+EndFinally
+Return

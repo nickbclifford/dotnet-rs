@@ -1,0 +1,6 @@
+LoadArgument(1)
+LoadConstantInt32(6)
+Remainder(Signed)
+LoadConstantInt32(0)
+CompareEqual
+Return

@@ -1,0 +1,2 @@
+# libFuzzer corpus entries are arbitrary bytes, not source text.
+crates/**/fuzz/corpus/** binary

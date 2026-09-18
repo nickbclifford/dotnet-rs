@@ -1,0 +1,3 @@
+LoadArgument(1)
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(40))) }
+Return

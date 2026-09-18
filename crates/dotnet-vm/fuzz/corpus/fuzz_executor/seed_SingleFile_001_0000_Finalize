@@ -1,0 +1,23 @@
+NoOperation
+NoOperation
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 1 }) }
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(17)
+NoOperation
+LoadArgument(0)
+LoadArgument(0)
+LoadField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 2 }) }
+LoadConstantInt32(1)
+Add
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 2 }) }
+LoadArgument(0)
+StoreStaticField { volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(1), field: 0 }) }
+NoOperation
+Leave(22)
+LoadArgument(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(13))) }
+NoOperation
+EndFinally
+Return

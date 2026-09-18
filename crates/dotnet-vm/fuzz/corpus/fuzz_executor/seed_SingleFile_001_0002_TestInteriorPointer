@@ -1,0 +1,71 @@
+NoOperation
+LoadConstantInt32(10)
+NewArray(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(20))) }))
+StoreLocal(0)
+LoadLocal(0)
+LoadConstantInt32(5)
+LoadConstantInt32(999)
+StoreElementPrimitive { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Int32 }
+LoadLocal(0)
+LoadConstantInt32(5)
+LoadConstantInt32(2)
+Call { tail_call: false, param0: Generic(GenericMethodInstantiation { base: Reference(MethodRefIndex(18)), parameters: [Base(Int32)] }) }
+StoreLocal(1)
+LoadNull
+StoreLocal(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+NoOperation
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+NoOperation
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+NoOperation
+LoadLocalAddress(1)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(19))) }
+LoadConstantInt32(2)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(2)
+LoadLocal(2)
+BranchFalsy(33)
+LoadConstantInt32(120)
+StoreLocal(3)
+Branch(69)
+LoadLocalAddress(1)
+LoadConstantInt32(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(20))) }
+LoadIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadConstantInt32(999)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(4)
+LoadLocal(4)
+BranchFalsy(47)
+LoadConstantInt32(121)
+StoreLocal(3)
+Branch(69)
+LoadLocalAddress(1)
+LoadConstantInt32(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(20))) }
+LoadConstantInt32(888)
+StoreIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadLocalAddress(1)
+LoadConstantInt32(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(20))) }
+LoadIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadConstantInt32(888)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(5)
+LoadLocal(5)
+BranchFalsy(66)
+LoadConstantInt32(122)
+StoreLocal(3)
+Branch(69)
+LoadConstantInt32(42)
+StoreLocal(3)
+Branch(69)
+LoadLocal(3)
+Return

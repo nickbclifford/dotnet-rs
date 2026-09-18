@@ -1,0 +1,5 @@
+NoOperation
+LoadArgument(0)
+LoadArgument(1)
+StoreObject { unaligned: None, volatile: false, param0: MethodGeneric(0) }
+Return

@@ -1,0 +1,4 @@
+LoadArgument(1)
+LoadConstantInt32(1)
+Add
+Return

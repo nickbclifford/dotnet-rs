@@ -1,0 +1,38 @@
+NoOperation
+LoadLocalAddress(0)
+LoadConstantInt32(42)
+Call { tail_call: false, param0: User(Definition(MethodIndex { parent_type: TypeIndex(1), member: Method(0) })) }
+LoadLocal(0)
+Call { tail_call: false, param0: Generic(GenericMethodInstantiation { base: Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(0) }), parameters: [Base(Type { value_kind: Some(ValueType), source: User(Definition(TypeIndex(1))) })] }) }
+LoadConstantInt32(42)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(2)
+LoadLocal(2)
+BranchFalsy(16)
+LoadConstantInt32(1)
+StoreLocal(3)
+Branch(36)
+LoadLocalAddress(1)
+InitializeForObject(Base(Type { value_kind: None, source: User(Definition(TypeIndex(2))) }))
+LoadLocalAddress(1)
+LoadConstantInt32(17)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadLocal(1)
+Call { tail_call: false, param0: Generic(GenericMethodInstantiation { base: Definition(MethodIndex { parent_type: TypeIndex(3), member: Method(0) }), parameters: [Base(Type { value_kind: Some(ValueType), source: User(Definition(TypeIndex(2))) })] }) }
+LoadConstantInt32(17)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(4)
+LoadLocal(4)
+BranchFalsy(33)
+LoadConstantInt32(2)
+StoreLocal(3)
+Branch(36)
+LoadConstantInt32(42)
+StoreLocal(3)
+Branch(36)
+LoadLocal(3)
+Return

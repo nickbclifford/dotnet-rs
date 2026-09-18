@@ -1,0 +1,5 @@
+NoOperation
+LoadArgument(0)
+LoadConstantInt32(42)
+StoreIndirect { unaligned: None, volatile: false, param0: Int32 }
+Return

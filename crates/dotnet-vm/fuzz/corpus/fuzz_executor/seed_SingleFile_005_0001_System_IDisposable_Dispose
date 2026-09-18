@@ -1,0 +1,4 @@
+LoadArgument(0)
+LoadConstantInt32(-2)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(5), field: 0 }) }
+Return

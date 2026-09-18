@@ -1,0 +1,13 @@
+NoOperation
+LoadTokenType(Base(Type { value_kind: None, source: User(Definition(TypeIndex(3))) }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+LoadConstantInt32(1)
+NewArray(Base(Type { value_kind: None, source: User(Reference(TypeRefIndex(19))) }))
+Duplicate
+LoadConstantInt32(0)
+LoadTokenType(Base(Type { value_kind: None, source: User(Definition(TypeIndex(8))) }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(15))) }
+StoreElementPrimitive { skip_type_check: false, skip_range_check: false, skip_null_check: false, param0: Object }
+CallVirtual { skip_null_check: false, param0: User(Reference(MethodRefIndex(16))) }
+Pop
+Return

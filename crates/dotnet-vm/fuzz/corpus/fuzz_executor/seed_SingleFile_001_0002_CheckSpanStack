@@ -1,0 +1,46 @@
+NoOperation
+LoadArgumentAddress(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(24))) }
+LoadConstantInt32(3)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(0)
+LoadLocal(0)
+BranchFalsy(13)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(44)
+LoadArgumentAddress(0)
+LoadConstantInt32(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(25))) }
+LoadIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadConstantInt32(10)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(2)
+LoadLocal(2)
+BranchFalsy(27)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(44)
+LoadArgumentAddress(0)
+LoadConstantInt32(2)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(25))) }
+LoadIndirect { unaligned: None, volatile: false, param0: Int32 }
+LoadConstantInt32(30)
+CompareEqual
+LoadConstantInt32(0)
+CompareEqual
+StoreLocal(3)
+LoadLocal(3)
+BranchFalsy(41)
+LoadConstantInt32(0)
+StoreLocal(1)
+Branch(44)
+LoadConstantInt32(1)
+StoreLocal(1)
+Branch(44)
+LoadLocal(1)
+Return

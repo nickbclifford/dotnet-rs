@@ -1,0 +1,8 @@
+NoOperation
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(17))) }
+NoOperation
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(18))) }
+NoOperation
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(17))) }
+NoOperation
+Return

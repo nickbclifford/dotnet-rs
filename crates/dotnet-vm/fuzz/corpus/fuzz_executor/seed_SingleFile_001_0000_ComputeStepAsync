@@ -1,0 +1,19 @@
+NewObject(Definition(MethodIndex { parent_type: TypeIndex(2), member: Method(0) }))
+StoreLocal(0)
+LoadLocal(0)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(21))) }
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }) }
+LoadLocal(0)
+LoadArgument(0)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 2 }) }
+LoadLocal(0)
+LoadConstantInt32(-1)
+StoreField { unaligned: None, volatile: false, param0: Definition(FieldIndex { parent_type: TypeIndex(2), field: 0 }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }))
+LoadLocalAddress(0)
+Call { tail_call: false, param0: Generic(GenericMethodInstantiation { base: Reference(MethodRefIndex(22)), parameters: [Base(Type { value_kind: Some(Class), source: User(Definition(TypeIndex(2))) })] }) }
+LoadLocal(0)
+LoadFieldAddress(Definition(FieldIndex { parent_type: TypeIndex(2), field: 1 }))
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(23))) }
+Return

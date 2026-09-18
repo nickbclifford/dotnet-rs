@@ -1,0 +1,5 @@
+NoOperation
+LoadConstantInt32(1)
+Call { tail_call: false, param0: User(Reference(MethodRefIndex(14))) }
+NoOperation
+Return

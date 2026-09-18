@@ -178,6 +178,7 @@ dependencies = [
  "dotnet-build-tools",
  "dotnet-types",
  "dotnet-utils",
+ "dotnet-value",
  "dotnetdll",
  "gc-arena",
  "hashbrown 0.17.1",
@@ -320,6 +321,7 @@ dependencies = [
 name = "dotnet-metrics"
 version = "0.1.0"
 dependencies = [
+ "dotnet-utils",
  "serde",
 ]
 
@@ -400,6 +402,7 @@ version = "0.1.0"
 dependencies = [
  "arbitrary",
  "gc-arena",
+ "loom",
  "parking_lot",
  "tracing",
 ]
@@ -450,6 +453,7 @@ dependencies = [
  "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
+ "hashbrown 0.17.1",
  "lru",
  "phf",
  "phf_codegen",
@@ -601,6 +605,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "generator"
+version = "0.8.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ade96dc9003043bce7c035c85a9df5a858bfb2039c5a2e6fdf00f324f6c551"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows-link",
+ "windows-result",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -735,6 +754,21 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "loom"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "lru"
@@ -976,6 +1010,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
+name = "rustversion"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
 name = "ruzstd"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -992,6 +1032,12 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scopeguard"
@@ -1303,6 +1349,15 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+dependencies = [
+ "windows-link",
+]
 
 [[package]]
 name = "windows-sys"
