@@ -5,7 +5,7 @@
 F3/F4/F9 value-level facts; and a guard-off leg proves the feature-gated
 validation hooks are not silently load-bearing.
 
-**Status:** not started.
+**Status:** in progress — instrument 1 complete (2026-09-18), instruments 2–5 pending.
 
 ## Premise
 
@@ -36,42 +36,48 @@ scale is the better trade.
 - **Differential**: 7 `diff_test!` fixtures in
   `crates/dotnet-cli/tests/integration_tests_impl/diff_harness.rs`, against 475
   C# fixtures in the tree.
-- **`loom` / `shuttle`**: not present anywhere in the workspace.
+- **`loom` facade**: `cfg(loom)` selects the private `loom_compat` adapter in
+  `crates/dotnet-utils/src/sync.rs`, with loom lock, condition-variable, and
+  atomic implementations while preserving the facade's public API shape.
+- **`loom` model**: `crates/dotnet-vm/tests/loom_stw.rs` exhaustively models
+  normal STW parking/resume, cross-arena lease teardown, and the two panic-guard
+  paths. It bounds the model to one collector/model thread and two mutators
+  (`max_threads = 3`) without preemption, permutation, or duration cutoffs.
+- **`loom` CI**: an independent blocking `loom` job runs
+  `RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features`.
+  The model faithfully mirrors production sequencing; it does not directly run
+  the feature-gated production threaded implementation.
 - **Kani**: not present.
-- **The `loom` seam already exists.** `crates/dotnet-utils/src/sync.rs` has a
-  `compat` module providing `Mutex`/`RwLock` shims selected by
-  `#[cfg(not(feature = "multithreading"))]`. A third arm is the natural
-  insertion point. 39 files across the workspace reference `std::sync`.
+- **The `loom` seam now exists.** `crates/dotnet-utils/src/sync.rs` has a
+  `loom_compat` arm alongside mutually exclusive `parking_lot` and `compat`
+  arms. Dynamic synchronization sites use the facade; the reviewed direct
+  `std::sync` exemptions are constrained by a 70-token source-policy ceiling.
 
 ## Instrument 1 — `loom` leg (highest value)
 
 `loom` runs a test repeatedly, permuting concurrent executions under the C11
-memory model with partial-order reduction. It requires substituting
-`loom::sync::*` and `loom::thread` for the std types, which is exactly what the
-existing `compat` module is shaped for.
+memory model with partial-order reduction. Instrument 1 is complete; these
+checks record the implemented, bounded falsifier rather than a proof of the
+feature-gated production threaded implementation.
 
-1. Add a `loom` cfg arm to `dotnet-utils/src/sync.rs`'s `compat` module,
-   re-exporting `loom::sync::{Mutex, RwLock, Condvar}` and `loom::sync::atomic`.
-2. Route the 39 `std::sync` users through `compat`. This is a mechanical,
-   bounded, supervised-refactor-shaped change; it also has standalone value as
-   an abstraction cleanup. Add a `check_doc_drift`-style ceiling on direct
-   `std::sync` imports so the routing cannot regress.
-3. Write the first model as the smallest thing that can be wrong: two mutator
-   threads plus one collector, exercising `GCCoordinator::begin_collection`, the
-   thread-manager handshake, and `unregister_arena`'s wait for
-   `active_leases == 0`. Assert the F1 predicate directly — no mutator is
-   running while a collection session is active, and no arena is torn down with
-   a live lease.
-4. Add `ResumeOnPanic` and `CommandCompletionGuard` unwind paths, since `loom`
-   explores those too and Kani cannot (no unwinding support).
-5. Make the leg blocking in `ci.yml` once green. `loom` runs are slow; scope the
-   first leg to 2–3 threads, which is where the study said specification errors
-   surface cheaply, and cap with `LOOM_MAX_PREEMPTIONS`.
+- [x] Add the `cfg(loom)` adapter arm to `dotnet-utils/src/sync.rs`, preserving
+  the facade's `Mutex`, `RwLock`, condition-variable, mapped-guard, and atomic
+  API shapes over loom primitives.
+- [x] Route the scoped dynamic synchronization users through the facade and add
+  `scripts/check_std_sync_ceiling.sh` so the reviewed direct `std::sync`
+  exemptions cannot regress beyond the 70-token source-policy ceiling.
+- [x] Add faithful STW and cross-arena lease models: two mutators plus one
+  collector/model thread, directly asserting parked-mutator and live-lease
+  teardown safety predicates. The model mirrors production sequencing because
+  the feature-gated production threaded types are disabled in the required
+  no-default-features loom configuration.
+- [x] Model `ResumeOnPanic` and `CommandCompletionGuard` unwind paths and assert
+  their resume and completion visibility after injected panics are caught.
+- [x] Make the exhaustive model a blocking `ci.yml` job. The shared builder
+  caps the population at three total threads but leaves preemption, permutation,
+  and duration exploration uncapped; no `LOOM_MAX_PREEMPTIONS` cap is used.
 
-If exhaustive exploration proves too slow, `shuttle` (randomized, unsound but
-scalable) is the fallback for the larger configurations, with `loom` retained
-for the small ones. Do not replace `loom` with `shuttle` — losing exhaustiveness
-at 2–3 threads loses the whole point.
+Instruments 2–5 below are independent portfolio work and remain pending.
 
 ## Instrument 2 — promote the existing fuzz targets
 

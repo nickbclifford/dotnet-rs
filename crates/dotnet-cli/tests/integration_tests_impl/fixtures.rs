@@ -116,6 +116,19 @@ fn hello_world() {
 }
 
 #[test]
+#[cfg(not(feature = "fuzzing"))]
+fn finalizer_runs_after_entrypoint_completes() {
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(
+        "tests/fixtures/gc/finalizer_after_entrypoint_0.cs",
+    ));
+    let (exit_code, stdout) = harness.run_cli(&dll_path);
+
+    assert_eq!(exit_code, 0, "finalizer-at-exit fixture failed");
+    assert_eq!(stdout.trim(), "finalizer ran");
+}
+
+#[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
 fn managed_thread_lifecycle() {
     let harness = TestHarness::get();

@@ -4,13 +4,13 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Design Principle
 
-Deterministic correctness checks are blocking, including the `dotnet-value` Miri leg and the `fuzz_raw_memory_access` corpus replay. Other instrumentation-heavy checks (the remaining fuzzing and Miri legs, and Valgrind) are informative and non-blocking.
+Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, and the `fuzz_raw_memory_access` corpus replay. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Other instrumentation-heavy checks (the remaining fuzzing and Miri legs, and Valgrind) are informative and non-blocking.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, `miri-value`, and `fuzz-raw-memory-access` gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value`, and `fuzz-raw-memory-access` gates |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -21,17 +21,18 @@ Deterministic correctness checks are blocking, including the `dotnet-value` Miri
 
 Jobs:
 
-1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh` and the direct-`std::sync` ceiling with `scripts/check_std_sync_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
-3. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
-4. `clippy`: feature matrix resolved from `xtask`
+3. `loom`: stable, blocking exhaustive Loom model of the STW protocol. It runs exactly `RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features`; `RUSTFLAGS` selects the rustc cfg (rather than a nonexistent nextest `--cfg` option). The shared model builder is fixed at three total threads (the collector/model thread and two spawned mutators) and leaves preemption, permutation, and duration exploration uncapped.
+4. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
+5. `clippy`: feature matrix resolved from `xtask`
    - source of truth: `cargo run --quiet -p xtask -- matrix clippy-features --format json`
    - CI sets `DOTNET_SKIP_BUILD=1` for this job as an explicit analysis-only guardrail
-5. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
-6. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
-7. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
-8. `miri-value`: pinned-nightly, blocking Miri test suite for `dotnet-value`
-9. `fuzz-raw-memory-access`: pinned-nightly, blocking replay of the committed `fuzz_raw_memory_access` corpus (`-runs=0`) with `cargo-fuzz` 0.13.1
+6. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
+7. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
+8. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
+9. `miri-value`: pinned-nightly, blocking Miri test suite for `dotnet-value`
+10. `fuzz-raw-memory-access`: pinned-nightly, blocking replay of the committed `fuzz_raw_memory_access` corpus (`-runs=0`) with `cargo-fuzz` 0.13.1
 
 Hang probes use tighter timeouts and run these filters individually:
 
@@ -135,6 +136,21 @@ If you need to force skip behavior outside clippy (for example a local `cargo ch
 DOTNET_SKIP_BUILD=1 cargo check --workspace --all-targets
 ```
 
+### Loom STW Model
+
+Run the independent blocking Loom leg separately from the normal feature matrix:
+
+```bash
+DOTNET_SKIP_BUILD=1 RUSTFLAGS="--cfg loom" \
+  cargo nextest run -p dotnet-vm --test loom_stw --no-default-features
+```
+
+Loom is a rustc `cfg(loom)`, not a Cargo feature: do not add `--features multithreading`
+and do not pass a nonexistent `--cfg loom` argument to `cargo nextest`. The model builder has
+exactly three total threads (one collector/model thread and two spawned mutators) and leaves
+preemption, permutation, and duration exploration uncapped. It is therefore a blocking,
+exhaustive check at that deliberately small bound, not a replacement for the normal matrix.
+
 ### Full Check Matrix
 
 ```bash
@@ -230,12 +246,27 @@ DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 
 ### Multithreading cfg-Occurrence Budget
 
-The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling lives in the script and is lowered whenever the canonical count drops.
+The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 413; it lives in the script and is lowered whenever the canonical count drops.
 
 Run it locally with:
 
 ```bash
 bash scripts/check_mt_cfg_ceiling.sh
+```
+
+### Direct `std::sync` Ceiling
+
+The blocking `doc-lint` job and `check.sh` also run a lexical ratchet for contiguous
+`std::sync` tokens in Rust sources under `crates/`, excluding generated `target` output. Its
+ceiling is 70. The retained direct uses are the reviewed test/build-script, standard `Arc`/`Weak`,
+static/raw-atomic, and `Once`/`LazyLock`-family exemptions; this is a regression ceiling rather
+than a complete source-policy parser. The ceiling must be lowered when the measured count drops,
+never raised solely to admit a new direct use.
+
+Run it locally with:
+
+```bash
+bash scripts/check_std_sync_ceiling.sh
 ```
 
 The blocking `miri-value` and `fuzz-raw-memory-access` jobs above are also available as local commands in their respective sections below. The latter replays the committed corpus only; exploratory fuzzing remains advisory in `fuzz.yml`.

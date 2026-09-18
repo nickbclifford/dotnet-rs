@@ -45,7 +45,7 @@ condition objectively met or not — so progress is not self-assessed.
 | # | Plan | Gate | Status | Depends on |
 | --- | --- | --- | --- | --- |
 | 01 | [Layer invariant specs](01-layer-invariant-specs.md) | Every `// SAFETY:` comment in the four core crates cites a named predicate from the registry; drift-checked in CI | Complete | — |
-| 02 | [Falsifier portfolio](02-falsifier-portfolio.md) | A `loom` leg exercising the STW handshake is blocking in CI; all four fuzz targets blocking; Kani harnesses for the F3/F4/F9 value facts | Not started | — |
+| 02 | [Falsifier portfolio](02-falsifier-portfolio.md) | A `loom` leg exercising the STW handshake is blocking in CI; all four fuzz targets blocking; Kani harnesses for the F3/F4/F9 value facts | in progress — instrument 1 complete (2026-09-18), instruments 2–5 pending | — |
 | 03 | [Width-generic atomics](03-width-generic-atomics.md) | The nine `match size` ladders in `dotnet-utils/src/atomic.rs` are replaced by one width-generic implementation | Complete | — |
 | 04 | [Model correspondence](04-model-correspondence.md) | Clause→site index covers every family-F2 site; differential fixture count ratcheted upward from 7 | Not started | 01 (predicate names) |
 | 05 | [Descriptor interning, phase 2](05-descriptor-interning.md) | Zero `mutable_key_type` allows remain for `ConcreteType`/`GenericLookup` keys; `record_key_clones` reads zero in production | Not started | — |
@@ -56,10 +56,11 @@ condition objectively met or not — so progress is not self-assessed.
 
 Plan 01 is complete, so its dependencies no longer block plan 04 and satisfy
 that half of plan 06's prerequisites. Plans 02, 03, 04, and 05 therefore
-have no unmet dependency and can run in any order or concurrently; Plan 07 is
-complete, and plan 06 still waits on plan 02. Plan 09 is the integrated review
-backlog, and the per-row dependencies in its Phase 4 table control the work it
-adds or extends.
+have no unmet dependency and can run in any order or concurrently. Plan 02 is
+in progress — instrument 1 complete (2026-09-18), instruments 2–5 pending;
+Plan 07 is complete, and plan 06 still waits on plan 02. Plan 09 is the
+integrated review backlog, and the per-row dependencies in its Phase 4 table
+control the work it adds or extends.
 
 08 is parked, not queued: its gate was closed by an explicit owner decision,
 and reopening it requires a new, explicitly authorized task beginning with a

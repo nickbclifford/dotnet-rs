@@ -537,6 +537,20 @@ impl Executor {
 
             match step_result {
                 StepResult::Return => {
+                    // A collection requested by the last instruction can queue finalizers after
+                    // `run` has already completed the managed entry point.  Keep the executor
+                    // alive for another iteration so the finalizer-processing phase above can
+                    // start those frames before reporting program exit.
+                    let has_pending_finalizers = match self.with_arena_ref(|arena| {
+                        arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+                    }) {
+                        Ok(has_pending) => has_pending,
+                        Err(e) => break ExecutorResult::Error(e),
+                    };
+                    if has_pending_finalizers {
+                        continue;
+                    }
+
                     let exit_code = match self
                         .with_arena_ref(|arena| {
                             arena.mutate(|_, c| {

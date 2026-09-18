@@ -42,13 +42,13 @@
 //! unchanged while adopting `ArenaLease`.
 use crate::{
     newtypes::ArenaId,
-    sync::{Arc, AtomicBool, Ordering, RwLock},
+    sync::{Arc, AtomicBool, AtomicUsize, Ordering, RwLock},
 };
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     mem,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+    sync::atomic::{AtomicU64, Ordering as StdAtomicOrdering},
     thread,
     time::{Duration, Instant},
 };
@@ -92,7 +92,7 @@ impl ArenaState {
     fn new(stw_in_progress: Arc<AtomicBool>) -> Self {
         // SeqCst ensures the generation is globally unique even under
         // concurrent registrations on different CPUs.
-        let generation = ARENA_GENERATION_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let generation = ARENA_GENERATION_COUNTER.fetch_add(1, StdAtomicOrdering::SeqCst);
         Self {
             stw_in_progress,
             active_leases: AtomicUsize::new(0),
@@ -138,13 +138,14 @@ impl ArenaLease {
     /// unregistration) and the lease generation matches the arena's current
     /// generation.
     ///
-    /// Under normal operation this will always be `true` for the duration of
-    /// a held lease, because `unregister_arena` spins until all leases are
-    /// dropped before returning.  The check is provided as a defense-in-depth
-    /// assertion point.
+    /// A concurrent `unregister_arena` clears the liveness flag before
+    /// draining outstanding leases, so this may become `false` while the lease
+    /// still keeps arena memory live. The lease, not this observation, protects
+    /// a dereference through the end of its lifetime. This check is a
+    /// defense-in-depth assertion point for callers that need to detect begun
+    /// unregistration.
     pub fn is_valid(&self) -> bool {
-        self.state.is_alive.load(AtomicOrdering::Acquire)
-            && self.state.generation == self.generation
+        self.state.is_alive.load(Ordering::Acquire) && self.state.generation == self.generation
     }
 
     /// Returns `true` if a stop-the-world GC pause is currently in progress
@@ -158,9 +159,7 @@ impl Drop for ArenaLease {
     fn drop(&mut self) {
         // Use Release so that any writes performed while holding the lease are
         // visible to the unregister_arena spin-check on Acquire.
-        self.state
-            .active_leases
-            .fetch_sub(1, AtomicOrdering::Release);
+        self.state.active_leases.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -191,7 +190,7 @@ const UNREGISTER_LEASE_WARN_INTERVAL: Duration = Duration::from_millis(100);
 pub fn register_arena(thread_id: ArenaId, stw_in_progress: Arc<AtomicBool>) {
     let id = thread_id.as_u64();
     if id < 64 {
-        VALID_ARENAS_FAST.fetch_or(1 << id, Ordering::Release);
+        VALID_ARENAS_FAST.fetch_or(1 << id, StdAtomicOrdering::Release);
     }
     let state = Arc::new(ArenaState::new(stw_in_progress));
     VALID_ARENAS.write().insert(thread_id, state);
@@ -210,13 +209,13 @@ pub fn register_arena(thread_id: ArenaId, stw_in_progress: Arc<AtomicBool>) {
 pub fn unregister_arena(thread_id: ArenaId) {
     let id = thread_id.as_u64();
     if id < 64 {
-        VALID_ARENAS_FAST.fetch_and(!(1 << id), Ordering::Release);
+        VALID_ARENAS_FAST.fetch_and(!(1 << id), StdAtomicOrdering::Release);
     }
     // Remove under write lock.  After this point try_acquire_lease will find
     // no entry and return None, preventing new leases from being issued.
     let state = VALID_ARENAS.write().remove(&thread_id);
     if let Some(state) = state {
-        state.is_alive.store(false, AtomicOrdering::Release);
+        state.is_alive.store(false, Ordering::Release);
         // Drain all in-flight leases before returning.
         // Back off from short bounded spinning to cooperative yielding to
         // avoid burning CPU if a lease holder is preempted.
@@ -226,17 +225,17 @@ pub fn unregister_arena(thread_id: ArenaId) {
         let mut yield_count = 0u64;
 
         loop {
-            if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+            if state.active_leases.load(Ordering::Acquire) == 0 {
                 break;
             }
 
             for _ in 0..spin_budget {
-                if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+                if state.active_leases.load(Ordering::Acquire) == 0 {
                     break;
                 }
                 std::hint::spin_loop();
             }
-            if state.active_leases.load(AtomicOrdering::Acquire) == 0 {
+            if state.active_leases.load(Ordering::Acquire) == 0 {
                 break;
             }
 
@@ -246,7 +245,7 @@ pub fn unregister_arena(thread_id: ArenaId) {
 
             let elapsed = wait_start.elapsed();
             if elapsed >= next_warn_at {
-                let active_leases = state.active_leases.load(AtomicOrdering::Acquire);
+                let active_leases = state.active_leases.load(Ordering::Acquire);
                 tracing::warn!(
                     arena_id = thread_id.as_u64(),
                     active_leases,
@@ -285,7 +284,7 @@ pub fn unregister_arena(thread_id: ArenaId) {
 pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
     // Fast path: if the arena is definitely absent, skip the lock entirely.
     let id = target_id.as_u64();
-    if id < 64 && (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) == 0 {
+    if id < 64 && (VALID_ARENAS_FAST.load(StdAtomicOrdering::Acquire) & (1 << id)) == 0 {
         return None;
     }
 
@@ -297,7 +296,7 @@ pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
     // the state we are pinning.
     let generation = state.generation;
     // Increment before releasing the map lock.
-    state.active_leases.fetch_add(1, AtomicOrdering::Acquire);
+    state.active_leases.fetch_add(1, Ordering::Acquire);
     drop(guard); // read lock released here; unregister may now take write lock
     // and will see active_leases > 0, so it will spin.
 
@@ -316,14 +315,14 @@ pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
 pub fn is_valid_cross_arena_ref(target_thread_id: ArenaId) -> bool {
     let id = target_thread_id.as_u64();
     if id < 64 {
-        (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
+        (VALID_ARENAS_FAST.load(StdAtomicOrdering::Acquire) & (1 << id)) != 0
     } else {
         VALID_ARENAS.read().contains_key(&target_thread_id)
     }
 }
 
 pub fn reset_arena_registry() {
-    VALID_ARENAS_FAST.store(0, Ordering::Release);
+    VALID_ARENAS_FAST.store(0, StdAtomicOrdering::Release);
     VALID_ARENAS.write().clear();
 }
 
@@ -423,7 +422,7 @@ pub fn record_cross_arena_ref(target_thread_id: ArenaId, ptr: usize) -> bool {
         if tracing_under_stw {
             let id = target_thread_id.as_u64();
             let valid = if id < 64 {
-                (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
+                (VALID_ARENAS_FAST.load(StdAtomicOrdering::Acquire) & (1 << id)) != 0
             } else {
                 // IDs >= 64 are not represented in the fast bitset.  Under STW
                 // this optimistic validity is safe: harvest still acquires a
@@ -493,7 +492,7 @@ mod lease_tests {
         let guard = VALID_ARENAS.read();
         guard
             .get(&id)
-            .map(|s| s.active_leases.load(AtomicOrdering::Acquire))
+            .map(|s| s.active_leases.load(Ordering::Acquire))
             .unwrap_or(0)
     }
 

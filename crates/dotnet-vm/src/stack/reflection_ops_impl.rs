@@ -31,13 +31,13 @@ use dashmap::{DashMap, mapref::entry::Entry};
 #[cfg(feature = "multithreading")]
 use dotnet_metrics::{CacheEvent, CacheKind};
 #[cfg(feature = "multithreading")]
-use dotnet_utils::sync::Ordering;
+use dotnet_utils::sync::{AtomicUsize, Ordering};
 
 #[cfg(feature = "multithreading")]
 fn shared_reflection_index_get_or_insert<K, V, H, M>(
     map: &DashMap<K, usize>,
     rev_map: &DashMap<usize, V>,
-    next_index: &std::sync::atomic::AtomicUsize,
+    next_index: &AtomicUsize,
     key: K,
     value: V,
     on_hit: H,

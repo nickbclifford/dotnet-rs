@@ -1,11 +1,9 @@
 //! Runtime and cache metric counters used across the VM.
+use dotnet_utils::sync::Mutex;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -474,10 +472,7 @@ impl RuntimeMetrics {
             .fetch_add(duration_us, Ordering::Relaxed);
         self.gc_pause_count.fetch_add(1, Ordering::Relaxed);
 
-        let mut samples = self
-            .gc_pause_samples_us
-            .lock()
-            .expect("gc pause samples lock poisoned");
+        let mut samples = self.gc_pause_samples_us.lock();
         if samples.len() == GC_PAUSE_SAMPLE_WINDOW {
             samples.remove(0);
         }
@@ -498,10 +493,7 @@ impl RuntimeMetrics {
         &self,
         gc_pressure_by_arena: BTreeMap<String, ArenaGcPressureSnapshot>,
     ) {
-        *self
-            .arena_gc_pressure_by_arena
-            .lock()
-            .expect("arena gc pressure metrics lock poisoned") = gc_pressure_by_arena;
+        *self.arena_gc_pressure_by_arena.lock() = gc_pressure_by_arena;
     }
 
     #[inline]
@@ -622,10 +614,7 @@ impl RuntimeMetrics {
     #[cfg(feature = "bench-instrumentation")]
     pub fn record_intrinsic_signature_call(&self, signature: impl Into<String>) {
         self.intrinsic_call_total.fetch_add(1, Ordering::Relaxed);
-        let mut map = self
-            .intrinsic_calls_by_signature
-            .lock()
-            .expect("intrinsic metric lock poisoned");
+        let mut map = self.intrinsic_calls_by_signature.lock();
         *map.entry(signature.into()).or_insert(0) += 1;
     }
 
@@ -657,10 +646,7 @@ impl RuntimeMetrics {
             object_count,
         );
 
-        let mut by_iteration = self
-            .gc_fixed_point_cross_arena_objects_by_iteration
-            .lock()
-            .expect("gc fixed-point-by-iteration lock poisoned");
+        let mut by_iteration = self.gc_fixed_point_cross_arena_objects_by_iteration.lock();
         *by_iteration.entry(iteration).or_insert(0) += object_count;
     }
 
@@ -682,16 +668,10 @@ impl RuntimeMetrics {
         let root = root.into();
         let duration_ns = duration.as_nanos() as u64;
         {
-            let mut count_by_root = self
-                .gc_trace_root_count_by_root
-                .lock()
-                .expect("gc trace root count lock poisoned");
+            let mut count_by_root = self.gc_trace_root_count_by_root.lock();
             *count_by_root.entry(root.clone()).or_insert(0) += 1;
         }
-        let mut total_ns_by_root = self
-            .gc_trace_root_total_ns_by_root
-            .lock()
-            .expect("gc trace root timing lock poisoned");
+        let mut total_ns_by_root = self.gc_trace_root_total_ns_by_root.lock();
         *total_ns_by_root.entry(root).or_insert(0) += duration_ns;
     }
 
@@ -703,16 +683,10 @@ impl RuntimeMetrics {
         let path = path.into();
         let duration_ns = duration.as_nanos() as u64;
         {
-            let mut count_by_path = self
-                .layout_scan_count_by_path
-                .lock()
-                .expect("layout scan count lock poisoned");
+            let mut count_by_path = self.layout_scan_count_by_path.lock();
             *count_by_path.entry(path.clone()).or_insert(0) += 1;
         }
-        let mut total_ns_by_path = self
-            .layout_scan_total_ns_by_path
-            .lock()
-            .expect("layout scan timing lock poisoned");
+        let mut total_ns_by_path = self.layout_scan_total_ns_by_path.lock();
         *total_ns_by_path.entry(path).or_insert(0) += duration_ns;
     }
 
@@ -784,11 +758,7 @@ impl RuntimeMetrics {
         let (gc_pause_samples, gc_pause_p50_us, gc_pause_p95_us, gc_pause_p99_us, gc_pause_max_us) =
             self.gc_pause_histogram_snapshot();
 
-        let gc_pressure_by_arena = self
-            .arena_gc_pressure_by_arena
-            .lock()
-            .expect("arena gc pressure metrics lock poisoned")
-            .clone();
+        let gc_pressure_by_arena = self.arena_gc_pressure_by_arena.lock().clone();
 
         RuntimeMetricsSnapshot {
             gc_pause_total_us: self.gc_pause_total_us.load(Ordering::Relaxed),
@@ -809,11 +779,7 @@ impl RuntimeMetrics {
     }
 
     fn gc_pause_histogram_snapshot(&self) -> (u64, u64, u64, u64, u64) {
-        let mut gc_pause_samples = self
-            .gc_pause_samples_us
-            .lock()
-            .expect("gc pause samples lock poisoned")
-            .clone();
+        let mut gc_pause_samples = self.gc_pause_samples_us.lock().clone();
         gc_pause_samples.sort_unstable();
         let gc_pause_sample_count = gc_pause_samples.len() as u64;
         let gc_pause_p50_us = percentile_sorted(&gc_pause_samples, 50);
@@ -880,11 +846,7 @@ impl RuntimeMetrics {
             OpcodeCategory::Other.as_key().to_string(),
             self.opcode_dispatch_other.load(Ordering::Relaxed),
         );
-        let intrinsic_calls_by_signature = self
-            .intrinsic_calls_by_signature
-            .lock()
-            .expect("intrinsic metric lock poisoned")
-            .clone();
+        let intrinsic_calls_by_signature = self.intrinsic_calls_by_signature.lock().clone();
         let allocation_pressure_by_source = AllocationPressureSource::ALL
             .into_iter()
             .map(|source| {
@@ -901,30 +863,13 @@ impl RuntimeMetrics {
         let gc_fixed_point_cross_arena_objects_by_iteration = self
             .gc_fixed_point_cross_arena_objects_by_iteration
             .lock()
-            .expect("gc fixed-point-by-iteration lock poisoned")
             .iter()
             .map(|(iteration, count)| (iteration.to_string(), *count))
             .collect();
-        let gc_trace_root_count_by_root = self
-            .gc_trace_root_count_by_root
-            .lock()
-            .expect("gc trace root count lock poisoned")
-            .clone();
-        let gc_trace_root_total_ns_by_root = self
-            .gc_trace_root_total_ns_by_root
-            .lock()
-            .expect("gc trace root timing lock poisoned")
-            .clone();
-        let layout_scan_count_by_path = self
-            .layout_scan_count_by_path
-            .lock()
-            .expect("layout scan count lock poisoned")
-            .clone();
-        let layout_scan_total_ns_by_path = self
-            .layout_scan_total_ns_by_path
-            .lock()
-            .expect("layout scan timing lock poisoned")
-            .clone();
+        let gc_trace_root_count_by_root = self.gc_trace_root_count_by_root.lock().clone();
+        let gc_trace_root_total_ns_by_root = self.gc_trace_root_total_ns_by_root.lock().clone();
+        let layout_scan_count_by_path = self.layout_scan_count_by_path.lock().clone();
+        let layout_scan_total_ns_by_path = self.layout_scan_total_ns_by_path.lock().clone();
         let mut cache_key_clones_by_cache = BTreeMap::new();
         let mut cache_key_clone_total = 0;
         for kind in CacheKind::ALL {

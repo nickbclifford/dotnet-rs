@@ -412,6 +412,10 @@ impl GlobalCaches {
 impl SharedGlobalState {
     pub fn new(loader: Arc<AssemblyLoader>) -> Self {
         let tracer = Tracer::new();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "no-MT global state is executor-confined; Arc preserves feature-neutral metrics ownership"
+        )]
         let metrics = Arc::new(RuntimeMetrics::new());
         #[allow(
             clippy::arc_with_non_send_sync,
@@ -804,6 +808,10 @@ mod abort_signal_tests {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "the cache API takes Arc metrics in every feature mode; this test never shares them between threads"
+)]
 mod global_cache_registry_tests {
     use super::*;
 

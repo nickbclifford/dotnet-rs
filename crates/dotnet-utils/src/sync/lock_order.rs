@@ -330,11 +330,11 @@ impl<L: LockLevel, T> OrderedRwLock<L, T> {
     /// Caller must guarantee that the returned pointer is not used in a way
     /// that violates the lock's aliasing requirements.
     pub unsafe fn data_ptr(&self) -> *mut T {
-        #[cfg(feature = "multithreading")]
+        #[cfg(all(not(loom), feature = "multithreading"))]
         {
             self.inner.data_ptr()
         }
-        #[cfg(not(feature = "multithreading"))]
+        #[cfg(not(all(not(loom), feature = "multithreading")))]
         {
             // SAFETY: F8.LockOrderRespected — Forwarding contract to underlying lock implementation.
             unsafe { self.inner.data_ptr() }
@@ -406,7 +406,7 @@ impl<L: LockLevel, T> DerefMut for OrderedRwLockWriteGuard<'_, L, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::{AcquireAfter, LockLevel, OrderedMutex, OrderedRwLock, levels};
     use static_assertions::assert_not_impl_all;

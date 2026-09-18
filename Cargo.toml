@@ -62,6 +62,7 @@ parking_lot = "0.12"
 dashmap = "6.1"
 hashbrown = "0.17"
 tracing = "0.1"
+loom = { version = "0.7.2", features = ["checkpoint"] }
 thiserror = "2.0"
 smallvec = "1.13"
 slab = "0.4"
@@ -72,6 +73,9 @@ serde_json = "1"
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 # Keep release arithmetic checked as a correctness backstop. The dispatch benchmark evidence is
 # recorded in docs/BENCHMARK_WORKFLOW.md under "Release Overflow-Checks Policy".

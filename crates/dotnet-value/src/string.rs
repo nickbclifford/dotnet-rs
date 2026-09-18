@@ -1,9 +1,10 @@
+use dotnet_utils::sync::Mutex;
 use gc_arena::static_collect;
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
     ops::Deref,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
 };
 
 #[macro_export]
@@ -138,17 +139,18 @@ static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
     }
 });
 
+// The single-threaded synchronization facade is RefCell-backed and deliberately !Sync, so its
+// cache must be thread-local. Multithreaded and loom builds retain one shared interner.
+#[cfg(any(dotnet_value_multithreading, loom))]
 static STRING_INTERNER: LazyLock<Mutex<StringInternerCache>> =
     LazyLock::new(|| Mutex::new(StringInternerCache::new()));
 
-fn maybe_intern(chars: Vec<u16>) -> StringStorage {
-    if !INTERN_CONFIG.enabled {
-        return StringStorage::Owned(chars);
-    }
+#[cfg(all(not(dotnet_value_multithreading), not(loom)))]
+thread_local! {
+    static STRING_INTERNER: Mutex<StringInternerCache> = Mutex::new(StringInternerCache::new());
+}
 
-    let mut interner = STRING_INTERNER
-        .lock()
-        .expect("string interner lock poisoned");
+fn intern_chars(chars: Vec<u16>, interner: &mut StringInternerCache) -> StringStorage {
     if let Some(existing) = interner.get(chars.as_slice()) {
         return StringStorage::Interned(Arc::clone(existing));
     }
@@ -162,6 +164,22 @@ fn maybe_intern(chars: Vec<u16>) -> StringStorage {
     let interned = Arc::<[u16]>::from(chars.into_boxed_slice());
     interner.insert(Arc::clone(&interned), Arc::clone(&interned));
     StringStorage::Interned(interned)
+}
+
+fn maybe_intern(chars: Vec<u16>) -> StringStorage {
+    if !INTERN_CONFIG.enabled {
+        return StringStorage::Owned(chars);
+    }
+
+    #[cfg(any(dotnet_value_multithreading, loom))]
+    {
+        intern_chars(chars, &mut STRING_INTERNER.lock())
+    }
+
+    #[cfg(all(not(dotnet_value_multithreading), not(loom)))]
+    {
+        STRING_INTERNER.with(|interner| intern_chars(chars, &mut interner.lock()))
+    }
 }
 
 impl CLRString {

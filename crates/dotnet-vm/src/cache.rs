@@ -467,6 +467,10 @@ where
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arc_with_non_send_sync,
+    reason = "cache constructors use feature-neutral Arc metrics; no-MT tests never share them between threads"
+)]
 mod tests {
     use super::{
         CacheStore, FrontCache, FrontCachePolicy, LockedCache, LockedStore, ShardedCache,

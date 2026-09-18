@@ -92,4 +92,7 @@ fi
 echo "Checking multithreading cfg occurrence ceiling..."
 bash scripts/check_mt_cfg_ceiling.sh
 
+echo "Checking std::sync occurrence ceiling..."
+bash scripts/check_std_sync_ceiling.sh
+
 echo "All checks passed!"
