@@ -1,62 +1,66 @@
 # Plan 07 — Fixture exit-code oracle
 
-**Gate:** harness-level outcomes (setup failure, unhandled managed exception,
-executor error) occupy a reserved high exit-code band distinct from the
-0–200 range fixture bodies use for their own assertions, so `1` and `255` stop
-being overloaded; and an opt-in differential *exit-code-only* comparison
-against real `dotnet` exists for fixtures that cannot use the stdout-diff
-`diff_test!` path.
+**Gate:** harness-level outcomes reserve the high `240`–`254` exit-code band
+distinct from fixture-authored codes, with unhandled managed exceptions using
+`254`; setup failures and executor errors intentionally retain the existing
+`255` catch-all. An opt-in differential *exit-code-only* comparison against
+real `dotnet` exists for fixtures that cannot use the stdout-diff `diff_test!`
+path.
 
-**Status:** not started. Independent of every other plan in this queue —
-lowest coupling, no dependency in either direction. Do this when the appetite
-is for test infrastructure rather than runtime code.
+**Status:** complete (2026-09-17). This independent, low-coupling test
+infrastructure plan is complete.
 
 ## Goal
 
-The managed fixture suite (176 `.cs` files under
+The managed fixture suite (178 `.cs` files under
 `crates/dotnet-cli/tests/fixtures`) intentionally asserts only a `u8` exit
 code encoded in the filename — assertions live in the C# body, and comparing
 stdout for every fixture would couple all of them to the console/IO stack.
 That design choice is correct and is not being revisited here.
 
-The real gap is that exit code `1` is overloaded.
-`crates/dotnet-cli/tests/integration_tests_impl/harness.rs:264` maps
-`ExecutorResult::Threw` to exit code `1`, which is also the dominant C#
-first-failure-branch idiom (`Environment.Exit(1)` on the "something went
-wrong" path). The three `exceptions/stack_trace_{no_params,params,generic}_1.cs`
-fixtures therefore cannot distinguish "threw with the expected trace" from
-"threw at all" — both produce the same observable exit code. Separately,
-`Error` (executor-level failure) and setup failure both map to `255`
-(`harness.rs:254,276`), which the harness already reserves as a high code, so
-fixing this extends an existing convention instead of inventing a new one.
+The gap this plan closed was that exit code `1` was overloaded. The harness
+formerly mapped `ExecutorResult::Threw` to exit code `1`, which is also the
+dominant C# first-failure-branch idiom (`Environment.Exit(1)` on the
+"something went wrong" path). The four unconditional-throw exception fixtures
+therefore could not distinguish "threw with the expected trace" from "threw at
+all" — both produced the same observable exit code. Separately, `Error`
+(executor-level failure) and setup failure both mapped to `255` (`harness.rs`),
+which the harness already reserved as a high code, so the completed change
+extended that convention instead of inventing a new one.
 
-There is also a confirmed, unrecorded compatibility divergence: real `dotnet`
-exits `134` (`SIGABRT`) on an unhandled exception, while `dotnet-rs` exits `1`
-— the suite currently treats this as correct because no fixture checks for it.
+There is also a confirmed, documented compatibility divergence: real `dotnet`
+exits `134` (`SIGABRT`) on an unhandled exception, while `dotnet-rs` exits `1`.
+The rejected-candidates record preserves it until plan 06's trust register
+exists, because no fixture checks that process-level behavior directly.
 
-## Current state (verified 2026-08-10)
+## Implemented state (2026-09-17)
 
-- 176 `.cs` fixtures under `crates/dotnet-cli/tests/fixtures`, generated into
+- 178 `.cs` fixtures under `crates/dotnet-cli/tests/fixtures`, generated into
   `tests.rs` at build time by `crates/dotnet-cli/build.rs`.
-- Exit-code assignment in `harness.rs`: setup error → `255` (`:254`),
-  `ExecutorResult::Threw` → `1` (`:264`), `ExecutorResult::Error` → `255`
-  (`:276`). `ExecutorResult::Exited(code)` passes the fixture-authored code
-  through unchanged.
-- 7 of 475 total fixtures (`.cs` files across the whole tree, not just this
-  suite) are compared differentially against real `dotnet` via the
-  `diff_test!` macro in
-  `crates/dotnet-cli/tests/integration_tests_impl/diff_harness.rs`, which
-  requires a fixture whose expected exit code is `42` and diffs both exit code
-  and stdout.
-- `diff_harness.rs` already carries a rejected-candidates comment block naming
-  exactly the divergence class this plan addresses:
+- Exit-code assignment in `harness.rs`: setup error → `255`,
+  `ExecutorResult::Threw` → the named in-process
+  `MANAGED_EXCEPTION_EXIT_CODE` (`254`), and `ExecutorResult::Error` → `255`.
+  `ExecutorResult::Exited(code)` passes the fixture-authored code through
+  unchanged. Thus `240`–`254` is reserved for harness-level outcomes while
+  `255` remains the intentional setup/executor-error catch-all.
+- The four unconditional-throw fixture sources are
+  `exceptions/stack_trace_{no_params,params,generic}_254.cs` and
+  `exceptions/unhandled_exception_254.cs`, so their filename oracle now
+  distinguishes an in-process managed exception from fixture-authored `1`.
+- Seven fixtures use the stdout-comparing `diff_test!` path, and the new
+  `diff_test_exit_code!` test covers the qualified
+  `exceptions/intrinsic_trace_42.cs` fixture at expected exit code `42`
+  without comparing stdout.
+- `diff_harness.rs` carries a rejected-candidates comment block naming the
+  divergence classes this plan addresses:
   `structs/interlocked_misaligned_1` (intentional ECMA alignment divergence),
   `exceptions/exception_filter_5` (VM correctness mismatch),
-  `exceptions/unhandled_exception_1` and the `stack_trace_*` fixtures (real
-  `.NET` exits 134 for unhandled exceptions while `dotnet-rs` exits 1), and
-  `exceptions/intrinsic_trace_42` (GC.Collect timing mismatch). That list is
-  itself an assurance artifact — the record of known, intentional divergences
-  — and should be preserved, not replaced, by this plan.
+  `exceptions/unhandled_exception_254` and the `stack_trace_*_254` fixtures
+  (in-process oracle `254`; unchanged real-.NET `134` versus dotnet-rs CLI
+  `1` subprocess behavior), and `exceptions/intrinsic_trace_42` (covered only
+  by the exit-code differential test because of its GC.Collect stdout
+  mismatch). That list remains an assurance artifact — the record of known,
+  intentional divergences.
 
 ## Steps
 

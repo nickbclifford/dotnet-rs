@@ -50,15 +50,16 @@ condition objectively met or not — so progress is not self-assessed.
 | 04 | [Model correspondence](04-model-correspondence.md) | Clause→site index covers every family-F2 site; differential fixture count ratcheted upward from 7 | Not started | 01 (predicate names) |
 | 05 | [Descriptor interning, phase 2](05-descriptor-interning.md) | Zero `mutable_key_type` allows remain for `ConcreteType`/`GenericLookup` keys; `record_key_clones` reads zero in production | Not started | — |
 | 06 | [Trust register](06-trust-register.md) | Every entry names a falsifier; count is CI-ceilinged | Not started | 01, 02 |
-| 07 | [Fixture exit-code oracle](07-fixture-exit-code-oracle.md) | Harness-level outcomes occupy a reserved code band distinct from fixture-authored codes; opt-in exit-code-only differential mode exists | Not started | — |
+| 07 | [Fixture exit-code oracle](07-fixture-exit-code-oracle.md) | Harness-level outcomes reserve `240`–`254`, with `255` retained as the setup/executor-error catch-all; opt-in exit-code-only differential mode exists | Complete (2026-09-17) | — |
 | 08 | [Provenance redesign](08-provenance-redesign.md) | `-Zmiri-strict-provenance` runs green on at least the `dotnet-value` and `dotnet-runtime-memory` legs | **Parked** — implementation complete, gate closed unmet by owner-directed deferral (2026-08-05) | — |
 | 09 | [Whole-codebase legibility review](09-codebase-legibility-review.md) | Every active Phase-4 row reaches its objective gate or moves to a separately tracked successor plan without duplicate scope | In progress — review accepted; priorities 1 (arena-local P/Invoke last-error cache and blocking `multithreading` isolation fixture), 3 (workspace-wide extension of Plan 01's predicate-citation coverage and drift gate), and 4 (Plan 03's sealed width markers and dynamic bridge) complete | Mixed; see plan |
 
 Plan 01 is complete, so its dependencies no longer block plan 04 and satisfy
-that half of plan 06's prerequisites. Plans 02, 03, 04, 05, and 07 therefore
-have no unmet dependency and can run in any order or concurrently; plan 06
-still waits on plan 02. Plan 09 is the integrated review backlog, and the
-per-row dependencies in its Phase 4 table control the work it adds or extends.
+that half of plan 06's prerequisites. Plans 02, 03, 04, and 05 therefore
+have no unmet dependency and can run in any order or concurrently; Plan 07 is
+complete, and plan 06 still waits on plan 02. Plan 09 is the integrated review
+backlog, and the per-row dependencies in its Phase 4 table control the work it
+adds or extends.
 
 08 is parked, not queued: its gate was closed by an explicit owner decision,
 and reopening it requires a new, explicitly authorized task beginning with a

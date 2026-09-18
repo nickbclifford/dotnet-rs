@@ -2,7 +2,11 @@ using System;
 
 public class Program {
     public static int Main() {
-        A();
+        try {
+            A();
+        } catch (ArgumentOutOfRangeException) {
+            Console.WriteLine("real dotnet rejects GC.Collect(-1)");
+        }
         return 42;
     }
 

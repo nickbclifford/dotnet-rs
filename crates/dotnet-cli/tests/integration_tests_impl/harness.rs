@@ -10,6 +10,8 @@ use std::{
     time::Duration,
 };
 
+const MANAGED_EXCEPTION_EXIT_CODE: u8 = 254;
+
 pub fn get_test_timeout(default_secs: u64) -> Duration {
     let secs = std::env::var("DOTNET_TEST_TIMEOUT_SECS")
         .ok()
@@ -265,7 +267,7 @@ impl TestHarness {
                 let msg = format!("Execution threw: {:?}", e);
                 eprintln!("{}", msg);
                 ExecutionResult {
-                    exit_code: 1,
+                    exit_code: MANAGED_EXCEPTION_EXIT_CODE,
                     stderr: Some(msg),
                 }
             }
