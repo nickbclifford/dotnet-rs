@@ -26,6 +26,8 @@ jobs:
         run: bash scripts/check_std_sync_ceiling.sh
       - name: Verify support-slot consumer coverage
         run: cargo run --quiet -p xtask -- verify-slots
+      - name: Test pointer diagnostic guards
+        run: bash -n scripts/pointer_provenance.sh && python3 scripts/tests/test_pointer_provenance.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links
@@ -304,6 +306,45 @@ jobs:
           components: miri
       - uses: Swatinem/rust-cache@v2.8.2
       - run: cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
+
+  miri-pointer-controls:
+    name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [no-features, multithreading]
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup nightly and Miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - name: Setup cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          key: miri-pointer-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.shard }}
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+      - name: Verify control discovery
+        run: bash scripts/pointer_provenance.sh verify-controls --configuration ${{ matrix.configuration }}
+      - name: Run control shard
+        run: bash scripts/pointer_provenance.sh controls --configuration ${{ matrix.configuration }} --shard ${{ matrix.shard }}
 
   fuzz-corpus-replay:
     name: Fuzz ${{ matrix.target }} Corpus
