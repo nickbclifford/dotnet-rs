@@ -58,9 +58,7 @@ Start with:
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
 - [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 
-For the project's full plan queue — unsafe-code assurance work (invariant
-specifications, provenance discipline, falsifiers, the trust register) plus
-the architecture and soundness backlog — see
+For the unified pointer/provenance implementation plan and its project queue, see
 [`docs/plans/README.md`](docs/plans/README.md).
 
 See the `docs/` directory for additional deep dives.
