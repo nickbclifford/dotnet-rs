@@ -78,6 +78,23 @@ with `cargo test --no-default-features [--features <combo>]`):
 - `multithreading,validation-all`
 - `fuzzing`
 
+## Miri CI Lane Mapping
+
+The feature matrix above describes the dynamic stable test/clippy jobs; Miri jobs are separate,
+explicit workflow lanes and are not represented by `SHARED_FEATURE_MATRIX`.
+
+| CI job | Blocking? | Configuration / selection | Meaning and limits |
+|---|---|---|---|
+| `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` Miri test suite | Blocking value-crate Miri coverage; not a VM gate. |
+| `miri-pointer-controls` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `--no-default-features` with and without `--features multithreading`; three guarded shards per configuration | Six enabled exact VM controls (`p00_smoke`, `p02_ldloca_stind_i4_control`, `p03_ldloca_convu_ldind_i4`, `p05_single_localloc_roundtrip`, `p07_localloc_one_past_end`, `p11_ldelema_stind_heap_array_control`), each revalidated in both configurations. Shards pair p00/p02, p03/p05, and p07/p11. This is a filtered permissive Tree Borrows lane, not a full VM Miri suite, strict-provenance validation, or proof of runtime soundness. The other 17 ignored probes are not executed by CI. |
+| `miri` matrix in `miri.yml` | No (`continue-on-error`) | Pinned `nightly-2026-05-27`; VM entries use `jmp_tests tail_calls fault_tests` substring filters in no-features and multithreading configurations | Existing advisory VM unsafe-gate runs remain unchanged; their bounded filters do not establish whole-VM coverage. Other crate entries are also advisory. |
+| Strict-provenance Miri | No job | None | No current CI job uses `-Zmiri-strict-provenance`; do not infer strict coverage from the two blocking Miri jobs. |
+
+The pointer-control job uses a provisional 45-minute timeout per matrix leg. Hosted cold-build/cache
+timings have not been measured. Ignored pointer probes may only be executed through the explicit
+diagnostic entrypoint in `scripts/pointer_provenance.sh`; native diagnostics are limited to catalog
+entries p17, p18 and p19.
+
 ## Debugging Environment Variables
 
 In addition to feature flags, some components use environment variables for extra tracing:

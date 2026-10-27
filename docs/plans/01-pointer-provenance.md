@@ -1,6 +1,6 @@
 # Unified pointer/provenance project plan
 
-**Status:** Not started
+**Status:** In progress — partial M0 (VM probe harness and blocking controls)
 **Prepared:** 2026-10-27
 **Baseline:** `b49f5df8` (also HEAD when this plan was prepared)
 **Scope:** Guest storage, pointer operations, GC transport/barriers, concurrency, and native-call boundaries.
@@ -11,18 +11,22 @@ assignment, frame growth, repeated `localloc`, collection, and suspension withou
 Native-integer conversions remain available through an explicit exposed-provenance boundary.
 
 This is the implementation plan derived from all three [reviews](../pointer-provenance/README.md).
-The reviews and their logs remain historical evidence. No runtime fix or new test gate is claimed by
-this document. Milestone IDs below are the work-item IDs; split them into focused changes while retaining
-their acceptance criteria. Ownership is assigned by subsystem, not by an assumed individual or schedule.
+The underlying historical pass archives and raw logs are not present in this checkout; current evidence
+limits and source-recovery tasks are recorded in the [inventory](../pointer-provenance/INVENTORY.md).
+The plan is **in progress, partial M0**: a VM probe harness and blocking control lane exist, but no
+runtime repair or full M0 completion is claimed. Milestone IDs below are the work-item IDs; split them
+into focused changes while retaining their acceptance criteria. Ownership is assigned by subsystem, not
+by an assumed individual or schedule.
 
 ## Evidence and reconciled decisions
 
-Sources: [pass 1](../pointer-provenance/pass-1/REVIEW.md) covers library invariants and strict Miri;
-[pass 2](../pointer-provenance/pass-2/REVIEW.md) exercises real IL;
-[pass 3](../pointer-provenance/pass-3/REVIEW.md) adds independent IL, standalone borrow/race models,
-native reproductions, and experimental patches. Probe IDs `p00`–`p20` below always mean pass 3;
-pass-1 probes are identified by name. A standalone model establishes the model's behavior, not an
-end-to-end reproduction in the VM. Source-review and audit-only claims require confirmation in M0.
+The historical pass-1/2/3 review archives are absent from this checkout. Their subject areas are
+summarized in the [current evidence inventory](../pointer-provenance/INVENTORY.md): pass 1 covered
+library invariants and strict Miri; pass 2 exercised real IL; pass 3 added independent IL, standalone
+borrow/race models, native reproductions, and experimental patches. Probe IDs `p00`–`p20` below
+always mean pass 3; pass-1 probes are identified by name. A standalone model establishes the model's
+behavior, not an end-to-end reproduction in the VM. Source-review and audit-only claims require
+confirmation in M0.
 
 | Question | Unified decision | Basis and limit |
 |---|---|---|
@@ -81,18 +85,31 @@ discovery rather than waiting for the final copy API.
 
 ### M0 — Make failures and controls executable
 
-- Promote pass-1 library probes and pass-3 IL p00–p20 into the owning test suites, retaining the mock
-  corlib primitive typedefs. Incorporate pass-2 cases absent from that corpus (null through `&p`,
-  wide stores). Keep read/control tests alongside writes and dereference after mutation or decoding.
+**Current progress — partial M0 only:** The durable [inventory](../pointer-provenance/INVENTORY.md)
+maps R01–R13 and catalogs the 23 VM probes. Six bounded controls (`p00_smoke`,
+`p02_ldloca_stind_i4_control`, `p03_ldloca_convu_ldind_i4`, `p05_single_localloc_roundtrip`,
+`p07_localloc_one_past_end`, and `p11_ldelema_stind_heap_array_control`) each passed separate
+revalidation in both no-features and multithreading configurations (12 recorded exact-name passes).
+The six controls are enabled in ordinary tests and run by the blocking `miri-pointer-controls` CI job
+as two configurations by three guarded shards under the pinned permissive Tree Borrows setup. The
+other 17 probes remain ignored for diagnostic execution only. This filtered VM control lane is not a
+full VM Miri suite, strict-provenance evidence, or a claim of runtime soundness.
+
+- Keep the pass-3 IL p00–p20 probes and the two unique pass-2 cases (null through `&p`, wide stores)
+  in the owning VM suite, retaining the mock corlib primitive typedefs. Recover and integrate the
+  missing pass-1 library probes. Keep read/control tests alongside writes and dereference after
+  mutation or decoding.
 - Port lab E1–E13 and `gc_model::e11*` with clear labels for model tests. Repair the backing-storage
   aliasing in the two ignored atomic tests; distinguish that UB from their historical Miri ICE reasons.
-- Classify each test as native, permissive TB, strict-core TB, supplemental Stacked Borrows, or native FFI.
-  Existing tests that deliberately exhibit UB must be ignored with a finding/work-item ID until fixed;
-  do not execute UB as an ordinary passing native test. Keep known-failure reproductions in an explicit
-  diagnostic lane, and remove ignores as each fix lands. Run failing Miri reproducers separately.
-- Establish blocking lanes for the passing pointer controls and for each repaired regression. Expand
-  VM coverage beyond `jmp_tests`, `tail_calls`, and `fault_tests`. Record the current strict exclusions
-  (`bitvec`, default-feature `parking_lot`, exposed reconstruction), with exact filters and reasons.
+- Preserve the existing per-probe classification; classify recovered library/model/FFI evidence and
+  future regressions as native, permissive TB, strict-core TB, supplemental Stacked Borrows, or native
+  FFI as appropriate. Tests that deliberately exhibit UB stay ignored with a finding/work-item ID
+  until fixed; do not execute UB as ordinary native tests. Keep known-failure reproductions in the
+  explicit diagnostic lane and run failing Miri reproducers separately.
+- The six passing pointer controls now have a blocking lane. Add appropriate gates for each repaired
+  regression and expand VM coverage beyond `jmp_tests`, `tail_calls`, and `fault_tests`. Recover exact
+  strict filters and reasons where possible; current dependency traces and historical filters are
+  unavailable, and exposed reconstruction remains an explicit strict-provenance boundary.
 - Inventory the 73 reported provenance-lint hits before denying `fuzzy_provenance_casts` and
   `lossy_provenance_casts` in first-party code. Use explicit exposure/reconstruction helpers; record any
   narrow exceptions. Do not deny everything before migration and call unrelated dependency failures fixes.
@@ -103,12 +120,40 @@ discovery rather than waiting for the final copy API.
 all current passing controls run in CI. Evidence distinguishes VM tests, models, source claims, and
 dependency blockers. No green filtered lane is described as a green full strict suite.
 
+#### Recorded follow-ups (not completed)
+
+The [evidence inventory](../pointer-provenance/INVENTORY.md) maps R01–R13 to exact probes,
+evidence limits, owners and reproduction tasks. The historical pass-1/2/3 archive directories,
+raw transcripts, library/model/FFI sources and patch sources are absent from this tree; their
+external recovery location is unknown. Recover an external backup if available or independently
+reproduce the missing evidence. The integrated p20 source came from a patched tree; its unpatched
+baseline result remains unknown. The six filtered permissive-TB controls do not establish full M0,
+strict Miri or runtime soundness.
+
+- Recover and integrate pass-1 library probes, standalone E1–E13 models and `gc_model::e11*`,
+  preserving the distinction between model, library and real-VM evidence. Recover the missing address
+  and libffi fixtures and reproduce the p20 baseline as described in the inventory.
+- Identify the two historically reported atomic tests, distinguish test-backing aliasing from their
+  historical Miri ICE reasons, and repair and validate them (M0/M6); their identities remain unknown.
+- Inventory and migrate the reported 73 provenance-lint hits before denying `fuzzy_provenance_casts`
+  and `lossy_provenance_casts`; document narrow exceptions (M0). The count is not a fresh audit.
+- Capture native benchmark baselines for memory/unsafe_buffer/span/dispatch and field/byref/native-int
+  paths, recovering the excluded addressing and field performance probes as needed (M0).
+- Recover or re-establish strict-core evidence and exact selectors after diagnosing dependency
+  blockers; the historical filters and first-failure dependency traces are unavailable. Separately
+  scope unrelated VM Miri expansion (M0/M6). Whole-VM strict Miri is not a claim of this harness.
+  Observe hosted CI cold/cache timings before changing the provisional 45-minute control timeout.
+- Complete the M1–M6 pointer, storage, GC, ABI and concurrency repairs and their existing exits; no
+  runtime repair or milestone completion follows from this harness.
+
 ### M1 — Contain independently reproducible defects
 
 - **M1a, heap access:** use actual payload lengths in `with_data`; eliminate shared slices from address
   observation and use root-derived wrapping address formation. Apply explicit exposure at conversion
-  sites, including their separate implementations. Review the [3c2 patch](../pointer-provenance/pass-3/fix-variants/heap-address-observation-3c2.patch)
-  as evidence, rewriting its stale safety comments and remaining stack fallback. It is not a wholesale fix.
+  sites, including their separate implementations. The historical 3c2 patch source is absent; recover it
+  before reviewing its exact changes, or independently validate the same design. Rewriting stale safety
+  comments and the remaining stack fallback would still be required; the historical patch is not a
+  wholesale fix.
   Gates: p10/p13/p14/p16/p20 plus pass-1 one-byte heap read and safe-OOB observation probes.
 - **M1b, pointer semantics:** wrapping unmanaged arithmetic with explicit null handling; comparison arms;
   correct `Unsafe.ByteOffset` sign and pointer acceptance for `conv.i`/native-int stores. Validate native
@@ -261,11 +306,12 @@ Implement M0 first, then small M1/M2 changes with their own reproducer and passi
 must state which access paths it repairs and which migration obligations remain. Re-run only the relevant
 tests during iteration; reserve the full matrix and benchmarks for milestones and final validation.
 
-Use the reviews' pinned `nightly-2026-05-27` and flags initially for comparable evidence; changing Miri
-versions requires recording both versions' outcomes. VM Miri builds/probes are expensive (the review
-reports roughly ten minutes to build and four per IL probe); shard passing suites and run known failures
-individually. Native libffi tests require their own runner. Tests under the review folders are currently
-unwired; M0 must integrate them before CI claims coverage.
+Use the pinned `nightly-2026-05-27` and recorded flags initially for comparable evidence; changing
+Miri versions requires recording both versions' outcomes. VM Miri builds/probes are expensive (the
+historical estimate is roughly ten minutes to build and four per IL probe, not a fresh measurement);
+shard passing suites and run known failures individually. Native libffi tests require their own runner.
+The 23 current VM probes are wired, but the missing pass-1 library and standalone lab/FFI sources are
+not; recover or reproduce those separately before claiming their coverage.
 
 Track milestone progress here and update the [queue](README.md) when the overall status changes.
 Completion requires passing accesses after state changes, not address-only equality or metadata checks.

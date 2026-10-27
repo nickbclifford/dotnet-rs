@@ -6,7 +6,7 @@ Historical assurance-plan links elsewhere in the documentation refer to plans re
 
 | ID | Plan | Priority | Status | Dependencies |
 |---|---|---|---|---|
-| 01 | [Pointer/provenance model](01-pointer-provenance.md) | First | Not started | None; internal milestone dependencies are in the plan |
+| 01 | [Pointer/provenance model](01-pointer-provenance.md) | First | In progress — partial M0 (VM probe harness and blocking controls) | None; internal milestone dependencies are in the plan |
 
 Keep the status here synchronized with the plan's `Status` header. Validate with
 `bash scripts/check_plan_queue.sh`.
