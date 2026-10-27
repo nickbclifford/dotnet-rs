@@ -11,8 +11,11 @@ use crate::{
 };
 use dotnet_types::{TypeDescription, error::ExecutionError};
 use dotnet_utils::{
-    ByteOffset, StackSlotIndex, atomic::StandardAtomicAccess, gc::GCHandle,
-    is_ptr_aligned_to_field, sync::Ordering as AtomicOrdering,
+    ByteOffset, StackSlotIndex,
+    atomic::{StandardAtomicAccess, validate_atomic_access},
+    gc::GCHandle,
+    is_ptr_aligned_to_field,
+    sync::Ordering as AtomicOrdering,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Gc, collect::Trace};
@@ -801,7 +804,8 @@ impl<'gc> StackValue<'gc> {
     /// must uphold it. Managed-code instruction paths through `RawMemoryAccess` validate
     /// alignment before reaching this low-level operation.
     /// When `t` is `LoadType::Object`, the location must contain zero or a live
-    /// object GC-handle address in the VM's atomic object-storage representation.
+    /// object reference in the VM's atomic object-storage representation, with
+    /// its pointer provenance and tagged cross-arena form intact.
     /// The caller must hold the GC lifetime and synchronization required to
     /// retain that object through use of the returned `StackValue`.
     ///
@@ -817,13 +821,31 @@ impl<'gc> StackValue<'gc> {
             load_type_alignment(t)
         );
 
+        if t == LoadType::Object {
+            // Object storage carries GC-pointer provenance and may use the
+            // tagged cross-arena form, so use pointer atomics instead of
+            // converting it through an integer-sized atomic.
+            // SAFETY: F4.WidthAligned — The method contract guarantees valid, aligned object
+            // pointer storage, and the debug assertion checks its alignment.
+            validate_atomic_access(ptr, true);
+            // SAFETY: F4.WidthAligned — The caller supplies an initialized and aligned pointer slot.
+            let stored_ptr = unsafe {
+                dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast_mut().cast::<*mut u8>())
+                    .load(ordering)
+            };
+            // SAFETY: F11.CliLoadKindMatchesStorage — The caller guarantees that object storage
+            // contains either null or a live, provenance-preserving VM object reference.
+            let object = unsafe { ObjectRef::from_storage_ptr(stored_ptr) };
+            return Self::ObjectRef(object);
+        }
+
         let size = match t {
             LoadType::Int8 | LoadType::UInt8 => 1,
             LoadType::Int16 | LoadType::UInt16 => 2,
             LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
             LoadType::Int64 | LoadType::Float64 => 8,
             LoadType::IntPtr => size_of::<isize>(),
-            LoadType::Object => ObjectRef::SIZE,
+            LoadType::Object => unreachable!("object loads preserve pointer provenance"),
         };
 
         // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
@@ -836,6 +858,9 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
+    /// When `t` is `StoreType::Object`, the stored object reference must be
+    /// live for the destination VM storage's lifetime; the caller must ensure
+    /// the synchronization and GC rooting required by that storage.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
         // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
         unsafe {
@@ -845,6 +870,9 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
+    /// When `t` is `StoreType::Object`, the stored reference must remain live
+    /// for the destination storage's lifetime, with the synchronization and
+    /// GC rooting required by that storage.
     /// Debug builds enforce this contract with `is_ptr_aligned_to_field`; release-build callers
     /// must uphold it. Managed-code instruction paths through `RawMemoryAccess` validate
     /// alignment before reaching this low-level operation.
@@ -860,6 +888,19 @@ impl<'gc> StackValue<'gc> {
             store_type_alignment(t)
         );
 
+        if t == StoreType::Object {
+            let object_ptr = self.as_object_ref().to_storage_ptr();
+            // SAFETY: F4.WidthAligned — The method contract guarantees valid, aligned object
+            // pointer storage, and the debug assertion checks its alignment.
+            validate_atomic_access(ptr.cast_const(), true);
+            // SAFETY: F4.WidthAligned — The caller supplies an initialized and aligned pointer slot.
+            unsafe {
+                dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast::<*mut u8>())
+                    .store(object_ptr, ordering);
+            }
+            return;
+        }
+
         let (val, size) = match t {
             StoreType::Int8 => (self.as_i32() as u64, 1),
             StoreType::Int16 => (self.as_i32() as u64, 2),
@@ -868,14 +909,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Float32 => ((self.as_f64() as f32).to_bits() as u64, 4),
             StoreType::Float64 => (self.as_f64().to_bits(), 8),
             StoreType::IntPtr => (self.as_isize() as u64, size_of::<isize>()),
-            StoreType::Object => {
-                let obj = self.as_object_ref();
-                let val = match obj.0 {
-                    Some(h) => Gc::as_ptr(h).addr(),
-                    None => 0,
-                };
-                (val as u64, ObjectRef::SIZE)
-            }
+            StoreType::Object => unreachable!("object stores preserve pointer provenance"),
         };
 
         // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
@@ -894,7 +928,7 @@ const fn load_type_alignment(t: LoadType) -> usize {
         LoadType::Float32 => align_of::<f32>(),
         LoadType::Float64 => align_of::<f64>(),
         LoadType::IntPtr => align_of::<isize>(),
-        LoadType::Object => align_of::<ObjectRef>(),
+        LoadType::Object => align_of::<dotnet_utils::sync::AtomicPtr<u8>>(),
     }
 }
 
@@ -907,7 +941,7 @@ const fn store_type_alignment(t: StoreType) -> usize {
         StoreType::Float32 => align_of::<f32>(),
         StoreType::Float64 => align_of::<f64>(),
         StoreType::IntPtr => align_of::<isize>(),
-        StoreType::Object => align_of::<ObjectRef>(),
+        StoreType::Object => align_of::<dotnet_utils::sync::AtomicPtr<u8>>(),
     }
 }
 impl Default for StackValue<'_> {

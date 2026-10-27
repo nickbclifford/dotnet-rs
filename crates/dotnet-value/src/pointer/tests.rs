@@ -285,6 +285,11 @@ fn test_managed_ptr_serialization_roundtrip() {
         assert_eq!(info.address, ptr);
         assert_eq!(info.origin, PointerOrigin::Heap(obj));
         assert_eq!(info.offset.as_usize(), offset);
+        // SAFETY: F6.NoEscapeAcrossArena — `info.address` was resolved from the
+        // live Heap handle recovered from `buf`, and the offset selects the
+        // second UTF-16 code unit in the rooted string.
+        let recovered_code_unit = unsafe { info.address.unwrap().cast::<u16>().as_ptr().read() };
+        assert_eq!(recovered_code_unit, 'e' as u16);
 
         // 4. Static
         let type_desc = TypeDescription::NULL;

@@ -7,7 +7,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{
     ArenaId, ByteOffset,
-    atomic::{Atomic, StandardAtomicAccess, validate_atomic_access},
+    atomic::{Atomic, PointerAtomicOp, StandardAtomicAccess, validate_atomic_access},
     gc::GCHandle,
 };
 use dotnet_value::{
@@ -135,6 +135,79 @@ pub struct RawMemoryAccess<'a, 'gc> {
 impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub fn new(heap: &'a HeapManager<'gc>) -> Self {
         Self { _heap: heap }
+    }
+
+    /// Performs a pointer-valued atomic operation on a GC reference slot.
+    ///
+    /// # Safety
+    /// The slot must contain an initialized object-reference representation;
+    /// the caller must retain its GC lifetime and synchronize unaligned access.
+    pub unsafe fn object_atomic(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<MemoryOwner<'gc>>,
+        offset: ByteOffset,
+        op: PointerAtomicOp,
+    ) -> Result<*mut u8, MemoryAccessError> {
+        if let Some(owner) = owner {
+            let (previous, written) = owner.with_data_mut(gc, |data| {
+                let base = data.as_mut_ptr();
+                let len = data.len();
+                let ptr = base.wrapping_add(offset.as_usize());
+                self.check_bounds_internal(ptr, base, len, std::mem::size_of::<*mut u8>())?;
+                // SAFETY: F10.RawMemoryAccessValid — Bounds and the owner guard establish a live synchronized slot.
+                unsafe { op.execute(ptr) }.ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
+            })?;
+            if written {
+                Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
+                #[cfg(feature = "multithreading")]
+                {
+                    let value = match op {
+                        PointerAtomicOp::Store(value, _)
+                        | PointerAtomicOp::Exchange(value, _)
+                        | PointerAtomicOp::CompareExchange(_, value, _, _) => value,
+                        PointerAtomicOp::Load(_) => unreachable!(),
+                    };
+                    // SAFETY: F1.GcHandleRooted — The caller guarantees the stored value is a live object encoding.
+                    let object = unsafe { ObjectRef::from_storage_ptr(value) };
+                    let _flush_guard = WriteBarrierPanicFlushGuard;
+                    WB_LOCAL_BUF.with(|buf| {
+                        let mut buffer = buf.borrow_mut();
+                        let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut buffer);
+                        recorder.record_ref(object);
+                    });
+                }
+            }
+            Ok(previous)
+        } else {
+            // SAFETY: F10.RawMemoryAccessValid — The caller owns this unmanaged address and its synchronization.
+            let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "object atomic operation on null pointer",
+                ));
+            }
+            // SAFETY: F10.RawMemoryAccessValid — The caller supplies a valid initialized pointer slot.
+            unsafe { op.execute(ptr) }
+                .map(|(previous, _)| previous)
+                .ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
+        }
+    }
+
+    /// Performs a pointer-valued atomic operation through a live slot pointer.
+    ///
+    /// # Safety
+    /// `slot` must be valid and synchronized for an initialized object pointer
+    /// slot and must not require a heap-owner write barrier.
+    pub unsafe fn object_atomic_ptr(
+        &mut self,
+        slot: NonNull<u8>,
+        op: PointerAtomicOp,
+    ) -> Result<*mut u8, MemoryAccessError> {
+        // SAFETY: F10.RawMemoryAccessValid — The caller guarantees slot validity and synchronization.
+        unsafe { op.execute(slot.as_ptr()) }
+            .map(|(previous, _)| previous)
+            .ok_or(MemoryAccessError::UnalignedAccess(slot.as_ptr().addr()))
     }
 
     /// Writes a value to a memory location (owner + offset), performing necessary checks.

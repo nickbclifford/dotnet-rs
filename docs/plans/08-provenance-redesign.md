@@ -1,5 +1,11 @@
 # Plan 08 — Provenance redesign
 
+**Follow-up:** Object-reference storage and atomic paths now preserve pointer
+provenance; the ordinary pinned `dotnet-value` Miri suite passes locally. The
+strict-provenance gate described below remains deferred because unmanaged
+address reconstruction still uses exposed provenance. The original disposition
+and measurements below record the state at the close of this plan.
+
 **Original gate:** `MIRIFLAGS="-Zmiri-strict-provenance"` runs green on at least the
 `dotnet-value` and `dotnet-runtime-memory` Miri legs, and the flag is added to
 `.github/workflows/miri.yml` for those legs.

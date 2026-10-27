@@ -398,7 +398,10 @@ pub use lock_order::{
     OrderedRwLockReadGuard, OrderedRwLockWriteGuard, levels, unlocked,
 };
 // Loom does not provide `Weak` or the unsized-`Arc` behavior exposed by this facade.
-pub use std::sync::{Arc, Weak};
+pub use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicPtr, fence},
+};
 
 #[cfg(loom)]
 pub use loom::sync::atomic::{

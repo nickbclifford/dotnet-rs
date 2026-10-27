@@ -11,7 +11,7 @@ use gc_arena::Mutation;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
-use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_addr};
+use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_ptr};
 
 const STACK_TAG: usize = 1;
 const STACK_SLOT_MASK: usize = 0x3FFF_FFFF;
@@ -25,9 +25,18 @@ const STACK_OFFSET_SHIFT: usize = 33;
 /// than reimplementing any part of the wire format.
 #[derive(Copy, Clone)]
 struct SerializedManagedPtrWords {
-    word0: usize,
+    // Keep the first slot as a pointer, not an integer. Heap and cross-arena
+    // encodings store a tagged `ObjectRef` pointer here, and copying the pointer
+    // value through this type preserves its provenance.
+    word0: *mut u8,
     word1: usize,
     word2: usize,
+}
+
+impl SerializedManagedPtrWords {
+    fn word0_addr(self) -> usize {
+        self.word0.addr()
+    }
 }
 
 struct SerializedStackManagedPtr {
@@ -47,7 +56,10 @@ fn read_serialized_managed_ptr_words(
 
     let ptr_size = ObjectRef::SIZE;
     Ok(SerializedManagedPtrWords {
-        word0: usize::from_ne_bytes(source[..ptr_size].try_into().expect("slice length checked")),
+        // SAFETY: F10.RawMemoryAccessValid — The buffer length was checked above. The serialized first
+        // slot is a pointer-sized value and may carry provenance; reading it
+        // as a pointer retains that provenance for Heap and CrossArena tags.
+        word0: unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() },
         word1: usize::from_ne_bytes(
             source[ptr_size..ptr_size * 2]
                 .try_into()
@@ -64,7 +76,7 @@ fn read_serialized_managed_ptr_words(
 fn validate_serialized_managed_ptr_checksum(
     words: SerializedManagedPtrWords,
 ) -> Result<(), PointerDeserializationError> {
-    if words.word2 == words.word0 ^ words.word1 {
+    if words.word2 == words.word0_addr() ^ words.word1 {
         Ok(())
     } else {
         Err(PointerDeserializationError::ChecksumMismatch)
@@ -74,18 +86,19 @@ fn validate_serialized_managed_ptr_checksum(
 fn parse_serialized_stack_managed_ptr(
     words: SerializedManagedPtrWords,
 ) -> Result<Option<SerializedStackManagedPtr>, PointerDeserializationError> {
-    if words.word0 & 7 != STACK_TAG {
+    let word0 = words.word0_addr();
+    if word0 & 7 != STACK_TAG {
         return Ok(None);
     }
 
-    let packed_offset = words.word0 >> STACK_OFFSET_SHIFT;
+    let packed_offset = word0 >> STACK_OFFSET_SHIFT;
     if words.word1 > u32::MAX as usize || packed_offset != (words.word1 & STACK_OFFSET_MIRROR_MASK)
     {
         return Err(PointerDeserializationError::OffsetMismatch);
     }
 
     Ok(Some(SerializedStackManagedPtr {
-        slot: StackSlotIndex::new((words.word0 >> STACK_SLOT_SHIFT) & STACK_SLOT_MASK),
+        slot: StackSlotIndex::new((word0 >> STACK_SLOT_SHIFT) & STACK_SLOT_MASK),
         offset: ByteOffset::new(words.word1),
     }))
 }
@@ -99,7 +112,7 @@ fn canonical_stack_managed_ptr_words(
         | (offset.as_usize() << STACK_OFFSET_SHIFT);
     let word1 = offset.as_usize();
     SerializedManagedPtrWords {
-        word0,
+        word0: std::ptr::without_provenance_mut(word0),
         word1,
         word2: word0 ^ word1,
     }
@@ -130,14 +143,25 @@ fn resolve_stack_address(
 /// [`ManagedPtr::SIZE`] bytes.
 fn write_serialized_managed_ptr_words(dest: &mut [u8], words: SerializedManagedPtrWords) {
     let ptr_size = ObjectRef::SIZE;
-    dest[..ptr_size].copy_from_slice(&words.word0.to_ne_bytes());
+    assert!(
+        dest.len() >= ManagedPtr::SIZE,
+        "ManagedPtr buffer too small"
+    );
+    // SAFETY: F10.RawMemoryAccessValid — Callers establish at least three pointer-sized words of space.
+    // This raw pointer copy is intentional: serializing through `usize` would
+    // discard provenance from managed owner pointers.
+    unsafe {
+        dest.as_mut_ptr()
+            .cast::<*mut u8>()
+            .write_unaligned(words.word0);
+    }
     dest[ptr_size..ptr_size * 2].copy_from_slice(&words.word1.to_ne_bytes());
     dest[ptr_size * 2..ptr_size * 3].copy_from_slice(&words.word2.to_ne_bytes());
 }
 
 #[cfg(feature = "multithreading")]
 fn cross_arena_storage_base_with_lease(ptr: crate::object::ObjectPtr) -> *mut u8 {
-    // This private helper is called only by `cross_arena_ptr_from_addr` callbacks,
+    // This private helper is called only by `cross_arena_ptr_from_ptr` callbacks,
     // whose contract holds the target arena lease for the callback duration.
     // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — That callback-scoped lease keeps `ptr`'s object storage live while
     // its base address is read.
@@ -171,9 +195,10 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// # Origin-handle convention
     ///
-    /// - `Heap`: word 0 is the GC handle address from `Gc::as_ptr(handle).addr()`;
-    ///   word 1 is the byte offset. `ObjectRef::read_unchecked` is the sole
-    ///   GC-handle reconstruction boundary.
+    /// - `Heap`: word 0 is the provenance-carrying GC handle pointer from
+    ///   `Gc::as_ptr(handle)`; word 1 is the byte offset. Its address is used
+    ///   only for tag/checksum inspection, and `ObjectRef::from_storage_ptr` is
+    ///   the GC-handle reconstruction boundary.
     /// - `Stack`: word 0 is `1 | (slot_idx << 3) | (offset << 33)`; word 1 is
     ///   the full compact byte offset, never a cached address. The packed
     ///   word-0 field mirrors its low 31 bits for legacy tag compatibility.
@@ -183,15 +208,17 @@ impl<'gc> ManagedPtr<'gc> {
     ///   field mirrors its low 26 bits.
     /// - `Unmanaged`: word 0 is zero and word 1 is the absolute address. The
     ///   address is the value because this origin has no recoverable handle.
-    /// - `CrossArenaObjectRef`: word 0 is `lock_ptr.addr() | 5`; word 1 is
+    /// - `CrossArenaObjectRef`: word 0 is the provenance-carrying lock pointer
+    ///   tagged with low bits `5`; word 1 is
     ///   `offset | (arena_id << 32)`. Its lock-pointer reconstruction is
     ///   confined to the scoped helper established before this redesign.
     /// - `Transient`: word 0 carries its tag and offset and word 1 is the byte
     ///   offset, but it remains unserializable: metadata and resolved reads return
     ///   `PointerDeserializationError::UnknownSubtag`.
     ///
-    /// Word 2 remains the integrity word `word0 ^ word1`. Address words must
-    /// be obtained with `ptr::addr()`, not provenance exposure.
+    /// Word 2 remains the integrity word `word0 ^ word1`, computed from the
+    /// first pointer's address. Do not turn managed pointers into integers for
+    /// storage or reconstruction.
     pub const SIZE: usize = ObjectRef::SIZE * 3;
 
     pub fn serialization_buffer() -> [u8; ObjectRef::SIZE * 3] {
@@ -303,11 +330,10 @@ impl<'gc> ManagedPtr<'gc> {
             panic!("ManagedPtr::read_metadata_unchecked: buffer too small");
         }
 
-        let word0 = usize::from_ne_bytes(
-            source[..ptr_size]
-                .try_into()
-                .expect("slice length was checked above"),
-        );
+        // SAFETY: F10.RawMemoryAccessValid — The source length was checked. Preserve the pointer
+        // provenance carried by the ObjectRef storage slot.
+        let word0: *mut u8 = unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() };
+        let word0_addr = word0.addr();
         let word1 = usize::from_ne_bytes(
             source[ptr_size..ptr_size * 2]
                 .try_into()
@@ -319,17 +345,17 @@ impl<'gc> ManagedPtr<'gc> {
                 .expect("slice length was checked above"),
         );
 
-        if word2 != word0 ^ word1 {
+        if word2 != word0_addr ^ word1 {
             return Err(PointerDeserializationError::ChecksumMismatch);
         }
 
-        match word0 & 7 {
+        match word0_addr & 7 {
             1 => {
-                let packed_offset = word0 >> 33;
+                let packed_offset = word0_addr >> 33;
                 if word1 > u32::MAX as usize || packed_offset != (word1 & 0x7FFF_FFFF) {
                     return Err(PointerDeserializationError::OffsetMismatch);
                 }
-                let slot_idx = (word0 >> 3) & 0x3FFF_FFFF;
+                let slot_idx = (word0_addr >> 3) & 0x3FFF_FFFF;
                 Ok(ManagedPtrInfo {
                     address: None,
                     origin: PointerOrigin::Stack(StackSlotIndex::new(slot_idx)),
@@ -346,7 +372,7 @@ impl<'gc> ManagedPtr<'gc> {
                     // address in the encoded arena. The helper holds that arena's
                     // lease while it reconstructs the origin handle; the callback
                     // deliberately does not access object storage.
-                    let ptr = unsafe { cross_arena_ptr_from_addr(word0 & !7, owner_id, |ptr| ptr) }
+                    let ptr = unsafe { cross_arena_ptr_from_ptr(word0, owner_id, |ptr| ptr) }
                         .ok_or(PointerDeserializationError::UnknownTag(5))?;
                     Ok(ManagedPtrInfo {
                         address: None,
@@ -359,10 +385,10 @@ impl<'gc> ManagedPtr<'gc> {
                     Err(PointerDeserializationError::UnknownTag(5))
                 }
             }
-            7 => match (word0 >> 3) & 7 {
+            7 => match (word0_addr >> 3) & 7 {
                 1 => {
-                    let id = ((word0 >> 6) & 0xFFFF_FFFF) as u32;
-                    let slot_offset = word0 >> 38;
+                    let id = ((word0_addr >> 6) & 0xFFFF_FFFF) as u32;
+                    let slot_offset = word0_addr >> 38;
                     if word1 > u32::MAX as usize || slot_offset != (word1 & 0x03FF_FFFF) {
                         return Err(PointerDeserializationError::OffsetMismatch);
                     }
@@ -385,7 +411,7 @@ impl<'gc> ManagedPtr<'gc> {
                 // executable address in either case.
                 // SAFETY: F3.InteriorPointerRebased — `source` is a full ManagedPtr representation; its
                 // initial word is the ObjectRef encoding expected by this helper.
-                let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
+                let owner = unsafe { ObjectRef::from_storage_ptr(word0) };
                 Ok(ManagedPtrInfo {
                     address: None,
                     origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| {
@@ -473,16 +499,14 @@ impl<'gc> ManagedPtr<'gc> {
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(_, owner_id) => {
-                let word0 = usize::from_ne_bytes(
-                    _source[..ObjectRef::SIZE]
-                        .try_into()
-                        .expect("slice length was checked by metadata decoding"),
-                );
+                // SAFETY: F6.NoEscapeAcrossArena — Metadata decoding read this pointer from a complete
+                // ManagedPtr buffer and validated its tag and checksum.
+                let word0: *mut u8 = unsafe { _source.as_ptr().cast::<*mut u8>().read_unaligned() };
                 // SAFETY: F1.GcHandleRooted — Metadata decoding already validated the CrossArena
                 // representation. The helper holds the encoded arena lease for
                 // the complete origin-to-storage traversal below.
                 let base = unsafe {
-                    cross_arena_ptr_from_addr(word0 & !7, *owner_id, |ptr| {
+                    cross_arena_ptr_from_ptr(word0, *owner_id, |ptr| {
                         cross_arena_storage_base_with_lease(ptr)
                     })
                 }
@@ -520,11 +544,11 @@ impl<'gc> ManagedPtr<'gc> {
             panic!("ManagedPtr::read_resolved_with_heap_cache_unchecked: buffer too small");
         }
 
-        let word0 = usize::from_ne_bytes(
-            source[..ptr_size]
-                .try_into()
-                .expect("slice length was checked above"),
-        );
+        // SAFETY: F10.RawMemoryAccessValid — The complete three-word buffer was checked above. Reading
+        // the first word as a pointer retains provenance for cache misses and
+        // lets the numeric address be used only as a cache key/tag.
+        let word0: *mut u8 = unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() };
+        let word0_addr = word0.addr();
         let word1 = usize::from_ne_bytes(
             source[ptr_size..ptr_size * 2]
                 .try_into()
@@ -535,19 +559,19 @@ impl<'gc> ManagedPtr<'gc> {
                 .try_into()
                 .expect("slice length was checked above"),
         );
-        if word2 != word0 ^ word1 {
+        if word2 != word0_addr ^ word1 {
             return Err(PointerDeserializationError::ChecksumMismatch);
         }
 
-        if word0 != 0 && word0 & 7 == 0 {
-            let owner = match cache.get_heap_handle(word0) {
+        if word0_addr != 0 && word0_addr & 7 == 0 {
+            let owner = match cache.get_heap_handle(word0_addr) {
                 Some(owner) => owner,
                 None => {
                     // SAFETY: F1.GcHandleRooted — `source` starts with the complete Heap ObjectRef
                     // representation validated as an untagged non-null word above.
-                    let owner = unsafe { ObjectRef::read_unchecked(&source[..ptr_size]) };
+                    let owner = unsafe { ObjectRef::from_storage_ptr(word0) };
                     if owner.0.is_some() {
-                        cache.insert_heap_handle(word0, owner);
+                        cache.insert_heap_handle(word0_addr, owner);
                     }
                     owner
                 }
@@ -613,13 +637,13 @@ impl<'gc> ManagedPtr<'gc> {
         let (word0, word1) = match &self.origin {
             PointerOrigin::Stack(slot_idx) => {
                 let words = canonical_stack_managed_ptr_words(*slot_idx, byte_offset);
-                debug_assert_eq!(words.word2, words.word0 ^ words.word1);
+                debug_assert_eq!(words.word2, words.word0_addr() ^ words.word1);
                 (words.word0, words.word1)
             }
             PointerOrigin::Heap(owner) => {
                 let w0 = match owner.0 {
-                    Some(h) => gc_arena::Gc::as_ptr(h).addr(),
-                    None => 0,
+                    Some(handle) => gc_arena::Gc::as_ptr(handle).cast::<u8>().cast_mut(),
+                    None => std::ptr::without_provenance_mut(0),
                 };
                 let w1 = byte_offset.as_usize();
                 (w0, w1)
@@ -637,16 +661,20 @@ impl<'gc> ManagedPtr<'gc> {
                     | ((id as usize & 0xFFFFFFFF) << 6)
                     | (byte_offset.as_usize() << 38);
                 let w1 = byte_offset.as_usize();
-                (w0, w1)
+                (std::ptr::without_provenance_mut(w0), w1)
             }
             PointerOrigin::Unmanaged => {
-                let w0: usize = 0;
+                let w0 = std::ptr::without_provenance_mut(0);
                 let w1 = self._value.map_or(0, |p| p.as_ptr().addr());
                 (w0, w1)
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let w0: usize = ptr.as_ptr().addr() | 5;
+                let w0 = ptr
+                    .as_ptr()
+                    .cast::<u8>()
+                    .cast_mut()
+                    .map_addr(|addr| addr | 5);
                 // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
                 // This avoids dereferencing the pointer during deserialization/GC.
                 let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
@@ -657,7 +685,7 @@ impl<'gc> ManagedPtr<'gc> {
             PointerOrigin::Transient(_) => {
                 let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
                 let w1 = byte_offset.as_usize();
-                (w0, w1)
+                (std::ptr::without_provenance_mut(w0), w1)
             }
         };
 
@@ -666,7 +694,7 @@ impl<'gc> ManagedPtr<'gc> {
             SerializedManagedPtrWords {
                 word0,
                 word1,
-                word2: word0 ^ word1,
+                word2: word0.addr() ^ word1,
             },
         );
 

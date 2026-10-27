@@ -348,6 +348,19 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), MemoryAccessError>;
 
+    /// Performs an atomic operation on a pointer-valued object-reference slot.
+    /// Compare-exchange returns the previous pointer on success or mismatch.
+    ///
+    /// # Safety
+    /// `origin` and `offset` must identify a valid, initialized object slot;
+    /// referenced objects must remain rooted for the duration of the operation.
+    unsafe fn object_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        op: dotnet_utils::atomic::PointerAtomicOp,
+    ) -> Result<*mut u8, MemoryAccessError>;
+
     #[must_use]
     fn check_gc_safe_point(&self) -> bool;
 }

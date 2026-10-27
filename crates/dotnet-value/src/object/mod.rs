@@ -422,127 +422,135 @@ impl<'gc> ObjectRef<'gc> {
         Self(Some(h))
     }
 
-    /// Reads an ObjectRef from a byte slice without lifetime branding.
+    /// Reads an ObjectRef from pointer-typed byte storage without lifetime branding.
     ///
     /// # Safety
-    /// - `source` must contain at least [`ObjectRef::SIZE`] bytes encoding a valid `Gc` pointer
-    ///   (or null). The bytes may be unaligned.
+    /// - `source` must contain at least [`ObjectRef::SIZE`] bytes containing an initialized
+    ///   `*mut u8` storage pointer previously produced by [`ObjectRef::to_storage_ptr`], a null
+    ///   pointer, or a pointer with an odd non-object tag. The bytes may be unaligned.
     /// - The caller must ensure the returned `ObjectRef` does not outlive the
     ///   arena generation it belongs to.
-    #[expect(
-        clippy::multiple_unsafe_ops_per_block,
-        reason = "this parser validates one serialized object-reference representation before reconstructing it"
-    )]
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        // SAFETY: F6.NoEscapeAcrossArena — The caller supplies a complete serialized ObjectRef whose non-null pointer is
-        // live for the returned lifetime; the tagged branches below additionally validate arena
-        // registration before reconstructing a handle.
-        unsafe {
-            let ptr_val = {
-                // SAFETY: F4.WidthAligned — Use read_unaligned to avoid UB on unaligned access.
-                // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
-                (source.as_ptr() as *const usize).read_unaligned()
-            };
+        // SAFETY: F10.RawMemoryAccessValid — `read_unchecked` requires an initialized pointer value and permits unaligned
+        // storage access.
+        let ptr = unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() };
+        // SAFETY: F1.GcHandleRooted — The method's documented requirements are those of `from_storage_ptr`.
+        unsafe { Self::from_storage_ptr(ptr) }
+    }
 
-            #[cfg(feature = "multithreading")]
-            {
-                let tag = ptr_val & 7;
-                if tag == 5 {
-                    // This is a CrossArenaObjectRef (Tag 5).
-                    // Recover the 16-bit ArenaId from the upper bits and the pointer from the lower 48 bits.
-                    // This avoids dereferencing the pointer during deserialization/GC,
-                    // which is critical for robustness against race conditions.
-                    let owner_id_u16 = (ptr_val >> 48) as u16;
-                    // Sign-extend from 16-bit to correctly handle ArenaId::INVALID (u64::MAX)
-                    let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
-                    let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
-                    // `ObjectRef::write` stores only the lock's numeric address.
-                    // Reconstitution is therefore this type's explicit serialized-object
-                    // storage boundary, separate from ManagedPtr's origin-resolved paths.
-                    // The arena lease below supplies liveness, but not strict provenance.
-                    let real_ptr = std::ptr::with_exposed_provenance::<
-                        ThreadSafeLock<ObjectInner<'static>>,
-                    >(real_ptr_val);
+    /// Returns the pointer representation used to store this reference.
+    ///
+    /// In multithreaded builds, live managed references carry Tag 5 and their owner arena ID in
+    /// the pointer's address bits. The pointer's provenance is retained while those bits are
+    /// changed, so callers can store the result in pointer-typed atomics or byte storage.
+    #[allow(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the immutable owner ID read traverses the live lock and its interior"
+    )]
+    pub fn to_storage_ptr(&self) -> *mut u8 {
+        let Some(handle) = self.0 else {
+            return std::ptr::null_mut();
+        };
+        let ptr = Gc::as_ptr(handle).cast_mut().cast::<u8>();
 
-                    // Acquire a lease to pin the arena while we reconstruct the Gc pointer.
-                    // This ensures the memory remains valid during magic check and construction.
-                    let lease = try_acquire_lease(owner_id);
-                    if lease.is_none() {
-                        return ObjectRef(None);
-                    }
-                    let _lease = lease;
-
-                    // Also record it if we are tracing
-                    record_cross_arena_ref(owner_id, real_ptr.addr());
-
-                    // Continue with the untagged pointer to construct the ObjectRef
-                    let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
-
-                    #[cfg(any(feature = "memory-validation", debug_assertions))]
-                    {
-                        use std::mem::align_of;
-                        let real_ptr_addr = real_ptr.addr();
-                        if !real_ptr_addr
-                            .is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>())
-                        {
-                            panic!(
-                                "ObjectRef::read: Pointer {:#x} is not aligned",
-                                real_ptr_addr
-                            );
-                        }
-
-                        // Verify magic number
-                        // SAFETY: F6.NoEscapeAcrossArena — `ptr` was reconstructed from a tagged cross-arena
-                        // pointer.  We hold an arena lease (`_lease`) which guarantees
-                        // the owning arena — and therefore this allocation — has not
-                        // been freed.  Alignment was verified by `is_multiple_of` above.
-                        let inner = &*(*ptr).as_ptr();
-                        inner.validate_magic();
-                    }
-
-                    return ObjectRef(Some(Gc::from_ptr(ptr)));
+        #[cfg(feature = "multithreading")]
+        {
+            // SAFETY: F1.GcHandleRooted — `handle` keeps the lock allocation alive. `owner_id` is immutable after
+            // construction, so this raw read cannot race with a write to that field.
+            let owner_id = unsafe { (*(*Gc::as_ptr(handle)).as_ptr()).owner_id() };
+            if owner_id != ArenaId::INVALID {
+                // Preserve the existing serialization behavior if the owning arena has exited.
+                if let Some(_lease) = try_acquire_lease(owner_id) {
+                    let addr = ptr.addr();
+                    debug_assert_eq!(
+                        addr & 0xFFFF000000000000,
+                        0,
+                        "Pointer upper bits should be clear"
+                    );
+                    debug_assert_eq!(addr & 7, 0, "Pointer low bits should be clear");
+                    return ptr.map_addr(|a| {
+                        (a & 0x0000FFFFFFFFFFF8) | 5 | ((owner_id.as_u64() as usize) << 48)
+                    });
                 }
-            }
-
-            // If bit 0 is set and it's not Tag 5, it's a tagged pointer (Stack, Static, or other metadata).
-            // These should not be traced as ObjectRefs.
-            if ptr_val & 1 != 0 {
-                return ObjectRef(None);
-            }
-
-            // Non-tagged object references likewise contain only a numeric
-            // handle address. This is the local ObjectRef storage boundary;
-            // callers guarantee that the encoded handle remains live.
-            let ptr =
-                std::ptr::with_exposed_provenance::<ThreadSafeLock<ObjectInner<'gc>>>(ptr_val);
-
-            if ptr.is_null() {
-                ObjectRef(None)
-            } else {
-                #[cfg(any(feature = "memory-validation", debug_assertions))]
-                {
-                    use std::mem::align_of;
-                    if !ptr_val.is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>()) {
-                        panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
-                    }
-
-                    // Verify magic number to ensure we are pointing to a valid object
-                    // SAFETY: F6.NoEscapeAcrossArena — `ptr` was reconstructed from the address stored in `source`.
-                    // Alignment was verified by `is_multiple_of` above.  The caller
-                    // guarantees `source` contains a live `Gc` pointer, so the
-                    // allocation is valid for the lifetime of this call.
-                    let inner = &*(*ptr).as_ptr();
-                    inner.validate_magic();
-                }
-
-                // SAFETY: F1.GcHandleRooted — The pointer was originally obtained via Gc::as_ptr and stored as bytes.
-                // Since this is only called during VM execution where 'gc is valid and
-                // the object is guaranteed to be alive (as it is traced by the caller),
-                // it is safe to reconstruct the Gc pointer.
-                // Note: We don't assert alignment of the Gc pointer itself here, but Gc ptrs are always aligned.
-                ObjectRef(Some(Gc::from_ptr(ptr)))
+                return std::ptr::null_mut();
             }
         }
+        ptr
+    }
+
+    /// Reconstructs an ObjectRef from its pointer representation in storage.
+    ///
+    /// Null decodes to `ObjectRef(None)`. Odd tags other than Tag 5 represent stack, static, or
+    /// other non-object values and are returned as `None` without dereferencing the pointer.
+    ///
+    /// # Safety
+    /// - For an untagged, non-null pointer, it must retain provenance from a live
+    ///   `ThreadSafeLock<ObjectInner>` allocation containing a valid `Gc` handle, and that handle
+    ///   must remain live for the returned lifetime `'gc`.
+    /// - For Tag 5, if its owner arena can be leased, the pointer must retain provenance from the
+    ///   original live object allocation, its owner ID must describe that allocation, and the
+    ///   owner arena must remain valid for the returned reference's lifetime. The acquired arena
+    ///   lease protects the allocation during decoding. If the owner arena is no longer
+    ///   registered, this method returns `None` without dereferencing the pointer.
+    /// - The pointer's tag bits must use the storage format: zero for local references, Tag 5 for
+    ///   cross-arena references, or an odd non-object tag. Other odd tags are ignored without
+    ///   dereferencing the pointer.
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the validation reads the live lock and its interior as one operation"
+    )]
+    pub unsafe fn from_storage_ptr(ptr: *mut u8) -> Self {
+        let addr = ptr.addr();
+
+        #[cfg(feature = "multithreading")]
+        if addr & 7 == 5 {
+            let owner_id_u16 = (addr >> 48) as u16;
+            let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
+            // `map_addr` clears metadata without dropping the provenance carried by `ptr`.
+            let real_ptr = ptr.map_addr(|a| a & 0x0000FFFFFFFFFFF8);
+            let Some(_lease) = try_acquire_lease(owner_id) else {
+                return ObjectRef(None);
+            };
+            record_cross_arena_ref(owner_id, real_ptr.addr());
+            let lock_ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
+
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            {
+                use std::mem::align_of;
+                if !real_ptr
+                    .addr()
+                    .is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>())
+                {
+                    panic!(
+                        "ObjectRef::read: Pointer {:#x} is not aligned",
+                        real_ptr.addr()
+                    );
+                }
+                // SAFETY: F6.NoEscapeAcrossArena — The caller guarantees a live allocation and the lease pins its owner;
+                // alignment was checked above.
+                unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
+            }
+            // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation for `'gc`.
+            return ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) }));
+        }
+
+        if addr & 1 != 0 || ptr.is_null() {
+            return ObjectRef(None);
+        }
+
+        let lock_ptr = ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        {
+            use std::mem::align_of;
+            if !addr.is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>()) {
+                panic!("ObjectRef::read: Pointer {:#x} is not aligned", addr);
+            }
+            // SAFETY: F1.GcHandleRooted — The caller guarantees `ptr` retains provenance from a live ObjectInner
+            // allocation for the duration of this call.
+            unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
+        }
+        // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation with lifetime `'gc`.
+        ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) }))
     }
 
     /// Reads an ObjectRef from a byte slice and brands it with the GC lifetime.
@@ -556,57 +564,12 @@ impl<'gc> ObjectRef<'gc> {
         unsafe { Self::read_unchecked(source) }
     }
 
-    #[cfg_attr(
-        feature = "multithreading",
-        expect(
-            clippy::multiple_unsafe_ops_per_block,
-            reason = "the immutable owner-id read traverses the GC pointer and lock interior as one encoding operation"
-        )
-    )]
     pub fn write(&self, dest: &mut [u8]) {
-        let ptr_val: usize = match self.0 {
-            None => 0,
-            Some(s) => {
-                let ptr = Gc::as_ptr(s).addr();
-                #[cfg(feature = "multithreading")]
-                {
-                    // Encode arena ownership with Tag 5 for every managed owner.
-                    // This keeps ownership metadata intact when references flow through
-                    // shared storage (e.g. statics) and are later read on another thread.
-                    let lock_ptr = Gc::as_ptr(s);
-                    // SAFETY: F1.GcHandleRooted — `s` keeps the lock allocation alive. `owner_id` is immutable after
-                    // object creation, so this raw read cannot race with a write to that field.
-                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
-                    if owner_id != ArenaId::INVALID {
-                        // Verify with a lease that the arena is still alive before
-                        // we encode its ID into the tagged reference.
-                        if let Some(_lease) = try_acquire_lease(owner_id) {
-                            // Store pointer + owner arena id in a stable tagged form.
-                            // Store the 16-bit ArenaId in the upper bits of the pointer.
-                            // We assume 48-bit addressing (standard on current 64-bit OSs).
-                            debug_assert_eq!(
-                                ptr & 0xFFFF000000000000,
-                                0,
-                                "Pointer upper bits should be clear"
-                            );
-                            debug_assert_eq!(ptr & 7, 0, "Pointer low bits should be clear");
-                            (ptr & 0x0000FFFFFFFFFFFF) | 5 | ((owner_id.as_u64() as usize) << 48)
-                        } else {
-                            // Arena exited; write as NULL.
-                            0
-                        }
-                    } else {
-                        ptr
-                    }
-                }
-                #[cfg(not(feature = "multithreading"))]
-                ptr
-            }
-        };
-        unsafe {
-            // SAFETY: F4.WidthAligned — Use write_unaligned to avoid UB. Caller holds lock.
-            (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr_val);
-        }
+        assert!(dest.len() >= Self::SIZE, "ObjectRef storage is too short");
+        let ptr = self.to_storage_ptr();
+        // SAFETY: F10.RawMemoryAccessValid — `write_unaligned` supports byte storage with arbitrary alignment. The caller
+        // provides at least ObjectRef::SIZE writable bytes and is responsible for synchronization.
+        unsafe { dest.as_mut_ptr().cast::<*mut u8>().write_unaligned(ptr) };
     }
 
     pub fn try_as_object<T>(
@@ -1003,15 +966,27 @@ mod tests {
         let arena_id = ArenaId::new(1000);
         unregister_arena(arena_id);
 
-        // Construct a Tag 5 pointer for arena 1000.
-        // Pointer value doesn't matter much since it shouldn't be dereferenced.
-        let raw_ptr = 0x123456780000usize;
-        let tagged_ptr = (raw_ptr & 0x0000FFFFFFFFFFFF) | 5 | ((arena_id.as_u64() as usize) << 48);
+        // Construct a provenance-carrying Tag 5 pointer for an unregistered arena. Its address
+        // bits don't refer to an allocation, but the failed lease must prevent dereferencing it.
+        let base = NonNull::<ThreadSafeLock<ObjectInner<'static>>>::dangling()
+            .as_ptr()
+            .cast::<u8>();
+        let tagged_ptr = base.map_addr(|addr| {
+            (addr & 0x0000FFFFFFFFFFF8) | 5 | ((arena_id.as_u64() as usize) << 48)
+        });
 
         let mut source = [0u8; 8];
-        source.copy_from_slice(&tagged_ptr.to_ne_bytes());
+        // SAFETY: F6.NoEscapeAcrossArena — The synthetic Tag 5 value is only checked against the absent arena lease and
+        // is never dereferenced.
+        unsafe {
+            source
+                .as_mut_ptr()
+                .cast::<*mut u8>()
+                .write_unaligned(tagged_ptr)
+        };
 
-        // SAFETY: F6.NoEscapeAcrossArena — tagged_ptr is a validly constructed Tag 5 pointer.
+        // SAFETY: F6.NoEscapeAcrossArena — The arena encoded in this Tag 5 pointer is not registered, so decoding returns
+        // `None` before dereferencing it.
         let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
 
         assert!(
@@ -1035,13 +1010,20 @@ mod tests {
                 arena_id,
             );
             let lock = Gc::new(mc, ThreadSafeLock::new(inner));
-            let lock_ptr = Gc::as_ptr(lock) as usize;
-
-            let tagged_ptr =
-                (lock_ptr & 0x0000FFFFFFFFFFFF) | 5 | ((arena_id.as_u64() as usize) << 48);
+            let obj = ObjectRef(Some(lock));
+            let tagged_ptr = obj.to_storage_ptr();
+            assert_eq!(tagged_ptr.addr() & 7, 5);
+            assert_eq!((tagged_ptr.addr() >> 48) as u16, arena_id.as_u64() as u16);
 
             let mut source = [0u8; 8];
-            source.copy_from_slice(&tagged_ptr.to_ne_bytes());
+            // SAFETY: F10.RawMemoryAccessValid — Store the pointer as a pointer-typed value to preserve provenance through
+            // the serialization wrapper.
+            unsafe {
+                source
+                    .as_mut_ptr()
+                    .cast::<*mut u8>()
+                    .write_unaligned(tagged_ptr)
+            };
 
             // SAFETY: F1.GcHandleRooted — lock is a valid GC pointer.
             let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };

@@ -10,7 +10,7 @@ use dotnet_types::{
     generics::GenericLookup,
     members::MethodDescription,
 };
-use dotnet_utils::sync::Ordering;
+use dotnet_utils::{atomic::PointerAtomicOp, sync::Ordering};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
@@ -211,47 +211,29 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
             let value = ctx.pop_obj();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // Encode using ObjectRef::write so the tagged representation (Tag-5 +
-            // ArenaId in upper 16 bits) matches what is stored in memory by the
-            // normal field-write path.  Using Gc::as_ptr directly would produce an
-            // untagged pointer that never matches the stored tagged bytes.
-            let mut val_buf = [0u8; ObjectRef::SIZE];
-            value.write(&mut val_buf);
-            let val_raw = usize::from_ne_bytes(val_buf);
-
-            let mut comp_buf = [0u8; ObjectRef::SIZE];
-            comparand.write(&mut comp_buf);
-            let comp_raw = usize::from_ne_bytes(comp_buf);
-
-            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-            let size = ObjectRef::SIZE;
-            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
-            // use the same tagged object representation as regular field writes.
-            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
+            let val_raw = value.to_storage_ptr();
+            let comp_raw = comparand.to_storage_ptr();
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — The target is a live object slot and both inputs are encoded live references.
             let prev_raw = match unsafe {
-                RawMemoryOps::compare_exchange_atomic(
+                RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
-                    comp_raw as u64,
-                    val_raw as u64,
-                    size,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
+                    PointerAtomicOp::CompareExchange(
+                        comp_raw,
+                        val_raw,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ),
                 )
             } {
-                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as usize,
-                Err(CompareExchangeError::Bounds(error)) => {
+                Ok(prev) => prev,
+                Err(error) => {
                     return handle_interlocked_memory_access_error(ctx, error);
                 }
             };
-
-            // Decode via read_branded so the tag bits are stripped correctly and
-            // the GC lifetime is properly branded.  Gc::from_ptr(prev_raw) would
-            // use the tagged value as a raw address, producing an invalid pointer.
-            // SAFETY: F1.GcHandleRooted — `prev_raw` came from VM-managed object slot bytes and `gc`
-            // brands the returned reference to the current arena lifetime.
-            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
+            // SAFETY: F1.GcHandleRooted — The previous slot value remains rooted in the active GC scope.
+            let prev = unsafe { ObjectRef::from_storage_ptr(prev_raw) };
             ctx.push_obj(prev);
         }
     }
@@ -269,7 +251,7 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     // Exchange(ref T, T) -> T
     // First parameter is always `ref T`.
     let target_type = dotnet_vm_ops::vm_try!(resolve_atomic_ref_target_type(
@@ -407,15 +389,11 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
             let value = ctx.pop();
             let target_ptr = ctx.pop_managed_ptr();
 
-            // Encode using ObjectRef::write so the tagged representation matches
-            // what is stored in memory by the normal field-write path.
             let val_raw = match value {
-                StackValue::ObjectRef(ref obj_ref) => {
-                    let mut buf = [0u8; ObjectRef::SIZE];
-                    obj_ref.write(&mut buf);
-                    usize::from_ne_bytes(buf)
-                }
-                StackValue::NativeInt(i) => i as usize,
+                StackValue::ObjectRef(ref obj_ref) => obj_ref.to_storage_ptr(),
+                // Native integers are an explicit exposed-provenance boundary.
+                StackValue::NativeInt(0) => std::ptr::null_mut(),
+                StackValue::NativeInt(i) => std::ptr::with_exposed_provenance_mut(i as usize),
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
                         expected: "ObjectRef or NativeInt",
@@ -424,27 +402,21 @@ pub fn intrinsic_interlocked_exchange<'gc, T: ThreadingIntrinsicHost<'gc>>(
                 }
             };
 
-            let size = ObjectRef::SIZE;
-            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is the managed `ref T` argument and `val_raw`
-            // uses the VM tagged object representation.
-            // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
+            // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — `target_ptr` is a live object slot and the value uses its representation.
             let prev_raw = match unsafe {
-                RawMemoryOps::exchange_atomic(
+                RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
-                    val_raw as u64,
-                    size,
-                    Ordering::SeqCst,
+                    PointerAtomicOp::Exchange(val_raw, Ordering::SeqCst),
                 )
             } {
-                Ok(prev) => prev as usize,
+                Ok(prev) => prev,
                 Err(error) => return handle_interlocked_memory_access_error(ctx, error),
             };
 
-            // SAFETY: F1.GcHandleRooted — `prev_raw` came from VM-managed object slot bytes and `gc`
-            // brands the returned reference to the current arena lifetime.
-            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
+            // SAFETY: F1.GcHandleRooted — The previous slot value remains rooted in the active GC scope.
+            let prev = unsafe { ObjectRef::from_storage_ptr(prev_raw) };
             ctx.push_obj(prev);
         }
     }

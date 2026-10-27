@@ -1,4 +1,7 @@
-use crate::{is_ptr_aligned_to_field, sync::Ordering};
+use crate::{
+    is_ptr_aligned_to_field,
+    sync::{AtomicPtr, Ordering},
+};
 use std::ptr;
 
 #[cfg(feature = "multithreading")]
@@ -303,6 +306,142 @@ pub trait AtomicAccess {
 
 /// Concrete implementation using `AtomicT::from_ptr`.
 pub struct StandardAtomicAccess;
+
+/// Operations on a pointer-valued atomic slot. Unlike integer atomics these
+/// retain the provenance of both the stored and returned pointer.
+#[derive(Clone, Copy)]
+pub enum PointerAtomicOp {
+    Load(Ordering),
+    Store(*mut u8, Ordering),
+    Exchange(*mut u8, Ordering),
+    CompareExchange(*mut u8, *mut u8, Ordering, Ordering),
+}
+
+impl PointerAtomicOp {
+    /// Operates on one initialized pointer slot, returning its previous value
+    /// and whether the slot was written. Unaligned load/store require external
+    /// synchronization; unaligned read-modify-write operations are rejected.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a pointer-sized access, initialized as a
+    /// pointer slot, and synchronized against conflicting non-atomic accesses.
+    pub unsafe fn execute(self, slot: *mut u8) -> Option<(*mut u8, bool)> {
+        let aligned = is_ptr_aligned_to_field(slot, std::mem::align_of::<AtomicPtr<u8>>());
+        if !aligned {
+            validate_atomic_access(slot, false);
+            return match self {
+                Self::Load(_) => {
+                    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees initialized storage and synchronization.
+                    Some((unsafe { slot.cast::<*mut u8>().read_unaligned() }, false))
+                }
+                Self::Store(value, _) => {
+                    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees writable storage and synchronization.
+                    unsafe { slot.cast::<*mut u8>().write_unaligned(value) };
+                    Some((std::ptr::null_mut(), true))
+                }
+                _ => None,
+            };
+        }
+        validate_atomic_access(slot, true);
+        // SAFETY: F4.WidthAligned — The caller guarantees a valid initialized slot and alignment was checked.
+        let atomic = unsafe { AtomicPtr::from_ptr(slot.cast::<*mut u8>()) };
+        Some(match self {
+            Self::Load(order) => (atomic.load(order), false),
+            Self::Store(value, order) => {
+                atomic.store(value, order);
+                (std::ptr::null_mut(), true)
+            }
+            Self::Exchange(value, order) => (atomic.swap(value, order), true),
+            Self::CompareExchange(expected, value, success, failure) => {
+                match atomic.compare_exchange(expected, value, success, failure) {
+                    Ok(previous) => (previous, true),
+                    Err(previous) => (previous, false),
+                }
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod pointer_atomic_tests {
+    use super::{Ordering, PointerAtomicOp};
+
+    #[test]
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the test checks a sequence of operations on one live pointer slot"
+    )]
+    fn preserves_pointer_provenance_through_atomic_operations() {
+        let first = Box::new(11u32);
+        let second = Box::new(22u32);
+        let a = (&*first as *const u32).cast_mut().cast::<u8>();
+        let b = (&*second as *const u32).cast_mut().cast::<u8>();
+        let mut slot = std::ptr::null_mut::<u8>();
+        let ptr = (&mut slot as *mut *mut u8).cast::<u8>();
+        // SAFETY: F4.WidthAligned — `ptr` is a live, aligned, initialized pointer slot; the boxes remain live.
+        unsafe {
+            PointerAtomicOp::Store(a, Ordering::Release)
+                .execute(ptr)
+                .unwrap();
+            let (loaded, _) = PointerAtomicOp::Load(Ordering::Acquire)
+                .execute(ptr)
+                .unwrap();
+            assert_eq!(*loaded.cast::<u32>(), 11);
+            let (previous, changed) =
+                PointerAtomicOp::CompareExchange(b, b, Ordering::SeqCst, Ordering::SeqCst)
+                    .execute(ptr)
+                    .unwrap();
+            assert!(!changed);
+            assert_eq!(*previous.cast::<u32>(), 11);
+            let (previous, changed) =
+                PointerAtomicOp::CompareExchange(a, b, Ordering::SeqCst, Ordering::SeqCst)
+                    .execute(ptr)
+                    .unwrap();
+            assert!(changed);
+            assert_eq!(*previous.cast::<u32>(), 11);
+            let (previous, _) = PointerAtomicOp::Exchange(std::ptr::null_mut(), Ordering::SeqCst)
+                .execute(ptr)
+                .unwrap();
+            assert_eq!(*previous.cast::<u32>(), 22);
+            assert!(
+                PointerAtomicOp::Load(Ordering::Relaxed)
+                    .execute(ptr)
+                    .unwrap()
+                    .0
+                    .is_null()
+            );
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::multiple_unsafe_ops_per_block,
+        reason = "the test checks synchronized operations on one unaligned slot"
+    )]
+    fn unaligned_pointer_access_is_limited_to_synchronized_load_and_store() {
+        #[repr(align(16))]
+        struct Buffer([u8; 32]);
+        let value = Box::new(42u32);
+        let raw = (&*value as *const u32).cast_mut().cast::<u8>();
+        let mut bytes = Buffer([0; 32]);
+        let slot = bytes.0.as_mut_ptr().wrapping_add(1);
+        // SAFETY: F10.RawMemoryAccessValid — `slot` is in bounds and externally synchronized for the test.
+        unsafe {
+            PointerAtomicOp::Store(raw, Ordering::Release)
+                .execute(slot)
+                .unwrap();
+            let (loaded, _) = PointerAtomicOp::Load(Ordering::Acquire)
+                .execute(slot)
+                .unwrap();
+            assert_eq!(*loaded.cast::<u32>(), 42);
+            assert!(
+                PointerAtomicOp::Exchange(raw, Ordering::SeqCst)
+                    .execute(slot)
+                    .is_none()
+            );
+        }
+    }
+}
 
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic<W: AtomicWidth>(ptr: *const u8, ordering: Ordering) -> W::Repr {

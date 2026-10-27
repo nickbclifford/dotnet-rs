@@ -10,7 +10,7 @@ use dotnet_types::{
     generics::GenericLookup,
     members::MethodDescription,
 };
-use dotnet_utils::sync::Ordering;
+use dotnet_utils::{atomic::PointerAtomicOp, sync::Ordering};
 use dotnet_value::{StackValue, object::ObjectRef, pointer::ManagedPtr};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::RawMemoryOps;
@@ -36,7 +36,7 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     debug_assert_eq!(
         ObjectRef::SIZE,
         std::mem::size_of::<usize>(),
@@ -161,20 +161,18 @@ pub fn intrinsic_volatile_read<'gc, T: ThreadingIntrinsicHost<'gc>>(
             // one pointer-sized slot atomically from managed memory.
             // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             let val = unsafe {
-                RawMemoryOps::load_atomic(
+                RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
-                    ObjectRef::SIZE,
-                    Ordering::Acquire,
+                    PointerAtomicOp::Load(Ordering::Acquire),
                 )
                 .expect(
                     "the by-ref pointer and size are dispatch-selected to match the target type",
                 )
             };
-            // SAFETY: F1.GcHandleRooted — `val` was read atomically from an object-reference slot and `gc`
-            // brands the reconstructed handle to the current arena lifetime.
-            let obj = unsafe { ObjectRef::read_branded(&val.to_ne_bytes(), &gc) };
+            // SAFETY: F1.GcHandleRooted — `val` was read from a live object-reference slot in the active GC scope.
+            let obj = unsafe { ObjectRef::from_storage_ptr(val) };
             ctx.push_obj(obj);
         }
     }
@@ -350,12 +348,10 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
         VolatileAtomicTypeDispatch::ObjectRef => {
             // Assume ObjectRef
             let val_raw = match value {
-                StackValue::ObjectRef(obj_ref) => {
-                    let mut encoded = [0u8; ObjectRef::SIZE];
-                    obj_ref.write(&mut encoded);
-                    usize::from_ne_bytes(encoded) as u64
-                }
-                StackValue::NativeInt(i) => i as u64,
+                StackValue::ObjectRef(obj_ref) => obj_ref.to_storage_ptr(),
+                // Native integers are an explicit exposed-provenance boundary.
+                StackValue::NativeInt(0) => std::ptr::null_mut(),
+                StackValue::NativeInt(i) => std::ptr::with_exposed_provenance_mut(i as usize),
                 actual => {
                     return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
                         expected: "ObjectRef or NativeInt",
@@ -363,18 +359,15 @@ pub fn intrinsic_volatile_write<'gc, T: ThreadingIntrinsicHost<'gc>>(
                     }));
                 }
             };
-            let size = ObjectRef::SIZE;
             // SAFETY: F10.RawMemoryAccessValid, F4.WidthAligned — This branch stores one object-reference-sized slot atomically; ObjectRef values
             // are serialized through `ObjectRef::write` to preserve any runtime tagging protocol.
             // The atomic subsystem uses the selected width for an aligned atomic operation or a synchronized fallback.
             unsafe {
-                RawMemoryOps::store_atomic(
+                RawMemoryOps::object_atomic(
                     ctx,
                     target_ptr.origin().clone(),
                     target_ptr.byte_offset(),
-                    val_raw,
-                    size,
-                    Ordering::Release,
+                    PointerAtomicOp::Store(val_raw, Ordering::Release),
                 )
                 .expect(
                     "the by-ref pointer and size are dispatch-selected to match the target type",

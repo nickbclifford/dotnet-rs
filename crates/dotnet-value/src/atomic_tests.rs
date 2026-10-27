@@ -119,13 +119,9 @@ mod tests {
         reader.join().unwrap();
     }
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
-    )]
     #[expect(
         clippy::multiple_unsafe_ops_per_block,
-        reason = "the test intentionally exercises object atomic load/store sequencing over one owned buffer"
+        reason = "the test intentionally exercises object atomic load/store sequencing over an initialized pointer slot"
     )]
     fn test_atomic_object_load_store() {
         use crate::{
@@ -136,8 +132,10 @@ mod tests {
         with_test_gc_context(|gc_handle| {
             let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let obj = ObjectRef::new(gc_handle, storage);
-            let mut buffer = Aligned8([0u8; 8]);
-            let ptr = buffer.0.as_mut_ptr();
+            // An initialized pointer slot lets Miri validate the provenance
+            // preserved by the object storage encoding across atomic access.
+            let mut stored_object_ptr: *mut u8 = std::ptr::null_mut();
+            let ptr = (&mut stored_object_ptr as *mut *mut u8).cast::<u8>();
             // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
             unsafe {
                 StackValue::ObjectRef(obj).store_atomic(
@@ -145,6 +143,10 @@ mod tests {
                     StoreType::Object,
                     AtomicOrdering::SeqCst,
                 );
+                let encoded_ptr =
+                    dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast::<*mut u8>())
+                        .load(dotnet_utils::sync::Ordering::SeqCst);
+                assert_eq!(encoded_ptr, obj.to_storage_ptr());
                 let val = StackValue::load_atomic(ptr, LoadType::Object, AtomicOrdering::SeqCst);
                 if let StackValue::ObjectRef(read_obj) = val {
                     assert_eq!(read_obj, obj);
@@ -155,6 +157,11 @@ mod tests {
                     ptr,
                     StoreType::Object,
                     AtomicOrdering::SeqCst,
+                );
+                assert!(
+                    dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast::<*mut u8>())
+                        .load(dotnet_utils::sync::Ordering::SeqCst)
+                        .is_null()
                 );
                 let val = StackValue::load_atomic(ptr, LoadType::Object, AtomicOrdering::SeqCst);
                 if let StackValue::ObjectRef(read_obj) = val {

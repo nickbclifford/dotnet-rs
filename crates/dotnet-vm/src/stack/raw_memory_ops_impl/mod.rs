@@ -233,6 +233,16 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
+        if let PointerOrigin::Stack(idx) = &origin
+            && offset == ByteOffset::ZERO
+            && matches!(layout, LayoutManager::Scalar(Scalar::ObjectRef))
+            && matches!(
+                self.evaluation_stack.get_slot_ref(*idx),
+                StackValue::ObjectRef(_)
+            )
+        {
+            return Ok(self.evaluation_stack.get_slot(*idx));
+        }
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
@@ -412,6 +422,141 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    unsafe fn object_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        op: dotnet_utils::atomic::PointerAtomicOp,
+    ) -> Result<*mut u8, MemoryAccessError> {
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
+        match origin {
+            PointerOrigin::Heap(owner) => {
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.RawMemoryAccessValid — The caller identifies a live object slot; memory checks its bounds.
+                unsafe {
+                    memory.object_atomic(self.gc, Some(MemoryOwner::Local(owner)), offset, op)
+                }
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner supplies the guarded storage.
+                unsafe {
+                    memory.object_atomic(
+                        self.gc,
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        offset,
+                        op,
+                    )
+                }
+            }
+            PointerOrigin::Static(metadata) => {
+                let storage = self
+                    .statics()
+                    .get(metadata.type_desc.clone(), &metadata.generics);
+                storage.storage.with_data_mut(|data| {
+                    let end = offset
+                        .as_usize()
+                        .checked_add(std::mem::size_of::<*mut u8>());
+                    if end.is_none_or(|end| end > data.len()) {
+                        return Err(MemoryAccessError::BoundsCheck {
+                            offset: offset.as_usize(),
+                            size: std::mem::size_of::<*mut u8>(),
+                            len: data.len(),
+                        });
+                    }
+                    let slot = NonNull::new(data.as_mut_ptr().wrapping_add(offset.as_usize()))
+                        .expect("static slot is non-null");
+                    let mut memory = RawMemoryAccess::new(&self.local.heap);
+                    // SAFETY: F10.BorrowedStorageStable — The guard and bounds check protect this slot.
+                    unsafe { memory.object_atomic_ptr(slot, op) }
+                })
+            }
+            PointerOrigin::Stack(idx)
+                if offset == ByteOffset::ZERO
+                    && matches!(
+                        self.evaluation_stack.get_slot_ref(idx),
+                        StackValue::ObjectRef(_)
+                    ) =>
+            {
+                // Stack slots hold actual Rust `ObjectRef` values (whose Gc pointer
+                // names the allocation header), not the tagged serialized value.
+                // They are thread-local, so update the typed slot rather than
+                // writing a serialized pointer over the Gc representation.
+                use dotnet_utils::atomic::PointerAtomicOp;
+                use dotnet_utils::sync::Ordering;
+                let StackValue::ObjectRef(old) = self.evaluation_stack.get_slot(idx) else {
+                    unreachable!()
+                };
+                let previous = old.to_storage_ptr();
+                let (replacement, order) = match op {
+                    PointerAtomicOp::Load(order) => (None, order),
+                    PointerAtomicOp::Store(value, order)
+                    | PointerAtomicOp::Exchange(value, order) => (Some(value), order),
+                    PointerAtomicOp::CompareExchange(expected, value, success, failure) => {
+                        if previous.addr() == expected.addr() {
+                            (Some(value), success)
+                        } else {
+                            (None, failure)
+                        }
+                    }
+                };
+                if matches!(
+                    order,
+                    Ordering::Release | Ordering::AcqRel | Ordering::SeqCst
+                ) {
+                    dotnet_utils::sync::fence(order);
+                }
+                let replacement = replacement.map(|value| {
+                    // SAFETY: F1.GcHandleRooted — The caller supplies a live encoded reference in the active GC scope.
+                    unsafe { dotnet_value::object::ObjectRef::from_storage_ptr(value) }
+                });
+                // Replacing a stack slot cannot invoke a safepoint; end the
+                // borrow scope so the typed evaluation stack can be updated.
+                drop(_gc_scope);
+                if let Some(object) = replacement {
+                    self.evaluation_stack
+                        .set_slot(idx, StackValue::ObjectRef(object));
+                }
+                if matches!(
+                    order,
+                    Ordering::Acquire | Ordering::AcqRel | Ordering::SeqCst
+                ) {
+                    dotnet_utils::sync::fence(order);
+                }
+                Ok(previous)
+            }
+            PointerOrigin::Stack(_) => {
+                let slot = self.resolve_address(origin, offset);
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.RawMemoryAccessValid — The caller guarantees the resolved stack slot is valid.
+                unsafe { memory.object_atomic_ptr(slot, op) }
+            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data_mut(|data| {
+                let end = offset
+                    .as_usize()
+                    .checked_add(std::mem::size_of::<*mut u8>());
+                if end.is_none_or(|end| end > data.len()) {
+                    return Err(MemoryAccessError::BoundsCheck {
+                        offset: offset.as_usize(),
+                        size: std::mem::size_of::<*mut u8>(),
+                        len: data.len(),
+                    });
+                }
+                let slot = NonNull::new(data.as_mut_ptr().wrapping_add(offset.as_usize()))
+                    .expect("transient slot is non-null");
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.BorrowedStorageStable — The guard and bounds check protect this slot.
+                unsafe { memory.object_atomic_ptr(slot, op) }
+            }),
+            PointerOrigin::Unmanaged => {
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.RawMemoryAccessValid — The caller guarantees a valid unmanaged slot.
+                unsafe { memory.object_atomic(self.gc, None, offset, op) }
+            }
+        }
+    }
+
     unsafe fn compare_exchange_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,

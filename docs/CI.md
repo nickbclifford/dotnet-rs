@@ -323,9 +323,10 @@ No current Miri job adds `-Zmiri-strict-provenance`. Plan 01's Phase 9 CI work
 was explicitly closed by owner-directed deferral on 2026-08-05; this is an
 accepted missing gate, not implied coverage. In particular:
 
-- `dotnet-value` remains known-red locally at the atomic GC-handle
-  `gc_handle_from_addr` storage boundary, with continuation triage also reaching
-  serialized `ObjectRef::read_unchecked` reconstruction.
+- `dotnet-value` now preserves provenance through object-reference storage and
+  pointer-valued atomics. Its ordinary pinned Miri suite passes locally; the
+  stricter gate remains deferred because unmanaged address reconstruction and
+  other exposed-provenance paths still require separate work.
 - `dotnet-runtime-memory` passed its pinned-nightly strict-provenance baseline,
   but it has never had an entry in this advisory matrix and was not added solely
   to satisfy the plan's stale gate wording.
