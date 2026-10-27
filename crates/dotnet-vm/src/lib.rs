@@ -39,6 +39,8 @@ mod intrinsics_codegen_guard_tests;
 #[cfg(test)]
 mod jmp_tests;
 pub mod layout;
+#[cfg(test)]
+mod pointer_provenance_tests;
 pub mod resolution;
 pub mod resolver;
 mod stack;

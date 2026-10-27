@@ -5,11 +5,10 @@ mod tests {
         stack::ops::VmCallOps,
         state::SharedGlobalState,
         sync::Arc,
-        test_utils::{new_test_arena, should_break_after_step},
+        test_utils::{new_test_arena, should_break_after_step, test_gc_handle},
     };
     use dotnet_assemblies::AssemblyLoader;
     use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-    use dotnet_utils::gc::GCHandle;
     use dotnetdll::{
         binary::signature::kinds::CallingConvention,
         prelude::*,
@@ -65,19 +64,9 @@ mod tests {
         entrypoint: MethodDescription,
     ) -> StepResult {
         let mut arena = new_test_arena(shared);
-        #[cfg(feature = "memory-validation")]
-        let thread_id = dotnet_utils::sync::get_current_thread_id();
         arena.mutate_root(|gc, engine| {
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
-                unsafe {
-                    engine.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
+            // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+            let gc_handle = unsafe { test_gc_handle(gc, engine) };
             let info = shared
                 .caches
                 .get_method_info(entrypoint, &Default::default(), shared.clone())
@@ -90,16 +79,8 @@ mod tests {
         let mut step_res = StepResult::Continue;
         for _ in 0..10 {
             step_res = arena.mutate_root(|gc, engine| {
-                let gc_handle = GCHandle::new(
-                    gc,
-                    #[cfg(feature = "multithreading")]
-                    // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
-                    unsafe {
-                        engine.stack.arena_inner_gc()
-                    },
-                    #[cfg(feature = "memory-validation")]
-                    thread_id,
-                );
+                // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+                let gc_handle = unsafe { test_gc_handle(gc, engine) };
                 engine.step(gc_handle)
             });
             if matches!(step_res, StepResult::Error(_)) {
@@ -170,19 +151,9 @@ mod tests {
             MethodMemberIndex::Method(method_index),
         );
         let mut arena = new_test_arena(&shared);
-        #[cfg(feature = "memory-validation")]
-        let thread_id = dotnet_utils::sync::get_current_thread_id();
         arena.mutate_root(|gc, engine| {
-            let gc_handle = GCHandle::new(
-                gc,
-                #[cfg(feature = "multithreading")]
-                // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
-                unsafe {
-                    engine.stack.arena_inner_gc()
-                },
-                #[cfg(feature = "memory-validation")]
-                thread_id,
-            );
+            // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+            let gc_handle = unsafe { test_gc_handle(gc, engine) };
             let info = shared
                 .caches
                 .get_method_info(entrypoint, &Default::default(), shared.clone())
@@ -200,16 +171,8 @@ mod tests {
         let mut final_int = None;
         for _ in 0..1000 {
             let step_res = arena.mutate_root(|gc, engine| {
-                let gc_handle = GCHandle::new(
-                    gc,
-                    #[cfg(feature = "multithreading")]
-                    // SAFETY: F1.GcHandleRooted — The test fixture keeps this arena and the referenced test data alive for the operation.
-                    unsafe {
-                        engine.stack.arena_inner_gc()
-                    },
-                    #[cfg(feature = "memory-validation")]
-                    thread_id,
-                );
+                // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+                let gc_handle = unsafe { test_gc_handle(gc, engine) };
                 max_depth = max_depth.max(engine.stack.execution.frame_stack.len());
                 let res = engine.step(gc_handle);
                 if let StepResult::Return = res {

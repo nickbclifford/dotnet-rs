@@ -5,6 +5,7 @@ use crate::{
     state::{ArenaLocalState, SharedGlobalState},
     sync::Arc,
 };
+use dotnet_utils::gc::GCHandle;
 use dotnetdll::{
     binary::signature::kinds::CallingConvention,
     resolved::{
@@ -12,6 +13,29 @@ use dotnetdll::{
         types::{BaseType, MethodType},
     },
 };
+use gc_arena::Mutation;
+
+/// Constructs a handle for a test arena's rooted engine.
+///
+/// # Safety
+/// The engine must remain the live arena root and its stack must not be replaced
+/// for the lifetime of the returned handle. Use it only inside the mutation.
+pub(crate) unsafe fn test_gc_handle<'gc>(
+    gc: &'gc Mutation<'gc>,
+    _engine: &ExecutionEngine<'gc>,
+) -> GCHandle<'gc> {
+    GCHandle::new(
+        gc,
+        #[cfg(feature = "multithreading")]
+        // SAFETY: F1.GcHandleRooted — the caller guarantees the root and its
+        // stack-owned arena stay alive for the returned handle's lifetime.
+        unsafe {
+            _engine.stack.arena_inner_gc()
+        },
+        #[cfg(feature = "memory-validation")]
+        dotnet_utils::sync::get_current_thread_id(),
+    )
+}
 
 pub(crate) fn parameterless_i32_signature() -> MethodSignature<CallingConvention, MethodType> {
     MethodSignature {
