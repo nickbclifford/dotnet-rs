@@ -2,6 +2,21 @@
 # Bounded pointer diagnostics and control gates. No probe bodies live here.
 set -uo pipefail
 
+# Explicit control identities and shard assignments; edit alongside each promotion.
+expected_controls=(
+'pointer_provenance_tests::p00_smoke|1'
+'pointer_provenance_tests::p02_ldloca_stind_i4_control|1'
+'pointer_provenance_tests::p03_ldloca_convu_ldind_i4|2'
+'pointer_provenance_tests::p05_single_localloc_roundtrip|2'
+'pointer_provenance_tests::p07_localloc_one_past_end|3'
+'pointer_provenance_tests::p11_ldelema_stind_heap_array_control|3'
+'pointer_provenance_tests::p10_ldelema_convu_stind_heap_array|4'
+'pointer_provenance_tests::p20_heap_convu_then_typed_write_then_raw_store|4'
+'pointer_provenance_tests::p13_ldelema_managed_add_far_out_of_bounds_then_conv_u|5'
+'pointer_provenance_tests::p14_initblk_heap_array_via_managed_ptr|5'
+'pointer_provenance_tests::p16_cpblk_heap_arrays_via_managed_ptr|6'
+)
+
 # full name | classification | native diagnostic permission | control shard
 catalog=(
 'pointer_provenance_tests::p00_smoke|control|no|1'
@@ -14,24 +29,43 @@ catalog=(
 'pointer_provenance_tests::p07_localloc_one_past_end|control|no|3'
 'pointer_provenance_tests::p08_localloc_overshoot|reported-ub|no|-'
 'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth|reported-ub|no|-'
-'pointer_provenance_tests::p10_ldelema_convu_stind_heap_array|reported-ub|no|-'
+'pointer_provenance_tests::p10_ldelema_convu_stind_heap_array|control|no|4'
 'pointer_provenance_tests::p11_ldelema_stind_heap_array_control|control|no|3'
 'pointer_provenance_tests::p12_ldsflda_convu_stind_static|suspected-ub|no|-'
-'pointer_provenance_tests::p13_ldelema_managed_add_far_out_of_bounds_then_conv_u|reported-ub|no|-'
-'pointer_provenance_tests::p14_initblk_heap_array_via_managed_ptr|reported-ub|no|-'
+'pointer_provenance_tests::p13_ldelema_managed_add_far_out_of_bounds_then_conv_u|control|no|5'
+'pointer_provenance_tests::p14_initblk_heap_array_via_managed_ptr|control|no|5'
 'pointer_provenance_tests::p15_initblk_stack_local_via_managed_ptr|suspected-ub|no|-'
-'pointer_provenance_tests::p16_cpblk_heap_arrays_via_managed_ptr|reported-ub|no|-'
+'pointer_provenance_tests::p16_cpblk_heap_arrays_via_managed_ptr|control|no|6'
 'pointer_provenance_tests::p17_localloc_ptr_ceq_self|semantic|yes|-'
 'pointer_provenance_tests::p18_localloc_ptr_clt|semantic|yes|-'
 'pointer_provenance_tests::p19_ldelem_negative_index|panic|yes|-'
-'pointer_provenance_tests::p20_heap_convu_then_typed_write_then_raw_store|unverified|no|-'
+'pointer_provenance_tests::p20_heap_convu_then_typed_write_then_raw_store|control|no|4'
 'pointer_provenance_tests::p_null_through_pointer_local_address|unverified|no|-'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
+# Refuse stale, empty, duplicated or mis-sharded control tables before discovery.
+declare -A expected_by_name=() seen_controls=() shard_counts=()
+for row in "${expected_controls[@]}"; do
+    IFS='|' read -r name group extra <<< "$row"
+    [[ -n $name && $group =~ ^[1-9][0-9]*$ && -z ${extra:-} && ! -v expected_by_name[$name] ]] || die 'invalid or duplicate expected control'
+    expected_by_name[$name]=$group
+done
+((${#expected_controls[@]} > 0)) || die 'expected control table is empty'
+shards=()
+for row in "${catalog[@]}"; do
+    IFS='|' read -r name class native group <<< "$row"
+    [[ $class == control ]] || continue
+    [[ -v expected_by_name[$name] && ${expected_by_name[$name]} == "$group" && ! -v seen_controls[$name] ]] || die "unexpected, duplicate or mis-sharded control: $name"
+    seen_controls[$name]=1
+    if [[ ! -v shard_counts[$group] ]]; then shards+=("$group"); shard_counts[$group]=0; fi
+    ((shard_counts[$group]+=1))
+done
+((${#seen_controls[@]} == ${#expected_controls[@]})) || die 'catalog is missing expected controls'
+shard_options=$(IFS='|'; echo "${shards[*]}")
 usage() {
-    echo 'Usage: pointer_provenance.sh list | verify-controls --configuration no-features|multithreading [--dry-run] | controls --configuration CONFIG --shard 1|2|3 [--dry-run] | diagnostic --configuration CONFIG (--probe SHORT_NAME | --all) [--lane permissive-tb|native] [--dry-run]'
+    echo "Usage: pointer_provenance.sh list | verify-controls --configuration no-features|multithreading [--dry-run] | controls --configuration CONFIG --shard $shard_options [--dry-run] | diagnostic --configuration CONFIG (--probe SHORT_NAME | --all) [--lane permissive-tb|native] [--dry-run]"
     echo 'diagnostic --all selects diagnostic-only probes; enabled controls use controls. Native diagnostics require an individually permitted probe.'
 }
 command=${1:-}; [[ -n $command ]] || { usage >&2; exit 2; }; shift
@@ -80,8 +114,8 @@ for row in "${catalog[@]}"; do
     esac
 done
 case $command in
-    verify-controls) [[ -z $shard && -z $probe && $all == 0 && ${lane_set:-0} == 0 ]] || die 'invalid verify-controls options'; ((${#selected[@]} == 6)) || die 'catalog must contain six controls' ;;
-    controls) [[ $shard == 1 || $shard == 2 || $shard == 3 ]] || die 'shard required: 1, 2, or 3'; [[ -z $probe && $all == 0 && ${lane_set:-0} == 0 ]] || die 'invalid controls options'; ((${#selected[@]} == 2)) || die 'catalog shard must contain two controls' ;;
+    verify-controls) [[ -z $shard && -z $probe && $all == 0 && ${lane_set:-0} == 0 ]] || die 'invalid verify-controls options'; ((${#selected[@]} > 0)) || die 'catalog must contain controls' ;;
+    controls) [[ $shard =~ ^[1-9][0-9]*$ && -v shard_counts[$shard] ]] || die "shard required: $shard_options"; [[ -z $probe && $all == 0 && ${lane_set:-0} == 0 ]] || die 'invalid controls options'; ((${#selected[@]} == shard_counts[$shard] && ${#selected[@]} > 0)) || die 'catalog shard control count mismatch' ;;
     diagnostic) [[ -z $shard ]] || die 'diagnostic does not accept shard'; if ((all)); then [[ -z $probe ]] || die 'choose --all or --probe'; else [[ -n $probe ]] && ((${#selected[@]} == 1)) || die 'unknown or missing exact short probe name'; fi ;;
 esac
 show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
@@ -117,7 +151,10 @@ try:
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print("control discovery: six exact non-ignored controls")
+count = len(sys.argv[3:])
+# Preserve the existing six-control message while reporting other counts accurately.
+count_text = "six" if count == 6 else str(count)
+print(f"control discovery: {count_text} exact non-ignored controls")
 PY
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"
@@ -188,5 +225,5 @@ if ((!dry)); then
     printf '%s\n' '--- per-probe summary ---' "${summaries[@]}"
     echo "total: $passes passed, $failures failed"
     ((failures == 0)) || exit 1
-    if [[ $command == controls && $passes != 2 ]]; then echo 'expected exactly two passing controls' >&2; exit 1; fi
+    if [[ $command == controls ]] && ((passes != shard_counts[$shard])); then echo "expected exactly ${shard_counts[$shard]} passing controls" >&2; exit 1; fi
 fi

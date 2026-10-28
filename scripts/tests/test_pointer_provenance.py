@@ -11,11 +11,16 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/pointer_provenance.sh"
 SOURCE = ROOT / "crates/dotnet-vm/src/pointer_provenance_tests.rs"
-CONTROLS = [
-    "p00_smoke", "p02_ldloca_stind_i4_control", "p03_ldloca_convu_ldind_i4",
-    "p05_single_localloc_roundtrip", "p07_localloc_one_past_end",
-    "p11_ldelema_stind_heap_array_control",
-]
+# Edit this mapping alongside the catalog and runner table when promoting a probe.
+CONTROLS_BY_SHARD = {
+    1: ["p00_smoke", "p02_ldloca_stind_i4_control"],
+    2: ["p03_ldloca_convu_ldind_i4", "p05_single_localloc_roundtrip"],
+    3: ["p07_localloc_one_past_end", "p11_ldelema_stind_heap_array_control"],
+    4: ["p10_ldelema_convu_stind_heap_array", "p20_heap_convu_then_typed_write_then_raw_store"],
+    5: ["p13_ldelema_managed_add_far_out_of_bounds_then_conv_u", "p14_initblk_heap_array_via_managed_ptr"],
+    6: ["p16_cpblk_heap_arrays_via_managed_ptr"],
+}
+CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -31,10 +36,10 @@ if '--list' in a:
     for n in names: print(n + ': test')
 elif 'nextest' in a:
     cases = {n: {'kind': 'test', 'ignored': mode == 'ignored' and i == 0,
-                 'filter-match': {'status': 'mismatch' if mode == 'ignored' and i == 0 else 'matches'}}
+                 'filter-match': {'status': 'mismatch' if mode == 'filter-mismatch' and i == 0 else 'matches'}}
              for i, n in enumerate(names)}
     print(json.dumps({'rust-suites': {'dotnet-vm': {'package-name': 'dotnet-vm', 'kind': 'lib',
-          'status': 'listed', 'testcases': cases}}}))
+          'status': 'skipped' if mode == 'not-listed' else 'listed', 'testcases': cases}}}))
 else:
     name = a[a.index('--exact') + 1]
     if mode == 'fail-first' and name.endswith('p01_ldloca_convu_stind_i4'):
@@ -68,12 +73,13 @@ class PointerScriptTests(unittest.TestCase):
         cargo.write_text(FAKE)
         cargo.chmod(0o755)
         self.calls = self.path / 'calls'
+        self.script = SCRIPT
         self.env = dict(os.environ, PATH=str(self.path) + os.pathsep + os.environ['PATH'],
                         CALLS=str(self.calls), CONTROLS=json.dumps(CONTROLS), TMPDIR=str(self.path))
 
     def invoke(self, *args, mode='', ok=True):
         env = dict(self.env, MODE=mode)
-        result = subprocess.run(['bash', str(SCRIPT), *args], cwd=ROOT, env=env,
+        result = subprocess.run(['bash', str(self.script), *args], cwd=ROOT, env=env,
                                 text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return result.stdout + result.stderr
@@ -86,33 +92,65 @@ class PointerScriptTests(unittest.TestCase):
         rows = [line.split('|') for line in output.splitlines()[1:]]
         text = SOURCE.read_text()
         source = re.findall(r'^fn (p(?:\d\d_|_)[a-z0-9_]+)\(', text, re.M)
-        ignored = set(re.findall(r'^#\[ignore = "[^\n]+"\]\nfn (p(?:\d\d_|_)[a-z0-9_]+)\(', text, re.M))
+        attributes = {
+            name: attrs for attrs, name in re.findall(
+                r'((?:^#\[[^\]]*\]\n)+)fn (p(?:\d\d_|_)[a-z0-9_]+)\(', text, re.M,
+            )
+        }
+        self.assertEqual(set(attributes), set(source))
+        ignored = {name for name, attrs in attributes.items()
+                   if re.search(r'^#\[ignore(?:\s*=\s*"[^\n]+")?\]$', attrs, re.M)}
         self.assertEqual(ignored, set(source) - set(CONTROLS))
-        self.assertEqual(len(rows), 23)
+        # p13 and the conv.u8 far-OOB regression are conditionally ignored:
+        # runner configurations omit this feature, while validation-all
+        # intentionally triggers their debug bounds trap.
+        all_attributes = {
+            name: attrs for attrs, name in re.findall(
+                r'((?:^#\[[^\]]*\]\n)+)fn ([a-z][a-z0-9_]+)\(', text, re.M,
+            )
+        }
+        conditional = {name: attr for name, attrs in all_attributes.items()
+                       for attr in re.findall(r'^#\[cfg_attr\(([^\]]*\bignore\b[^\]]*)\)\]$', attrs, re.M)}
+        self.assertEqual(set(conditional), {
+            'p13_ldelema_managed_add_far_out_of_bounds_then_conv_u',
+            'conv_u8_after_far_oob_managed_add_does_not_panic',
+        })
+        self.assertRegex(
+            conditional['p13_ldelema_managed_add_far_out_of_bounds_then_conv_u'],
+            r'^\s*feature = "memory-validation",\s*ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design \(F-TEST-003\)"\s*$',
+        )
+        self.assertRegex(
+            conditional['conv_u8_after_far_oob_managed_add_does_not_panic'],
+            r'^\s*feature = "memory-validation",\s*ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design \(F-TEST-003\)"\s*$',
+        )
         self.assertEqual({r[0].split('::')[-1] for r in rows}, set(source))
-        self.assertEqual(len(set(r[0] for r in rows)), 23)
-        for shard, pair in enumerate((CONTROLS[:2], CONTROLS[2:4], CONTROLS[4:]), 1):
-            self.assertEqual([r[0].split('::')[-1] for r in rows if r[3] == str(shard)], pair)
+        self.assertEqual(len(set(r[0] for r in rows)), len(rows))
+        self.assertEqual({int(r[3]) for r in rows if r[1] == 'control'}, set(CONTROLS_BY_SHARD))
+        for shard, names in CONTROLS_BY_SHARD.items():
+            self.assertEqual([r[0].split('::')[-1] for r in rows if r[1] == 'control' and r[3] == str(shard)], names)
         self.assertEqual([r[0].split('::')[-1] for r in rows if r[2] == 'yes'],
                          ['p17_localloc_ptr_ceq_self', 'p18_localloc_ptr_clt', 'p19_ldelem_negative_index'])
         self.assertEqual(self.recorded(), [])
 
     def test_guard_good_and_stale_or_ignored(self):
         for config in ('no-features', 'multithreading'):
-            self.assertIn('six exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
-            for mode in ('missing', 'typo', 'duplicate', 'ignored'):
+            count = 'six' if len(CONTROLS) == 6 else str(len(CONTROLS))
+            self.assertIn(f'{count} exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
+            for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
     def test_controls_count_and_guard(self):
-        base = ('controls', '--configuration', 'no-features', '--shard', '1')
-        self.assertIn('total: 2 passed, 0 failed', self.invoke(*base))
+        shard = next(iter(CONTROLS_BY_SHARD))
+        names = CONTROLS_BY_SHARD[shard]
+        base = ('controls', '--configuration', 'no-features', '--shard', str(shard))
+        self.assertIn(f'total: {len(names)} passed, 0 failed', self.invoke(*base))
         calls = self.recorded()
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 2 + len(names))
         self.assertTrue(all('--ignored' not in c['args'] for c in calls))
         self.assertEqual([c['args'][c['args'].index('--exact') + 1] for c in calls[2:]],
-                         ['pointer_provenance_tests::' + c for c in CONTROLS[:2]])
+                         ['pointer_provenance_tests::' + c for c in names])
         for mode in ('zero', 'ignored-run'):
             self.assertIn('zero-ignored-or-unverified-count', self.invoke(*base, mode=mode, ok=False))
         before = len(self.recorded())
@@ -121,14 +159,14 @@ class PointerScriptTests(unittest.TestCase):
 
     def test_each_control_shard_uses_exact_names_and_pinned_flags(self):
         for config in ('no-features', 'multithreading'):
-            for shard, pair in enumerate((CONTROLS[:2], CONTROLS[2:4], CONTROLS[4:]), 1):
+            for shard, names in CONTROLS_BY_SHARD.items():
                 self.calls.unlink(missing_ok=True)
                 self.invoke('controls', '--configuration', config, '--shard', str(shard))
                 calls = self.recorded()
-                self.assertEqual(len(calls), 4)
+                self.assertEqual(len(calls), 2 + len(names))
                 self.assertTrue(all('--ignored' not in c['args'] for c in calls))
                 self.assertEqual([c['args'][c['args'].index('--exact') + 1] for c in calls[2:]],
-                                 ['pointer_provenance_tests::' + name for name in pair])
+                                 ['pointer_provenance_tests::' + name for name in names])
                 for call in calls[2:]:
                     self.assertIn('+nightly-2026-05-27', call['args'])
                     self.assertEqual(call['flags'], '-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks')
@@ -139,6 +177,8 @@ class PointerScriptTests(unittest.TestCase):
                      ('--probe', 'p00_smoke'),
                      ('--all', '--lane', 'native'), ('--probe', 'pointer_provenance_tests::p01_ldloca_convu_stind_i4')]:
             self.invoke('diagnostic', '--configuration', 'no-features', *args, ok=False)
+        for name in CONTROLS:
+            self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
         self.assertEqual(self.recorded(), [])
         self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p17_localloc_ptr_ceq_self', '--lane', 'native')
         call = self.recorded()[0]['args']
@@ -146,6 +186,8 @@ class PointerScriptTests(unittest.TestCase):
         self.assertNotIn('miri', call)
 
     def test_diagnostic_continues_and_distinguishes_failures(self):
+        rows = [line.split('|') for line in self.invoke('list').splitlines()[1:]]
+        diagnostics = {r[0].split('::')[-1] for r in rows if r[1] != 'control'}
         for mode, classification in [('fail-first', 'miri-ub'),
                                      ('setup-first', 'compile-setup-or-process-failure'),
                                      ('panic-first', 'assertion-or-panic'),
@@ -153,11 +195,11 @@ class PointerScriptTests(unittest.TestCase):
             self.calls.unlink(missing_ok=True)
             output = self.invoke('diagnostic', '--configuration', 'multithreading', '--all', mode=mode, ok=False)
             self.assertIn(classification, output)
-            self.assertIn('total: 16 passed, 1 failed', output)
+            self.assertIn(f'total: {len(diagnostics) - 1} passed, 1 failed', output)
             calls = self.recorded()
-            self.assertEqual(len(calls), 17)
+            self.assertEqual(len(calls), len(diagnostics))
             names = {c['args'][c['args'].index('--exact') + 1].split('::')[-1] for c in calls}
-            self.assertEqual(len(names), 17)
+            self.assertEqual(names, diagnostics)
             self.assertTrue(names.isdisjoint(CONTROLS))
             for call in calls:
                 self.assertIn('--ignored', call['args'])
@@ -177,11 +219,75 @@ class PointerScriptTests(unittest.TestCase):
         self.assertEqual(calls[0]['args'][calls[0]['args'].index('--exact') + 1],
                          'pointer_provenance_tests::p01_ldloca_convu_stind_i4')
 
+    def test_ci_shards_match_catalog(self):
+        # Parse the specific inline matrix list without a PyYAML dependency. Fail
+        # closed if its job or syntax changes instead of silently skipping it.
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        job = re.search(r'^  miri-pointer-controls:\s*\n(?P<body>(?:^(?: {4,}.*|\s*)\n)*)', workflow, re.M)
+        self.assertIsNotNone(job, 'missing miri-pointer-controls job')
+        matrix = re.findall(r'^        shard: \[([0-9, ]+)\]\s*$', job.group('body'), re.M)
+        self.assertEqual(len(matrix), 1, 'expected one inline shard list')
+        ci_shards = [int(value.strip()) for value in matrix[0].split(',')]
+        self.assertEqual(len(ci_shards), len(set(ci_shards)))
+        rows = [line.split('|') for line in self.invoke('list').splitlines()[1:]]
+        self.assertEqual(set(ci_shards), {int(row[3]) for row in rows if row[1] == 'control'})
+
+    def test_reject_invalid_control_table_before_cargo(self):
+        original = SCRIPT.read_text()
+        shard, names = next(iter(CONTROLS_BY_SHARD.items()))
+        full = 'pointer_provenance_tests::' + names[0]
+        table_row = f"'{full}|{shard}'"
+        catalog_row = f"'{full}|control|no|{shard}'"
+        mutations = (
+            original.replace(table_row, ''),
+            original.replace(table_row, table_row + '\n' + table_row),
+            original.replace(catalog_row, catalog_row + '\n' + catalog_row),
+            original.replace(catalog_row, f"'{full}|control|no|{max(CONTROLS_BY_SHARD) + 1}'"),
+            re.sub(r'expected_controls=\(.*?\n\)', 'expected_controls=(\n)', original, count=1, flags=re.S),
+        )
+        self.script = self.path / 'runner.sh'
+        for mutated in mutations:
+            self.assertNotEqual(mutated, original)
+            self.script.write_text(mutated)
+            self.invoke('verify-controls', '--configuration', 'no-features', ok=False)
+            self.assertEqual(self.recorded(), [])
+
+    def test_simulated_promotion_and_stale_table(self):
+        # Modify a temporary copy only: no real ignored probe is executed.
+        original = SCRIPT.read_text()
+        rows = [line.split('|') for line in self.invoke('list').splitlines()[1:]]
+        candidate = next(r for r in rows if r[1] != 'control' and r[2] == 'no')
+        full = candidate[0]
+        name = full.split('::')[-1]
+        row = "'" + '|'.join(candidate) + "'"
+        table_end = ')\n\n# full name | classification'
+        for shard in (next(iter(CONTROLS_BY_SHARD)), max(CONTROLS_BY_SHARD) + 1):
+            with self.subTest(shard=shard):
+                # A catalog-only promotion must fail before Cargo is invoked.
+                catalog_only = original.replace(row, f"'{full}|control|no|{shard}'")
+                self.script = self.path / 'runner.sh'
+                self.script.write_text(catalog_only)
+                self.calls.unlink(missing_ok=True)
+                self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
+                self.assertEqual(self.recorded(), [])
+                self.script.write_text(catalog_only.replace(table_end, f"'{full}|{shard}'\n" + table_end))
+                self.env['CONTROLS'] = json.dumps(CONTROLS + [name])
+                count = len(CONTROLS_BY_SHARD.get(shard, [])) + 1
+                output = self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard))
+                self.assertIn(f'total: {count} passed, 0 failed', output)
+                calls = self.recorded()
+                self.assertEqual(len(calls), count + 2)
+                self.assertTrue(all('--ignored' not in c['args'] for c in calls))
+                self.assertIn(full, [c['args'][c['args'].index('--exact') + 1] for c in calls[2:]])
+                self.calls.unlink(missing_ok=True)
+                self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
+                self.assertEqual(self.recorded(), [])
+
     def test_all_dry_runs_do_not_invoke_cargo(self):
         for config in ('no-features', 'multithreading'):
-            for shard in ('1', '2', '3'):
-                out = self.invoke('controls', '--configuration', config, '--shard', shard, '--dry-run')
-                self.assertEqual(out.count('--exact'), 2)
+            for shard, names in CONTROLS_BY_SHARD.items():
+                out = self.invoke('controls', '--configuration', config, '--shard', str(shard), '--dry-run')
+                self.assertEqual(out.count('--exact'), len(names))
                 self.assertNotIn('--ignored', out)
                 self.assertEqual('--features multithreading' in out, config == 'multithreading')
             out = self.invoke('diagnostic', '--configuration', config, '--probe', 'p01_ldloca_convu_stind_i4', '--dry-run')
