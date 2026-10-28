@@ -1,3 +1,33 @@
+//! Managed pointer access.
+//!
+//! **M1a heap access contract:** For `Heap` and `CrossArenaObjectRef` origins,
+//! address observation is distinct from reading, writing, copying, or atomic
+//! access. `ManagedPtr::observe_address(&self) -> Option<NonNull<u8>>`,
+//! used by `PointerLike::pointer`, obtains the retained payload base under the
+//! shared object borrow and forms `base.wrapping_add(offset)` without a payload
+//! slice or a bounds check. A null base or a result wrapping to zero yields
+//! `None`. The raw address neither keeps the borrow/arena lease nor roots the
+//! owner; it grants no right to dereference, and later access needs its own
+//! owner, lifetime, bounds, alignment, synchronization, and barrier proofs.
+//! Expose provenance explicitly when an address is converted to an integer for
+//! later pointer reconstruction.
+//!
+//! Heap reads are exact-or-reject: `with_data` checks
+//! `offset.checked_add(size) <= payload_len` before forming only the requested
+//! slice. Offset equal to payload length is valid for size zero; overflow or an
+//! out-of-range window is rejected, never silently shortened. The unsafe
+//! `try_with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> Option<T>`
+//! returns `None` without calling `f` for a rejected heap range. This is not a
+//! promise to catch callback panics or change legacy non-heap behavior.
+//! `Stack` and `Static` retain their legacy fallback (M3); `Transient` and
+//! owner/guard escape remain M1d debt. `Unmanaged` retains its existing caller
+//! contract. None of these paths is covered by the heap observation/read rules.
+//!
+//! This design does not change `ObjectRef`/`ManagedPtr` serialization words,
+//! pointer atomics (`AtomicPtr`), or write barriers. `memory-validation`'s
+//! `validate_offset` uses accounting `size_bytes()` as a debug trap, not as an
+//! access guard, and remains untouched.
+
 use crate::{
     ByteOffset, StackSlotIndex, ValidationTag,
     object::{Object, ObjectRef},
@@ -36,9 +66,11 @@ pub use origin::*;
 ///
 /// For every later access through the returned pointer, the caller must prove
 /// that `addr` is zero or denotes live storage with the required provenance,
-/// bounds, alignment, lifetime, and synchronization. This function validates
-/// none of those properties. It must never be used to recover a managed
-/// `ManagedPtr` origin from serialized address bits.
+/// bounds, alignment, lifetime, and synchronization. Nonzero `addr` values
+/// that are later dereferenced must carry provenance previously exposed from
+/// the corresponding pointer; arbitrary integers do not root allocations or
+/// acquire access rights. This function validates none of those properties. It
+/// must never recover a managed `ManagedPtr` origin from serialized address bits.
 #[inline]
 pub unsafe fn unmanaged_ptr_from_addr(addr: usize) -> *mut u8 {
     std::ptr::with_exposed_provenance_mut::<u8>(addr)
@@ -485,41 +517,144 @@ impl<'gc> ManagedPtr<'gc> {
         (offset, to_access)
     }
 
-    /// Safely accesses the data pointed to by this ManagedPtr.
-    ///
-    /// # Safety
-    /// If there is no owner, this method assumes the cached pointer is valid for at least `size` bytes.
-    pub unsafe fn with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> T {
-        self.validate_magic();
+    fn try_with_heap_data<T>(
+        &self,
+        size: usize,
+        allow_short: bool,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        let offset = self.byte_offset().as_usize();
         match &self.origin {
             PointerOrigin::Heap(owner) => {
                 let handle = owner
                     .0
                     .expect("ManagedPtr::with_data: null heap owner handle");
                 let inner = handle.borrow();
-                // SAFETY: F1.GcHandleRooted — `inner` holds a shared lock on the object storage;
-                // we only read the raw base pointer.
-                let ptr = unsafe { inner.storage.raw_data_ptr() };
-                // SAFETY: F1.GcHandleRooted — `ptr` points to `inner.storage` which remains locked
-                // for this scope, and `size_bytes()` is the exact allocation size.
-                let slice = unsafe { std::slice::from_raw_parts(ptr, inner.storage.size_bytes()) };
-                let offset = self.byte_offset().as_usize();
-                let available = slice.len().saturating_sub(offset);
-                let to_access = std::cmp::min(size, available);
-                f(&slice[offset..offset + to_access])
+                if allow_short {
+                    inner.storage.with_data_up_to(offset, size, f)
+                } else {
+                    inner.storage.try_with_data_range(offset, size, f)
+                }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => ptr.with_data(|data| {
-                let (offset, to_access) = self.access_window(data.len(), size);
-                f(&data[offset..offset + to_access])
-            }),
+            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+                if allow_short {
+                    ptr.with_data_up_to(offset, size, f)
+                } else {
+                    ptr.try_with_data_range(offset, size, f)
+                }
+            }
+            _ => unreachable!("heap range access requires a heap origin"),
+        }
+    }
+
+    /// Attempts an exact read from a heap-backed managed pointer.
+    ///
+    /// For Heap and CrossArenaObjectRef origins, the requested window is checked
+    /// against the actual payload length before any byte slice is formed; an
+    /// invalid or overflowing window returns `None` without invoking `f`.
+    /// Other origins retain their legacy `with_data` behavior and return
+    /// `Some` unless that behavior panics.
+    ///
+    /// # Safety
+    /// If there is no heap owner, this method inherits `with_data`'s requirement
+    /// that the cached pointer be valid for the requested range.
+    pub unsafe fn try_with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
+        self.validate_magic();
+        match &self.origin {
+            PointerOrigin::Heap(_) => self.try_with_heap_data(size, false, f),
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(_, _) => self.try_with_heap_data(size, false, f),
+            _ => {
+                // SAFETY: F10.RawMemoryAccessValid — Non-heap origins deliberately retain the
+                // pre-existing `with_data` behavior and its caller-provided validity contract.
+                Some(unsafe { self.with_data(size, f) })
+            }
+        }
+    }
+
+    /// Reads up to `max_size` bytes from a managed pointer.
+    ///
+    /// Heap reads explicitly clamp to the bytes remaining after the logical
+    /// offset, for callers such as P/Invoke that preserve a zero-filled buffer
+    /// tail. An offset beyond the payload is rejected. Other origins retain
+    /// their previous behavior.
+    ///
+    /// # Safety
+    /// If there is no heap owner, this method inherits `with_data`'s requirement
+    /// that the cached pointer be valid for the requested range.
+    pub unsafe fn with_data_up_to<T>(&self, max_size: usize, f: impl FnOnce(&[u8]) -> T) -> T {
+        self.validate_magic();
+        match &self.origin {
+            PointerOrigin::Heap(_) => {
+                self.try_with_heap_data(max_size, true, f)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "ManagedPtr::with_data_up_to: heap offset {} exceeds payload extent",
+                            self.byte_offset().as_usize()
+                        )
+                    })
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(_, _) => self
+                .try_with_heap_data(max_size, true, f)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ManagedPtr::with_data_up_to: heap offset {} exceeds payload extent",
+                        self.byte_offset().as_usize()
+                    )
+                }),
+            _ => {
+                // SAFETY: F10.RawMemoryAccessValid — Non-heap origins deliberately retain the
+                // pre-existing `with_data` behavior and its caller-provided validity contract.
+                unsafe { self.with_data(max_size, f) }
+            }
+        }
+    }
+
+    /// Safely accesses the data pointed to by this ManagedPtr.
+    ///
+    /// Heap and cross-arena heap reads are exact: the complete requested range
+    /// must fit within the actual payload extent, not allocation-pressure
+    /// `size_bytes()`. Invalid offsets, size overflow, or short heap ranges panic
+    /// rather than returning a truncated success. Other origins retain their
+    /// existing access behavior.
+    ///
+    /// # Safety
+    /// If there is no owner, this method assumes the cached pointer is valid for at least `size` bytes.
+    pub unsafe fn with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> T {
+        self.validate_magic();
+        match &self.origin {
+            PointerOrigin::Heap(_) => self
+                .try_with_heap_data(size, false, f)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ManagedPtr::with_data: heap range overflow or out of bounds (offset {}, size {})",
+                        self.byte_offset().as_usize(),
+                        size
+                    )
+                }),
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(_, _) => self
+                .try_with_heap_data(size, false, f)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ManagedPtr::with_data: heap range overflow or out of bounds (offset {}, size {})",
+                        self.byte_offset().as_usize(),
+                        size
+                    )
+                }),
+            // Legacy Transient access remains outside the heap payload contract (M1d).
             PointerOrigin::Transient(obj) => obj.with_data(|data| {
                 let (offset, to_access) = self.access_window(data.len(), size);
                 f(&data[offset..offset + to_access])
             }),
             _ => {
-                // SAFETY: F10.RawMemoryAccessValid — Caller must ensure the pointer is valid.
-                // Inline pointer resolution to avoid lockless aliasing.
+                // SAFETY: F10.RawMemoryAccessValid — This retains the legacy non-heap
+                // slice path and its caller-provided range/lifetime contract; it does
+                // not use the heap payload extent or establish a new access right.
+                // Stack/Static migration belongs to M3; Transient owner/guard
+                // escape belongs to M1d. Inline resolution preserves existing aliasing behavior.
                 let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
                     // Stack pointer - use cached value
                     self._value
@@ -667,42 +802,50 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
+// Wrapping address formation is observation only, not a bounds check or access right.
+fn observed_address(base: *const u8, offset: usize) -> Option<NonNull<u8>> {
+    if base.is_null() {
+        return None;
+    }
+    NonNull::new(base.wrapping_add(offset).cast_mut())
+}
+
+impl<'gc> ManagedPtr<'gc> {
+    /// Observes a heap address without forming a payload slice or checking bounds.
+    ///
+    /// Wrapping formation is observation only, not an access check or permission
+    /// to dereference. The returned address retains allocation provenance only;
+    /// it neither roots the owner nor retains a borrow, arena lease, or lock.
+    /// Other origins return their legacy cached value (Stack/Static: M3;
+    /// Transient owner/guard escape: M1d).
+    pub fn observe_address(&self) -> Option<NonNull<u8>> {
+        self.validate_magic();
+        let base = match &self.origin {
+            PointerOrigin::Heap(owner) => {
+                let handle = owner.0?;
+                handle.borrow().storage.observe_payload_base()
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+                ptr.as_heap_storage(|storage| storage.observe_payload_base())
+            }
+            _ => return self._value,
+        };
+        observed_address(base, self.byte_offset().as_usize())
+    }
+}
+
 impl<'gc> PointerLike for ManagedPtr<'gc> {
     #[inline]
     fn pointer(&self) -> Option<NonNull<u8>> {
         self.validate_magic();
         match &self.origin {
-            PointerOrigin::Heap(owner) => {
-                let handle = owner.0?;
-                // SAFETY: F10.RawMemoryAccessValid — `handle` is a live object handle and we only read the
-                // immutable base pointer for offset computation.
-                let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    // SAFETY: F3.InteriorPointerRebased — offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
-                    NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
-                }
-            }
+            PointerOrigin::Heap(_) => self.observe_address(),
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
-                let base_ptr = ptr.as_heap_storage(|storage| {
-                    // SAFETY: F1.GcHandleRooted — `as_heap_storage` validates the object and keeps
-                    // the lock held for the closure duration; we only read the
-                    // base storage pointer.
-                    unsafe { storage.raw_data_ptr() }
-                });
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    // SAFETY: F3.InteriorPointerRebased — offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
-                    NonNull::new(unsafe { base_ptr.add(self.byte_offset().as_usize()) })
-                }
-            }
-            _ => {
-                // For stack/static/absolute pointers, use cached value
-                self._value
-            }
+            PointerOrigin::CrossArenaObjectRef(_, _) => self.observe_address(),
+            // Legacy cached-address fallback for non-heap origins; Stack/Static
+            // migration is M3 and Transient owner/guard escape is M1d.
+            _ => self._value,
         }
     }
 }

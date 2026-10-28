@@ -444,8 +444,13 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// Stack and Static encodings carry an offset, not an address. `resolver`
     /// must provide their live storage bases; this method applies the encoded
-    /// offset directly to that live pointer. A resolver that cannot supply a
-    /// base receives a contextual deserialization error instead of an address
+    /// offset to that pointer. Heap and CrossArena addresses likewise derive from
+    /// their retained allocation bases. Wrapping formation is observation only:
+    /// it proves neither bounds nor read/write/copy/atomic permission, and the
+    /// raw address retains no root or borrow/lease. Later access needs the
+    /// separately retained origin/owner and its own guards and range checks.
+    /// Stack/Static fallback migration remains M3. A resolver that cannot supply
+    /// a base receives a contextual deserialization error instead of an address
     /// reconstructed from an integer.
     ///
     /// # Safety
@@ -484,9 +489,12 @@ impl<'gc> ManagedPtr<'gc> {
             ),
             PointerOrigin::Heap(owner) => match owner.0 {
                 Some(handle) => {
-                    // SAFETY: F6.NoEscapeAcrossArena — Heap origin serialization contains a live branded
-                    // handle. The resulting pointer is derived while its storage
-                    // is borrowed from that handle.
+                    // SAFETY: F1.GcHandleRooted — The decoded Heap origin retains this
+                    // handle, which roots the owner during base observation. The raw
+                    // address is derived from the retained allocation base while the
+                    // storage is borrowed; it carries provenance only and retains no
+                    // root or borrow/lock after this statement. Later access needs its
+                    // own owner and guard, range, and access-right checks.
                     let base = unsafe { handle.borrow().storage.raw_data_ptr() };
                     NonNull::new(base.wrapping_add(offset))
                 }
@@ -502,9 +510,11 @@ impl<'gc> ManagedPtr<'gc> {
                 // SAFETY: F6.NoEscapeAcrossArena — Metadata decoding read this pointer from a complete
                 // ManagedPtr buffer and validated its tag and checksum.
                 let word0: *mut u8 = unsafe { _source.as_ptr().cast::<*mut u8>().read_unaligned() };
-                // SAFETY: F1.GcHandleRooted — Metadata decoding already validated the CrossArena
-                // representation. The helper holds the encoded arena lease for
-                // the complete origin-to-storage traversal below.
+                // SAFETY: F1.ArenaGenerationMatch — Metadata decoding validated this
+                // CrossArena representation. The helper's lease protects only the
+                // origin-to-base traversal in its callback; the returned address
+                // retains neither that lease nor a root/guard. Later dereference
+                // requires fresh cross-arena coordination and its own access checks.
                 let base = unsafe {
                     cross_arena_ptr_from_ptr(word0, *owner_id, |ptr| {
                         cross_arena_storage_base_with_lease(ptr)

@@ -188,7 +188,10 @@ impl CLRString {
     }
 
     pub fn len(&self) -> usize {
-        self.deref().len()
+        match &self.0 {
+            StringStorage::Owned(chars) => chars.len(),
+            StringStorage::Interned(chars) => chars.len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -209,6 +212,16 @@ impl CLRString {
         match &mut self.0 {
             StringStorage::Owned(chars) => chars.as_mut_slice(),
             StringStorage::Interned(chars) => Arc::make_mut(chars),
+        }
+    }
+
+    /// Returns the raw base of the UTF-16 backing allocation without creating a slice.
+    /// The address does not retain this string's owner or any borrow/lock, root the
+    /// allocation, or grant write access; interned storage may be shared.
+    pub(crate) fn raw_data_ptr(&self) -> *const u8 {
+        match &self.0 {
+            StringStorage::Owned(chars) => chars.as_ptr().cast(),
+            StringStorage::Interned(chars) => Arc::as_ptr(chars).cast(),
         }
     }
 }

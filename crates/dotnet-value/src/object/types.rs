@@ -332,11 +332,14 @@ impl<'gc> Vector<'gc> {
         }
     }
 
-    /// Returns a pointer to the raw data without taking a field access guard.
+    /// Returns the raw data allocation base without taking a field access guard.
+    /// The address retains neither this vector's owner/root nor a borrow/lock and
+    /// does not itself authorize payload access.
     ///
     /// # Safety
-    /// The caller must ensure synchronization is provided elsewhere (e.g. during STW GC)
-    /// or that the data is otherwise stable and no writers are active.
+    /// The caller must retain the owner and ensure synchronization is provided
+    /// elsewhere (e.g. during STW GC), with no writer or reallocation while the
+    /// pointer is used. Any access must independently satisfy its range and aliasing contract.
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         self.storage.as_ptr() as *mut u8
     }

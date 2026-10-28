@@ -5,8 +5,8 @@ use dotnet_types::{
 use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
-    layout::{FieldLayoutManager, HasLayout},
-    object::{HeapStorage, Object},
+    layout::FieldLayoutManager,
+    object::Object,
     pointer::{ManagedPtr, ManagedPtrInfo, ManagedPtrResolver, PointerOrigin},
 };
 use dotnet_vm_ops::SupportSlotOps;
@@ -168,6 +168,21 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     Ok(())
 }
 
+pub(crate) fn heap_payload_len(pointer: &ManagedPtr<'_>) -> Option<usize> {
+    match pointer.origin() {
+        PointerOrigin::Heap(owner) => owner.0.map(|handle| handle.borrow().storage.payload_len()),
+        #[cfg(feature = "multithreading")]
+        PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+            Some(ptr.as_heap_storage(|storage| storage.payload_len()))
+        }
+        _ => None,
+    }
+}
+
+fn memory_bounds_error(offset: usize, size: usize, len: usize) -> IntrinsicError {
+    IntrinsicError::Memory(MemoryAccessError::BoundsCheck { offset, size, len })
+}
+
 pub fn with_span_data<
     'gc,
     'span,
@@ -192,66 +207,52 @@ pub fn with_span_data<
     }
 
     let m_ptr = ManagedPtr::from_info_full(info, element_type, false);
-    let total_size = len * element_size;
-
-    // Bounds checking
-    if let Some(owner) = m_ptr.owner() {
-        let handle = owner.0.ok_or(IntrinsicError::Static(
+    if matches!(m_ptr.origin(), PointerOrigin::Heap(owner) if owner.0.is_none()) {
+        return Err(IntrinsicError::Static(
             "ManagedPtr::with_data: null owner handle",
-        ))?;
-        let inner = handle.borrow();
+        ));
+    }
+    let offset = m_ptr.byte_offset().as_usize();
+    let payload_len = heap_payload_len(&m_ptr);
+    let total_size = if let Some(payload_len) = payload_len {
+        len.checked_mul(element_size)
+            .ok_or_else(|| memory_bounds_error(offset, usize::MAX, payload_len))?
+    } else {
+        // Preserve the pre-existing non-heap size arithmetic; this repair covers heap origins.
+        len * element_size
+    };
 
-        match &inner.storage {
-            HeapStorage::Vec(v) => {
-                // Vector storage is external (on Rust heap), so we must check absolute addresses
-                // rather than offsets relative to the object header.
-                // SAFETY: F10.BorrowedStorageStable — We only read the vector's backing data pointer for bounds computation.
-                // `inner` borrow keeps the storage alive while this pointer is used.
-                let data_ptr = unsafe { v.raw_data_ptr() } as usize;
-                let elem_size = v.layout.element_layout.size().as_usize();
-                let data_len = v.layout.length * elem_size;
-
-                // Calculate pointer value from owner + offset
-                let ptr_val = data_ptr + m_ptr.byte_offset().as_usize();
-
-                // Check if the range [ptr_val, ptr_val + total_size) is within [data_ptr, data_ptr + data_len)
-                if ptr_val < data_ptr || ptr_val + total_size > data_ptr + data_len {
-                    return Err(IntrinsicError::Memory(MemoryAccessError::BoundsCheck {
-                        offset: m_ptr.byte_offset().as_usize(),
-                        size: total_size,
-                        len: data_len,
-                    }));
-                }
-            }
-            _ => {
-                // Inline storage (Object/Boxed): check offset relative to object header
-                let obj_size = inner.storage.size_bytes();
-                if m_ptr.byte_offset().as_usize() + total_size > obj_size {
-                    return Err(IntrinsicError::Memory(MemoryAccessError::BoundsCheck {
-                        offset: m_ptr.byte_offset().as_usize(),
-                        size: total_size,
-                        len: obj_size,
-                    }));
-                }
-            }
+    // Heap and cross-arena ranges use actual initialized payload extent, not
+    // `size_bytes()` (which includes allocation-accounting overhead). The
+    // subsequent exact read revalidates the range while holding its own guard.
+    if let Some(payload_len) = payload_len {
+        if offset
+            .checked_add(total_size)
+            .is_none_or(|end| end > payload_len)
+        {
+            return Err(memory_bounds_error(offset, total_size, payload_len));
         }
-    } else if let PointerOrigin::Transient(obj) = &m_ptr.origin() {
+    } else if let PointerOrigin::Transient(obj) = m_ptr.origin() {
         let mut bounds_error = None;
         obj.with_data(|data| {
-            if m_ptr.byte_offset().as_usize() + total_size > data.len() {
-                bounds_error = Some(IntrinsicError::Memory(MemoryAccessError::BoundsCheck {
-                    offset: m_ptr.byte_offset().as_usize(),
-                    size: total_size,
-                    len: data.len(),
-                }));
+            if offset + total_size > data.len() {
+                bounds_error = Some(memory_bounds_error(offset, total_size, data.len()));
             }
         });
-        if let Some(e) = bounds_error {
-            return Err(e);
+        if let Some(error) = bounds_error {
+            return Err(error);
         }
     }
 
-    // SAFETY: F10.RawMemoryAccessValid — All size/offset bounds above guarantee the `[byte_offset, byte_offset + total_size)`
-    // range is valid for `m_ptr`'s origin before exposing a byte slice to `f`.
-    Ok(unsafe { m_ptr.with_data(total_size, f) })
+    if let Some(payload_len) = payload_len {
+        // SAFETY: F10.RawMemoryAccessValid — the exact read validates the heap
+        // range again under the storage guard before exposing the requested bytes.
+        unsafe { m_ptr.try_with_data(total_size, f) }
+            .ok_or_else(|| memory_bounds_error(offset, total_size, payload_len))
+    } else {
+        // SAFETY: F10.RawMemoryAccessValid — Non-heap origins retain their legacy
+        // access behavior and caller-provided validity contract. Stack/Static
+        // migration belongs to M3; Transient owner/guard escape belongs to M1d.
+        Ok(unsafe { m_ptr.with_data(total_size, f) })
+    }
 }

@@ -69,12 +69,15 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 StackValue::Int32(i) => (i as u32) as u64,
                 StackValue::Int64(i) => i as u64,
                 StackValue::NativeInt(i) => i as usize as u64,
-                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
-                // SAFETY: F10.RawMemoryAccessValid — `m` is a live managed pointer; a zero-length view reads no memory and
-                // only exposes the address represented by that pointer.
-                StackValue::ManagedPtr(m) => unsafe {
-                    m.with_data(0, |data| data.as_ptr() as usize) as u64
-                },
+                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr().expose_provenance() as u64,
+                // Heap address observation uses wrapping address formation, not a payload
+                // slice or access check. Exposing provenance supports an integer-address
+                // round trip only; the integer retains no owner/root or borrow/lock and grants
+                // no access right.
+                StackValue::ManagedPtr(m) => m
+                    .observe_address()
+                    .map_or(0, |address| address.as_ptr().expose_provenance())
+                    as u64,
                 StackValue::NativeFloat(f) => f as u64,
                 _ => {
                     return ctx.throw_by_name_with_message(
@@ -94,12 +97,14 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 StackValue::Int32(i) => (i as u32) as usize,
                 StackValue::Int64(i) => i as u64 as usize,
                 StackValue::NativeInt(i) => i as usize,
-                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize,
-                // SAFETY: F10.RawMemoryAccessValid — `m` is a live managed pointer; a zero-length view reads no memory and
-                // only exposes the address represented by that pointer.
-                StackValue::ManagedPtr(m) => unsafe {
-                    m.with_data(0, |data| data.as_ptr() as usize)
-                },
+                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr().expose_provenance(),
+                // Heap address observation uses wrapping address formation, not a payload
+                // slice or access check. Exposing provenance supports an integer-address
+                // round trip only; the integer retains no owner/root or borrow/lock and grants
+                // no access right.
+                StackValue::ManagedPtr(m) => m
+                    .observe_address()
+                    .map_or(0, |address| address.as_ptr().expose_provenance()),
                 StackValue::NativeFloat(f) => f as usize,
                 _ => {
                     return ctx.throw_by_name_with_message(

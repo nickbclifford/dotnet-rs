@@ -1,4 +1,5 @@
 use crate::mem_helpers::{chunked_copy_with_safe_point, chunked_fill_with_safe_point};
+use crate::unsafe_ptr::managed_ptr_address;
 use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -28,8 +29,9 @@ fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
 fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
     match value {
         StackValue::NativeInt(v) => {
-            // SAFETY: F10.RawMemoryAccessValid — Unsafe buffer operations explicitly interpret NativeInt
-            // as an unmanaged address; their caller owns pointer validity.
+            // SAFETY: F10.RawMemoryAccessValid — This reconstructs an unmanaged address
+            // from NativeInt only. The integer does not root storage or grant access;
+            // the caller must supply provenance, lifetime, range, and synchronization validity.
             Some(unsafe { unmanaged_ptr_from_addr(*v as usize) })
         }
         StackValue::UnmanagedPtr(ptr) => Some(ptr.0.as_ptr()),
@@ -37,8 +39,8 @@ fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
             if ptr.is_null() {
                 None
             } else {
-                // SAFETY: F10.RawMemoryAccessValid — The managed pointer is non-null and we only read the raw address.
-                Some(unsafe { ptr.with_data(0, |data| data.as_ptr() as *mut u8) })
+                let address = managed_ptr_address(ptr);
+                (!address.is_null()).then_some(address)
             }
         }
         _ => None,

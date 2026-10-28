@@ -811,11 +811,15 @@ fn external_call_impl<'gc>(
                         // SAFETY: F1.GcHandleRooted; F10.BorrowedStorageStable — The heap owner is pinned above, and this guard is retained in
                         // `local_guards` for the whole synchronous native call.
                         let guard = unsafe { PinnedGuard::new(*handle) };
-                        // SAFETY: F10.BorrowedStorageStable — `guard` holds the object storage lock until it is retained below.
-                        let base = unsafe { guard.guard.storage.raw_data_ptr() };
-                        // SAFETY: F10.BorrowedStorageStable; F10.RawMemoryAccessValid — The typed-reference slot's offset was established for this live
-                        // object origin, whose storage remains pinned and guarded through the call.
-                        let value = unsafe { base.add(p.byte_offset().as_usize()) };
+                        // SAFETY: F10.BorrowedStorageStable — `guard` keeps the pinned object storage stable through the native call.
+                        // Observation uses the retained allocation base; the resulting address itself
+                        // retains no root or guard and grants no access right. The pin and guard are
+                        // retained separately in `pinned_objects`/`local_guards`.
+                        let value = guard
+                            .guard
+                            .storage
+                            .observe_address(p.byte_offset().as_usize())
+                            .map_or(std::ptr::null_mut(), NonNull::as_ptr);
                         local_guards.push(guard);
                         value
                     }
@@ -832,19 +836,23 @@ fn external_call_impl<'gc>(
                         // SAFETY: F10.BorrowedStorageStable — `ptr` is an owned cross-arena lock handle retained by the slot.
                         let lock = unsafe { &*ptr.as_ptr() };
                         let guard = lock.borrow();
-                        // SAFETY: F10.BorrowedStorageStable — `guard` keeps the cross-arena object storage live and immobile
-                        // until it is retained in `cross_arena_guards` below.
-                        let base = unsafe { guard.storage.raw_data_ptr() };
-                        // SAFETY: F10.BorrowedStorageStable; F10.RawMemoryAccessValid — The typed-reference slot's offset was established for this live
-                        // cross-arena object origin and remains valid while `guard` is retained.
-                        let value = unsafe { base.add(p.byte_offset().as_usize()) };
+                        // SAFETY: F10.BorrowedStorageStable — The retained `guard` keeps the object storage live and immobile through the native call.
+                        // Observation uses the retained allocation base; the resulting address itself
+                        // retains no arena lease or guard and grants no access right. This guard is
+                        // retained separately in `cross_arena_guards`.
+                        let value = guard
+                            .storage
+                            .observe_address(p.byte_offset().as_usize())
+                            .map_or(std::ptr::null_mut(), NonNull::as_ptr);
                         cross_arena_guards.push(guard);
                         value
                     }
                     _ => {
-                        // SAFETY: F10.RawMemoryAccessValid — The slot retains the managed pointer's live origin. For stack,
-                        // static, transient, and unmanaged origins, their established P/Invoke
-                        // lifetime contract keeps the resolved pointer valid through this call.
+                        // SAFETY: F10.RawMemoryAccessValid — This keeps the legacy non-heap
+                        // `with_data(0, ..)` path and its caller-provided P/Invoke lifetime
+                        // contract. Stack/Static fallback migration belongs to M3; Transient
+                        // owner/guard escape belongs to M1d. The returned address itself does
+                        // not retain the slot's root/guard or grant a native access right.
                         unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) }
                     }
                 };
@@ -877,14 +885,20 @@ fn external_call_impl<'gc>(
                 if is_ref {
                     #[expect(
                         clippy::multiple_unsafe_ops_per_block,
-                        reason = "the managed read and copy into its equally sized owned buffer share one bounds proof"
+                        reason = "the explicitly clamped managed read and copy share one bounds proof"
                     )]
-                    // SAFETY: F10.RawMemoryAccessValid — `p.with_data` validates access against the managed origin and we copy
-                    // at most `buf_len` bytes into an owned buffer of the same length.
+                    // SAFETY: F10.RawMemoryAccessValid — For Heap/CrossArena origins,
+                    // `with_data_up_to` clamps to the actual payload extent (not accounting
+                    // `size_bytes()`) while the read guard is held. Other origins keep the
+                    // legacy behavior. The destination buffer is at least `buf_len` bytes and
+                    // its untouched tail remains zero-filled.
                     unsafe {
-                        p.with_data(buf_len, |data| {
-                            let to_copy = std::cmp::min(buf_len, data.len());
-                            std::ptr::copy_nonoverlapping(data.as_ptr(), buf.as_mut_ptr(), to_copy);
+                        p.with_data_up_to(buf_len, |data| {
+                            std::ptr::copy_nonoverlapping(
+                                data.as_ptr(),
+                                buf.as_mut_ptr(),
+                                data.len(),
+                            );
                         });
                     }
                     temp_buffers.push(TempBuffer::Bytes(buf));
@@ -914,12 +928,15 @@ fn external_call_impl<'gc>(
 
                     #[expect(
                         clippy::multiple_unsafe_ops_per_block,
-                        reason = "obtaining and offsetting the pinned raw address is one heap-pointer marshaling proof"
+                        reason = "heap observation and legacy raw-pointer forwarding share one managed-pointer marshaling proof"
                     )]
                     let ptr =
-                        // SAFETY: F10.RawMemoryAccessValid — Heap pointers are pinned and their guards are kept alive in
-                        // `local_guards`; non-heap pointers come from `ManagedPtr` origin data and are
-                        // forwarded as-is for the duration of this call.
+                        // SAFETY: F10.RawMemoryAccessValid — The explicit Heap-owner branch
+                        // observes the retained allocation base; that address itself is not a
+                        // root/guard or access right. Its pin/guard is retained separately in
+                        // `local_guards`. Other origin variants keep their legacy forwarding
+                        // path here, including CrossArena; Stack/Static migration is M3 and
+                        // Transient/CrossArena owner/guard escape is M1d.
                         unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
@@ -927,14 +944,15 @@ fn external_call_impl<'gc>(
                                 let ptr = guard
                                     .guard
                                     .storage
-                                    .raw_data_ptr()
-                                    .add(p.byte_offset().as_usize());
+                                    .observe_address(p.byte_offset().as_usize())
+                                    .map_or(std::ptr::null_mut(), NonNull::as_ptr);
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                // SAFETY: F10.RawMemoryAccessValid — A handle-less Heap origin reaches this
-                                // branch only as the P/Invoke raw-address fallback;
-                                // native-call validity remains the caller's contract.
+                                // SAFETY: F10.RawMemoryAccessValid — A handle-less Heap origin
+                                // reaches this legacy P/Invoke raw-address fallback only. Rebuilding
+                                // its address from integer bits does not root an allocation or grant
+                                // access; native-call validity remains the caller's contract.
                                 unmanaged_ptr_from_addr(p.byte_offset().as_usize())
                             }
                         } else {
@@ -942,8 +960,11 @@ fn external_call_impl<'gc>(
                         }
                     };
 
-                    // SAFETY: F10.RawMemoryAccessValid — Heap storage is pinned and its guard remains in `local_guards`;
-                    // non-heap ManagedPtr origins retain their backing storage through the call.
+                    // SAFETY: F10.RawMemoryAccessValid — The explicit Heap owner is pinned
+                    // and its guard remains in `local_guards`; the raw address itself does
+                    // not provide that lifetime or an access right. Other origins retain the
+                    // legacy caller-provided native-call validity contract (Stack/Static: M3;
+                    // Transient/CrossArena owner/guard escape: M1d).
                     if let Err(e) = unsafe {
                         push_ptr_arg(
                             &mut temp_buffers,

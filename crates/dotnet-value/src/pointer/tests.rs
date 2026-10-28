@@ -1,9 +1,19 @@
 use crate::{
-    object::{HeapStorage, ObjectRef},
+    layout::{ArrayLayoutManager, FieldLayoutManager, GcDesc, LayoutManager, Scalar},
+    object::{HeapStorage, Object, ObjectRef, Vector},
     pointer::*,
+    ptr_common::PointerLike,
+    storage::FieldStorage,
     test_helpers::with_test_gc_context,
 };
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+    resolution::ResolutionS,
+};
+use dotnetdll::prelude::BaseType;
 use gc_arena::{Arena, Gc, Rootable};
+use hashbrown::HashMap;
 use std::{
     cell::Cell,
     ptr::NonNull,
@@ -73,6 +83,391 @@ fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc>
         false,
         Some(ByteOffset::new(0)),
     )
+}
+
+#[test]
+fn m1a_one_byte_heap_read() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let obj = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let ptr = ManagedPtr::new(
+            obj.pointer(),
+            TypeDescription::NULL,
+            Some(obj),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+
+        // SAFETY: F1.GcHandleRooted — `obj` keeps the one-byte vector alive for this read;
+        // `with_data` validates the exact one-byte payload window before forming the slice.
+        unsafe {
+            ptr.with_data(1, |data| {
+                assert_eq!(data.len(), 1);
+                assert_eq!(data[0], 0xA5);
+            });
+        }
+    });
+}
+
+#[test]
+fn m1a_heap_pointer_survives_typed_write() {
+    with_test_gc_context(|gc_handle| {
+        // Exercise both direct and decoded bases, with and without an exposed
+        // integer round trip; Miri's exposed-provenance mode has known limitations.
+        for (kind, decode, reconstruct) in (0..3).flat_map(|kind| {
+            [false, true].into_iter().flat_map(move |decode| {
+                [false, true].map(move |reconstruct| (kind, decode, reconstruct))
+            })
+        }) {
+            let storage = if kind == 0 {
+                HeapStorage::Vec(Box::new(Vector::new(
+                    ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+                    ArrayLayoutManager {
+                        element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                        length: 1,
+                    },
+                    vec![0],
+                    vec![1],
+                )))
+            } else {
+                let fields = FieldStorage::new(
+                    Arc::new(FieldLayoutManager {
+                        fields: HashMap::new(),
+                        total_size: 1,
+                        alignment: 1,
+                        gc_desc: GcDesc::default(),
+                        has_ref_fields: false,
+                    }),
+                    vec![0],
+                );
+                let object = Object::new(TypeDescription::NULL, GenericLookup::default(), fields);
+                if kind == 1 {
+                    HeapStorage::Obj(Box::new(object))
+                } else {
+                    HeapStorage::Boxed(Box::new(object))
+                }
+            };
+            let owner = ObjectRef::new(gc_handle, storage);
+            let managed = ManagedPtr::new(
+                None,
+                TypeDescription::NULL,
+                Some(owner),
+                false,
+                Some(ByteOffset::new(0)),
+            );
+            let base = managed.observe_address().expect("heap base");
+            let observed = if decode {
+                let serializable = ManagedPtr::new(
+                    Some(base),
+                    TypeDescription::NULL,
+                    Some(owner),
+                    false,
+                    Some(ByteOffset::new(0)),
+                );
+                let mut buffer = ManagedPtr::serialization_buffer();
+                serializable.write(&mut buffer);
+                // SAFETY: F1.GcHandleRooted — the complete encoding refers to the
+                // live owner retained throughout this test.
+                unsafe { ManagedPtr::read_resolved_unchecked(&buffer, &NO_MANAGED_BASES) }
+                    .expect("heap decode")
+                    .address
+                    .expect("decoded heap base")
+                    .as_ptr()
+            } else {
+                base.as_ptr()
+            };
+            let address = reconstruct.then(|| observed.expose_provenance());
+            owner.with_data_mut(gc_handle, |data| data[0] = 5);
+            let raw = if let Some(address) = address {
+                // SAFETY: F10.RawMemoryAccessValid — the owner retains the exposed,
+                // one-byte allocation for the synchronized write below.
+                unsafe { unmanaged_ptr_from_addr(address) }
+            } else {
+                observed
+            };
+            // SAFETY: F10.RawMemoryAccessValid — the owner remains live, the one-byte
+            // allocation is stable, and no guarded access overlaps this raw write.
+            unsafe { raw.write(7) };
+            assert_eq!(owner.with_data(|data| data[0]), 7);
+        }
+    });
+}
+
+#[test]
+fn heap_read_windows_are_exact_for_array_object_and_boxed_payloads() {
+    with_test_gc_context(|gc_handle| {
+        #[derive(Copy, Clone)]
+        enum StorageKind {
+            Array,
+            Object,
+            Boxed,
+        }
+
+        for kind in [StorageKind::Array, StorageKind::Object, StorageKind::Boxed] {
+            for len in [0usize, 1, 4] {
+                let expected: Vec<u8> = (0..len).map(|i| 0x30 + i as u8).collect();
+                let storage = match kind {
+                    StorageKind::Array => HeapStorage::Vec(Box::new(Vector::new(
+                        ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+                        ArrayLayoutManager {
+                            element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                            length: len,
+                        },
+                        expected.clone(),
+                        vec![len, 1],
+                    ))),
+                    StorageKind::Object | StorageKind::Boxed => {
+                        let fields = FieldStorage::new(
+                            Arc::new(FieldLayoutManager {
+                                fields: HashMap::new(),
+                                total_size: len,
+                                alignment: 1,
+                                gc_desc: GcDesc::default(),
+                                has_ref_fields: false,
+                            }),
+                            expected.clone(),
+                        );
+                        let object =
+                            Object::new(TypeDescription::NULL, GenericLookup::default(), fields);
+                        match kind {
+                            StorageKind::Object => HeapStorage::Obj(Box::new(object)),
+                            StorageKind::Boxed => HeapStorage::Boxed(Box::new(object)),
+                            StorageKind::Array => unreachable!(),
+                        }
+                    }
+                };
+                let owner = ObjectRef::new(gc_handle, storage);
+                let base = owner.pointer().expect("heap payload base");
+
+                let make_ptr = |offset| {
+                    ManagedPtr::new(
+                        Some(base),
+                        TypeDescription::NULL,
+                        Some(owner),
+                        false,
+                        Some(ByteOffset::new(offset)),
+                    )
+                };
+                let start = make_ptr(0);
+                // SAFETY: F1.GcHandleRooted — `owner` retains the exact payload and
+                // `try_with_data` validates the requested length before constructing a slice.
+                let whole = unsafe { start.try_with_data(len, |data| data.to_vec()) };
+                assert_eq!(whole, Some(expected.clone()));
+                // P/Invoke's explicit short-read contract returns only the actual remaining bytes.
+                // SAFETY: F1.GcHandleRooted — `owner` retains this payload and the helper validates
+                // the offset before clamping the requested size.
+                let clamped = unsafe { start.with_data_up_to(len + 1, |data| data.to_vec()) };
+                assert_eq!(clamped, expected);
+
+                let end = make_ptr(len);
+                // SAFETY: F1.GcHandleRooted — the empty range at the payload end is valid.
+                let end_read = unsafe { end.try_with_data(0, |data| data.len()) };
+                assert_eq!(end_read, Some(0));
+
+                let past_end = make_ptr(len + 1);
+                // SAFETY: F1.GcHandleRooted — this asserts rejection before the callback or
+                // any payload reference is constructed.
+                let past_end_read = unsafe { past_end.try_with_data(0, |data| data.len()) };
+                assert_eq!(past_end_read, None);
+
+                let overflow = make_ptr(1);
+                // SAFETY: F1.GcHandleRooted — checked offset-plus-size overflow must reject.
+                let overflow_read =
+                    unsafe { overflow.try_with_data(usize::MAX, |data| data.len()) };
+                assert_eq!(overflow_read, None);
+            }
+        }
+    });
+}
+
+#[test]
+#[should_panic(expected = "ManagedPtr::with_data: heap range overflow or out of bounds")]
+fn heap_with_data_rejects_short_range() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let ptr = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+
+        // SAFETY: F1.GcHandleRooted — `owner` retains a one-byte payload; the
+        // requested two-byte read must be rejected before invoking the callback.
+        unsafe { ptr.with_data(2, |_| unreachable!("short reads must not succeed")) };
+    });
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn cross_arena_heap_read_uses_exact_payload_range() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let base = owner.pointer().expect("heap payload base");
+        let (object_ptr, arena_id) = owner.as_ptr_info().expect("cross-arena pointer info");
+        let ptr = ManagedPtr::new_cross_arena(
+            Some(base),
+            TypeDescription::NULL,
+            object_ptr,
+            arena_id,
+            ByteOffset::new(0),
+        );
+
+        // SAFETY: F1.GcHandleRooted — `owner` retains the one-byte payload while the
+        // cross-arena read validates its range under the object and field read guards.
+        let byte = unsafe { ptr.with_data(1, |data| data[0]) };
+        assert_eq!(byte, 0xA5);
+        // SAFETY: F1.GcHandleRooted — the exact non-panicking API rejects this overlong range.
+        let invalid = unsafe { ptr.try_with_data(2, |data| data.len()) };
+        assert_eq!(invalid, None);
+    });
+}
+
+#[test]
+fn heap_address_observation_wraps_without_granting_read_access() {
+    with_test_gc_context(|gc_handle| {
+        let fields = || {
+            FieldStorage::new(
+                Arc::new(FieldLayoutManager {
+                    fields: HashMap::new(),
+                    total_size: 1,
+                    alignment: 1,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                }),
+                vec![0xA5],
+            )
+        };
+        let object = || Object::new(TypeDescription::NULL, GenericLookup::default(), fields());
+        let storage = [
+            HeapStorage::Vec(Box::new(Vector::new(
+                ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+                ArrayLayoutManager {
+                    element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                    length: 1,
+                },
+                vec![0xA5],
+                vec![1],
+            ))),
+            HeapStorage::Obj(Box::new(object())),
+            HeapStorage::Boxed(Box::new(object())),
+            HeapStorage::Str(crate::string::CLRString::from("x")),
+        ];
+        for storage in storage {
+            let owner = ObjectRef::new(gc_handle, storage);
+            let (base, len) = owner
+                .as_heap_storage(|storage| (storage.observe_payload_base(), storage.payload_len()));
+            let check = |ptr: ManagedPtr<'_>, offset: usize| {
+                assert_eq!(
+                    ptr.pointer().map(|p| p.as_ptr().addr()),
+                    Some(base.addr().wrapping_add(offset))
+                );
+                // SAFETY: F1.GcHandleRooted — `owner` is live; the checked API must
+                // reject any nonempty read beginning at or beyond the payload end.
+                let invalid = unsafe { ptr.try_with_data(1, |_| unreachable!()) };
+                assert_eq!(invalid, None);
+            };
+            for offset in [len, 4096] {
+                check(
+                    ManagedPtr::new(
+                        None,
+                        TypeDescription::NULL,
+                        Some(owner),
+                        false,
+                        Some(ByteOffset::new(offset)),
+                    ),
+                    offset,
+                );
+                #[cfg(feature = "multithreading")]
+                {
+                    let (object_ptr, arena_id) = owner.as_ptr_info().unwrap();
+                    check(
+                        ManagedPtr::new_cross_arena(
+                            None,
+                            TypeDescription::NULL,
+                            object_ptr,
+                            arena_id,
+                            ByteOffset::new(offset),
+                        ),
+                        offset,
+                    );
+                }
+            }
+            // Managed offsets are u32-packed, so full usize wrap is exercised on
+            // the same address-formation helper rather than an unrepresentable ManagedPtr.
+            assert_eq!(
+                observed_address(base, usize::MAX).map(|p| p.as_ptr().addr()),
+                match base.addr().wrapping_add(usize::MAX) {
+                    0 => None,
+                    address => Some(address),
+                }
+            );
+            assert_eq!(
+                observed_address(base, 0usize.wrapping_sub(base.addr())),
+                None
+            );
+            assert_eq!(observed_address(std::ptr::null(), 1), None);
+        }
+    });
+}
+
+#[test]
+fn m1a_safe_oob_address_observation() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let obj = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let base = obj.pointer().expect("retained heap allocation base");
+        let ptr = ManagedPtr::new(
+            Some(base),
+            TypeDescription::NULL,
+            Some(obj),
+            false,
+            Some(ByteOffset::new(4096)),
+        );
+        let expected = base.as_ptr().addr().wrapping_add(4096);
+
+        let observed = PointerLike::pointer(&ptr);
+        assert_eq!(observed.expect("observable").as_ptr().addr(), expected);
+        assert_eq!(
+            crate::StackValue::ManagedPtr(ptr.into()).as_ptr().addr(),
+            expected
+        );
+    });
 }
 
 #[test]

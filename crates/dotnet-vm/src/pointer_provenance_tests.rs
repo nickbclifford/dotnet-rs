@@ -1,9 +1,9 @@
 //! Bounded IL-level pointer provenance probes on the real VM.
-//! The six controls below are enabled after Phase 2 revalidation in both configurations; all other
-//! probes remain ignored with their final diagnostic-only reasons.
+//! Eleven controls below pass in both configurations; the other twelve probes remain
+//! diagnostic-only. p13 is additionally ignored when memory-validation is enabled.
 //!
-//! Classification is summarized in docs/pointer-provenance/INVENTORY.md; the six controls passed in both
-//! configurations, while the other expected outcomes remain review evidence:
+//! Classification and baseline results are in docs/pointer-provenance/INVENTORY.md;
+//! unverified diagnostic outcomes below remain review evidence, not new runs:
 //! | Probe | Finding | Work item | Lane | Expected outcome |
 //! |---|---|---|---|---|
 //! | `p00_smoke` | harness control | M0 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
@@ -16,17 +16,17 @@
 //! | `p07_localloc_one_past_end` | localloc/arithmetic control | M1b | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
 //! | `p08_localloc_overshoot` | localloc/arithmetic | M1b | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
 //! | `p09_ldloca_convu_survives_callee_stack_growth` | slot/byref | M3 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
+//! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
 //! | `p11_ldelema_stind_heap_array_control` | heap slice/address control | M1a/M3 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
 //! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | unknown-needs-run (suspected Miri UB) |
-//! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
+//! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs (except memory-validation) |
+//! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
 //! | `p15_initblk_stack_local_via_managed_ptr` | slot/byref; block | M3/M1f/M5 | diagnostic-permissive-TB | unknown-needs-run (suspected Miri UB) |
-//! | `p16_cpblk_heap_arrays_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
+//! | `p16_cpblk_heap_arrays_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
 //! | `p17_localloc_ptr_ceq_self` | localloc/arithmetic comparison | M1b | diagnostic-native (explicit opt-in) or diagnostic-permissive-TB | wrong result (predicted, not rerun) |
 //! | `p18_localloc_ptr_clt` | localloc/arithmetic comparison | M1b | diagnostic-native (explicit opt-in) or diagnostic-permissive-TB | wrong result (predicted, not rerun) |
 //! | `p19_ldelem_negative_index` | negative index/native-int | M1f | diagnostic-native or diagnostic-permissive-TB (isolated process) | native panic (reported; not rerun) |
-//! | `p20_heap_convu_then_typed_write_then_raw_store` | heap slice/address interleaving | M1a/M3 | diagnostic-permissive-TB | unknown-needs-run |
+//! | `p20_heap_convu_then_typed_write_then_raw_store` | heap slice/address interleaving | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
 //! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | diagnostic-permissive-TB | unknown-needs-run |
 //! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | unknown-needs-run |
 
@@ -40,8 +40,21 @@ use crate::{
     },
 };
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_value::StackValue;
+use dotnet_intrinsics_unsafe::unsafe_ptr::intrinsic_unsafe_as_pointer;
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+    members::MethodDescription,
+    resolution::ResolutionS,
+};
+use dotnet_utils::ByteOffset;
+use dotnet_value::{
+    StackValue,
+    layout::{ArrayLayoutManager, LayoutManager, Scalar},
+    object::{HeapStorage, ObjectRef, Vector},
+    pointer::{ManagedPtr, unmanaged_ptr_from_addr},
+};
+use dotnet_vm_ops::ops::EvalStackOps;
 use dotnetdll::{
     prelude::*,
     resolved::{
@@ -528,7 +541,6 @@ fn p09_ldloca_convu_survives_callee_stack_growth() {
 
 // Heap array element address laundered through an integer: `fixed (int* p = &arr[1]) *p = 7`.
 #[test]
-#[ignore = "M1a/M3: p10 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p10_ldelema_convu_stind_heap_array() {
     let r = run_program("P10", |_res, _t| {
         (
@@ -627,9 +639,12 @@ fn p12_ldsflda_convu_stind_static() {
 }
 
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):
-// `Unsafe.Add(ref arr[0], 100)` style. Never dereferenced; Rust-UB only if the VM forms a raw ptr.
+// `Unsafe.Add(ref arr[0], 100)` style. Never dereferenced; address formation must use wrapping arithmetic.
 #[test]
-#[ignore = "M1a/M3: p13 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[cfg_attr(
+    feature = "memory-validation",
+    ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+)]
 fn p13_ldelema_managed_add_far_out_of_bounds_then_conv_u() {
     let r = run_program("P13", |_res, _t| {
         (
@@ -659,6 +674,148 @@ fn p13_ldelema_managed_add_far_out_of_bounds_then_conv_u() {
     assert_eq!(r, 1);
 }
 
+// Regression for the separate conv.u8 implementation: the same heap element address
+// must be observed by conv.u8 and conv.u, without deriving either from a payload slice.
+#[test]
+fn conv_u8_heap_ldelema_matches_conv_u() {
+    let r = run_program("ConvU8AddressMatch", |_res, _t| {
+        (
+            4,
+            vec![local(BaseType::IntPtr), local(BaseType::IntPtr)],
+            vec![
+                Instruction::LoadConstantInt32(4),
+                Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                Instruction::StoreLocal(0),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(1),
+                ldelema_i4(),
+                Instruction::Convert(ConversionType::UInt64),
+                Instruction::Convert(ConversionType::UIntPtr),
+                Instruction::StoreLocal(1),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(1),
+                ldelema_i4(),
+                conv_u(),
+                Instruction::LoadLocal(1),
+                Instruction::CompareEqual,
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 1);
+}
+
+// Address observation after managed pointer arithmetic is allowed to form a far-OOB
+// numeric address; this regression never dereferences the resulting integer.
+#[test]
+#[cfg_attr(
+    feature = "memory-validation",
+    ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+)]
+fn conv_u8_after_far_oob_managed_add_does_not_panic() {
+    let r = run_program("ConvU8FarOob", |_res, _t| {
+        (
+            4,
+            vec![local(BaseType::IntPtr)],
+            vec![
+                Instruction::LoadConstantInt32(4),
+                Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                Instruction::StoreLocal(0),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(0),
+                ldelema_i4(),
+                Instruction::LoadConstantInt32(4096),
+                Instruction::Add,
+                Instruction::Convert(ConversionType::UInt64),
+                Instruction::Pop,
+                Instruction::LoadConstantInt32(1),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 1);
+}
+
+#[test]
+fn unsafe_as_pointer_heap_array_element_round_trips_raw_write_read() {
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader));
+    let mut arena = new_test_arena(&shared);
+
+    arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — the test arena root remains live for this mutation.
+        let gc_handle = unsafe { test_gc_handle(gc, engine) };
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 4,
+            },
+            vec![0; 4],
+            vec![4, 1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let element = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(1)),
+        );
+
+        let address = {
+            let mut ctx = engine.ves_context(gc_handle);
+            ctx.push(StackValue::ManagedPtr(element.into()));
+            let ignored_method = MethodDescription::new(
+                TypeDescription::NULL,
+                GenericLookup::default(),
+                ResolutionS::NULL,
+                MethodMemberIndex::Method(0),
+            );
+            assert!(matches!(
+                intrinsic_unsafe_as_pointer(&mut ctx, ignored_method, &GenericLookup::default()),
+                StepResult::Continue
+            ));
+            let StackValue::NativeInt(address) = ctx.pop() else {
+                panic!("Unsafe.AsPointer must return a native integer pointer value");
+            };
+            address
+        };
+
+        // SAFETY: F10.RawMemoryAccessValid — the returned exposed address points to
+        // element 1 of the live, rooted four-byte array allocated above.
+        let raw = unsafe { unmanaged_ptr_from_addr(address as usize) };
+        // SAFETY: F10.RawMemoryAccessValid — the owner remains rooted and the
+        // element address is within the array payload.
+        unsafe { raw.write(0x5A) };
+        assert_eq!(owner.with_data(|data| data[1]), 0x5A);
+    });
+}
+
+#[test]
+fn unmanaged_stind_ldind_round_trips_localloc_native_int() {
+    let r = run_program("LocallocNativeIntIndirectRoundTrip", |_res, _t| {
+        (
+            3,
+            vec![local(BaseType::IntPtr)],
+            vec![
+                Instruction::LoadConstantInt32(4),
+                Instruction::LocalMemoryAllocate,
+                conv_u(),
+                Instruction::StoreLocal(0),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(0x5A),
+                stind(StoreType::Int8),
+                Instruction::LoadLocal(0),
+                ldind(LoadType::UInt8),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 0x5A);
+}
+
 // =================================================================================================
 // Batch 4: systematic "managed -> raw via StackValue::as_ptr()" write paths (initblk / cpblk)
 // =================================================================================================
@@ -673,7 +830,6 @@ fn ldelema_i4() -> Instruction {
 
 // initblk(&arr[0], 0x01, 16): the destination is a ManagedPtr(Heap) converted with as_ptr() then ptr::write_bytes.
 #[test]
-#[ignore = "M1a/M1f/M5: p14 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p14_initblk_heap_array_via_managed_ptr() {
     let r = run_program("P14", |_res, _t| {
         (
@@ -730,9 +886,8 @@ fn p15_initblk_stack_local_via_managed_ptr() {
     assert_eq!(r, 0x01010101);
 }
 
-// cpblk(&dst[0], &src[0], 16): both ManagedPtr(Heap); the write side goes through the read-only-derived pointer.
+// cpblk(&dst[0], &src[0], 16): both ManagedPtr(Heap); the write uses the observed heap address.
 #[test]
-#[ignore = "M1a/M1f/M5: p16 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p16_cpblk_heap_arrays_via_managed_ptr() {
     let r = run_program("P16", |_res, _t| {
         (
@@ -853,7 +1008,6 @@ fn p19_ldelem_negative_index() {
 // array (stelem), then store through the integer. Expect 7. (Lab E12b predicts a reference-derived
 // exposure dies here; a root-derived exposure must survive.)
 #[test]
-#[ignore = "M1a/M3: p20 unverified on baseline; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p20_heap_convu_then_typed_write_then_raw_store() {
     let r = run_program("P20", |_res, _t| {
         (

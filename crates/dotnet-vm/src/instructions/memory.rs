@@ -245,7 +245,7 @@ fn resolve_indirect_origin_and_offset<'gc, T: ExceptionOps<'gc>>(
         StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
         StackValue::UnmanagedPtr(u) => Ok((
             PointerOrigin::Unmanaged,
-            ByteOffset::new(u.0.as_ptr() as usize),
+            ByteOffset::new(u.0.as_ptr().expose_provenance()),
         )),
         _ => {
             Err(ctx

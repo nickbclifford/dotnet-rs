@@ -72,8 +72,11 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
                     let element_type = make_char_element_type(ctx)?;
 
                     Ok(SpanSourceData {
-                        // SAFETY: F10.BorrowedStorageStable — `heap` borrow pins the string storage for this scope; we only
-                        // use the pointer to build a managed reference with validated bounds below.
+                        // SAFETY: F10.BorrowedStorageStable — `heap` stabilizes the string
+                        // descriptor while its retained allocation base is obtained; the raw
+                        // address does not retain this borrow or root the owner. The ManagedPtr
+                        // below keeps the owner separately. Observation is not a write right;
+                        // interned string storage remains read-only.
                         base_ptr: unsafe { heap.storage.raw_data_ptr() },
                         total_len: s.len(),
                         element_type,
@@ -81,8 +84,10 @@ fn extract_span_source<'gc, T: SpanIntrinsicHost<'gc>>(
                     })
                 }
                 HeapStorage::Vec(a) => Ok(SpanSourceData {
-                    // SAFETY: F10.BorrowedStorageStable — `heap` borrow keeps vector storage alive and we only derive an
-                    // offset pointer after explicit start/length range checks.
+                    // SAFETY: F10.BorrowedStorageStable — `heap` stabilizes the Vec while its
+                    // retained allocation base is obtained; the raw address does not retain
+                    // this borrow or root the owner. The resulting ManagedPtr keeps the owner
+                    // separately, and later accesses require their own checked range/guard.
                     base_ptr: unsafe { a.raw_data_ptr() },
                     total_len: a.layout.length,
                     element_type: a.element.clone(),
@@ -222,8 +227,10 @@ pub fn intrinsic_as_span<'gc, T: SpanIntrinsicHost<'gc>>(
     let ptr = if base_ptr.is_null() {
         base_ptr
     } else {
-        // SAFETY: F10.RawMemoryAccessValid — `start <= total_len` and `actual_length` checks above ensure this computed
-        // element offset remains within the source span's backing allocation.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The source
+        // element layout and the `start`/length checks place this offset within (or at the
+        // one-past end of) the backing payload. This is bounded span construction, not
+        // arbitrary address observation; the ManagedPtr below retains the owner separately.
         unsafe { base_ptr.add(byte_start) }
     };
     offset += ByteOffset::new(byte_start);
@@ -531,8 +538,9 @@ pub fn intrinsic_internal_get_array_data<'gc, T: SpanIntrinsicHost<'gc>>(
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
         if let HeapStorage::Vec(v) = &inner.storage {
-            // SAFETY: F10.BorrowedStorageStable — `inner` borrow keeps vector backing storage alive while deriving a pointer to
-            // its first element.
+            // SAFETY: F10.BorrowedStorageStable — `inner` stabilizes the Vec while the
+            // allocation base is read. The returned address retains no borrow or root;
+            // the ManagedPtr constructed below separately retains `array_ref` as owner.
             let ptr = unsafe { v.raw_data_ptr() };
 
             // For Vectors, the ManagedPtr offset must be relative to the raw data pointer
@@ -830,8 +838,9 @@ pub fn intrinsic_span_to_readonly_span<'gc, T: SpanIntrinsicHost<'gc>>(
                         format!("{:?}", object.storage),
                     );
                 };
-                // SAFETY: F10.BorrowedStorageStable — the owning handle is retained by the ManagedPtr below, and the vector
-                // borrow keeps its backing storage live while deriving the data pointer.
+                // SAFETY: F10.BorrowedStorageStable — the vector borrow stabilizes the
+                // allocation while its raw base is obtained; that address retains no
+                // borrow or root. The ManagedPtr below separately retains the owner.
                 (
                     unsafe { vector.raw_data_ptr() },
                     vector.layout.length as i32,

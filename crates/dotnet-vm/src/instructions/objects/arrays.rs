@@ -220,8 +220,10 @@ fn ldelema_internal<
             return Err(());
         }
         #[expect(clippy::multiple_unsafe_ops_per_block, reason = "retrieving vector storage and deriving its checked element address share one bounds proof")]
-        // SAFETY: F3.InteriorPointerRebased — `index < v.layout.length` above, and `element_offset` uses the vector's own
-        // element stride, so the derived address lies within its live backing storage.
+        // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — `index < v.layout.length`
+        // and the element stride place `element_offset` within the live Vec payload; `raw_data_ptr`
+        // is the allocation base, not a slice-derived pointer. The `ManagedPtr` below separately
+        // retains `obj` as its owner; this raw address alone is not a root or access right.
         let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
         Ok(ptr)
     }));

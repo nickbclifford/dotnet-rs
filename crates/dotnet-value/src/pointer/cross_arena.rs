@@ -9,6 +9,41 @@ use dotnet_utils::gc::{ThreadSafeLock, try_acquire_lease};
 #[cfg(feature = "multithreading")]
 use std::ptr::NonNull;
 
+#[cfg(feature = "multithreading")]
+impl ObjectPtr {
+    pub(crate) fn try_with_data_range<T>(
+        &self,
+        offset: usize,
+        size: usize,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        // SAFETY: F10.BorrowedStorageStable — the existing cross-arena origin protocol guarantees
+        // that this `ObjectPtr` is live and aligned; this shared borrow stabilizes `ObjectInner`
+        // but does not acquire an arena lease or create a root. The delegated HeapStorage read
+        // holds the applicable object/FieldStorage read guard through `f`; a raw address returned
+        // by `f` does not retain those guards or grant access beyond the checked read.
+        let lock = unsafe { &*self.as_ptr() };
+        let inner = lock.borrow();
+        inner.storage.try_with_data_range(offset, size, f)
+    }
+
+    pub(crate) fn with_data_up_to<T>(
+        &self,
+        offset: usize,
+        max_size: usize,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        // SAFETY: F10.BorrowedStorageStable — the existing cross-arena origin protocol guarantees
+        // that this `ObjectPtr` is live and aligned; this shared borrow stabilizes `ObjectInner`
+        // but does not acquire an arena lease or create a root. The delegated HeapStorage read
+        // holds the applicable object/FieldStorage read guard through `f`; a raw address returned
+        // by `f` does not retain those guards or grant access beyond the checked read.
+        let lock = unsafe { &*self.as_ptr() };
+        let inner = lock.borrow();
+        inner.storage.with_data_up_to(offset, max_size, f)
+    }
+}
+
 /// Reconstruct a serialized cross-arena lock pointer while its arena is pinned.
 ///
 /// The callback is deliberately scoped to the arena lease. Any dereference of

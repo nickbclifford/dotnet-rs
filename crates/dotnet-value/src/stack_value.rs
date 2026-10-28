@@ -262,11 +262,14 @@ fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
             .0
             .map_or(std::ptr::null_mut(), |h: ObjectHandle<'gc>| {
                 let inner = h.borrow();
-                // SAFETY: F1.GcHandleRooted — The live Heap owner supplies the storage provenance
-                // while `inner` keeps that storage borrowed.
+                // SAFETY: F1.GcHandleRooted — `m` retains the Heap owner while `inner`
+                // is borrowed to obtain the allocation base. The returned raw address
+                // itself retains neither this borrow nor a root; callers must keep the
+                // owner alive and establish access rights separately.
                 let base = unsafe { inner.storage.raw_data_ptr() };
-                // SAFETY: F3.InteriorPointerRebased — The ManagedPtr retains the offset associated with
-                // this live owner storage.
+                // SAFETY: F10.RawMemoryAccessValid — This legacy helper uses in-bounds
+                // `.add` and therefore assumes the stored offset lies within the live
+                // payload. It is not the wrapping heap observer and grants no access right.
                 unsafe { base.add(m.byte_offset().as_usize()) }
             })
     } else {
@@ -561,8 +564,10 @@ impl<'gc> StackValue<'gc> {
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
             Self::NativeInt(i) => {
-                // SAFETY: F10.RawMemoryAccessValid — NativeInt-to-pointer conversion is an address-only
-                // unmanaged boundary; the eventual accessor owns validity.
+                // SAFETY: F10.RawMemoryAccessValid — This reconstructs an unmanaged
+                // address only. The integer does not root an allocation or grant an
+                // access right; the eventual accessor/caller must supply provenance,
+                // lifetime, range, and synchronization validity.
                 unsafe { pointer::unmanaged_ptr_from_addr(*i as usize) }
             }
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
@@ -570,8 +575,7 @@ impl<'gc> StackValue<'gc> {
                 if m.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-                    unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) }
+                    Self::managed_ptr_as_ptr(m)
                 }
             }
             Self::TypedRef(slot) => {
@@ -579,12 +583,30 @@ impl<'gc> StackValue<'gc> {
                 if value.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    // SAFETY: F3.StackSlotMatchesView — The frame-owned typed-reference slot retains the valid managed
-                    // pointer and this operation uses it only under its existing access contract.
-                    unsafe { value.with_data(0, |data| data.as_ptr() as *mut u8) }
+                    Self::managed_ptr_as_ptr(value)
                 }
             }
             v => panic!("expected pointer on stack, received {:?}", v),
+        }
+    }
+
+    fn managed_ptr_as_ptr(pointer: &ManagedPtr<'gc>) -> *mut u8 {
+        match pointer.origin() {
+            PointerOrigin::Heap(_) => pointer
+                .observe_address()
+                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(_, _) => pointer
+                .observe_address()
+                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
+            _ => {
+                // SAFETY: F10.RawMemoryAccessValid — This deliberately keeps the legacy
+                // non-heap `with_data(0, ..)` address path; the caller still supplies
+                // its validity and lifetime contract, and observation grants no access
+                // right. Stack/Static migration belongs to M3; Transient owner/guard
+                // escape belongs to M1d. Do not apply the heap observation rules here.
+                unsafe { pointer.with_data(0, |data| data.as_ptr() as *mut u8) }
+            }
         }
     }
 

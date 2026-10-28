@@ -176,6 +176,104 @@ impl FieldStorage {
         f(&mut self.data.write())
     }
 
+    /// Returns the length of the backing byte vector while excluding concurrent field writers.
+    ///
+    /// This reads Vec metadata only; it does not construct a slice over the payload bytes.
+    pub(crate) fn data_len(&self) -> usize {
+        self.validate_magic();
+        let _guard = self.data.read();
+        #[allow(
+            unused_unsafe,
+            reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
+        )]
+        // SAFETY: F10.BorrowedStorageStable — The read guard prevents writers from changing Vec
+        // metadata while its length is read.
+        let data_ptr = unsafe { self.data.data_ptr() };
+        // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the Vec protected by `self.data`;
+        // reading its length does not construct a reference to the payload bytes.
+        unsafe { (*data_ptr).len() }
+    }
+
+    /// Snapshots the allocation base while excluding concurrent field writers.
+    /// The returned pointer retains neither the guard nor permission to access bytes.
+    pub(crate) fn observe_data_base(&self) -> *const u8 {
+        self.validate_magic();
+        let _guard = self.data.read();
+        #[allow(
+            unused_unsafe,
+            reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
+        )]
+        // SAFETY: F10.BorrowedStorageStable — The read guard excludes changes to the Vec.
+        let data_ptr = unsafe { self.data.data_ptr() };
+        // SAFETY: F10.RawMemoryAccessValid — The guard protects this Vec descriptor; as_ptr
+        // obtains its allocation base without constructing a payload slice.
+        unsafe { (*data_ptr).as_ptr() }
+    }
+
+    /// Invokes `f` with exactly the requested in-bounds byte range, without
+    /// first constructing a slice over the whole payload.
+    pub(crate) fn try_with_data_range<T>(
+        &self,
+        offset: usize,
+        size: usize,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        self.with_data_window(offset, size, false, f)
+    }
+
+    /// Invokes `f` with up to `max_size` bytes from `offset`, explicitly
+    /// preserving the legacy short-read behavior needed by P/Invoke buffers.
+    pub(crate) fn with_data_up_to<T>(
+        &self,
+        offset: usize,
+        max_size: usize,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        self.with_data_window(offset, max_size, true, f)
+    }
+
+    fn with_data_window<T>(
+        &self,
+        offset: usize,
+        requested_size: usize,
+        allow_short: bool,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
+        self.validate_magic();
+        let _guard = self.data.read();
+        #[allow(
+            unused_unsafe,
+            reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
+        )]
+        // SAFETY: F10.BorrowedStorageStable — The read guard prevents field writers from changing
+        // the backing Vec or its allocation during range validation and the callback.
+        let data_ptr = unsafe { self.data.data_ptr() };
+        // SAFETY: F10.RawMemoryAccessValid — `data_ptr` addresses the Vec protected by `_guard`;
+        // reading its length does not construct a payload reference.
+        let len = unsafe { (*data_ptr).len() };
+        // SAFETY: F10.RawMemoryAccessValid — `data_ptr` addresses the Vec protected by `_guard`;
+        // `as_ptr` returns the allocation base without constructing a payload slice.
+        let base = unsafe { (*data_ptr).as_ptr() };
+        let available = len.checked_sub(offset)?;
+        let size = if allow_short {
+            requested_size.min(available)
+        } else {
+            requested_size
+        };
+        let end = offset.checked_add(size)?;
+        if end > len {
+            return None;
+        }
+
+        // SAFETY: F10.RawMemoryAccessValid — `offset <= len` was proven by `checked_sub` and
+        // `_guard` keeps the Vec allocation stable.
+        let range_ptr = unsafe { base.add(offset) };
+        // SAFETY: F10.RawMemoryAccessValid — `end <= len` was checked while `_guard` keeps the
+        // Vec allocation stable; this constructs only the requested window.
+        let bytes = unsafe { std::slice::from_raw_parts(range_ptr, size) };
+        Some(f(bytes))
+    }
+
     pub fn layout(&self) -> &Arc<FieldLayoutManager> {
         &self.layout
     }
@@ -298,18 +396,22 @@ impl FieldStorage {
         unsafe { &*data_ptr }
     }
 
-    /// Returns a pointer to the raw data without acquiring normal field access guards.
+    /// Returns the raw data allocation base without acquiring a field access guard.
+    /// The address retains neither the owner/root nor a borrow/lock and does not
+    /// itself authorize payload access.
     ///
     /// # Safety
-    /// The caller must ensure that synchronization is provided elsewhere (e.g. during STW GC)
-    /// or that the data is otherwise stable and no writers are active.
+    /// The caller must retain the owner and ensure synchronization is provided
+    /// elsewhere (e.g. during STW GC), with no writer or reallocation while the
+    /// pointer is used. Any access must independently satisfy its range and aliasing contract.
     #[allow(
         unused_unsafe,
         reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
     )]
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
-        // SAFETY: F10.BorrowedStorageStable — Caller upholds synchronization guarantees and the pointer does not outlive
-        // the lock.
+        // SAFETY: F10.BorrowedStorageStable — The caller supplies the synchronization
+        // required by this unsafe API. This descriptor pointer is used only for the
+        // immediate base lookup; the returned allocation address retains no guard.
         let data_ptr = unsafe { self.data.data_ptr() };
         // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the storage protected by `self.data`.
         unsafe { (*data_ptr).as_mut_ptr() }

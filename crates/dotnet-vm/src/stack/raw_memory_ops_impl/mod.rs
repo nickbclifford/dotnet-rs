@@ -1004,7 +1004,10 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
                 let base_ptr = slot.data_location().as_ptr();
                 #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the offset raw address and wrapping the proven non-null result share one stack-address proof")]
-                // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
+                // SAFETY: F10.RawMemoryAccessValid — This legacy Stack path retains its
+                // in-bounds `.add` premise and caller range contract; it is not the
+                // heap wrapping observer. Stack migration is M3, and address formation
+                // itself grants no later read/write/copy right.
                 unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
             }
             PointerOrigin::Static(metadata) => {
@@ -1013,18 +1016,20 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     .get(metadata.type_desc.clone(), &metadata.generics);
                 storage.storage.with_data(|data| {
                     #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the static offset address and wrapping its proven non-null result share one storage proof")]
-                    // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
+                    // SAFETY: F10.RawMemoryAccessValid — This legacy Static path retains
+                    // its in-bounds `.add` premise and caller range contract; it is not
+                    // the heap wrapping observer. Static migration is M3, and address
+                    // formation itself grants no later access right.
                     unsafe { NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut()) }
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let handle = owner.0.expect("resolve_address: null owner handle");
                 let inner = handle.borrow();
-                // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
-                let ptr = unsafe { inner.storage.raw_data_ptr() };
-                #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the heap offset address and wrapping the proven non-null result share one storage proof")]
-                // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
-                unsafe { NonNull::new_unchecked(ptr.add(offset.as_usize())) }
+                inner
+                    .storage
+                    .observe_address(offset.as_usize())
+                    .expect("resolve_address: heap address is null or wrapped to zero")
             }
             PointerOrigin::Unmanaged => {
                 // SAFETY: F10.RawMemoryAccessValid — This is the explicit Unmanaged-origin branch; callers
@@ -1034,18 +1039,19 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
-                let lock = unsafe { &*ptr.as_ptr() };
-                let guard = lock.borrow();
-                let storage = &guard.storage;
-                #[expect(clippy::multiple_unsafe_ops_per_block, reason = "extracting cross-arena storage and deriving its checked non-null offset share one lock-guard proof")]
-                // SAFETY: F10.BorrowedStorageStable — The lock guard keeps storage alive and the enclosing raw-memory operation
-                // validates the requested offset within that storage.
-                unsafe { NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
+                ptr.as_heap_storage(|storage| {
+                    storage
+                        .observe_address(offset.as_usize())
+                        .expect("resolve_address: cross-arena address is null or wrapped to zero")
+                })
             }
+            // Legacy Transient address resolution remains unchanged; owner/guard
+            // escape and its access contract are M1d follow-up work.
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the transient offset address and wrapping its proven non-null result share one storage proof")]
-                // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
+                // SAFETY: F10.RawMemoryAccessValid — This legacy path retains its
+                // in-bounds `.add` premise and caller range contract; address formation
+                // itself grants no later access right.
                 unsafe { NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut()) }
             }),
         }

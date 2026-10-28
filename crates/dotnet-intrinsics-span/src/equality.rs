@@ -3,6 +3,7 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_simd::sequence_equal as simd_sequence_equal;
 use dotnet_types::{
     TypeDescription, WellKnown,
+    error::MemoryAccessError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
@@ -23,13 +24,13 @@ fn run_chunked_compare<F, S>(
     mut should_yield: S,
 ) -> Result<bool, StepResult>
 where
-    F: FnMut(usize, usize) -> bool,
+    F: FnMut(usize, usize) -> Result<bool, StepResult>,
     S: FnMut() -> bool,
 {
     let mut offset = 0;
     while offset < total_bytes {
         let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
-        if !compare_chunk(offset, current_chunk) {
+        if !compare_chunk(offset, current_chunk)? {
             return Ok(false);
         }
 
@@ -42,17 +43,32 @@ where
     Ok(true)
 }
 
+fn heap_read_error(pointer: &ManagedPtr<'_>, size: usize) -> StepResult {
+    let len = heap_payload_len(pointer)
+        .expect("only heap-origin exact reads can reject a range without panicking");
+    StepResult::Error(
+        MemoryAccessError::BoundsCheck {
+            offset: pointer.byte_offset().as_usize(),
+            size,
+            len,
+        }
+        .into(),
+    )
+}
+
 fn chunk_equal_from_a_slice<'gc>(
     b_chunk: &ManagedPtr<'gc>,
     current_chunk: usize,
     a_slice: &[u8],
-) -> bool {
-    // SAFETY: F10.RawMemoryAccessValid — `b_chunk` was derived from the same validated extent as `a_slice`; this helper
-    // exposes exactly `current_chunk` bytes only while computing their read-only comparison.
+) -> Result<bool, StepResult> {
+    // SAFETY: F10.RawMemoryAccessValid — the exact read validates the complete
+    // requested heap window before exposing bytes to the read-only comparison.
     unsafe {
-        b_chunk.with_data(current_chunk, |b_slice| {
-            simd_sequence_equal(a_slice, b_slice)
-        })
+        b_chunk
+            .try_with_data(current_chunk, |b_slice| {
+                simd_sequence_equal(a_slice, b_slice)
+            })
+            .ok_or_else(|| heap_read_error(b_chunk, current_chunk))
     }
 }
 
@@ -71,12 +87,15 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
             // SAFETY: F10.RawMemoryAccessValid — As above, the validated chunk offset is within `b`'s shared extent.
             let b_chunk = unsafe { b.clone().offset(offset as isize) };
 
-            // SAFETY: F10.RawMemoryAccessValid — `a_chunk` covers `current_chunk` validated bytes and `with_data` exposes
-            // those bytes only for the read-only comparison callback.
-            unsafe {
-                a_chunk.with_data(current_chunk, |a_slice| {
+            // SAFETY: F10.RawMemoryAccessValid — the exact read validates the
+            // requested heap window before exposing bytes to the comparison.
+            match unsafe {
+                a_chunk.try_with_data(current_chunk, |a_slice| {
                     chunk_equal_from_a_slice(&b_chunk, current_chunk, a_slice)
                 })
+            } {
+                Some(result) => result,
+                None => Err(heap_read_error(&a_chunk, current_chunk)),
             }
         },
         || ctx.check_gc_safe_point(),
@@ -447,7 +466,7 @@ mod tests {
         let mut safe_point_checks = 0usize;
         let res = run_chunked_compare(
             total_bytes,
-            |_offset, _chunk| true,
+            |_offset, _chunk| Ok(true),
             || {
                 safe_point_checks += 1;
                 safe_point_checks == 1
@@ -466,7 +485,7 @@ mod tests {
             total_bytes,
             |_offset, _chunk| {
                 chunks += 1;
-                true
+                Ok(true)
             },
             || false,
         );

@@ -14,6 +14,29 @@ use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, Ty
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr::{self, NonNull};
 
+/// Returns the raw address represented by a managed pointer for unsafe intrinsics.
+///
+/// Heap origins use slice-free, wrapping address observation from the retained
+/// allocation base. The returned raw pointer carries no root or borrow/lock and
+/// grants no read/write/copy/atomic right; the caller must separately retain the
+/// owner and establish the required access contract. Other origins retain the
+/// legacy zero-length `with_data` fallback (Stack/Static: M3; Transient and
+/// owner/guard escape: M1d); it does not extend their lifetime or access rights.
+pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
+    match m.origin() {
+        PointerOrigin::Heap(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
+        #[cfg(feature = "multithreading")]
+        PointerOrigin::CrossArenaObjectRef(_, _) => {
+            m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
+        }
+        _ => {
+            // SAFETY: F10.RawMemoryAccessValid — non-heap origins retain their
+            // existing Unsafe intrinsic address path; no payload bytes are read.
+            unsafe { m.with_data(0, |data| data.as_ptr().cast_mut()) }
+        }
+    }
+}
+
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
 #[allow(unused_variables)]
@@ -27,12 +50,12 @@ pub fn intrinsic_unsafe_as_pointer<
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = match val {
-        // SAFETY: F10.RawMemoryAccessValid — `with_data(0, ...)` exposes no bytes and only obtains the address associated
-        // with this live managed pointer for the Unsafe.AsPointer contract.
-        StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
+        StackValue::ManagedPtr(m) => managed_ptr_address(&m),
         StackValue::NativeInt(i) => {
-            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsPointer` explicitly interprets NativeInt as an
-            // unmanaged address; the intrinsic caller owns pointer validity.
+            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsPointer` reconstructs an
+            // unmanaged address from NativeInt only. The integer does not root storage
+            // or grant access; the intrinsic caller must supply provenance, lifetime,
+            // range, and synchronization validity.
             unsafe { unmanaged_ptr_from_addr(i as usize) }
         }
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
@@ -44,7 +67,7 @@ pub fn intrinsic_unsafe_as_pointer<
             );
         }
     };
-    ctx.push_isize(ptr as isize);
+    ctx.push_isize(ptr.expose_provenance() as isize);
     StepResult::Continue
 }
 
@@ -225,8 +248,8 @@ pub fn intrinsic_unsafe_is_address_ordered<'gc, T: EvalStackOps<'gc> + TypedStac
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let right = ctx.pop_ptr() as usize;
-    let left = ctx.pop_ptr() as usize;
+    let right = ctx.pop_ptr().addr();
+    let left = ctx.pop_ptr().addr();
 
     let method_name = method.method().name.as_ref();
     let is_true = match method_name {
@@ -280,7 +303,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
         StackValue::ObjectRef(o) => {
             ctx.push(StackValue::ManagedPtr(
                 ManagedPtr::new(
-                    o.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
+                    o.pointer(),
                     target_type,
                     o.0.map(|_| o),
                     false,
@@ -523,8 +546,10 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let val = ctx.pop();
     let (ptr, pinned, origin, offset_base) = match val {
         StackValue::NativeInt(p) => {
-            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsRef(void*)` explicitly interprets NativeInt as
-            // an unmanaged address; the intrinsic caller owns pointer validity.
+            // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsRef(void*)` reconstructs an
+            // unmanaged address from NativeInt only. The integer does not root storage
+            // or grant access; the intrinsic caller must supply provenance, lifetime,
+            // range, and synchronization validity.
             (
                 unsafe { unmanaged_ptr_from_addr(p as usize) },
                 false,
@@ -533,9 +558,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
             )
         }
         StackValue::ManagedPtr(m) => (
-            // SAFETY: F10.RawMemoryAccessValid — `with_data(0, ...)` only exposes the address represented by the live
-            // managed pointer; no data is read or written here.
-            unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
+            managed_ptr_address(&m),
             m.is_pinned(),
             m.origin().clone(),
             Some(m.byte_offset()),
@@ -553,7 +576,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, T: UnsafeIntrinsicHost<'gc>>(
     let (src_layout_obj, base_addr) = ctx.unsafe_lookup_owner_layout_and_base(ptr, &origin);
 
     if let Some(base_addr) = base_addr {
-        let ptr_addr = ptr as usize;
+        let ptr_addr = ptr.addr();
         let offset = ptr_addr.wrapping_sub(base_addr);
         dotnet_vm_ops::vm_try!(ctx.unsafe_check_read_safety(
             &dest_layout,
