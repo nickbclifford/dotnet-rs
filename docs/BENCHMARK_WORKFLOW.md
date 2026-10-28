@@ -582,3 +582,80 @@ noise threshold, and the other eleven reported no change.  That is neither evide
 a whole-suite environmental slowdown nor a causal performance conclusion about the
 vector-tracing fix.  Most importantly, the absent `json_dom` and `ef_inmemory` baseline
 rows mean this particular experiment cannot answer the intended localized question.
+
+## `m1a` heap-access comparison (2026-10-28)
+
+The M1a heap-access changes were compared with the matching pre-runtime Criterion baselines using
+`bench-fat`, 10 samples, `DOTNET_USE_PREBUILT_FIXTURES=1`, stable `rustc 1.95.0`, no PGO, and the
+same AMD Ryzen 9 9900X / Linux x86_64 host with the `powersave` governor. Negative relative changes
+are faster; each slash-separated triple is the lower bound, point estimate, and upper bound of the
+Criterion 95% confidence interval. End-to-end case comparisons use `m1a-before` for default features
+and `m1a-before-nofeatures` for `--no-default-features`.
+
+```bash
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- '^(memory|unsafe_buffer|span|span_equality|dispatch|heap_access)$' \
+  --sample-size 10 --baseline m1a-before
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --no-default-features --bench end_to_end \
+  -- '^(memory|unsafe_buffer|span|span_equality|dispatch|heap_access)$' \
+  --sample-size 10 --baseline m1a-before-nofeatures
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench managed_ptr_serde -- 'ManagedPtr' --sample-size 10 --baseline m1a-before
+```
+
+| Default-feature `end_to_end` case | Relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `dispatch` | −4.1700% / −3.8969% / −3.6724% | improved (`p < 0.05`) |
+| `span` | −0.1697% / +0.0725% / +0.3130% | no change (`p = 0.58`); rerun: −0.2647% / −0.0456% / +0.1571% (`p = 0.70`) |
+| `span_equality` | −0.7323% / −0.5674% / −0.3992% | within Criterion noise threshold (`p < 0.05`) |
+| `memory` | −0.2260% / −0.0444% / +0.1523% | no change (`p = 0.67`); rerun: −0.8807% / −0.4330% / −0.0728% (`p = 0.06`, two severe low outliers) |
+| `heap_access` | −1.9662% / −1.6883% / −1.3862% | improved (`p < 0.05`); new fixture's first pre/post comparison |
+| `unsafe_buffer` | −0.0919% / +0.0881% / +0.2757% | no change (`p = 0.38`); rerun: −1.8543% / −1.6976% / −1.5340% (improved, one mild low outlier) |
+
+| No-default-features `end_to_end` case (`m1a-before-nofeatures`) | Relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `dispatch` | final +2.7320% / +3.1776% / +3.7114%; earlier +2.9017% / +3.1312% / +3.3564% | regressed (`p < 0.05`) in both; first incomplete run +4.6829% / +5.1742% / +5.6604% |
+| `span` | final +5.3591% / +6.0160% / +6.6081%; earlier +2.7269% / +2.9259% / +3.1313%; hot rerun +3.4456% / +3.8331% / +4.3122% | regressed (`p < 0.05`) in all runs; outliers varied |
+| `span_equality` | final +3.2253% / +3.9696% / +4.7995%; earlier +1.9721% / +2.6453% / +3.4223% | regressed (`p < 0.05`); first incomplete run +4.3664% / +4.7823% / +5.1955% |
+| `memory` | final +2.0553% / +2.8038% / +3.5176%; earlier +2.3509% / +3.2281% / +4.1255%; hot rerun +2.0012% / +2.4456% / +2.9294% | regressed (`p < 0.05`) in all runs |
+| `heap_access` | final +6.6197% / +6.8289% / +7.0380%; initial single-case compare +4.1803% / +4.7371% / +5.3239% | regressed (`p < 0.05`) in both; pre-runtime baseline reconstructed with the benchmark-only fixture/registration diff |
+| `unsafe_buffer` | final +3.6961% / +4.2270% / +4.6760%; earlier +6.5345% / +7.7659% / +8.7303%; hot rerun +3.1147% / +3.6599% / +4.1315% | regressed (`p < 0.05`) in all runs |
+
+The default-feature `managed_ptr_serde` comparisons used the matching `m1a-before` baseline. Its
+15 benchmark IDs reported:
+
+| `ManagedPtr` case | Relative change (95% CI) | Criterion outcome |
+|---|---:|---|
+| `write/unmanaged` | −0.4807% / −0.3555% / −0.2141% | within noise threshold |
+| `write/stack` | −0.7536% / −0.5556% / −0.3556% | within noise threshold |
+| `write/heap` | −0.8875% / −0.7789% / −0.6486% | within noise threshold |
+| `write/static` | −1.2042% / −0.9032% / −0.6105% | within noise threshold |
+| `write/cross_arena` | −0.5853% / −0.3764% / −0.1867% | within noise threshold |
+| `write/transient` | −1.2875% / −0.9795% / −0.6709% | within noise threshold |
+| `read_resolved_unchecked/unmanaged` | −13.226% / −12.858% / −12.554% | improved (`p < 0.05`) |
+| `read_resolved_unchecked/stack` | −12.598% / −12.477% / −12.336% | improved (`p < 0.05`) |
+| `read_resolved_unchecked/heap` | −9.3582% / −9.2229% / −9.0755% | improved (`p < 0.05`) |
+| `read_resolved_unchecked/static` | −16.293% / −16.042% / −15.757% | improved (`p < 0.05`) |
+| `read_resolved_unchecked/cross_arena` | −1.2816% / −1.1308% / −0.9754% | within noise threshold |
+| `read_resolved_unchecked/transient` | first +2.0178% / +2.1703% / +2.3399%; rerun −1.2258% / −1.1366% / −1.0539% | regression then improvement; inconsistent direction, treat as unstable |
+| `read_resolved_with_heap_cache_unchecked/heap_hit` | −1.8826% / −1.7993% / −1.7069% | improved (`p < 0.05`) |
+| `read_resolved_with_heap_cache_unchecked/heap_miss` | −15.764% / −2.5626% / +12.180%; rerun −16.692% / −1.6837% / +13.571% | no change (`p = 0.75`, then `p = 0.84`); broad intervals/outliers |
+| `read_resolved_with_heap_cache_unchecked/heap_mixed_hit_miss_pair` | −13.422% / −0.6534% / +16.737%; rerun −14.446% / −0.5107% / +16.883% | no change (`p = 0.94`, then `p = 0.95`); broad intervals/outliers |
+
+The pre-runtime default baselines for existing end-to-end cases and `managed_ptr_serde` were recorded
+at commit `968f66fe11a28bb8633304034a36aee4febcb1c7`. The default `heap_access` baseline was captured
+at base commit `62d944eb41f405810e27df3368f9ba535fb805a2` plus the then-uncommitted benchmark-only
+fixture and registration; this new case has no earlier history. The no-features `heap_access` baseline
+was independently captured from that same pre-runtime base plus the benchmark-only diff and stored
+under the separate `m1a-before-nofeatures` name. `managed_ptr_serde` requires `multithreading`, so no
+no-features baseline exists for that target.
+
+The default-feature `span` and `memory` cases were neutral on rerun, `unsafe_buffer` was neutral on the
+full run and faster on rerun, and `heap_access` improved by about 1.7%. In contrast, all six no-features
+end-to-end cases repeatedly had positive (slower) relative-change intervals; hot reruns remained
+above-noise but varied in magnitude. These aggregate measurements do not isolate cause: the checked
+extent/access work could contribute to some hot paths, but `dispatch` also regressed without features
+while improving with defaults. The powersave governor and feature-dependent code generation are
+possible confounders, not established explanations. Preserve this no-features performance signal for
+later review; no optimization was attempted. These are native Criterion measurements, not Miri evidence.

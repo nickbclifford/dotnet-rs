@@ -13,10 +13,11 @@ Native-integer conversions remain available through an explicit exposed-provenan
 This is the implementation plan derived from all three [reviews](../pointer-provenance/README.md).
 The underlying historical pass archives and raw logs are not present in this checkout; current evidence
 limits and source-recovery tasks are recorded in the [inventory](../pointer-provenance/INVENTORY.md).
-The plan is **in progress, partial M0**: a VM probe harness and blocking control lane exist, but no
-runtime repair or full M0 completion is claimed. Milestone IDs below are the work-item IDs; split them
-into focused changes while retaining their acceptance criteria. Ownership is assigned by subsystem, not
-by an assumed individual or schedule.
+The plan remains **in progress, partial M0**: the scoped M1a heap-access repairs and regression lanes
+have been implemented, but the broader M0 evidence inventory and M1/M2 work remain open. No broader
+milestone exit is claimed. Milestone IDs below are the work-item IDs; split them into focused changes
+while retaining their acceptance criteria. Ownership is assigned by subsystem, not by an assumed
+individual or schedule.
 
 ## Evidence and reconciled decisions
 
@@ -85,20 +86,21 @@ discovery rather than waiting for the final copy API.
 
 ### M0 — Make failures and controls executable
 
-**Current progress — partial M0 only:** The durable [inventory](../pointer-provenance/INVENTORY.md)
-maps R01–R13 and catalogs the 23 VM probes. Six bounded controls (`p00_smoke`,
+**Current progress — partial M0:** The durable [inventory](../pointer-provenance/INVENTORY.md)
+maps R01–R13 and catalogs the 23 VM probes. Eleven bounded controls (`p00_smoke`,
 `p02_ldloca_stind_i4_control`, `p03_ldloca_convu_ldind_i4`, `p05_single_localloc_roundtrip`,
-`p07_localloc_one_past_end`, and `p11_ldelema_stind_heap_array_control`) each passed separate
-revalidation in both no-features and multithreading configurations (12 recorded exact-name passes).
-The six controls are enabled in ordinary tests and run by the blocking `miri-pointer-controls` CI job
-as two configurations by three guarded shards under the pinned permissive Tree Borrows setup. The
-other 17 probes remain ignored for diagnostic execution only. This filtered VM control lane is not a
-full VM Miri suite, strict-provenance evidence, or a claim of runtime soundness.
+`p07_localloc_one_past_end`, `p11_ldelema_stind_heap_array_control`, `p10_ldelema_convu_stind_heap_array`,
+`p20_heap_convu_then_typed_write_then_raw_store`, `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`,
+`p14_initblk_heap_array_via_managed_ptr`, and `p16_cpblk_heap_arrays_via_managed_ptr`) passed exact
+revalidation in both no-features and multithreading configurations. All 11 are enabled in ordinary
+tests without `memory-validation` and run by the blocking `miri-pointer-controls` job across six guarded shards. The other 12
+catalogued probes remain ignored and diagnostic-only. These are filtered permissive Tree Borrows
+results, not a full VM Miri suite, strict-provenance evidence, or a claim of runtime soundness.
 
 - Keep the pass-3 IL p00–p20 probes and the two unique pass-2 cases (null through `&p`, wide stores)
-  in the owning VM suite, retaining the mock corlib primitive typedefs. Recover and integrate the
-  missing pass-1 library probes. Keep read/control tests alongside writes and dereference after
-  mutation or decoding.
+  in the owning VM suite, retaining the mock corlib primitive typedefs. Recover the original pass-1
+  library probe sources where possible; the independent M1a recreations do not establish source
+  identity. Keep read/control tests alongside writes and dereference after mutation or decoding.
 - Port lab E1–E13 and `gc_model::e11*` with clear labels for model tests. Repair the backing-storage
   aliasing in the two ignored atomic tests; distinguish that UB from their historical Miri ICE reasons.
 - Preserve the existing per-probe classification; classify recovered library/model/FFI evidence and
@@ -106,15 +108,17 @@ full VM Miri suite, strict-provenance evidence, or a claim of runtime soundness.
   FFI as appropriate. Tests that deliberately exhibit UB stay ignored with a finding/work-item ID
   until fixed; do not execute UB as ordinary native tests. Keep known-failure reproductions in the
   explicit diagnostic lane and run failing Miri reproducers separately.
-- The six passing pointer controls now have a blocking lane. Add appropriate gates for each repaired
-  regression and expand VM coverage beyond `jmp_tests`, `tail_calls`, and `fault_tests`. Recover exact
-  strict filters and reasons where possible; current dependency traces and historical filters are
-  unavailable, and exposed reconstruction remains an explicit strict-provenance boundary.
+- The 11 passing pointer controls now have a blocking lane, but they do not close M0. Add permanent
+  gates for recovered evidence and expand VM coverage beyond `jmp_tests`, `tail_calls`, and
+  `fault_tests`. Recover exact strict filters and reasons where possible; current dependency traces and
+  historical filters are unavailable, and exposed reconstruction remains an explicit strict-provenance
+  boundary.
 - Inventory the 73 reported provenance-lint hits before denying `fuzzy_provenance_casts` and
   `lossy_provenance_casts` in first-party code. Use explicit exposure/reconstruction helpers; record any
   narrow exceptions. Do not deny everything before migration and call unrelated dependency failures fixes.
-- Capture native benchmark baselines using the [benchmark workflow](../BENCHMARK_WORKFLOW.md),
-  including memory/unsafe_buffer/span/dispatch and field/byref/native-int loops.
+- Review native benchmark comparisons using the [benchmark workflow](../BENCHMARK_WORKFLOW.md),
+  including memory/unsafe_buffer/span/dispatch and field/byref/native-int loops. The M1a
+  `m1a-before` comparisons are recorded; repeated no-features regressions remain open for follow-up.
 
 **Exit:** every finding in the coverage table below has a permanent test or a specific reproduction task;
 all current passing controls run in CI. Evidence distinguishes VM tests, models, source claims, and
@@ -124,37 +128,70 @@ dependency blockers. No green filtered lane is described as a green full strict 
 
 The [evidence inventory](../pointer-provenance/INVENTORY.md) maps R01–R13 to exact probes,
 evidence limits, owners and reproduction tasks. The historical pass-1/2/3 archive directories,
-raw transcripts, library/model/FFI sources and patch sources are absent from this tree; their
-external recovery location is unknown. Recover an external backup if available or independently
-reproduce the missing evidence. The integrated p20 source came from a patched tree; its unpatched
-baseline result remains unknown. The six filtered permissive-TB controls do not establish full M0,
-strict Miri or runtime soundness.
+raw transcripts, most original library/model/FFI sources and patch sources are absent from this tree;
+their external recovery location is unknown. Two M1a library regressions independently recreate the missing test intents, and the p20 baseline
+was recorded, but neither recovers the missing historical source or archive. The
+11 filtered permissive-TB controls do not establish full M0, strict Miri or runtime soundness.
 
-- Recover and integrate pass-1 library probes, standalone E1–E13 models and `gc_model::e11*`,
-  preserving the distinction between model, library and real-VM evidence. Recover the missing address
-  and libffi fixtures and reproduce the p20 baseline as described in the inventory.
+- Recover and integrate the remaining pass-1 library probes, standalone E1–E13 models and
+  `gc_model::e11*`, preserving the distinction between model, library and real-VM evidence. Recover
+  the missing address and libffi fixtures; retain the recorded p20 result as current-tree evidence.
 - Identify the two historically reported atomic tests, distinguish test-backing aliasing from their
   historical Miri ICE reasons, and repair and validate them (M0/M6); their identities remain unknown.
 - Inventory and migrate the reported 73 provenance-lint hits before denying `fuzzy_provenance_casts`
   and `lossy_provenance_casts`; document narrow exceptions (M0). The count is not a fresh audit.
-- Capture native benchmark baselines for memory/unsafe_buffer/span/dispatch and field/byref/native-int
-  paths, recovering the excluded addressing and field performance probes as needed (M0).
+- Review the recorded native benchmark comparisons for memory/unsafe_buffer/span/dispatch and
+  field/byref/native-int paths (M0). Matching M1a comparisons are recorded in the
+  [benchmark report](../BENCHMARK_WORKFLOW.md); the repeated no-features regressions still need
+  follow-up.
 - Recover or re-establish strict-core evidence and exact selectors after diagnosing dependency
   blockers; the historical filters and first-failure dependency traces are unavailable. Separately
   scope unrelated VM Miri expansion (M0/M6). Whole-VM strict Miri is not a claim of this harness.
   Observe hosted CI cold/cache timings before changing the provisional 45-minute control timeout.
-- Complete the M1–M6 pointer, storage, GC, ABI and concurrency repairs and their existing exits; no
-  runtime repair or milestone completion follows from this harness.
+- Complete the M1–M6 pointer, storage, GC, ABI and concurrency repairs and their existing exits; the
+  scoped M1a heap repair does not itself complete any broader milestone exit.
 
 ### M1 — Contain independently reproducible defects
 
-- **M1a, heap access:** use actual payload lengths in `with_data`; eliminate shared slices from address
-  observation and use root-derived wrapping address formation. Apply explicit exposure at conversion
-  sites, including their separate implementations. The historical 3c2 patch source is absent; recover it
-  before reviewing its exact changes, or independently validate the same design. Rewriting stale safety
-  comments and the remaining stack fallback would still be required; the historical patch is not a
-  wholesale fix.
-  Gates: p10/p13/p14/p16/p20 plus pass-1 one-byte heap read and safe-OOB observation probes.
+- **M1a, heap access:** scoped heap repairs now use actual payload lengths for `with_data`, separate
+  heap address observation from reads, derive observed addresses from retained allocation bases with
+  wrapping arithmetic, and expose pointer provenance at integer-conversion boundaries. `conv.u` and
+  `conv.u8`, the unsafe pointer helpers, and the shared `StackValue::as_ptr`/VM address paths were
+  separately covered. The historical 3c2 patch source is absent; these changes were independently
+  validated and do not claim identity with that patch. See the coverage table below. The wider M0/M1
+  exits and the follow-on obligations listed there remain open.
+  Gates: p10/p13/p14/p16/p20 plus independently recreated pass-1 one-byte heap read and safe-OOB
+  observation tests.
+
+#### M1a scoped status and coverage (2026-10-28)
+
+The heap-access portion of M1a is implemented and has passed the following pinned
+`nightly-2026-05-27`, permissive Tree Borrows checks in both no-features and multithreading
+configurations. This status does not close M0 or the broader M1 milestone.
+
+| Coverage | Current result | Boundary |
+|---|---|---|
+| `dotnet-value` regressions `pointer::tests::m1a_one_byte_heap_read`, `m1a_safe_oob_address_observation`, and `m1a_heap_pointer_survives_typed_write` | Each exact test passed in both configurations (1 passed, 0 failed, 0 ignored per run). | The first two independently recreate missing test intents; the third is a new interleaving test. Original pass-1 sources are absent, so no identity claim. |
+| VM heap probes p10, p13, p14, p16, p20 | All five are promoted controls and passed individually in both configurations. | Original IL and assertions are unchanged. p13's `memory-validation` native bounds trap remains an intentional conditional ignore; the separate far-OOB `conv.u8` regression is conditionally ignored for the same reason. |
+| Blocking VM pointer-control lane | 11 exact controls passed in each configuration across shards 1–6; shard layout is recorded in [CI](../CI.md). | Filtered permissive Tree Borrows only; the other 12 catalog entries remain diagnostic-only. |
+| Heap access paths | Exact payload-extent reads; slice-free heap observation in `PointerLike`, `StackValue::as_ptr`, VM address resolution, `conv.u`/`conv.u8`, Unsafe helpers, buffer and P/Invoke heap branches; retained-base typed-write interleaving covered. | Observation does not retain an owner, root, or guard; strings have no new writable contract. |
+
+Remaining obligations are explicit and are not implied complete by this table:
+
+- **M3:** stack/static storage migration and the legacy `ManagedPtr::with_data` stack fallback;
+  pointer-codec and Rust struct-layout redesign.
+- **M4:** shared-memory/atomic access protocol, including synchronization for escaped raw pointers.
+- **M1f/M5:** block-operation correctness: unsigned count width, checked ranges, reference barriers,
+  and yield/resumption state.
+- **M1b:** `conv.i` and broader pointer arithmetic/acceptance semantics. Legacy `StackValue`
+  managed-pointer/native-integer comparisons and managed-pointer subtraction still call
+  `managed_ptr_to_raw`, whose Heap arm uses in-bounds `.add`; a far-OOB offset can violate its
+  premise even without dereferencing. The M1a observation tests do not cover those operations.
+- **M1d:** owner/guard escape from `pop_ptr` and `resolve_address`, plus Transient ownership.
+- **M1e/M1g:** GC transport/lease behavior and arena/address identity encoding.
+- **M0/M6:** provenance-lint migration and recovery of strict-provenance evidence. Permissive Tree
+  Borrows results do not satisfy this obligation.
+
 - **M1b, pointer semantics:** wrapping unmanaged arithmetic with explicit null handling; comparison arms;
   correct `Unsafe.ByteOffset` sign and pointer acceptance for `conv.i`/native-int stores. Validate native
   signed/unsigned widths. Gates: p06/p07/p08/p17/p18 and new signed conversion/store/load/dereference tests.
@@ -307,11 +344,24 @@ must state which access paths it repairs and which migration obligations remain.
 tests during iteration; reserve the full matrix and benchmarks for milestones and final validation.
 
 Use the pinned `nightly-2026-05-27` and recorded flags initially for comparable evidence; changing
-Miri versions requires recording both versions' outcomes. VM Miri builds/probes are expensive (the
-historical estimate is roughly ten minutes to build and four per IL probe, not a fresh measurement);
-shard passing suites and run known failures individually. Native libffi tests require their own runner.
-The 23 current VM probes are wired, but the missing pass-1 library and standalone lab/FFI sources are
-not; recover or reproduce those separately before claiming their coverage.
+Miri versions requires recording both versions' outcomes. The blocking pointer lane currently runs
+11 exact controls in each of two configurations across shards 1–6; the per-shard test names are in
+[CI](../CI.md). The three M1a library regressions run in the blocking `miri-value` job's default
+(multithreading) suite and its separate no-features selector. These are filtered permissive Tree
+Borrows lanes: they are not a full VM Miri suite, strict-provenance evidence, or proof of soundness.
+Miri reports warnings around exposed-provenance integer reconstruction; they do not make this lane
+strict evidence. The 12 remaining VM catalog entries are diagnostic-only; run known failures
+individually, and treat setup failures/timeouts separately from UB. Native libffi tests require their
+own runner. The original pass-1 library sources and pass-1/2/3 archives remain unavailable; the three
+M1a library tests are independent recreations, while standalone lab/FFI sources still need recovery or
+reproduction before broader coverage is claimed.
+
+The native benchmark review compares matching `m1a-before` and `m1a-before-nofeatures` Criterion
+baselines at `bench-fat`, 10 samples, on the same Ryzen 9 9900X / `powersave` host. Default-feature
+end-to-end results were neutral or faster for the reviewed hot cases; repeated no-features regressions
+remain an open performance concern, with intervals and caveats in the
+[benchmark report](../BENCHMARK_WORKFLOW.md#m1a-heap-access-comparison-2026-10-28). These native
+measurements are not Miri evidence.
 
 Track milestone progress here and update the [queue](README.md) when the overall status changes.
 Completion requires passing accesses after state changes, not address-only equality or metadata checks.
