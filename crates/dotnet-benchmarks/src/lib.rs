@@ -121,6 +121,14 @@ pub const MEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
+pub const HEAP_ACCESS_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "heap_access",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/heap_access/HeapAccessOps_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
 pub const UNSAFE_BUFFER_BENCHMARK: BenchmarkCase = BenchmarkCase {
     name: "unsafe_buffer",
     fixture: BenchmarkFixture::SingleFile {
@@ -192,7 +200,7 @@ pub const EF_INMEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 18] = [
+pub const BENCHMARK_CASES: [BenchmarkCase; 19] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
@@ -203,6 +211,7 @@ pub const BENCHMARK_CASES: [BenchmarkCase; 18] = [
     SPAN_BENCHMARK,
     SPAN_EQUALITY_BENCHMARK,
     MEMORY_BENCHMARK,
+    HEAP_ACCESS_BENCHMARK,
     UNSAFE_BUFFER_BENCHMARK,
     STRING_BENCHMARK,
     STACK_BENCHMARK,
