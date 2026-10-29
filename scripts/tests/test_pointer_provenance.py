@@ -18,7 +18,13 @@ CONTROLS_BY_SHARD = {
     3: ["p07_localloc_one_past_end", "p11_ldelema_stind_heap_array_control"],
     4: ["p10_ldelema_convu_stind_heap_array", "p20_heap_convu_then_typed_write_then_raw_store"],
     5: ["p13_ldelema_managed_add_far_out_of_bounds_then_conv_u", "p14_initblk_heap_array_via_managed_ptr"],
-    6: ["p16_cpblk_heap_arrays_via_managed_ptr"],
+    6: ["p16_cpblk_heap_arrays_via_managed_ptr", "p_null_through_pointer_local_address"],
+    7: ["p06_localloc_minus_one_then_plus_one", "p08_localloc_overshoot"],
+    8: ["p17_localloc_ptr_ceq_self", "p18_localloc_ptr_clt"],
+    9: ["p21_localloc_signed_extreme_offsets_roundtrip", "p22_localloc_wrap_to_zero_roundtrip"],
+    10: ["p23_localloc_pointer_loop_unsigned_branch_compare", "p24_unsafe_byte_offset_direction_and_deref"],
+    11: ["p25_convi_and_stind_i_pointer_roundtrip_deref", "p26_native_int_boundary_store_load_roundtrip"],
+    12: ["p27_stind_i_fresh_pointer_through_local_slot_dereferences", "p28_stind_i_fresh_pointer_through_heap_memory_dereferences"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 FAKE = r'''#!/usr/bin/env python3
@@ -129,7 +135,7 @@ class PointerScriptTests(unittest.TestCase):
         for shard, names in CONTROLS_BY_SHARD.items():
             self.assertEqual([r[0].split('::')[-1] for r in rows if r[1] == 'control' and r[3] == str(shard)], names)
         self.assertEqual([r[0].split('::')[-1] for r in rows if r[2] == 'yes'],
-                         ['p17_localloc_ptr_ceq_self', 'p18_localloc_ptr_clt', 'p19_ldelem_negative_index'])
+                         ['p19_ldelem_negative_index'])
         self.assertEqual(self.recorded(), [])
 
     def test_guard_good_and_stale_or_ignored(self):
@@ -180,7 +186,7 @@ class PointerScriptTests(unittest.TestCase):
         for name in CONTROLS:
             self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
         self.assertEqual(self.recorded(), [])
-        self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p17_localloc_ptr_ceq_self', '--lane', 'native')
+        self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p19_ldelem_negative_index', '--lane', 'native')
         call = self.recorded()[0]['args']
         self.assertIn('--ignored', call)
         self.assertNotIn('miri', call)

@@ -311,6 +311,11 @@ jobs:
           set -o pipefail
           cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1a_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-no-features.log"
           grep -F 'test result: ok. 3 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-no-features.log"
+      - name: Miri pointer semantics regressions (no features)
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-m1b-no-features.log"
+          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-m1b-no-features.log"
 
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
@@ -322,7 +327,7 @@ jobs:
       fail-fast: false
       matrix:
         configuration: [no-features, multithreading]
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust

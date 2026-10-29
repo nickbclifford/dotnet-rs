@@ -1,34 +1,44 @@
 //! Bounded IL-level pointer provenance probes on the real VM.
-//! Eleven controls below pass in both configurations; the other twelve probes remain
-//! diagnostic-only. p13 is additionally ignored when memory-validation is enabled.
+//! The 31-entry catalog has 24 controls and 7 diagnostic-only probes. Recorded local
+//! pinned permissive Tree Borrows runs pass the controls in both configurations. p13 is
+//! additionally ignored when memory-validation is enabled; only p19 permits native diagnostics.
 //!
-//! Classification and baseline results are in docs/pointer-provenance/INVENTORY.md;
-//! unverified diagnostic outcomes below remain review evidence, not new runs:
-//! | Probe | Finding | Work item | Lane | Expected outcome |
+//! Current classifications and measured outcomes are summarized in
+//! docs/pointer-provenance/INVENTORY.md. Historical failures are labeled as pre-repair;
+//! unverified diagnostic outcomes remain review evidence, not new runs:
+//! | Probe | Finding | Work item | Lane | Current outcome / history |
 //! |---|---|---|---|---|
-//! | `p00_smoke` | harness control | M0 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p01_ldloca_convu_stind_i4` | slot/byref | M3 | diagnostic-permissive-TB | unknown-needs-run (suspected Miri UB) |
-//! | `p02_ldloca_stind_i4_control` | slot/byref control | M3 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p03_ldloca_convu_ldind_i4` | slot/byref read control | M3 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p04_double_localloc_write_first` | localloc/arithmetic | M1c | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p05_single_localloc_roundtrip` | serde/transport control; localloc | M1c/M1e/M3 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p06_localloc_minus_one_then_plus_one` | localloc/arithmetic | M1b | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p07_localloc_one_past_end` | localloc/arithmetic control | M1b | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p08_localloc_overshoot` | localloc/arithmetic | M1b | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p09_ldloca_convu_survives_callee_stack_growth` | slot/byref | M3 | diagnostic-permissive-TB | Miri UB reported group; exact current outcome unverified |
-//! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
-//! | `p11_ldelema_stind_heap_array_control` | heap slice/address control | M1a/M3 | blocking-native + blocking-permissive-TB | pass (Phase 2 revalidated in both configs) |
-//! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | unknown-needs-run (suspected Miri UB) |
-//! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs (except memory-validation) |
-//! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
-//! | `p15_initblk_stack_local_via_managed_ptr` | slot/byref; block | M3/M1f/M5 | diagnostic-permissive-TB | unknown-needs-run (suspected Miri UB) |
-//! | `p16_cpblk_heap_arrays_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
-//! | `p17_localloc_ptr_ceq_self` | localloc/arithmetic comparison | M1b | diagnostic-native (explicit opt-in) or diagnostic-permissive-TB | wrong result (predicted, not rerun) |
-//! | `p18_localloc_ptr_clt` | localloc/arithmetic comparison | M1b | diagnostic-native (explicit opt-in) or diagnostic-permissive-TB | wrong result (predicted, not rerun) |
-//! | `p19_ldelem_negative_index` | negative index/native-int | M1f | diagnostic-native or diagnostic-permissive-TB (isolated process) | native panic (reported; not rerun) |
-//! | `p20_heap_convu_then_typed_write_then_raw_store` | heap slice/address interleaving | M1a/M3 | blocking-native + blocking-permissive-TB | pass after M1a in both configs |
-//! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | diagnostic-permissive-TB | unknown-needs-run |
-//! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | unknown-needs-run |
+//! | `p00_smoke` | harness control | M0 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p01_ldloca_convu_stind_i4` | slot/byref | M3 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
+//! | `p02_ldloca_stind_i4_control` | slot/byref control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p03_ldloca_convu_ldind_i4` | slot/byref read control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p04_double_localloc_write_first` | localloc/arithmetic | M1c | diagnostic-permissive-TB | group UB historically reported; exact current outcome unknown |
+//! | `p05_single_localloc_roundtrip` | serde/transport control; localloc | M1c/M1e/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p06_localloc_minus_one_then_plus_one` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair Miri UB |
+//! | `p07_localloc_one_past_end` | localloc/arithmetic control | M1b | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p08_localloc_overshoot` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair Miri UB |
+//! | `p09_ldloca_convu_survives_callee_stack_growth` | slot/byref | M3 | diagnostic-permissive-TB | UB historically reported; exact current outcome unknown |
+//! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations; pre-repair Miri UB |
+//! | `p11_ldelema_stind_heap_array_control` | heap slice/address control | M1a/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
+//! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
+//! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configs; conditionally ignored with memory-validation |
+//! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations |
+//! | `p15_initblk_stack_local_via_managed_ptr` | slot/byref; block | M3/M1f/M5 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
+//! | `p16_cpblk_heap_arrays_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations |
+//! | `p17_localloc_ptr_ceq_self` | localloc/arithmetic comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair native and VM-M assertions failed |
+//! | `p18_localloc_ptr_clt` | localloc/arithmetic comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair native and VM-M assertions failed |
+//! | `p19_ldelem_negative_index` | negative index/native-int | M1f | diagnostic-native (permitted) or diagnostic-permissive-TB | native panic historically reported; not rerun |
+//! | `p20_heap_convu_then_typed_write_then_raw_store` | heap slice/address interleaving | M1a/M3 | blocking-native + blocking-permissive-TB | post-repair control passed in both configs; pre-repair Miri UB |
+//! | `p21_localloc_signed_extreme_offsets_roundtrip` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features Miri UB |
+//! | `p22_localloc_wrap_to_zero_roundtrip` | localloc/arithmetic/null | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features Miri UB |
+//! | `p23_localloc_pointer_loop_unsigned_branch_compare` | localloc/arithmetic/comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair semantic assertion failed |
+//! | `p24_unsafe_byte_offset_direction_and_deref` | unsafe intrinsics/pointer arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair ByteOffset sign assertion failed |
+//! | `p25_convi_and_stind_i_pointer_roundtrip_deref` | conversion/native-int store | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair conversion/store diagnostic failed |
+//! | `p26_native_int_boundary_store_load_roundtrip` | native-int width/sign | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features diagnostic passed |
+//! | `p27_stind_i_fresh_pointer_through_local_slot_dereferences` | pointer store/local slot | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (296/348 s) |
+//! | `p28_stind_i_fresh_pointer_through_heap_memory_dereferences` | pointer store/heap memory | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (302/321 s) |
+//! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | blocking-native + blocking-permissive-TB | step 0.1 and Phase 6 control passes in both configurations |
+//! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | baseline and current outcome unknown |
 
 use crate::{
     StepResult,
@@ -40,7 +50,11 @@ use crate::{
     },
 };
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_intrinsics_unsafe::unsafe_ptr::intrinsic_unsafe_as_pointer;
+use dotnet_intrinsics_unsafe::unsafe_ptr::{
+    intrinsic_unsafe_add_byte_offset, intrinsic_unsafe_are_same, intrinsic_unsafe_as_pointer,
+    intrinsic_unsafe_byte_offset, intrinsic_unsafe_is_address_ordered,
+    intrinsic_unsafe_subtract_byte_offset,
+};
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -345,9 +359,8 @@ fn p05_single_localloc_roundtrip() {
     assert_eq!(r, 5);
 }
 
-// ---- Claim 3: UnmanagedPtr - 1 uses `offset` (UB when it leaves the allocation) -----------------
+// Regression: the former in-bounds `offset` was UB when subtraction left the allocation.
 #[test]
-#[ignore = "M1b: p06 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p06_localloc_minus_one_then_plus_one() {
     // (p - 1) + 1 == p ; the intermediate pointer is outside the allocation.
     let r = run_il(
@@ -395,7 +408,6 @@ fn p07_localloc_one_past_end() {
 
 // Overshoot by more than one-past-end (e.g. loop `p += stride` after the last element).
 #[test]
-#[ignore = "M1b: p08 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p08_localloc_overshoot() {
     let r = run_il(
         "P08",
@@ -935,11 +947,10 @@ fn p16_cpblk_heap_arrays_via_managed_ptr() {
 }
 
 // =================================================================================================
-// Batch 5: semantic and panic probes; native execution requires explicit diagnostic selection.
+// Batch 5: comparison controls and a diagnostic-only negative-index panic probe.
 // =================================================================================================
-// Agent claim: ceq on two identical localloc pointers is false (no UnmanagedPtr arm in PartialEq).
+// Regression: identical localloc pointers previously compared unequal under ceq.
 #[test]
-#[ignore = "M1b: p17 predicted semantic failure; explicit diagnostic only via scripts/pointer_provenance.sh diagnostic"]
 fn p17_localloc_ptr_ceq_self() {
     let r = run_il(
         "P17",
@@ -958,9 +969,8 @@ fn p17_localloc_ptr_ceq_self() {
     assert_eq!(r, 1, "p == p must be true");
 }
 
-// Agent claim: clt on stackalloc pointers is false both ways; `for (p = buf; p < end; p++)` never runs.
+// Regression: clt on localloc pointers previously failed, preventing pointer loops from running.
 #[test]
-#[ignore = "M1b: p18 predicted semantic failure; explicit diagnostic only via scripts/pointer_provenance.sh diagnostic"]
 fn p18_localloc_ptr_clt() {
     let r = run_il(
         "P18",
@@ -1050,7 +1060,636 @@ fn p20_heap_convu_then_typed_write_then_raw_store() {
     assert_eq!(r, 7);
 }
 
+// Extreme signed offsets cancel back to the allocation before any dereference.
+#[test]
+fn p21_localloc_signed_extreme_offsets_roundtrip() {
+    let r = run_il(
+        "P21",
+        4,
+        vec![local(BaseType::IntPtr), local(BaseType::IntPtr)],
+        vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            // p - i32::MIN + i32::MIN == p.
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt32(i32::MIN),
+            Instruction::Subtract,
+            Instruction::LoadConstantInt32(i32::MIN),
+            Instruction::Add,
+            Instruction::StoreLocal(1),
+            Instruction::LoadLocal(1),
+            Instruction::LoadConstantInt32(3),
+            stind(StoreType::Int32),
+            // p + isize::MIN + isize::MIN == p (on the native 64-bit lane).
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt64(i64::MIN),
+            Instruction::Convert(ConversionType::IntPtr),
+            Instruction::Add,
+            Instruction::LoadConstantInt64(i64::MIN),
+            Instruction::Convert(ConversionType::IntPtr),
+            Instruction::Add,
+            Instruction::StoreLocal(1),
+            Instruction::LoadLocal(1),
+            Instruction::LoadLocal(1),
+            ldind(LoadType::Int32),
+            Instruction::LoadConstantInt32(4),
+            Instruction::Add,
+            stind(StoreType::Int32),
+            // The arithmetic state change is complete before the final read.
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt32(-1),
+            Instruction::Add,
+            Instruction::LoadConstantInt32(1),
+            Instruction::Add,
+            ldind(LoadType::Int32),
+            Instruction::Return,
+        ],
+    );
+    assert_eq!(r, 7);
+}
+
+// Subtracting a pointer's exposed integer address produces explicit null; adding it back
+// must reconstruct an address that still permits a real write and read.
+#[test]
+fn p22_localloc_wrap_to_zero_roundtrip() {
+    let r = run_il(
+        "P22",
+        5,
+        vec![
+            local(BaseType::IntPtr),
+            local(BaseType::IntPtr),
+            local(BaseType::IntPtr),
+            local(BaseType::IntPtr),
+            local(BaseType::Int32),
+        ],
+        vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            // a = conv.u p; z = p - a (the wrapped address is zero).
+            Instruction::LoadLocal(0),
+            conv_u(),
+            Instruction::StoreLocal(1),
+            Instruction::LoadLocal(0),
+            Instruction::LoadLocal(1),
+            Instruction::Subtract,
+            Instruction::StoreLocal(2),
+            // Record that zero compares equal to conv.i 0.
+            Instruction::LoadLocal(2),
+            Instruction::LoadConstantInt32(0),
+            Instruction::Convert(ConversionType::IntPtr),
+            Instruction::CompareEqual,
+            Instruction::StoreLocal(4),
+            // q = z + a; mutate through q, then read through the original p.
+            Instruction::LoadLocal(2),
+            Instruction::LoadLocal(1),
+            Instruction::Add,
+            Instruction::StoreLocal(3),
+            Instruction::LoadLocal(3),
+            Instruction::LoadConstantInt32(9),
+            stind(StoreType::Int32),
+            Instruction::LoadLocal(0),
+            ldind(LoadType::Int32),
+            Instruction::LoadLocal(4),
+            Instruction::LoadConstantInt32(100),
+            Instruction::Multiply,
+            Instruction::Add,
+            Instruction::Return,
+        ],
+    );
+    assert_eq!(r, 109);
+}
+
+// Exercise unsigned pointer branches over a byte buffer. Each loop compares and dereferences
+// pointers after the prior arithmetic update; the second loop's result is the read-back evidence.
+#[test]
+fn p23_localloc_pointer_loop_unsigned_branch_compare() {
+    let r = run_il(
+        "P23",
+        4,
+        vec![
+            local(BaseType::IntPtr),
+            local(BaseType::IntPtr),
+            local(BaseType::Int32),
+        ],
+        vec![
+            Instruction::LoadConstantInt32(8),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt32(8),
+            Instruction::Add,
+            Instruction::StoreLocal(1),
+            Instruction::LoadConstantInt32(0),
+            Instruction::StoreLocal(2),
+            // If comparisons are incomparable, the paired blt check safely exits rather than
+            // attempting a write beyond the localloc buffer on this diagnostic baseline.
+            Instruction::LoadLocal(0), // 9: first-loop condition
+            Instruction::LoadLocal(1),
+            Instruction::BranchGreaterOrEqual(NumberSign::Unsigned, 24),
+            Instruction::LoadLocal(0),
+            Instruction::LoadLocal(1),
+            Instruction::BranchLess(NumberSign::Unsigned, 16),
+            Instruction::Branch(24),
+            Instruction::LoadLocal(0), // 16: first-loop body
+            Instruction::LoadConstantInt32(5),
+            stind(StoreType::Int8),
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt32(1),
+            Instruction::Add,
+            Instruction::StoreLocal(0),
+            Instruction::Branch(9),
+            // Reset p = end - 8 and sum = 0 before reading the bytes back.
+            Instruction::LoadLocal(1), // 24: first loop exit
+            Instruction::LoadConstantInt32(8),
+            Instruction::Subtract,
+            Instruction::StoreLocal(0),
+            Instruction::LoadConstantInt32(0),
+            Instruction::StoreLocal(2),
+            // The read loop uses blt.un to enter and bge.un to exit.
+            Instruction::LoadLocal(0), // 30: second-loop condition
+            Instruction::LoadLocal(1),
+            Instruction::BranchGreaterOrEqual(NumberSign::Unsigned, 47),
+            Instruction::LoadLocal(0),
+            Instruction::LoadLocal(1),
+            Instruction::BranchLess(NumberSign::Unsigned, 37),
+            Instruction::Branch(47),
+            Instruction::LoadLocal(2), // 37: read-loop body
+            Instruction::LoadLocal(0),
+            ldind(LoadType::UInt8),
+            Instruction::Add,
+            Instruction::StoreLocal(2),
+            Instruction::LoadLocal(0),
+            Instruction::LoadConstantInt32(1),
+            Instruction::Add,
+            Instruction::StoreLocal(0),
+            Instruction::Branch(30),
+            Instruction::LoadLocal(2), // 47: second loop exit
+            Instruction::Return,
+        ],
+    );
+    assert_eq!(r, 40);
+}
+
+#[test]
+fn p24_unsafe_byte_offset_direction_and_deref() {
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+
+    let (mut method_res, _, method_type_idx) = make_test_assembly!(
+        "UnsafeAddressOrder.dll".to_string(),
+        "UnsafeAddressOrderAssembly".to_string(),
+        "UnsafeAddressOrderType".to_string()
+    );
+    let method_idx = method_res.push_method(
+        method_type_idx,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "IsAddressLessThan",
+            None,
+        ),
+    );
+    let method_res = loader.register_owned_assembly(method_res);
+    let method_def = &method_res.definition()[method_idx];
+    let method_type = TypeDescription::new(method_res.clone(), method_type_idx);
+    let method_member_index = method_type
+        .definition()
+        .methods
+        .iter()
+        .position(|method| std::ptr::eq(method, method_def))
+        .expect("test method exists in its type");
+    let is_address_less_than = MethodDescription::new(
+        method_type,
+        GenericLookup::default(),
+        method_res,
+        MethodMemberIndex::Method(method_member_index),
+    );
+    let add_generics = GenericLookup::from_arcs(
+        Arc::new([]),
+        vec![ConcreteType::new(ResolutionS::NULL, BaseType::Int32)].into(),
+    );
+
+    let mut arena = new_test_arena(&shared);
+    arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — the test arena root remains live for this mutation.
+        let gc_handle = unsafe { test_gc_handle(gc, engine) };
+        let mut payload = vec![0; 16];
+        payload[8..12].copy_from_slice(&77_i32.to_ne_bytes());
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::Int32),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                length: 4,
+            },
+            payload,
+            vec![4, 1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let origin = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+        let target = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(8)),
+        );
+
+        // AddByteOffset must form element 2, and the dereference observes its initialized value.
+        let mut ctx = engine.ves_context(gc_handle);
+        ctx.push(StackValue::ManagedPtr(origin.clone().into()));
+        ctx.push(StackValue::NativeInt(8));
+        assert!(matches!(
+            intrinsic_unsafe_add_byte_offset(&mut ctx, is_address_less_than.clone(), &add_generics),
+            StepResult::Continue
+        ));
+        let StackValue::ManagedPtr(at_element_two) = ctx.pop() else {
+            panic!("Unsafe.AddByteOffset must return a managed pointer");
+        };
+        // SAFETY: F10.RawMemoryAccessValid — this pointer is element 2 of the rooted Int32[4].
+        let value = unsafe {
+            at_element_two.with_data(4, |data| {
+                i32::from_ne_bytes(data[..4].try_into().expect("four-byte Int32 payload"))
+            })
+        };
+        assert_eq!(value, 77);
+
+        // SubtractByteOffset returns to element 0; AreSame provides a value-bearing comparison.
+        ctx.push(StackValue::ManagedPtr(at_element_two));
+        ctx.push(StackValue::NativeInt(8));
+        assert!(matches!(
+            intrinsic_unsafe_subtract_byte_offset(
+                &mut ctx,
+                is_address_less_than.clone(),
+                &GenericLookup::default()
+            ),
+            StepResult::Continue
+        ));
+        let StackValue::ManagedPtr(back_at_origin) = ctx.pop() else {
+            panic!("Unsafe.SubtractByteOffset must return a managed pointer");
+        };
+        ctx.push(StackValue::ManagedPtr(origin.clone().into()));
+        ctx.push(StackValue::ManagedPtr(back_at_origin));
+        assert!(matches!(
+            intrinsic_unsafe_are_same(
+                &mut ctx,
+                is_address_less_than.clone(),
+                &GenericLookup::default()
+            ),
+            StepResult::Continue
+        ));
+        assert!(matches!(ctx.pop(), StackValue::Int32(1)));
+
+        // Address ordering uses unsigned addresses: 0 precedes the all-ones address.
+        ctx.push(StackValue::NativeInt(0));
+        ctx.push(StackValue::NativeInt(-1));
+        assert!(matches!(
+            intrinsic_unsafe_is_address_ordered(
+                &mut ctx,
+                is_address_less_than.clone(),
+                &GenericLookup::default()
+            ),
+            StepResult::Continue
+        ));
+        assert!(matches!(ctx.pop(), StackValue::Int32(1)));
+
+        // Native-integer operands cover direction at zero and the signed-width boundary.
+        macro_rules! assert_byte_offset {
+            ($origin:expr, $target:expr, $expected:expr) => {{
+                ctx.push($origin);
+                ctx.push($target);
+                assert!(matches!(
+                    intrinsic_unsafe_byte_offset(
+                        &mut ctx,
+                        is_address_less_than.clone(),
+                        &GenericLookup::default()
+                    ),
+                    StepResult::Continue
+                ));
+                let StackValue::NativeInt(actual) = ctx.pop() else {
+                    panic!("Unsafe.ByteOffset must return a native integer");
+                };
+                assert_eq!(actual, $expected);
+            }};
+        }
+        assert_byte_offset!(StackValue::NativeInt(-1), StackValue::NativeInt(0), 1);
+        assert_byte_offset!(StackValue::NativeInt(0), StackValue::NativeInt(-1), -1);
+        assert_byte_offset!(
+            StackValue::NativeInt(isize::MIN),
+            StackValue::NativeInt(isize::MAX),
+            -1
+        );
+
+        // ByteOffset is target - origin; the reverse managed-pointer call is also checked.
+        assert_byte_offset!(
+            StackValue::ManagedPtr(origin.clone().into()),
+            StackValue::ManagedPtr(target.clone().into()),
+            8
+        );
+        assert_byte_offset!(
+            StackValue::ManagedPtr(target.into()),
+            StackValue::ManagedPtr(origin.into()),
+            -8
+        );
+    });
+}
+
 use Instruction as I;
+
+// These controls each use one fresh localloc
+// and never converts or dereferences its pointer before the pointer-valued store.
+#[test]
+fn p27_stind_i_fresh_pointer_through_local_slot_dereferences() {
+    let r = run_il(
+        "StindPointerLocal",
+        3,
+        vec![local(BaseType::IntPtr)],
+        vec![
+            // The local's managed address takes the stack-slot branch in stind.
+            I::LoadLocalAddress(0),
+            I::LoadConstantInt32(16),
+            I::LocalMemoryAllocate,
+            stind(StoreType::IntPtr),
+            // The loaded native integer must reconstruct the allocation for both accesses.
+            I::LoadLocal(0),
+            I::LoadConstantInt32(41),
+            stind(StoreType::Int32),
+            I::LoadLocal(0),
+            ldind(LoadType::Int32),
+            I::Return,
+        ],
+    );
+    assert_eq!(r, 41);
+}
+
+#[test]
+fn p28_stind_i_fresh_pointer_through_heap_memory_dereferences() {
+    let element_address = || I::LoadElementAddress {
+        skip_type_check: false,
+        skip_range_check: false,
+        skip_null_check: false,
+        param0: MethodType::Base(Box::new(BaseType::IntPtr)),
+    };
+    let r = run_il(
+        "StindPointerMemory",
+        3,
+        vec![local(BaseType::IntPtr)],
+        vec![
+            // The array element is a separate heap destination, not the localloc source.
+            I::LoadConstantInt32(1),
+            I::NewArray(MethodType::Base(Box::new(BaseType::IntPtr))),
+            I::StoreLocal(0),
+            I::LoadLocal(0),
+            I::LoadConstantInt32(0),
+            element_address(),
+            I::LoadConstantInt32(16),
+            I::LocalMemoryAllocate,
+            stind(StoreType::IntPtr),
+            I::LoadLocal(0),
+            I::LoadConstantInt32(0),
+            element_address(),
+            ldind(LoadType::IntPtr),
+            I::LoadConstantInt32(73),
+            stind(StoreType::Int32),
+            I::LoadLocal(0),
+            I::LoadConstantInt32(0),
+            element_address(),
+            ldind(LoadType::IntPtr),
+            ldind(LoadType::Int32),
+            I::Return,
+        ],
+    );
+    assert_eq!(r, 73);
+}
+
+// Cover unmanaged `conv.i`/`conv.i8` acceptance, pointer-valued `stind.i`, and a managed
+// array-element address converted with `conv.i`. Every transition is followed by a real read.
+#[test]
+fn p25_convi_and_stind_i_pointer_roundtrip_deref() {
+    let r = run_il(
+        "P25",
+        4,
+        vec![
+            local(BaseType::IntPtr),
+            local(BaseType::IntPtr),
+            local(BaseType::Int32),
+            local(BaseType::IntPtr),
+        ],
+        vec![
+            I::LoadConstantInt32(32),
+            I::LocalMemoryAllocate,
+            I::StoreLocal(0),
+            // A: conv.i of the localloc pointer, then read through the original pointer.
+            I::LoadLocal(0),
+            I::Convert(ConversionType::IntPtr),
+            I::StoreLocal(1),
+            I::LoadLocal(1),
+            I::LoadConstantInt32(11),
+            stind(StoreType::Int32),
+            I::LoadLocal(0),
+            ldind(LoadType::Int32),
+            I::StoreLocal(2),
+            // B: both conversions retain the address; the following dereference updates p[0].
+            I::LoadLocal(0),
+            I::Convert(ConversionType::Int64),
+            I::Convert(ConversionType::UIntPtr),
+            I::LoadConstantInt32(13),
+            stind(StoreType::Int32),
+            I::LoadLocal(2),
+            I::LoadLocal(0),
+            ldind(LoadType::Int32),
+            I::Add,
+            I::StoreLocal(2),
+            // C: stind.i receives the unmanaged pointer itself, without an integer conversion.
+            I::LoadLocal(0),
+            I::LoadConstantInt32(16),
+            I::Add,
+            I::LoadLocal(0),
+            stind(StoreType::IntPtr),
+            // Load the stored native integer and use it as the destination of a real write.
+            I::LoadLocal(0),
+            I::LoadConstantInt32(16),
+            I::Add,
+            ldind(LoadType::IntPtr),
+            I::LoadConstantInt32(100),
+            stind(StoreType::Int32),
+            I::LoadLocal(2),
+            I::LoadLocal(0),
+            ldind(LoadType::Int32),
+            I::Add,
+            I::StoreLocal(2),
+            // D: convert an array element's managed address and confirm the array observes it.
+            I::LoadConstantInt32(4),
+            I::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+            I::StoreLocal(3),
+            I::LoadLocal(3),
+            I::LoadConstantInt32(1),
+            ldelema_i4(),
+            I::Convert(ConversionType::IntPtr),
+            I::StoreLocal(1),
+            I::LoadLocal(1),
+            I::LoadConstantInt32(7),
+            stind(StoreType::Int32),
+            I::LoadLocal(2),
+            I::LoadLocal(3),
+            I::LoadConstantInt32(1),
+            I::LoadElementPrimitive {
+                skip_range_check: false,
+                skip_null_check: false,
+                param0: LoadType::Int32,
+            },
+            I::Add,
+            I::StoreLocal(2),
+            I::LoadLocal(2),
+            I::Return,
+        ],
+    );
+    // A: r=11; B: r=11+13=24; C: r=24+100=124; D: r=124+7=131.
+    assert_eq!(r, 131);
+}
+
+// Round-trip native-width signed/unsigned boundaries through stind.i and both native load widths.
+// Each comparison contributes one bit only when its expected result holds; the returned mask
+// therefore contains every asserted bit only when every conversion, comparison, and dereference
+// below behaves as specified.
+#[test]
+fn p26_native_int_boundary_store_load_roundtrip() {
+    let mut instructions = vec![
+        I::LoadConstantInt32(32),
+        I::LocalMemoryAllocate,
+        I::StoreLocal(0),
+        I::LoadConstantInt32(0),
+        I::StoreLocal(1),
+        // conv.i sign-extends i32::MIN; conv.u zero-extends the same 32-bit input.
+        I::LoadLocal(0),
+        I::LoadConstantInt32(i32::MIN),
+        I::Convert(ConversionType::IntPtr),
+        stind(StoreType::IntPtr),
+        I::LoadLocal(0),
+        I::LoadConstantInt32(8),
+        I::Add,
+        I::LoadConstantInt32(i32::MIN),
+        I::Convert(ConversionType::UIntPtr),
+        stind(StoreType::IntPtr),
+    ];
+    let mut bit_index = 0;
+    macro_rules! record_bit {
+        ($expected:expr; $($condition:expr),+ $(,)?) => {{
+            instructions.extend([$($condition),+]);
+            if !$expected {
+                instructions.extend([I::LoadConstantInt32(0), I::CompareEqual]);
+            }
+            instructions.push(I::LoadConstantInt32(1 << bit_index));
+            instructions.push(I::Multiply);
+            instructions.extend([I::LoadLocal(1), I::Add, I::StoreLocal(1)]);
+            bit_index += 1;
+        }};
+    }
+    macro_rules! load_slot {
+        ($offset:expr, $load_type:expr, $convert_native:expr) => {{
+            instructions.extend([
+                I::LoadLocal(0),
+                I::LoadConstantInt32($offset),
+                I::Add,
+                I::LoadIndirect {
+                    param0: $load_type,
+                    unaligned: None,
+                    volatile: false,
+                },
+            ]);
+            if $convert_native {
+                instructions.push(I::Convert(ConversionType::Int64));
+            }
+        }};
+    }
+    macro_rules! check_min_value {
+        ($offset:expr, $load_type:expr, $convert_native:expr, $expected:expr, $is_negative:expr) => {{
+            load_slot!($offset, $load_type, $convert_native);
+            record_bit!(true; I::LoadConstantInt64($expected), I::CompareEqual);
+            load_slot!($offset, $load_type, $convert_native);
+            record_bit!($is_negative; I::LoadConstantInt64(0), I::CompareLess(NumberSign::Signed));
+            load_slot!($offset, $load_type, $convert_native);
+            record_bit!(!$is_negative; I::LoadConstantInt64(0), I::CompareGreater(NumberSign::Signed));
+            load_slot!($offset, $load_type, $convert_native);
+            record_bit!(true; I::LoadConstantInt64(0), I::CompareGreater(NumberSign::Unsigned));
+        }};
+    }
+    macro_rules! check_roundtrip {
+        ($store:expr, $expected:expr) => {{
+            instructions.extend([
+                I::LoadLocal(0),
+                I::LoadConstantInt32(16),
+                I::Add,
+                I::LoadConstantInt64($store),
+                I::Convert(ConversionType::IntPtr),
+                stind(StoreType::IntPtr),
+            ]);
+            load_slot!(16, LoadType::Int64, false);
+            record_bit!(true; I::LoadConstantInt64($expected), I::CompareEqual);
+            load_slot!(16, LoadType::IntPtr, true);
+            record_bit!(true; I::LoadConstantInt64($expected), I::CompareEqual);
+        }};
+    }
+
+    // The i8 and native loads each check exact value plus signed/unsigned zero comparisons.
+    check_min_value!(0, LoadType::Int64, false, -2_147_483_648, true);
+    check_min_value!(0, LoadType::IntPtr, true, -2_147_483_648, true);
+    check_min_value!(8, LoadType::Int64, false, 2_147_483_648, false);
+    check_min_value!(8, LoadType::IntPtr, true, 2_147_483_648, false);
+
+    // isize::MIN, isize::MAX, and usize::MAX (all 64-bit on the supported Miri host).
+    check_roundtrip!(isize::MIN as i64, isize::MIN as i64);
+    check_roundtrip!(isize::MAX as i64, isize::MAX as i64);
+    instructions.extend([
+        I::LoadLocal(0),
+        I::LoadConstantInt32(16),
+        I::Add,
+        I::LoadConstantInt64(-1),
+        I::Convert(ConversionType::UIntPtr),
+        stind(StoreType::IntPtr),
+    ]);
+    load_slot!(16, LoadType::Int64, false);
+    record_bit!(true; I::LoadConstantInt64(-1), I::CompareEqual);
+    load_slot!(16, LoadType::IntPtr, true);
+    record_bit!(true; I::LoadConstantInt64(-1), I::CompareEqual);
+
+    // Expose/store the buffer's own pointer, reload it with ldind.i, and prove it can dereference.
+    instructions.extend([
+        I::LoadLocal(0),
+        I::LoadConstantInt32(24),
+        I::Add,
+        I::LoadLocal(0),
+        conv_u(),
+        stind(StoreType::IntPtr),
+        I::LoadLocal(0),
+        I::LoadConstantInt32(24),
+        I::Add,
+        ldind(LoadType::IntPtr),
+        I::LoadConstantInt32(0x1357),
+        stind(StoreType::Int32),
+        I::LoadLocal(0),
+        ldind(LoadType::Int32),
+    ]);
+    record_bit!(true; I::LoadConstantInt32(0x1357), I::CompareEqual);
+    instructions.extend([I::LoadLocal(1), I::Return]);
+
+    let expected_mask = (1_i32 << bit_index) - 1;
+    let r = run_il(
+        "P26",
+        4,
+        vec![local(BaseType::IntPtr), local(BaseType::Int32)],
+        instructions,
+    );
+    assert_eq!(r, expected_mask);
+}
 
 fn ptr_local() -> LocalVariable {
     local(BaseType::ValuePointer(vec![], None))
@@ -1058,7 +1697,6 @@ fn ptr_local() -> LocalVariable {
 
 /// C#: byte* p = stackalloc byte[16]; byte** pp = &p; *pp = null; return p == null ? 1 : 0;
 #[test]
-#[ignore = "M1b/M3: p_null_through_pointer_local_address unverified on baseline; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p_null_through_pointer_local_address() {
     let r = run_il(
         "Pass2Null",
