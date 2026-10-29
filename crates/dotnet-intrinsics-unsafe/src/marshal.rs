@@ -1,6 +1,7 @@
 use crate::UnsafeIntrinsicHost;
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
+    error::ExecutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
@@ -12,18 +13,26 @@ use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, TypedStackOps};
 use std::sync::Arc;
 
-pub(super) fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
+pub(super) fn offset_ptr<'gc>(
+    val: StackValue<'gc>,
+    byte_offset: isize,
+) -> Result<StackValue<'gc>, ExecutionError> {
     if let StackValue::ManagedPtr(m) = val {
-        // SAFETY: F3.InteriorPointerRebased — This intrinsic's caller supplies the byte offset and preserves the managed
-        // pointer's origin; `offset` only forms the corresponding managed address.
-        let new_m = unsafe { m.into_inner().offset(byte_offset) };
-        StackValue::ManagedPtr(new_m.into())
+        let new_m = m.into_inner().checked_offset(byte_offset).map_err(|error| {
+            ExecutionError::NotImplemented(
+                format!(
+                    "managed pointer offset is unrepresentable ({error:?}; signed or wider offsets require M3)"
+                )
+                .into(),
+            )
+        })?;
+        Ok(StackValue::ManagedPtr(new_m.into()))
     } else {
         let ptr = val.as_ptr();
-        // SAFETY: F10.RawMemoryAccessValid — The native pointer overload delegates its range/validity contract to the CLR
-        // caller; this operation only applies that requested byte offset.
-        let result_ptr = unsafe { ptr.offset(byte_offset) };
-        StackValue::NativeInt(result_ptr as isize)
+        let result_ptr = ptr.wrapping_byte_offset(byte_offset);
+        Ok(StackValue::NativeInt(
+            result_ptr.expose_provenance() as isize
+        ))
     }
 }
 

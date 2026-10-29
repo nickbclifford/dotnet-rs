@@ -125,8 +125,8 @@ pub fn intrinsic_unsafe_add<'gc, T: UnsafeIntrinsicHost<'gc>>(
     };
 
     let m_val = ctx.pop();
-    let byte_offset = offset * layout.size().as_usize() as isize;
-    ctx.push(offset_ptr(m_val, byte_offset));
+    let byte_offset = offset.wrapping_mul(layout.size().as_usize() as isize);
+    ctx.push(dotnet_vm_ops::vm_try!(offset_ptr(m_val, byte_offset)));
     StepResult::Continue
 }
 
@@ -156,7 +156,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, T: EvalStackOps<'gc> + ExceptionOps
     };
 
     let m_val = ctx.pop();
-    ctx.push(offset_ptr(m_val, offset));
+    ctx.push(dotnet_vm_ops::vm_try!(offset_ptr(m_val, offset)));
     StepResult::Continue
 }
 
@@ -185,8 +185,10 @@ pub fn intrinsic_unsafe_subtract<'gc, T: UnsafeIntrinsicHost<'gc>>(
     };
 
     let m_val = ctx.pop();
-    let byte_offset = -(offset * layout.size().as_usize() as isize);
-    ctx.push(offset_ptr(m_val, byte_offset));
+    let byte_offset = offset
+        .wrapping_mul(layout.size().as_usize() as isize)
+        .wrapping_neg();
+    ctx.push(dotnet_vm_ops::vm_try!(offset_ptr(m_val, byte_offset)));
     StepResult::Continue
 }
 
@@ -214,7 +216,10 @@ pub fn intrinsic_unsafe_subtract_byte_offset<'gc, T: EvalStackOps<'gc> + Excepti
     };
 
     let m_val = ctx.pop();
-    ctx.push(offset_ptr(m_val, -offset));
+    ctx.push(dotnet_vm_ops::vm_try!(offset_ptr(
+        m_val,
+        offset.wrapping_neg()
+    )));
     StepResult::Continue
 }
 
@@ -629,9 +634,9 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let r = ctx.pop_ptr();
-    let l = ctx.pop_ptr();
-    let offset = (l as isize) - (r as isize);
+    let target = ctx.pop_ptr();
+    let origin = ctx.pop_ptr();
+    let offset = target.addr().wrapping_sub(origin.addr()) as isize;
     ctx.push_isize(offset);
     StepResult::Continue
 }

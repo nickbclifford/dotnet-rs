@@ -22,6 +22,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 StackValue::Int32(i) => i as $t,
                 StackValue::Int64(i) => i as $t,
                 StackValue::NativeInt(i) => i as $t,
+                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr().expose_provenance() as $t,
                 StackValue::NativeFloat(f) => f as $t,
                 _ => {
                     return ctx.throw_by_name_with_message(
@@ -59,7 +60,14 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
             ctx.push(StackValue::Int32(i as i32));
         }
         ConversionType::Int64 => {
-            let i = simple_cast!(i64);
+            let i = match value {
+                // Observation and exposure do not retain an owner or grant access.
+                StackValue::ManagedPtr(m) => m
+                    .observe_address()
+                    .map_or(0, |address| address.as_ptr().expose_provenance())
+                    as i64,
+                _ => simple_cast!(i64),
+            };
             ctx.push(StackValue::Int64(i));
         }
         ConversionType::UInt64 => {
@@ -89,7 +97,14 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
             ctx.push(StackValue::Int64(i as i64));
         }
         ConversionType::IntPtr => {
-            let i = simple_cast!(isize);
+            let i = match value {
+                // Observation and exposure do not retain an owner or grant access.
+                StackValue::ManagedPtr(m) => m
+                    .observe_address()
+                    .map_or(0, |address| address.as_ptr().expose_provenance())
+                    as isize,
+                _ => simple_cast!(isize),
+            };
             ctx.push(StackValue::NativeInt(i));
         }
         ConversionType::UIntPtr => {
@@ -234,4 +249,89 @@ pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> 
     };
     ctx.push(StackValue::NativeFloat(f));
     StepResult::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        state::SharedGlobalState,
+        sync::Arc,
+        test_utils::{new_test_arena, test_gc_handle},
+    };
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_types::{TypeDescription, generics::ConcreteType, resolution::ResolutionS};
+    use dotnet_utils::ByteOffset;
+    use dotnet_value::{
+        layout::{ArrayLayoutManager, LayoutManager, Scalar},
+        object::{HeapStorage, ObjectRef, Vector},
+        pointer::ManagedPtr,
+    };
+
+    #[test]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn pointer_conversions_expose_live_addresses_and_truncate_unmanaged() {
+        let loader = Arc::new(AssemblyLoader::new_bare("conv_pointer_test".into()).unwrap());
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the arena root stays live throughout this mutation.
+            let gc_handle = unsafe { test_gc_handle(gc, engine) };
+            let vector = Vector::new(
+                ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+                ArrayLayoutManager {
+                    element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                    length: 2,
+                },
+                vec![0, 0xA5],
+                vec![2, 1],
+            );
+            let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+            let managed = ManagedPtr::new(
+                owner.pointer(),
+                TypeDescription::NULL,
+                Some(owner),
+                false,
+                Some(ByteOffset::new(1)),
+            );
+            let ptr = managed.observe_address().unwrap();
+            let addr = ptr.as_ptr().addr();
+            let mut ctx = engine.ves_context(gc_handle);
+
+            for input in [
+                StackValue::ManagedPtr(managed.into()),
+                StackValue::UnmanagedPtr(UnmanagedPtr(ptr)),
+            ] {
+                for conversion in [ConversionType::IntPtr, ConversionType::Int64] {
+                    ctx.push(input.clone());
+                    assert!(matches!(conv(&mut ctx, conversion), StepResult::Continue));
+                    let result = match ctx.pop() {
+                        StackValue::NativeInt(i) => i as usize,
+                        StackValue::Int64(i) => i as usize,
+                        other => panic!("unexpected converted value: {other:?}"),
+                    };
+                    // SAFETY: F10.RawMemoryAccessValid — the converted address refers to the
+                    // second byte of the live, rooted vector, and conv exposed its provenance.
+                    let byte = unsafe { *std::ptr::with_exposed_provenance::<u8>(result) };
+                    assert_eq!(byte, 0xA5);
+                }
+            }
+
+            for (conversion, expected) in [
+                (ConversionType::Int8, addr as i8 as i32),
+                (ConversionType::UInt8, addr as u8 as i32),
+                (ConversionType::Int16, addr as i16 as i32),
+                (ConversionType::UInt16, addr as u16 as i32),
+                (ConversionType::Int32, addr as i32),
+                (ConversionType::UInt32, addr as u32 as i32),
+            ] {
+                ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(ptr)));
+                assert!(matches!(conv(&mut ctx, conversion), StepResult::Continue));
+                assert!(matches!(ctx.pop(), StackValue::Int32(i) if i == expected));
+            }
+            // SAFETY: F10.RawMemoryAccessValid — ptr addresses the live vector's second byte.
+            let byte = unsafe { *ptr.as_ptr() };
+            assert_eq!(byte, 0xA5);
+        });
+    }
 }

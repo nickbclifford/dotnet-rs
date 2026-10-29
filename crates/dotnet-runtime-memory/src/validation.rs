@@ -204,6 +204,9 @@ pub(crate) fn extract_native_int(val: StackValue) -> Result<isize, MemoryAccessE
     let val = val.coerce_enum_to_underlying();
     match val {
         StackValue::NativeInt(v) => Ok(v),
+        // A native-integer store is a pointer-to-integer boundary: expose the
+        // provenance so a later integer load can be used to access the pointer.
+        StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().expose_provenance() as isize),
         _ => Err(MemoryAccessError::TypeMismatch(
             format!("Expected NativeInt, got {:?}", val).into(),
         )),

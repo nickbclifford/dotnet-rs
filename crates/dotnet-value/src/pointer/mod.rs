@@ -151,8 +151,26 @@ impl<'gc> ManagedPtrResolver<'gc> for NoManagedPtrResolver {
     }
 }
 
+/// An unmanaged address that is never null. On the evaluation stack, null is
+/// represented as `NativeInt(0)`, including when the wrapping offset helper
+/// reaches address zero. That null result drops provenance; dereferencing an address
+/// reconstructed after it requires prior provenance exposure.
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub NonNull<u8>);
+
+impl UnmanagedPtr {
+    /// Observes the address without exposing provenance or granting access.
+    pub fn addr(self) -> usize {
+        self.0.as_ptr().addr()
+    }
+
+    /// Forms a wrapping byte address, returning `None` exactly for address zero.
+    ///
+    /// A zero result drops provenance rather than retaining a null pointer.
+    pub fn wrapping_byte_offset(self, delta: isize) -> Option<Self> {
+        NonNull::new(self.0.as_ptr().wrapping_byte_offset(delta)).map(Self)
+    }
+}
 
 #[cfg(feature = "fuzzing")]
 impl<'a> Arbitrary<'a> for UnmanagedPtr {
@@ -197,6 +215,19 @@ pub(crate) const MANAGED_PTR_MAGIC: u32 = 0x504F_494E;
 
 const MANAGED_PTR_FLAG_PINNED: u8 = 0b0000_0001;
 const MANAGED_PTR_FLAG_UNMANAGED_INLINE_OFFSET: u8 = 0b0000_0010;
+
+/// An offset cannot be represented by the current managed-pointer form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedPtrOffsetError {
+    /// The managed offset would be negative.
+    NegativeResult,
+    /// Signed offset arithmetic overflowed.
+    ArithmeticOverflow,
+    /// The managed offset does not fit in the compact representation.
+    CompactRangeExceeded,
+    /// A non-unmanaged cached address wrapped to null.
+    NullCachedAddress,
+}
 
 #[derive(Clone)]
 pub struct ManagedPtr<'gc> {
@@ -720,6 +751,73 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
+    /// Forms a wrapping address without granting any access to it.
+    ///
+    /// Managed offsets must fit the compact unsigned representation. Unmanaged
+    /// offsets wrap at native width; a cached address wrapping to zero becomes
+    /// explicit null and loses its provenance. Offsetting a canonical unmanaged
+    /// null reconstructs the resulting address using exposed provenance; other
+    /// missing cached addresses remain missing (heap origins can resolve theirs
+    /// from their owner).
+    ///
+    /// With `memory-validation`, heap bounds violations still trap as a
+    /// diagnostic, independently of the representability errors returned here.
+    pub fn checked_offset(mut self, bytes: isize) -> Result<Self, ManagedPtrOffsetError> {
+        #[cfg(feature = "memory-validation")]
+        self.validate_offset(bytes);
+
+        let current_offset = self.byte_offset().as_usize();
+        let unmanaged = matches!(self.origin, PointerOrigin::Unmanaged);
+        if unmanaged && self._value.is_none() && current_offset == 0 && bytes == 0 {
+            return Ok(self);
+        }
+        let new_offset = if unmanaged {
+            current_offset.wrapping_add_signed(bytes)
+        } else {
+            // The compact unsigned offset can exceed isize::MAX on a 32-bit
+            // host. Widen before adding so valid offsets are not sign-flipped.
+            let result = (current_offset as i64)
+                .checked_add(bytes as i64)
+                .ok_or(ManagedPtrOffsetError::ArithmeticOverflow)?;
+            if result < 0 {
+                return Err(ManagedPtrOffsetError::NegativeResult);
+            }
+            u32::try_from(result)
+                .map(|offset| offset as usize)
+                .map_err(|_| ManagedPtrOffsetError::CompactRangeExceeded)?
+        };
+
+        let address = if unmanaged && self._value.is_none() && current_offset == 0 {
+            // A canonical null has no provenance to retain. Reconstruct nonzero
+            // results through the exposed-provenance boundary instead.
+            Some(NonNull::new(std::ptr::with_exposed_provenance_mut(
+                new_offset,
+            )))
+        } else {
+            self._value
+                .map(|p| NonNull::new(p.as_ptr().wrapping_offset(bytes)))
+        };
+        if matches!(address, Some(None)) {
+            if !unmanaged {
+                return Err(ManagedPtrOffsetError::NullCachedAddress);
+            }
+            self._value = None;
+            self.offset = ManagedByteOffset::ZERO;
+            self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, true);
+            return Ok(self);
+        }
+
+        let new_offset = ByteOffset::new(new_offset);
+        let packed_offset = Self::pack_offset(&self.origin, self._value, new_offset);
+        self.flags = Self::with_unmanaged_inline_offset_flag(
+            self.flags,
+            unmanaged && packed_offset.as_usize() == new_offset.as_usize(),
+        );
+        self.offset = packed_offset;
+        self._value = address.flatten();
+        Ok(self)
+    }
+
     /// # Safety
     ///
     /// This performs a raw pointer offset using wrapping arithmetic, so creating the intermediate
@@ -729,35 +827,27 @@ impl<'gc> ManagedPtr<'gc> {
     /// bounds and properly aligned for the accessed type). When `memory-validation` is enabled,
     /// an additional bounds check traps diagnostically, but that check is not a correctness guard.
     pub unsafe fn offset(self, bytes: isize) -> Self {
-        #[cfg(feature = "memory-validation")]
-        self.validate_offset(bytes);
-
-        let mut m = self;
-        let current_offset = m.byte_offset().as_usize();
-        let new_offset_isize = (current_offset as isize)
-            .checked_add(bytes)
-            .expect("ManagedPtr::offset overflow");
-
-        if new_offset_isize < 0 {
-            panic!(
+        let current_offset = self.byte_offset().as_usize();
+        let origin = self.origin.clone();
+        let value = self._value;
+        self.checked_offset(bytes).unwrap_or_else(|error| match error {
+            ManagedPtrOffsetError::ArithmeticOverflow => panic!("ManagedPtr::offset overflow"),
+            ManagedPtrOffsetError::NegativeResult => panic!(
                 "ManagedPtr::offset: negative result (offset={}, bytes={})",
                 current_offset, bytes
-            );
-        }
-
-        let new_offset = ByteOffset::new(new_offset_isize as usize);
-        let packed_offset = Self::pack_offset(&m.origin, m._value, new_offset);
-        m.flags = Self::with_unmanaged_inline_offset_flag(
-            m.flags,
-            matches!(m.origin, PointerOrigin::Unmanaged)
-                && packed_offset.as_usize() == new_offset.as_usize(),
-        );
-        m.offset = packed_offset;
-        m._value = m._value.map(|p| {
-            NonNull::new(p.as_ptr().wrapping_offset(bytes))
-                .expect("ManagedPtr::offset produced null pointer")
-        });
-        m
+            ),
+            ManagedPtrOffsetError::CompactRangeExceeded => {
+                let result = current_offset as i64 + bytes as i64;
+                let resolved = value.map(|p| p.as_ptr().addr()).unwrap_or(0);
+                panic!(
+                    "ManagedPtr offset exceeds compact range: offset={}, origin={:?}, value=0x{resolved:X}",
+                    result, origin
+                );
+            }
+            ManagedPtrOffsetError::NullCachedAddress => {
+                panic!("ManagedPtr::offset produced null pointer")
+            }
+        })
     }
 
     pub fn with_stack_origin(mut self, slot_index: StackSlotIndex) -> Self {

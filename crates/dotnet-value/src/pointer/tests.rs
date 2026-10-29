@@ -1211,3 +1211,624 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
     assert_eq!(info.origin, PointerOrigin::Unmanaged);
     assert_eq!(info.offset.as_usize(), addr);
 }
+
+#[test]
+fn m1b_managed_ptr_checked_offset_reports_errors() {
+    let mut storage = [0u8; 8];
+    storage[3] = 0x5A;
+    storage[5] = 0xA5;
+    let base = storage.as_mut_ptr();
+    let address = NonNull::new(base.wrapping_add(3)).unwrap();
+    let ptr = ManagedPtr::new(
+        Some(address),
+        TypeDescription::NULL,
+        None,
+        false,
+        Some(ByteOffset::new(3)),
+    )
+    .with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+
+    assert_eq!(
+        ptr.clone().checked_offset(-4).err(),
+        Some(ManagedPtrOffsetError::NegativeResult)
+    );
+    assert_eq!(
+        ptr.clone().checked_offset(isize::MIN).err(),
+        Some(ManagedPtrOffsetError::NegativeResult)
+    );
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(
+        ptr.clone().checked_offset(isize::MAX).err(),
+        Some(ManagedPtrOffsetError::ArithmeticOverflow)
+    );
+    #[cfg(target_pointer_width = "32")]
+    assert_eq!(
+        ptr.clone()
+            .checked_offset(isize::MAX)
+            .unwrap()
+            .byte_offset(),
+        ByteOffset::new(isize::MAX as usize + 3)
+    );
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(
+        ptr.clone().checked_offset(u32::MAX as isize).err(),
+        Some(ManagedPtrOffsetError::CompactRangeExceeded)
+    );
+    let displaced = ptr.checked_offset(2).unwrap();
+    assert_eq!(displaced.byte_offset(), ByteOffset::new(5));
+    assert_eq!(
+        displaced.observe_address().unwrap().as_ptr(),
+        base.wrapping_add(5)
+    );
+    // SAFETY: F10.RawMemoryAccessValid — The cached address points to byte 5 of live storage.
+    assert_eq!(unsafe { displaced.with_data(1, |bytes| bytes[0]) }, 0xA5);
+
+    let unmanaged = ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
+    let round_trip = unmanaged
+        .clone()
+        .checked_offset(isize::MIN)
+        .unwrap()
+        .checked_offset(isize::MIN)
+        .unwrap();
+    // SAFETY: F10.RawMemoryAccessValid — The full-width round trip returns to live byte 3.
+    assert_eq!(unsafe { round_trip.with_data(1, |bytes| bytes[0]) }, 0x5A);
+    let zero_delta = (address.as_ptr().addr() as isize).wrapping_neg();
+    let null = unmanaged.checked_offset(zero_delta).unwrap();
+    assert!(null.is_null());
+    assert_eq!(null.byte_offset(), ByteOffset::ZERO);
+    assert!(matches!(null.origin(), PointerOrigin::Unmanaged));
+    assert!(null.observe_address().is_none());
+    assert!(null.clone().checked_offset(0).unwrap().is_null());
+    let exposed = address.as_ptr().expose_provenance();
+    let restored = null.clone().checked_offset(exposed as isize).unwrap();
+    assert!(!restored.is_null());
+    assert_eq!(restored.observe_address().unwrap().as_ptr().addr(), exposed);
+    // SAFETY: F10.RawMemoryAccessValid — the exposed address is byte 3 of live storage.
+    assert_eq!(unsafe { restored.with_data(1, |bytes| bytes[0]) }, 0x5A);
+    let stack_null = crate::StackValue::ManagedPtr(null.clone().into());
+    let stack_restored = (stack_null + crate::StackValue::NativeInt(exposed as isize)).unwrap();
+    assert!(!stack_restored.is_null());
+    // SAFETY: F10.RawMemoryAccessValid — the stack result reconstructs the same live byte.
+    assert_eq!(unsafe { stack_restored.as_ptr().read() }, 0x5A);
+    let high_from_null = null.checked_offset(-1).unwrap();
+    assert_eq!(
+        high_from_null.observe_address().unwrap().as_ptr().addr(),
+        usize::MAX
+    );
+
+    // These synthetic addresses are formed but never dereferenced.
+    let high = NonNull::new(std::ptr::without_provenance_mut::<u8>(usize::MAX)).unwrap();
+    let far = ManagedPtr::new(
+        Some(high),
+        TypeDescription::NULL,
+        None,
+        false,
+        Some(ByteOffset::new(u32::MAX as usize)),
+    )
+    .with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+    assert_eq!(
+        far.clone().checked_offset(-1).unwrap().byte_offset(),
+        ByteOffset::new(u32::MAX as usize - 1)
+    );
+    assert_eq!(
+        far.checked_offset(1).err(),
+        Some(ManagedPtrOffsetError::CompactRangeExceeded)
+    );
+    let wrapped = ManagedPtr::new(Some(high), TypeDescription::NULL, None, false, None)
+        .checked_offset(1)
+        .unwrap();
+    assert!(wrapped.is_null());
+    let one = NonNull::new(std::ptr::without_provenance_mut::<u8>(1)).unwrap();
+    let stack = ManagedPtr::new(
+        Some(one),
+        TypeDescription::NULL,
+        None,
+        false,
+        Some(ByteOffset::new(1)),
+    )
+    .with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+    assert_eq!(
+        stack.checked_offset(-1).err(),
+        Some(ManagedPtrOffsetError::NullCachedAddress)
+    );
+}
+
+#[test]
+fn m1b_unmanaged_ptr_null_contract() {
+    use crate::StackValue;
+
+    let null = StackValue::unmanaged_ptr(std::ptr::null_mut());
+    assert!(matches!(null, StackValue::NativeInt(0)));
+    assert!(null.is_null());
+
+    let mut allocation = Box::new([0xA5u8; 64]);
+    let base = UnmanagedPtr(NonNull::new(allocation.as_mut_ptr()).unwrap());
+    let zero_delta = (base.addr() as isize).wrapping_neg();
+    for delta in [0, 1, -1, isize::MIN, isize::MAX, zero_delta] {
+        let expected = base.addr().wrapping_add_signed(delta);
+        let result = base.wrapping_byte_offset(delta);
+        let stack_result = StackValue::unmanaged_ptr_offset(base, delta);
+        if expected == 0 {
+            assert!(result.is_none());
+            assert!(matches!(stack_result, StackValue::NativeInt(0)));
+            assert!(stack_result.is_null());
+        } else {
+            let displaced = result.unwrap();
+            assert_eq!(displaced.addr(), expected);
+            assert!(matches!(stack_result, StackValue::UnmanagedPtr(_)));
+            assert!(!stack_result.is_null());
+            let restored = StackValue::unmanaged_ptr_offset(displaced, delta.wrapping_neg());
+            m1b_assert_unmanaged_sentinel(&restored);
+        }
+    }
+
+    // These synthetic addresses are only observed, never dereferenced.
+    for (address, delta) in [(1usize, -1isize), (usize::MAX, 1)] {
+        let ptr = UnmanagedPtr(NonNull::new(std::ptr::without_provenance_mut(address)).unwrap());
+        assert!(ptr.wrapping_byte_offset(delta).is_none());
+        let result = StackValue::unmanaged_ptr_offset(ptr, delta);
+        assert!(matches!(result, StackValue::NativeInt(0)));
+        assert!(result.is_null());
+        assert!(ptr.wrapping_byte_offset(0).is_some());
+    }
+}
+
+fn m1b_assert_unmanaged_sentinel(value: &crate::StackValue<'_>) {
+    // SAFETY: F10.RawMemoryAccessValid — the test keeps the 64-byte Box allocation
+    // alive, and `value` is expected to point back to its initialized first byte.
+    let byte = unsafe { value.as_ptr().read() };
+    assert_eq!(byte, 0xA5);
+}
+
+fn m1b_assert_unmanaged_round_trip(raw: *mut u8, delta: isize, int32: bool, subtract: bool) {
+    let pointer = crate::StackValue::unmanaged_ptr(raw);
+    let delta_value = || {
+        if int32 {
+            crate::StackValue::Int32(delta as i32)
+        } else {
+            crate::StackValue::NativeInt(delta)
+        }
+    };
+    let displaced = if subtract {
+        (pointer - delta_value()).unwrap()
+    } else {
+        (pointer + delta_value()).unwrap()
+    };
+    let restored = if subtract {
+        (displaced + delta_value()).unwrap()
+    } else {
+        (displaced - delta_value()).unwrap()
+    };
+    m1b_assert_unmanaged_sentinel(&restored);
+}
+
+#[test]
+fn m1b_unmanaged_offsets_wrap_and_round_trip_with_deref() {
+    let mut allocation = Box::new([0u8; 64]);
+    let raw = allocation.as_mut_ptr();
+    // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
+    // of the live Box allocation, which remains owned for the whole test.
+    unsafe { raw.write(0xA5) };
+
+    for delta in [1, -1, 8, i32::MIN as isize] {
+        for int32 in [true, false] {
+            for subtract in [false, true] {
+                m1b_assert_unmanaged_round_trip(raw, delta, int32, subtract);
+            }
+        }
+    }
+    for delta in [isize::MIN, isize::MAX] {
+        for subtract in [false, true] {
+            m1b_assert_unmanaged_round_trip(raw, delta, false, subtract);
+        }
+    }
+
+    let wrapped = (((crate::StackValue::unmanaged_ptr(raw)
+        + crate::StackValue::NativeInt(isize::MAX))
+    .unwrap()
+        + crate::StackValue::NativeInt(isize::MAX))
+    .unwrap()
+        + crate::StackValue::Int32(2))
+    .unwrap();
+    m1b_assert_unmanaged_sentinel(&wrapped);
+    drop(allocation);
+}
+
+#[test]
+fn m1b_unmanaged_arithmetic_wraps_to_explicit_null() {
+    let mut allocation = Box::new([0u8; 64]);
+    let raw = allocation.as_mut_ptr();
+    // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
+    // of the live Box allocation, which remains owned for the whole test.
+    unsafe { raw.write(0xA5) };
+
+    let base = crate::StackValue::unmanaged_ptr(raw);
+    let address = base.as_ptr().addr() as isize;
+    let zero = (base - crate::StackValue::NativeInt(address)).unwrap();
+    assert!(zero == crate::StackValue::NativeInt(0));
+    assert!(zero.is_null());
+
+    let max_address =
+        crate::StackValue::unmanaged_ptr(std::ptr::without_provenance_mut(usize::MAX));
+    let wrapped_from_max = (max_address + crate::StackValue::Int32(1)).unwrap();
+    assert!(wrapped_from_max == crate::StackValue::NativeInt(0));
+    assert!(wrapped_from_max.is_null());
+
+    let address_one = crate::StackValue::unmanaged_ptr(std::ptr::without_provenance_mut(1));
+    let wrapped_from_one = (address_one - crate::StackValue::Int32(1)).unwrap();
+    assert!(wrapped_from_one == crate::StackValue::NativeInt(0));
+    assert!(wrapped_from_one.is_null());
+
+    let exposed_address = raw.expose_provenance();
+    let null = crate::StackValue::unmanaged_ptr(std::ptr::null_mut());
+    assert!(null.is_null());
+    let reconstructed = (null + crate::StackValue::NativeInt(exposed_address as isize)).unwrap();
+    m1b_assert_unmanaged_sentinel(&reconstructed);
+    drop(allocation);
+}
+
+#[test]
+fn m1b_min_signed_operands_do_not_overflow() {
+    let mut allocation = Box::new([0u8; 64]);
+    let raw = allocation.as_mut_ptr();
+    // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
+    // of the live Box allocation, which remains owned for the whole test.
+    unsafe { raw.write(0xA5) };
+
+    let displaced_int32 =
+        (crate::StackValue::Int32(i32::MIN) + crate::StackValue::unmanaged_ptr(raw)).unwrap();
+    let restored_int32 = (displaced_int32 - crate::StackValue::Int32(i32::MIN)).unwrap();
+    m1b_assert_unmanaged_sentinel(&restored_int32);
+
+    let displaced_native_min =
+        (crate::StackValue::unmanaged_ptr(raw) - crate::StackValue::NativeInt(isize::MIN)).unwrap();
+    let restored_native_min =
+        (displaced_native_min + crate::StackValue::NativeInt(isize::MIN)).unwrap();
+    m1b_assert_unmanaged_sentinel(&restored_native_min);
+
+    let displaced_int32_sub =
+        (crate::StackValue::unmanaged_ptr(raw) - crate::StackValue::Int32(i32::MIN)).unwrap();
+    let restored_int32_sub = (displaced_int32_sub + crate::StackValue::Int32(i32::MIN)).unwrap();
+    m1b_assert_unmanaged_sentinel(&restored_int32_sub);
+    drop(allocation);
+}
+
+fn m1b_assert_unmanaged_byte(value: &crate::StackValue<'_>, expected: u8) {
+    // SAFETY: F10.RawMemoryAccessValid — callers pass pointers into a live local Box allocation
+    // (or a NativeInt with its provenance exposed from that allocation) and dereference only
+    // initialized bytes within that allocation.
+    let actual = unsafe { value.as_ptr().read() };
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn m1b_pointer_comparisons_are_value_bearing() {
+    let mut allocation = Box::new([0u8; 16]);
+    let base_raw = allocation.as_mut_ptr();
+    // SAFETY: F10.RawMemoryAccessValid — `base_raw` points to the initialized first byte
+    // of the live Box allocation, which remains owned for the whole test.
+    unsafe { base_raw.write(0xA5) };
+    // SAFETY: F10.RawMemoryAccessValid — byte eight is in the live allocation and is
+    // initialized before the corresponding pointer is read below.
+    unsafe { base_raw.wrapping_add(8).write(0x5A) };
+
+    let base = crate::StackValue::unmanaged_ptr(base_raw);
+    let later = crate::StackValue::unmanaged_ptr(base_raw.wrapping_add(8));
+    assert!(
+        base == base.clone(),
+        "an unmanaged pointer must equal itself"
+    );
+    assert_eq!(
+        base.compare(&later, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        later.compare(&base, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        base.compare(&later, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        later.compare(&base, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Greater)
+    );
+
+    let base_address = base_raw.expose_provenance();
+    let base_integer = crate::StackValue::NativeInt(base_address as isize);
+    assert!(base == base_integer.clone());
+    assert!(base_integer == base);
+    assert_eq!(
+        base.compare(&base_integer, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        base_integer.compare(&base, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        base.compare(&base_integer, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        base_integer.compare(&base, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Equal)
+    );
+
+    // These two address-only values intentionally have no backing allocation and
+    // must not be dereferenced. The real base and `later` pointers below are read
+    // after the comparisons, proving the live allocation path remains value-bearing.
+    let near_max =
+        crate::StackValue::unmanaged_ptr(std::ptr::without_provenance_mut(usize::MAX - 7));
+    assert_eq!(
+        near_max.compare(&base, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        near_max.compare(&base, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Greater)
+    );
+    let negative_one = crate::StackValue::NativeInt(-1);
+    assert_eq!(
+        negative_one.compare(&base, crate::NumberSign::Unsigned),
+        Some(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        negative_one.compare(&base, crate::NumberSign::Signed),
+        Some(std::cmp::Ordering::Less)
+    );
+
+    let managed = ManagedPtr::new(
+        NonNull::new(base_raw),
+        TypeDescription::NULL,
+        None,
+        false,
+        None,
+    );
+    let managed_value = crate::StackValue::ManagedPtr(managed.clone().into());
+    let null_managed = crate::StackValue::ManagedPtr(ManagedPtr::null().into());
+    let zero = crate::StackValue::NativeInt(0);
+    assert!(null_managed == zero);
+    assert!(zero == null_managed);
+    assert!(base != zero);
+    assert!(zero != base);
+    assert!(managed_value != zero);
+    assert!(managed_value == base);
+    assert!(base == managed_value);
+    assert!(managed_value == base_integer);
+    assert!(base_integer == managed_value);
+    assert_eq!(
+        managed_value.partial_cmp(&base),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        base.partial_cmp(&managed_value),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        managed_value.partial_cmp(&later),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        later.partial_cmp(&managed_value),
+        Some(std::cmp::Ordering::Greater)
+    );
+    for sign in [crate::NumberSign::Signed, crate::NumberSign::Unsigned] {
+        assert_eq!(
+            near_max.compare(&managed_value, sign),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            managed_value.compare(&near_max, sign),
+            Some(std::cmp::Ordering::Less)
+        );
+    }
+    for pointer in [&base, &managed_value] {
+        assert_eq!(
+            pointer.partial_cmp(&negative_one),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            pointer.compare(&negative_one, crate::NumberSign::Unsigned),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            negative_one.compare(pointer, crate::NumberSign::Unsigned),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            pointer.compare(&negative_one, crate::NumberSign::Signed),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            negative_one.compare(pointer, crate::NumberSign::Signed),
+            Some(std::cmp::Ordering::Less)
+        );
+    }
+    // SAFETY: F10.RawMemoryAccessValid — the unmanaged-origin managed pointer
+    // observes the initialized byte in the live Box allocation.
+    let managed_byte = unsafe { managed.with_data(1, |bytes| bytes[0]) };
+    assert_eq!(managed_byte, 0xA5);
+    m1b_assert_unmanaged_byte(&base, 0xA5);
+    m1b_assert_unmanaged_byte(&base_integer, 0xA5);
+    m1b_assert_unmanaged_byte(&later, 0x5A);
+    drop(allocation);
+}
+
+#[test]
+fn m1b_managed_ptr_far_oob_compare_and_difference() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let near = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+        // Construct logical far offsets directly: memory-validation's diagnostic
+        // guard is intentionally exercised only by the later arithmetic test.
+        let far = ManagedPtr::new(
+            None,
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(4096)),
+        );
+        let far_u32_max = ManagedPtr::new(
+            None,
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(u32::MAX as usize)),
+        );
+
+        let near_value = crate::StackValue::ManagedPtr(near.clone().into());
+        let far_value = crate::StackValue::ManagedPtr(far.clone().into());
+        assert_eq!(
+            (far_value.clone() - near_value.clone()).unwrap(),
+            crate::StackValue::NativeInt(4096)
+        );
+        assert_eq!(
+            (near_value.clone() - far_value.clone()).unwrap(),
+            crate::StackValue::NativeInt(-4096)
+        );
+
+        let observed_far = far.observe_address().expect("observed far address");
+        assert!(far_value == crate::StackValue::NativeInt(observed_far.addr().get() as isize));
+        let observed_base = near.observe_address().expect("observed base address");
+        assert_eq!(
+            far_value.compare(
+                &crate::StackValue::NativeInt(observed_base.addr().get() as isize),
+                crate::NumberSign::Unsigned,
+            ),
+            Some(std::cmp::Ordering::Greater)
+        );
+
+        let observed_max = far_u32_max
+            .observe_address()
+            .expect("observed u32::MAX address");
+        let far_max_value = crate::StackValue::ManagedPtr(far_u32_max.into());
+        assert!(far_max_value == crate::StackValue::NativeInt(observed_max.addr().get() as isize));
+
+        let other_vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0x5A],
+            vec![1],
+        );
+        let other_owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(other_vector)));
+        let other_far = ManagedPtr::new(
+            None,
+            TypeDescription::NULL,
+            Some(other_owner),
+            false,
+            Some(ByteOffset::new(4096)),
+        );
+        let other_far_value = crate::StackValue::ManagedPtr(other_far.clone().into());
+        let observed_other_far = other_far
+            .observe_address()
+            .expect("other observed far address");
+        assert_eq!(
+            far_value.partial_cmp(&other_far_value),
+            Some(observed_far.addr().cmp(&observed_other_far.addr()))
+        );
+        assert_eq!(
+            far_value == other_far_value,
+            observed_far.addr() == observed_other_far.addr()
+        );
+
+        // SAFETY: F1.GcHandleRooted — `near` retains the live one-byte vector owner,
+        // and this access is within its initialized payload.
+        let actual = unsafe { near.with_data(1, |bytes| bytes[0]) };
+        assert_eq!(actual, 0xA5);
+    });
+}
+
+#[test]
+#[cfg_attr(
+    feature = "memory-validation",
+    ignore = "M1b managed-pointer arithmetic deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+)]
+fn m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let near = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+        let value = crate::StackValue::ManagedPtr(near.clone().into());
+
+        let errors = [
+            value.clone() + crate::StackValue::Int32(-1),
+            crate::StackValue::Int32(i32::MIN) + value.clone(),
+            value.clone() - crate::StackValue::NativeInt(1),
+            value.clone() + crate::StackValue::NativeInt(isize::MIN),
+            value.clone() - crate::StackValue::NativeInt(isize::MIN),
+            value.clone() - crate::StackValue::Int32(1),
+            value.clone() - crate::StackValue::Int64(1),
+            value.clone() - crate::StackValue::Int64(i64::MIN),
+        ];
+        for result in errors {
+            let Err(dotnet_types::error::ExecutionError::NotImplemented(message)) = result else {
+                panic!("expected an explicit managed-offset NotImplemented error");
+            };
+            assert!(
+                message.contains("negative")
+                    && message.contains("compact")
+                    && message.contains("M3")
+            );
+        }
+
+        if let Ok(max) = isize::try_from(u32::MAX) {
+            let far = (crate::StackValue::NativeInt(max) + value.clone()).unwrap();
+            assert!(matches!(
+                far.clone() + crate::StackValue::Int32(1),
+                Err(dotnet_types::error::ExecutionError::NotImplemented(_))
+            ));
+            let restored = (far - crate::StackValue::Int64(i64::from(u32::MAX))).unwrap();
+            let crate::StackValue::ManagedPtr(restored) = restored else {
+                panic!("managed-pointer arithmetic changed the StackValue variant");
+            };
+            // SAFETY: F1.GcHandleRooted — the owner remains live, and subtraction
+            // returns the pointer to the initialized one-byte payload.
+            assert_eq!(unsafe { restored.with_data(1, |bytes| bytes[0]) }, 0xA5);
+        }
+
+        let displaced = (value + crate::StackValue::Int32(4096)).unwrap();
+        let displaced = (displaced - crate::StackValue::Int32(1)).unwrap();
+        let restored = (displaced - crate::StackValue::NativeInt(4095)).unwrap();
+        let crate::StackValue::ManagedPtr(restored) = restored else {
+            panic!("managed-pointer arithmetic changed the StackValue variant");
+        };
+        // SAFETY: F1.GcHandleRooted — `near` and the restored pointer retain the same
+        // live one-byte vector owner, and the round trip returns to its valid payload.
+        let actual = unsafe { restored.with_data(1, |bytes| bytes[0]) };
+        assert_eq!(actual, 0xA5);
+    });
+}

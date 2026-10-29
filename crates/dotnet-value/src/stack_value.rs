@@ -5,7 +5,7 @@ use dotnet_utils::{ArenaId, gc::record_cross_arena_ref};
 
 use crate::{
     cts_cli_conversion::CtsToCli,
-    object::{HeapStorage, Object, ObjectHandle, ObjectRef},
+    object::{HeapStorage, Object, ObjectRef},
     pointer::{self, ManagedPtr, PointerOrigin, UnmanagedPtr},
     string::CLRString,
 };
@@ -255,29 +255,29 @@ fn extract_shift_amount(v: StackValue<'_>) -> Result<u32, ExecutionError> {
     }
 }
 
+/// Observes an address without rooting the owner, retaining a borrow, or granting access.
 #[inline]
 fn managed_ptr_to_raw<'gc>(m: &StackManagedPtr<'gc>) -> *mut u8 {
-    if let Some(owner) = m.owner() {
-        owner
-            .0
-            .map_or(std::ptr::null_mut(), |h: ObjectHandle<'gc>| {
-                let inner = h.borrow();
-                // SAFETY: F1.GcHandleRooted — `m` retains the Heap owner while `inner`
-                // is borrowed to obtain the allocation base. The returned raw address
-                // itself retains neither this borrow nor a root; callers must keep the
-                // owner alive and establish access rights separately.
-                let base = unsafe { inner.storage.raw_data_ptr() };
-                // SAFETY: F10.RawMemoryAccessValid — This legacy helper uses in-bounds
-                // `.add` and therefore assumes the stored offset lies within the live
-                // payload. It is not the wrapping heap observer and grants no access right.
-                unsafe { base.add(m.byte_offset().as_usize()) }
-            })
-    } else {
-        // Stack, Static, CrossArena, Transient, and Unmanaged pointers already
-        // retain their live cached address. Reconstructing from the compact
-        // offset here would turn an owner-relative offset into a bogus pointer.
-        m._value.map_or(std::ptr::null_mut(), NonNull::as_ptr)
+    m.observe_address()
+        .map_or(std::ptr::null_mut(), NonNull::as_ptr)
+}
+
+/// Observe pointer and native-integer addresses without exposing provenance.
+#[inline]
+fn pointer_address(value: &StackValue<'_>) -> Option<usize> {
+    match value {
+        StackValue::NativeInt(i) => Some(*i as usize),
+        StackValue::UnmanagedPtr(p) => Some(p.addr()),
+        StackValue::ManagedPtr(m) => Some(managed_ptr_to_raw(m).addr()),
+        _ => None,
     }
+}
+
+#[inline]
+fn pointer_difference(lhs: &StackValue<'_>, rhs: &StackValue<'_>) -> isize {
+    let lhs = pointer_address(lhs).expect("left pointer value has an observable address");
+    let rhs = pointer_address(rhs).expect("right pointer value has an observable address");
+    lhs.wrapping_sub(rhs) as isize
 }
 
 macro_rules! checked_arithmetic_op {
@@ -478,12 +478,25 @@ macro_rules! wrapping_arithmetic_op {
 }
 
 impl<'gc> StackValue<'gc> {
+    /// Constructs a non-null unmanaged pointer, or `NativeInt(0)` for null.
+    /// Wrapping to zero through [`Self::unmanaged_ptr_offset`] produces this
+    /// explicit null and drops provenance; dereferencing an address reconstructed
+    /// after it requires prior provenance exposure.
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
         match NonNull::new(ptr) {
             Some(p) => Self::UnmanagedPtr(UnmanagedPtr(p)),
             None => Self::NativeInt(0),
         }
     }
+
+    /// Forms a wrapping unmanaged address, mapping zero to explicit null.
+    pub fn unmanaged_ptr_offset(ptr: UnmanagedPtr, delta: isize) -> Self {
+        Self::unmanaged_ptr(
+            ptr.wrapping_byte_offset(delta)
+                .map_or(std::ptr::null_mut(), |p| p.0.as_ptr()),
+        )
+    }
+
     pub fn managed_ptr(
         ptr: *mut u8,
         target_type: TypeDescription,
@@ -758,6 +771,10 @@ impl<'gc> StackValue<'gc> {
         self
     }
 
+    /// Tests for null or zero. An `UnmanagedPtr` is never null: unmanaged null
+    /// is `NativeInt(0)`, including a wrap-to-zero result from
+    /// [`Self::unmanaged_ptr_offset`]. That result drops provenance, so a later
+    /// reconstructed address requires prior exposure before dereferencing.
     pub fn is_null(&self) -> bool {
         match self {
             Self::ObjectRef(o) => o.0.is_none(),
@@ -795,6 +812,10 @@ impl<'gc> StackValue<'gc> {
             (NativeInt(l), Int32(r), Unsigned) => (*l as usize).partial_cmp(&(*r as u32 as usize)),
             (NativeInt(l), NativeInt(r), Unsigned) => (*l as usize).partial_cmp(&(*r as usize)),
             (Int64(l), Int64(r), Unsigned) => (*l as u64).partial_cmp(&(*r as u64)),
+            (ManagedPtr(_) | UnmanagedPtr(_), NativeInt(_), Unsigned)
+            | (NativeInt(_), ManagedPtr(_) | UnmanagedPtr(_), Unsigned) => {
+                pointer_address(self).partial_cmp(&pointer_address(other))
+            }
             _ => self.partial_cmp(other),
         }
     }
@@ -982,13 +1003,10 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeInt(l), NativeInt(r)) => l == r,
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
-            (ManagedPtr(l), NativeInt(r)) => {
-                let l_ptr = managed_ptr_to_raw(l);
-                (l_ptr as isize) == *r
-            }
-            (NativeInt(l), ManagedPtr(r)) => {
-                let r_ptr = managed_ptr_to_raw(r);
-                *l == (r_ptr as isize)
+            (ManagedPtr(_), NativeInt(_) | UnmanagedPtr(_))
+            | (UnmanagedPtr(_), ManagedPtr(_) | UnmanagedPtr(_) | NativeInt(_))
+            | (NativeInt(_), ManagedPtr(_) | UnmanagedPtr(_)) => {
+                pointer_address(self) == pointer_address(other)
             }
             (ObjectRef(l), ObjectRef(r)) => l == r,
             (ValueType(l), ValueType(r)) => l == r,
@@ -1007,99 +1025,98 @@ impl<'gc> PartialOrd for StackValue<'gc> {
             (NativeInt(l), Int32(r)) => l.partial_cmp(&(*r as isize)),
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), NativeInt(r)) => {
-                let l_ptr = managed_ptr_to_raw(l);
-                (l_ptr as isize).partial_cmp(r)
+            (ManagedPtr(_) | UnmanagedPtr(_), ManagedPtr(_) | UnmanagedPtr(_)) => {
+                pointer_address(self).partial_cmp(&pointer_address(other))
             }
-            (NativeInt(l), ManagedPtr(r)) => {
-                let r_ptr = managed_ptr_to_raw(r);
-                l.partial_cmp(&(r_ptr as isize))
-            }
+            (ManagedPtr(_) | UnmanagedPtr(_), NativeInt(_))
+            | (NativeInt(_), ManagedPtr(_) | UnmanagedPtr(_)) => pointer_address(self)
+                .map(|address| address as isize)
+                .partial_cmp(&pointer_address(other).map(|address| address as isize)),
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
         }
     }
 }
 
-#[expect(
-    clippy::multiple_unsafe_ops_per_block,
-    reason = "each unmanaged arithmetic arm derives and re-wraps one checked-invariant pointer"
-)]
+fn managed_offset_error() -> ExecutionError {
+    ExecutionError::NotImplemented(
+        "managed pointer offset is unrepresentable (negative or beyond the compact range requires the signed representation planned for M3; overflow or null cached address is unsupported)".into(),
+    )
+}
+
+fn managed_offset<'gc>(
+    m: StackManagedPtr<'gc>,
+    bytes: isize,
+) -> Result<StackValue<'gc>, ExecutionError> {
+    m.into_inner()
+        .checked_offset(bytes)
+        .map(|ptr| StackValue::ManagedPtr(StackManagedPtr::new(ptr)))
+        .map_err(|_| managed_offset_error())
+}
+
 impl<'gc> Add for StackValue<'gc> {
     type Output = Result<Self, ExecutionError>;
     fn add(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
-            (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object
-                // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
-                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i as isize))) })
-            }
-            (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
-                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(i))) })
-            }
+            (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => managed_offset(m, i as isize),
+            (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => managed_offset(m, i),
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
-                // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-                Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
-                    NonNull::new_unchecked(u.0.as_ptr().offset(i as isize))
-                })))
+                Ok(Self::unmanaged_ptr_offset(u, i as isize))
             }
             (NativeInt(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), NativeInt(i)) => {
-                // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-                Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
-                    NonNull::new_unchecked(u.0.as_ptr().offset(i))
-                })))
+                Ok(Self::unmanaged_ptr_offset(u, i))
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_add, +),
         }
     }
 }
 
-#[expect(
-    clippy::multiple_unsafe_ops_per_block,
-    reason = "each unmanaged arithmetic arm derives and re-wraps one checked-invariant pointer"
-)]
 impl<'gc> Sub for StackValue<'gc> {
     type Output = Result<Self, ExecutionError>;
     fn sub(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
-            (ManagedPtr(m), Int32(i)) => {
-                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
-                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                Ok(unsafe {
-                    ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
-                })
-            }
+            (ManagedPtr(m), Int32(i)) => managed_offset(
+                m,
+                (i as isize)
+                    .checked_neg()
+                    .ok_or_else(managed_offset_error)?,
+            ),
             (ManagedPtr(m), NativeInt(i)) => {
-                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
-                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                Ok(unsafe { ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-i))) })
+                managed_offset(m, i.checked_neg().ok_or_else(managed_offset_error)?)
             }
             (ManagedPtr(m), Int64(i)) => {
-                // SAFETY: F10.RawMemoryAccessValid — Pointer arithmetic is performed within the bounds of the managed object.
-                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
-                Ok(unsafe {
-                    ManagedPtr(StackManagedPtr::new(m.into_inner().offset(-(i as isize))))
-                })
+                let bytes = i
+                    .checked_neg()
+                    .and_then(|n| isize::try_from(n).ok())
+                    .ok_or_else(managed_offset_error)?;
+                managed_offset(m, bytes)
             }
-            // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-            (UnmanagedPtr(u), Int32(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
-                NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
-            }))),
-            // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
-            (UnmanagedPtr(u), NativeInt(i)) => Ok(UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
-                NonNull::new_unchecked(u.0.as_ptr().offset(-i))
-            }))),
-            (ManagedPtr(m1), ManagedPtr(m2)) => {
-                let v1 = managed_ptr_to_raw(&m1);
-                let v2 = managed_ptr_to_raw(&m2);
-                Ok(NativeInt((v1 as isize) - (v2 as isize)))
+            (UnmanagedPtr(u), Int32(i)) => {
+                Ok(Self::unmanaged_ptr_offset(u, (i as isize).wrapping_neg()))
             }
+            (UnmanagedPtr(u), NativeInt(i)) => Ok(Self::unmanaged_ptr_offset(u, i.wrapping_neg())),
+            (UnmanagedPtr(lhs), UnmanagedPtr(rhs)) => Ok(NativeInt(pointer_difference(
+                &UnmanagedPtr(lhs),
+                &UnmanagedPtr(rhs),
+            ))),
+            (NativeInt(lhs), UnmanagedPtr(rhs)) => Ok(NativeInt(pointer_difference(
+                &NativeInt(lhs),
+                &UnmanagedPtr(rhs),
+            ))),
+            (UnmanagedPtr(lhs), ManagedPtr(rhs)) => Ok(NativeInt(pointer_difference(
+                &UnmanagedPtr(lhs),
+                &ManagedPtr(rhs),
+            ))),
+            (ManagedPtr(lhs), UnmanagedPtr(rhs)) => Ok(NativeInt(pointer_difference(
+                &ManagedPtr(lhs),
+                &UnmanagedPtr(rhs),
+            ))),
+            (ManagedPtr(m1), ManagedPtr(m2)) => Ok(NativeInt(pointer_difference(
+                &ManagedPtr(m1),
+                &ManagedPtr(m2),
+            ))),
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
         }
     }

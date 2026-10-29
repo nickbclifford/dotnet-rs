@@ -263,7 +263,14 @@ fn convert_to_stack_value(
             Ok(StackValue::Int32(val.try_as_i32()?))
         }
         StoreType::Int64 => Ok(StackValue::Int64(val.try_as_i64()?)),
-        StoreType::IntPtr => Ok(StackValue::NativeInt(val.try_as_isize()?)),
+        StoreType::IntPtr => {
+            let value = match val {
+                // Storing a pointer as a native integer exposes its provenance.
+                StackValue::UnmanagedPtr(p) => p.0.as_ptr().expose_provenance() as isize,
+                _ => val.try_as_isize()?,
+            };
+            Ok(StackValue::NativeInt(value))
+        }
         StoreType::Float32 | StoreType::Float64 => Ok(StackValue::NativeFloat(val.try_as_f64()?)),
         StoreType::Object => Ok(val), // Already correct type
     }
