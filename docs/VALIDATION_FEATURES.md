@@ -85,19 +85,24 @@ explicit workflow lanes and are not represented by `SHARED_FEATURE_MATRIX`.
 
 | CI job | Blocking? | Configuration / selection | Meaning and limits |
 |---|---|---|---|
-| `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` test suite with default features (multithreading), plus no-default-features selector `pointer::tests::m1a_` | Blocking full value-crate Miri coverage in the default configuration. The no-features step covers exactly the three M1a library regressions, not the full crate; neither step is a VM gate. |
-| `miri-pointer-controls` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `--no-default-features` with and without `--features multithreading`; six guarded shards per configuration | Eleven enabled exact VM controls, revalidated in both configurations: shard 1 p00/p02; shard 2 p03/p05; shard 3 p07/p11; shard 4 p10/p20; shard 5 p13/p14; shard 6 p16. This is a filtered permissive Tree Borrows lane, not a full VM Miri suite, strict-provenance validation, or proof of runtime soundness. The other 12 diagnostic-only probes are not executed by CI. |
+| `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` test suite with default features (multithreading), plus no-default-features selectors `pointer::tests::m1a_` (3 tests) and `pointer::tests::m1b_` (8 tests) | Blocking full value-crate Miri coverage in the default configuration. The no-features selectors cover exactly the three M1a and eight M1b library regressions, not the full crate; neither step is a VM gate. |
+| `miri-pointer-controls` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `--no-default-features` with and without `--features multithreading`; twelve guarded shards per configuration | Twenty-four enabled exact VM controls: shard 1 p00/p02; 2 p03/p05; 3 p07/p11; 4 p10/p20; 5 p13/p14; 6 p16/p_null; 7 p06/p08; 8 p17/p18; 9 p21/p22; 10 p23/p24; 11 p25/p26; 12 p27/p28. Seven diagnostic-only probes are not executed by CI. This is a filtered permissive Tree Borrows lane, not a full VM Miri suite, strict-provenance validation, or proof of runtime soundness. |
 | `miri` matrix in `miri.yml` | No (`continue-on-error`) | Pinned `nightly-2026-05-27`; VM entries use `jmp_tests tail_calls fault_tests` substring filters in no-features and multithreading configurations | Existing advisory VM unsafe-gate runs remain unchanged; their bounded filters do not establish whole-VM coverage. Other crate entries are also advisory. |
 | Strict-provenance Miri | No job | None | No current CI job uses `-Zmiri-strict-provenance`; do not infer strict coverage from the two blocking Miri jobs. |
 
-The p13 control and the separate `conv_u8_after_far_oob_managed_add_does_not_panic` regression
-are conditionally ignored under `memory-validation`: their intentional 4096-byte managed offsets
-trigger its debug bounds trap. Both run in the pinned Miri configurations without that feature.
+The following tests are conditionally ignored under `memory-validation` because their deliberate
+managed-pointer offsets trigger its debug bounds trap:
+
+- VM control `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`;
+- VM regression `conv_u8_after_far_oob_managed_add_does_not_panic`;
+- value regression `m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
+
+They run in the pinned Miri configurations without that feature.
 
 The pointer-control job uses a provisional 45-minute timeout per matrix leg. Hosted cold-build/cache
 timings have not been measured. Ignored pointer probes may only be executed through the explicit
 diagnostic entrypoint in `scripts/pointer_provenance.sh`; native diagnostics are limited to catalog
-entries p17, p18 and p19.
+entry p19.
 
 ## Debugging Environment Variables
 

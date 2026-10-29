@@ -659,3 +659,50 @@ extent/access work could contribute to some hot paths, but `dispatch` also regre
 while improving with defaults. The powersave governor and feature-dependent code generation are
 possible confounders, not established explanations. Preserve this no-features performance signal for
 later review; no optimization was attempted. These are native Criterion measurements, not Miri evidence.
+
+## M1b pointer-semantics comparison (2026-10-29)
+
+The planned finished-tree comparison covered the same six `end_to_end` cases in both feature sets,
+against the unchanged-tree `m1b-before` / `m1b-before-nofeatures` baselines and, while present, the
+retained `m1a-before` / `m1a-before-nofeatures` baselines. All 24 case/baseline estimate files were
+available locally, but **the comparison was not measured**: the host was not sufficiently idle. The
+AMD Ryzen 9 9900X host had 24 logical CPUs, all using the `powersave` governor; observed load averages
+were 1.37/1.03/1.36 and later 0.91/0.97/1.32. A separate Vite/Playwright process was active in the
+first snapshot and unrelated browser/desktop activity remained in later snapshots (despite 88–95%
+CPU idle in `vmstat`). No medians, relative-change 95% intervals, p-values, or Criterion outcomes
+were obtained for the finished M1b tree.
+
+These were the intended **native Criterion** commands; none was run because of the host activity:
+
+```bash
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --bench end_to_end -- '^(memory|unsafe_buffer|span|span_equality|dispatch|heap_access)$' \
+  --sample-size 10 --baseline m1b-before
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --no-default-features --bench end_to_end \
+  -- '^(memory|unsafe_buffer|span|span_equality|dispatch|heap_access)$' \
+  --sample-size 10 --baseline m1b-before-nofeatures
+```
+
+The retained `m1a-before` and `m1a-before-nofeatures` comparisons were also not run. Local
+`target/criterion` baselines are volatile. This result is a statement of missing performance
+measurement, not a correctness result; Criterion measurements are native and are not Miri evidence.
+
+The repeated M1a no-features regressions remain **OPEN** as the separately tracked performance item
+F-PERF-001, owned by M6's benchmark review; this M1b report implies no
+owner change and no optimization was attempted. The final M1a runs recorded positive relative-change
+95% intervals for all six no-features cases (`dispatch` +3.1776%, `span` +6.0160%, `span_equality`
++3.9696%, `memory` +2.8038%, `heap_access` +6.8289%, `unsafe_buffer` +4.2270% point estimates;
+each `p < 0.05`). Reproduce the no-features comparison, when its local baseline remains available,
+with:
+
+```bash
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo bench --profile bench-fat -p dotnet-benchmarks \
+  --no-default-features --bench end_to_end \
+  -- '^(memory|unsafe_buffer|span|span_equality|dispatch|heap_access)$' \
+  --sample-size 10 --baseline m1a-before-nofeatures
+```
+
+The prior [`m1a` report](#m1a-heap-access-comparison-2026-10-28) retains all six intervals,
+repeat-run details, and the default-feature comparison command. This performance signal remains
+separate from correctness and does not establish a cause.

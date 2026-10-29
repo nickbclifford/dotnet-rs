@@ -1,6 +1,6 @@
 # Pointer / provenance review evidence and current status
 
-The pointer/provenance plan remains **In progress — partial M0**. The M1a heap-access containment implementation and its scoped evidence are now present, but this does not complete M0, the broader M1 exits, or M3. See the [unified plan](../plans/01-pointer-provenance.md) and the [durable evidence inventory](INVENTORY.md) for the baseline table, probe catalog, R-row task status, and detailed results.
+The pointer/provenance plan remains **In progress — scoped M1b pointer semantics complete; partial M0 (VM probe harness and controls)**. The M1a heap-access containment implementation and scoped M1b pointer-semantics evidence are recorded, but this does not complete M0, the broader M1 exits, or M3. See the [unified plan](../plans/01-pointer-provenance.md) and the [durable evidence inventory](INVENTORY.md) for the baseline table, probe catalog, R-row task status, and detailed results.
 
 ## M1a outcomes
 
@@ -16,13 +16,36 @@ Three library regressions in `crates/dotnet-value/src/pointer/tests.rs` passed i
 
 The original pass-1 library sources and pass archives remain unavailable. The first two tests independently recreate the reported intents and make **no identity claim** about the missing originals; the typed-write test is a new regression.
 
-The blocking pointer runner now has **11 exact controls**, in six shards, across no-features and multithreading. Final `verify-controls` passed in both configurations; every shard passed (2 controls in shards 1–5, 1 in shard 6). The largest recorded local shard wall was 1328.707 seconds, below the 2700-second limit, but the measurements were warm and contended and do not guarantee hosted CI timing. `miri-value` CI includes the three M1a library selectors in both its default multithreading run and a separate no-features step. The [inventory](INVENTORY.md#m1a-beforeafter-outcomes-and-repaired-scope) includes the exact shard walls and the evidence caveat.
+The current pointer runner has **24 exact controls in 12 shards** across no-features and multithreading; its 31-entry catalog also has 7 diagnostic-only probes. `verify-controls` discovered 24 exact controls in both configurations. The M1a-era lane measurements and Phase 6 additions passed; the inventory identifies which shard outcomes came from each run and records measured walls. `miri-value` CI includes the three M1a library selectors in both its default multithreading run and a separate no-features step. See the [M1b outcomes](#m1b-outcomes) and [inventory](INVENTORY.md#m1b-phase-6-control-outcome-comparison-2026-10-29).
+
+## M1b outcomes
+
+The current catalog contains **31 entries: 24 controls and 7 diagnostic-only probes**. Its 24 controls are grouped as follows; all 12 shards have documented passing outcomes in both no-features and multithreading configurations (shards 1–5 use the earlier final-lane measurements; shards 6–12 use Phase 6 results).
+
+| Shard | Controls |
+|---:|---|
+| 1 | p00, p02 |
+| 2 | p03, p05 |
+| 3 | p07, p11 |
+| 4 | p10, p20 |
+| 5 | p13, p14 |
+| 6 | p16, `p_null_through_pointer_local_address` |
+| 7 | p06, p08 |
+| 8 | p17, p18 |
+| 9 | p21, p22 |
+| 10 | p23, p24 |
+| 11 | p25, p26 |
+| 12 | p27, p28 |
+
+The eight `dotnet-value` `pointer::tests::m1b_` regressions passed natively and under pinned permissive-TB Miri in both configurations (8 passed, 0 failed, 0 ignored per run). With `memory-validation`, 7 passed and 1 was intentionally ignored by the F-TEST-003 guard.
+
+Shard 12's fresh-pointer `stind.i` controls were run using `bash scripts/pointer_provenance.sh controls --configuration CFG --shard 12`: p27 passed in 296 s (no-features) and 348 s (multithreading); p28 passed in 302 s and 321 s, respectively. Each configuration reported 2 passed, 0 failed. These are per-probe times in the filtered permissive Tree Borrows lane, not native timings. The lane is **not strict-provenance evidence**, **not a full VM Miri suite**, and **not a soundness proof**; the inventory records pre-repair outcomes and per-shard evidence details.
 
 ## Repaired heap paths and remaining boundaries
 
 M1a repaired heap `ManagedPtr::with_data` to validate checked ranges against actual payload extent and create only the requested slice; separated heap address observation from access using retained allocation bases and wrapping formation; routed heap `StackValue::as_ptr` and VM `resolve_address` through that observer; fixed both distinct integer conversions, `conv.u` and `conv.u8`; fixed heap-origin `AsPointer`/Unsafe and buffer address helpers; and kept retained-base derivation independent of a payload-slice reborrow so pointers survive ordinary typed writes.
 
-The following remain out of scope: Stack/Static observation and the `with_data` stack fallback (M3); any writable contract for strings/interned Arc data; P/Invoke pinning, guards, ABI and return/copy semantics (M2); and general `cpblk`/`initblk` correctness (M1f/M5: count width, full checked ranges, barriers/rooting and yield state). The short valid p14/p16 block probes only validate the M1a address path. The legacy `StackValue` managed-pointer/native-integer comparisons and managed-pointer subtraction still form Heap addresses with in-bounds `.add`; a far-OOB operand can violate that premise without a dereference. These operations remain an M1b follow-up, not covered by the repaired observation tests. Also open are pointer-codec/struct-layout redesign, M4 shared-memory/atomic protocol, M1b `conv.i`/pointer semantics, M1d `pop_ptr`/Transient owner-guard escape, M1e/M1g GC transport and identity, and strict-provenance lint migration/evidence recovery. R01's M1a heap reproduction is closed; broader R01/M3 and R06/R07/R10 follow-ups remain as detailed in the [R-row map](INVENTORY.md#finding-to-work-map).
+The following remain out of scope: Stack/Static observation and the `with_data` stack fallback (M3); any writable contract for strings/interned Arc data; P/Invoke pinning, guards, ABI and return/copy semantics (M2); and general `cpblk`/`initblk` correctness (M1f/M5: count width, full checked ranges, barriers/rooting and yield state). The short valid p14/p16 block probes only validate the M1a address path. M1b's scoped arithmetic, comparison, `Unsafe.ByteOffset`, and pointer/native-integer store/load paths are covered as described below; remaining obligations include M1c stable `localloc` storage, M1d owner/guard escape, M1f/M5 block operations and negative-index exception behavior, M3 signed/wider managed offsets and final pointer-codec/struct layout, M4 shared-memory/atomic protocol, M2 native ABI, and strict-provenance evidence (M0/M6). Negative or beyond-compact managed offsets still return an interim `NotImplemented` error; remaining narrow/overflow-checking `conv.*` pointer cases are unchanged. The repeated M1a no-features performance regressions remain an open PERF item. R01's M1a heap reproduction is closed; broader R01/M3 and R06/R07/R10 follow-ups remain as detailed in the [R-row map](INVENTORY.md#finding-to-work-map).
 
 ## Historical evidence and limits
 
@@ -32,7 +55,7 @@ All pointer-lane Miri results here are from a **filtered permissive Tree Borrows
 
 ## Current executable records and safe operation
 
-- [`INVENTORY.md`](INVENTORY.md) records the outcomes and limits, R01–R13 task updates, all 23 exact probe names, source variants, current line anchors, control results and still-open work.
+- [`INVENTORY.md`](INVENTORY.md) records the outcomes and limits, R01–R13 task updates, all 31 catalog entries (24 controls and 7 diagnostic-only), source variants, current line anchors, control results and still-open work.
 - [`pointer_provenance_tests.rs`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) is the owning VM test source; [`pointer_provenance.sh`](../../scripts/pointer_provenance.sh) owns catalog discovery, guarded control shards and bounded diagnostics.
-- Only p17/p18/p19 are permitted for native diagnostics. Never run known-UB probes natively or ignored tests outside the runner's diagnostic entrypoint.
+- Only p19 is permitted for native diagnostics. Never run known-UB probes natively or ignored tests outside the runner's diagnostic entrypoint.
 - The source test anchors in the inventory are manually refreshed; they are not machine-checked.

@@ -1,7 +1,7 @@
 # Unified pointer/provenance project plan
 
-**Status:** In progress — partial M0 (VM probe harness and blocking controls)
-**Prepared:** 2026-10-27
+**Status:** In progress — scoped M1b pointer semantics complete; partial M0 (VM probe harness and controls)
+**Prepared:** 2026-10-29
 **Baseline:** `b49f5df8` (also HEAD when this plan was prepared)
 **Scope:** Guest storage, pointer operations, GC transport/barriers, concurrency, and native-call boundaries.
 
@@ -13,11 +13,10 @@ Native-integer conversions remain available through an explicit exposed-provenan
 This is the implementation plan derived from all three [reviews](../pointer-provenance/README.md).
 The underlying historical pass archives and raw logs are not present in this checkout; current evidence
 limits and source-recovery tasks are recorded in the [inventory](../pointer-provenance/INVENTORY.md).
-The plan remains **in progress, partial M0**: the scoped M1a heap-access repairs and regression lanes
-have been implemented, but the broader M0 evidence inventory and M1/M2 work remain open. No broader
-milestone exit is claimed. Milestone IDs below are the work-item IDs; split them into focused changes
-while retaining their acceptance criteria. Ownership is assigned by subsystem, not by an assumed
-individual or schedule.
+The scoped M1a heap-access repairs and M1b pointer-semantics work have been implemented and recorded,
+but the broader M0 evidence inventory and remaining M1/M2 work remain open. No broader milestone exit
+is claimed. Milestone IDs below are the work-item IDs; split them into focused changes while retaining
+their acceptance criteria. Ownership is assigned by subsystem, not by an assumed individual or schedule.
 
 ## Evidence and reconciled decisions
 
@@ -87,14 +86,10 @@ discovery rather than waiting for the final copy API.
 ### M0 — Make failures and controls executable
 
 **Current progress — partial M0:** The durable [inventory](../pointer-provenance/INVENTORY.md)
-maps R01–R13 and catalogs the 23 VM probes. Eleven bounded controls (`p00_smoke`,
-`p02_ldloca_stind_i4_control`, `p03_ldloca_convu_ldind_i4`, `p05_single_localloc_roundtrip`,
-`p07_localloc_one_past_end`, `p11_ldelema_stind_heap_array_control`, `p10_ldelema_convu_stind_heap_array`,
-`p20_heap_convu_then_typed_write_then_raw_store`, `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`,
-`p14_initblk_heap_array_via_managed_ptr`, and `p16_cpblk_heap_arrays_via_managed_ptr`) passed exact
-revalidation in both no-features and multithreading configurations. All 11 are enabled in ordinary
-tests without `memory-validation` and run by the blocking `miri-pointer-controls` job across six guarded shards. The other 12
-catalogued probes remain ignored and diagnostic-only. These are filtered permissive Tree Borrows
+maps R01–R13 and catalogs 31 VM entries. The guarded lane has 24 exact blocking controls in both
+no-features and multithreading configurations across shards 1–12; all have documented passing results.
+The other 7 catalogued probes remain ignored and diagnostic-only. Shards 1–5 retain their earlier
+final-lane measurements; shards 6–12 have Phase 6 outcomes. These are filtered permissive Tree Borrows
 results, not a full VM Miri suite, strict-provenance evidence, or a claim of runtime soundness.
 
 - Keep the pass-3 IL p00–p20 probes and the two unique pass-2 cases (null through `&p`, wide stores)
@@ -108,7 +103,7 @@ results, not a full VM Miri suite, strict-provenance evidence, or a claim of run
   FFI as appropriate. Tests that deliberately exhibit UB stay ignored with a finding/work-item ID
   until fixed; do not execute UB as ordinary native tests. Keep known-failure reproductions in the
   explicit diagnostic lane and run failing Miri reproducers separately.
-- The 11 passing pointer controls now have a blocking lane, but they do not close M0. Add permanent
+- The 24 passing pointer controls now have a blocking lane, but they do not close M0. Add permanent
   gates for recovered evidence and expand VM coverage beyond `jmp_tests`, `tail_calls`, and
   `fault_tests`. Recover exact strict filters and reasons where possible; current dependency traces and
   historical filters are unavailable, and exposed reconstruction remains an explicit strict-provenance
@@ -131,7 +126,7 @@ evidence limits, owners and reproduction tasks. The historical pass-1/2/3 archiv
 raw transcripts, most original library/model/FFI sources and patch sources are absent from this tree;
 their external recovery location is unknown. Two M1a library regressions independently recreate the missing test intents, and the p20 baseline
 was recorded, but neither recovers the missing historical source or archive. The
-11 filtered permissive-TB controls do not establish full M0, strict Miri or runtime soundness.
+24 filtered permissive-TB controls do not establish full M0, strict Miri or runtime soundness.
 
 - Recover and integrate the remaining pass-1 library probes, standalone E1–E13 models and
   `gc_model::e11*`, preserving the distinction between model, library and real-VM evidence. Recover
@@ -173,7 +168,7 @@ configurations. This status does not close M0 or the broader M1 milestone.
 |---|---|---|
 | `dotnet-value` regressions `pointer::tests::m1a_one_byte_heap_read`, `m1a_safe_oob_address_observation`, and `m1a_heap_pointer_survives_typed_write` | Each exact test passed in both configurations (1 passed, 0 failed, 0 ignored per run). | The first two independently recreate missing test intents; the third is a new interleaving test. Original pass-1 sources are absent, so no identity claim. |
 | VM heap probes p10, p13, p14, p16, p20 | All five are promoted controls and passed individually in both configurations. | Original IL and assertions are unchanged. p13's `memory-validation` native bounds trap remains an intentional conditional ignore; the separate far-OOB `conv.u8` regression is conditionally ignored for the same reason. |
-| Blocking VM pointer-control lane | 11 exact controls passed in each configuration across shards 1–6; shard layout is recorded in [CI](../CI.md). | Filtered permissive Tree Borrows only; the other 12 catalog entries remain diagnostic-only. |
+| Blocking VM pointer-control lane | 24 exact controls passed in each configuration across shards 1–12; the current catalog has 31 entries, including 7 diagnostic-only probes. | Filtered permissive Tree Borrows only; see the [M1b coverage table](#m1b-status-and-coverage-2026-10-29) and [CI shard layout](../CI.md). |
 | Heap access paths | Exact payload-extent reads; slice-free heap observation in `PointerLike`, `StackValue::as_ptr`, VM address resolution, `conv.u`/`conv.u8`, Unsafe helpers, buffer and P/Invoke heap branches; retained-base typed-write interleaving covered. | Observation does not retain an owner, root, or guard; strings have no new writable contract. |
 
 Remaining obligations are explicit and are not implied complete by this table:
@@ -183,18 +178,43 @@ Remaining obligations are explicit and are not implied complete by this table:
 - **M4:** shared-memory/atomic access protocol, including synchronization for escaped raw pointers.
 - **M1f/M5:** block-operation correctness: unsigned count width, checked ranges, reference barriers,
   and yield/resumption state.
-- **M1b:** `conv.i` and broader pointer arithmetic/acceptance semantics. Legacy `StackValue`
-  managed-pointer/native-integer comparisons and managed-pointer subtraction still call
-  `managed_ptr_to_raw`, whose Heap arm uses in-bounds `.add`; a far-OOB offset can violate its
-  premise even without dereferencing. The M1a observation tests do not cover those operations.
+- **M1b:** The scoped pointer arithmetic, comparison, `Unsafe.ByteOffset`, conversion and native-integer
+  store/load work is implemented; see [M1b status and coverage](#m1b-status-and-coverage-2026-10-29).
+  This does not close the remaining storage, ownership, representation, ABI, access-protocol or strict-
+  provenance obligations listed in that status and below.
 - **M1d:** owner/guard escape from `pop_ptr` and `resolve_address`, plus Transient ownership.
 - **M1e/M1g:** GC transport/lease behavior and arena/address identity encoding.
 - **M0/M6:** provenance-lint migration and recovery of strict-provenance evidence. Permissive Tree
   Borrows results do not satisfy this obligation.
 
-- **M1b, pointer semantics:** wrapping unmanaged arithmetic with explicit null handling; comparison arms;
-  correct `Unsafe.ByteOffset` sign and pointer acceptance for `conv.i`/native-int stores. Validate native
-  signed/unsigned widths. Gates: p06/p07/p08/p17/p18 and new signed conversion/store/load/dereference tests.
+#### M1b status and coverage (2026-10-29)
+
+The scoped M1b pointer-arithmetic, comparison, and native-integer changes are implemented. The
+following results distinguish native tests, the filtered permissive Tree Borrows lane, native
+diagnostics, and source/audit claims; Phase 6 control outcomes are recorded in detail in the
+[inventory](../pointer-provenance/INVENTORY.md#m1b-phase-6-control-outcome-comparison-2026-10-29).
+
+| Coverage | Current result | Boundary |
+|---|---|---|
+| Eight `dotnet-value` `pointer::tests::m1b_` regressions | Native tests and pinned permissive-TB Miri each reported 8 passed, 0 failed, 0 ignored in both no-features and multithreading configurations. | With `memory-validation`, 7 passed and 1 intentionally ignored by the F-TEST-003 guard for deliberate heap-owner out-of-bounds arithmetic. These results are not strict-provenance evidence. |
+| Blocking VM pointer-control lane | 24 exact non-ignored controls passed across shards 1–12 in both configurations; `verify-controls` found 24 exact controls in each. The catalog has 31 entries (24 controls, 7 diagnostic-only). | Shards 1–5 use the earlier final lane measurements; shards 6–12 have Phase 6 control results. Discovery is metadata, not execution; see the inventory for provenance and per-shard walls. |
+| Address arithmetic, comparisons and `Unsafe.ByteOffset` | p06/p08, p17/p18, p21–p24 and `p_null_through_pointer_local_address` passed as controls in both configurations. | Address formation on these covered paths is wrapping, not allocation-bounded in-bounds arithmetic; observation alone does not grant dereference permission. Stable repeated `localloc` storage remains M1c. |
+| Pointer conversion and native-integer round trips | p25–p28 passed as controls in both configurations; the assertions include store/load round trips followed by real dereferences. | This covers only the asserted `conv.i`/`conv.i8`, `stind.i` and native-width cases; it does not prove every conversion opcode or ABI boundary. |
+| Fresh-pointer `stind.i` controls p27 and p28 (shard 12) | Under `bash scripts/pointer_provenance.sh controls --configuration CFG --shard 12`, both passed: no-features p27 296 s / p28 302 s; multithreading p27 348 s / p28 321 s; each configuration totaled 2 passed, 0 failed. | Filtered permissive-TB Miri evidence; p27 tests the local-slot path and p28 the heap-memory path. The measurements are per-probe runner wall seconds, not native timings. |
+| Native diagnostics and source/audit | The p17/p18 pre-repair native assertion failures are historical diagnostics; no new native diagnostic result is claimed here. Source review confirms `managed_ptr_to_raw` uses the M1a retained-base observer and the covered address-formation paths no longer use in-bounds arithmetic. | Native diagnostics, where permitted, are distinct from Miri. The current documentation does not claim a native diagnostic pass for the M1b control lane. |
+
+A final audit also repaired arithmetic from a canonical unmanaged-origin managed null: nonzero results reconstruct through exposed provenance, while zero stays null. Managed-offset calculations now widen the compact unsigned offset before signed addition, avoiding a 32-bit sign flip. The extended value regression passed natively and under pinned permissive Tree Borrows in both feature configurations on x86_64, including an exposed-address dereference. After these repairs, guarded VM shard 5 (p13/p14) also passed in both configurations; the other shards were not rerun. No 32-bit target was run, and strict-provenance evidence remains open.
+
+Remaining M1b boundaries and related obligations are explicit:
+
+- **M1c:** stable `localloc` storage; the growing `memory_pool` `Vec` remains out of scope here.
+- **M1d:** owner/guard escape from `pop_ptr`/`resolve_address` and Transient ownership.
+- **M1f/M5:** block operations (`cpblk`/`initblk`, count width, ranges, barriers and yield state) and the negative array-index managed-exception case.
+- **M3:** signed/wider managed offsets and final pointer structs/codecs. Negative or beyond-compact managed offsets currently return an interim `NotImplemented` error; the final representation is not implemented.
+- **M4:** shared host memory-access protocol; **M2:** native ABI and pinned-address boundary.
+- **M0/M6:** strict-provenance evidence and broader strict-core/Miri work remain outstanding. Filtered permissive Tree Borrows is not strict-provenance evidence, not a full VM Miri suite, and not a soundness proof.
+- Pointer cases left unchanged include the remaining narrow/overflow-checking `conv.*` forms (notably managed-pointer narrow conversions and `conv.ovf.*` pointer conversions); no general conversion claim is made.
+- **PERF:** repeated M1a no-features regressions remain an open, separately tracked performance item; see the [native benchmark report](../BENCHMARK_WORKFLOW.md#m1a-heap-access-comparison-2026-10-28). Native Criterion measurements are not Miri evidence.
 - **M1c, frame allocation:** replace the growing `localloc` byte vector with stable aligned per-frame
   blocks; checked size/alignment arithmetic and cleanup on all frame exits. Reuse the M3 block contract.
   Gates: p04/p05, repeated allocations, alignment, unwind and tail-call lifetime tests.
@@ -215,8 +235,10 @@ Remaining obligations are explicit and are not implied complete by this table:
   requires M3, enforce the interim supported range rather than silently decoding a live object as null.
 
 **Exit:** corresponding regression tests execute and pass in their designated lane. Owners survive actual
-accesses; address formation alone never performs out-of-bounds in-bounds arithmetic. Stack/static exposure
-and local assignment interleaving remain M3 work until their tests pass.
+accesses. On covered M1a/M1b paths, address formation uses wrapping operations rather than
+allocation-bounded in-bounds pointer arithmetic; formation alone does not authorize dereference. Stable
+`localloc` storage and stack/static exposure and local-assignment interleaving remain M1c/M3 work until
+their tests pass.
 
 ### M2 — Repair the native boundary
 
@@ -327,13 +349,13 @@ Evidence: **VM-M** = real VM Miri, **LIB-M** = library Miri, **N** = native repr
 | Slot assignment invalidates byref; stack growth invalidates native int | Pass 1 LIB-M; pass 3 VM-M/N p09, MODEL E12b/E13 | M3: assign home then dereference, recursion/suspend/restore |
 | Transient destruction; expired static/arena guards | Pass 1 LIB-M for pop/normalize; R for resolver guards | M1d/M3: access after pop/codec and concurrent teardown |
 | Unmanaged serde loses exposure; integer GC transport loses provenance | Pass 1 LIB-M; pass 3 p05 refutes unconditional failure | M1e/M3: decode and dereference without unrelated exposure; strict GC transport |
-| Repeated localloc; unsafe arithmetic; null/wrapping and comparison gaps | Pass 2 VM-M/N; pass 3 p04/p06/p08/p17/p18 | M1b/M1c: p04–p08, comparisons, zero result |
+| Repeated localloc; unsafe arithmetic; null/wrapping and comparison gaps | Phase 6 controls p06, p08, p17, p18, p21–p24 and p_null passed in both configurations; p07 remains a passing control. The pre-repair p06/p08 diagnostics were VM-M `miri-ub`, and p17/p18 had native/VM-M assertion failures. | **M1b covered arithmetic/comparison/null paths closed** for wrapping, signed extremes, wrap-to-zero, comparisons, subtraction and dereference. **M1c remains open** for stable `localloc` storage (p04 and the growing pool `Vec`). **M3 remains open** for signed/wider managed offsets and final pointer structs/codecs; unrepresentable negative or beyond-compact managed offsets return interim `NotImplemented`. |
 | Pinned payload address; FFI return overwrite | Pass 2 R; pass 3 Rust address test/N libffi | M2: IL pinned cases and native fixture guard bytes |
 | By-ref/out, temp growth, null and string ABI | Pass 3 R | M2: native type-sized copy and lifetime fixtures |
 | Cross-arena root barrier/teardown; arena/address packing | Pass 3 MODEL E11/R; pass 1 LIB-M ID 40000 | M1e/M1g/M5: actual VM GC, lease/ID reuse, codec boundaries |
 | Host races/alignment; mixed-size overlaps; static atomics | Pass 3 MODEL E9/E10; R/A for VM paths | M3/M4: seeded VM races and layout alignment |
 | Block barriers, count width and yield state | Passes 1–3 R | M1f/M5: forced chunk yield/GC and fresh-reference copies |
-| Negative index; ByteOffset sign; conv.i/native-int stores | Pass 3 N p19 and R; pass 1 low-level store panic | M1b/M1f: managed exception, signed offset and storage round trips |
+| Negative index; ByteOffset sign; conv.i/native-int stores | Phase 6 controls p24–p28 and p_null passed in both configurations; p26 covers native-width sign/zero extension, and p25–p28 include pointer/store-load paths followed by dereferences. p19 remains a reported native panic; `p_wide_store_into_int_local` remains unverified. | **M1b ByteOffset direction, asserted pointer conversions/native-int stores, and native-integer round trips closed** for the covered paths. **M1f/M5 remain open** for the negative-index managed exception and block operations. **M3 remains open** for signed/wider managed offsets and final structs/codecs. |
 | Volatile ignored; Interlocked overflow; sync-block race; refanytype lifetime | Pass 3 R/A | M4/M6: ordering/overflow/concurrent identity and handle lifetime tests |
 | Atomic tests' backing aliasing; strict dependency gaps; missing blocking VM coverage | Pass 1 LIB-M; pass 3 CI review | M0/M6: repaired test storage and explicit CI lane inventory |
 
@@ -345,12 +367,12 @@ tests during iteration; reserve the full matrix and benchmarks for milestones an
 
 Use the pinned `nightly-2026-05-27` and recorded flags initially for comparable evidence; changing
 Miri versions requires recording both versions' outcomes. The blocking pointer lane currently runs
-11 exact controls in each of two configurations across shards 1–6; the per-shard test names are in
+24 exact controls in each of two configurations across shards 1–12; the per-shard test names are in
 [CI](../CI.md). The three M1a library regressions run in the blocking `miri-value` job's default
 (multithreading) suite and its separate no-features selector. These are filtered permissive Tree
 Borrows lanes: they are not a full VM Miri suite, strict-provenance evidence, or proof of soundness.
 Miri reports warnings around exposed-provenance integer reconstruction; they do not make this lane
-strict evidence. The 12 remaining VM catalog entries are diagnostic-only; run known failures
+strict evidence. The 7 remaining VM catalog entries are diagnostic-only; run known failures
 individually, and treat setup failures/timeouts separately from UB. Native libffi tests require their
 own runner. The original pass-1 library sources and pass-1/2/3 archives remain unavailable; the three
 M1a library tests are independent recreations, while standalone lab/FFI sources still need recovery or
@@ -362,6 +384,7 @@ end-to-end results were neutral or faster for the reviewed hot cases; repeated n
 remain an open performance concern, with intervals and caveats in the
 [benchmark report](../BENCHMARK_WORKFLOW.md#m1a-heap-access-comparison-2026-10-28). These native
 measurements are not Miri evidence.
+The finished-tree M1b comparison was not measured because the host was not idle; see the [M1b PERF report](../BENCHMARK_WORKFLOW.md#m1b-pointer-semantics-comparison-2026-10-29).
 
 Track milestone progress here and update the [queue](README.md) when the overall status changes.
 Completion requires passing accesses after state changes, not address-only equality or metadata checks.
