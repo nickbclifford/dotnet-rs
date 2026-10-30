@@ -16,8 +16,8 @@ This document describes the garbage collection subsystem, memory safety invarian
 ## Invariants
 
 - `F1.StwParked`: GC-only raw accesses require a `StopTheWorldGuard`/`GcCycleGuard` pause in which every relevant mutator is parked.
-- `F1.ArenaGenerationMatch`: cross-arena accesses hold an `ArenaLease` and compare its generation with the recorded generation; `unregister_arena` waits for active leases.
-- `F1.GcHandleRooted`: raw access through a GC reference remains rooted by its `Gc<'gc>` handle, lock guard, or live lease for the full access.
+- `F1.ArenaGenerationMatch`: the required cross-arena generation match is not universally established. The GC harvest compares recorded generations (with an STW sentinel exception); ordinary `CrossArenaObjectRef` origins carry only an `ArenaId`, so per-access leases cannot detect ID reuse. `unregister_arena` waits for active leases; origin identity/generation remains M1g work.
+- `F1.GcHandleRooted`: a GC reference used through raw storage must remain rooted throughout access. A live arena lease prevents arena teardown but is not itself an object root; the caller must establish reachability separately.
 - `F5.TracesEveryGcRef`: every unsafe `Collect` implementation enumerates every contained GC handle through its fields and variants.
 - `F6.NoEscapeAcrossArena`: arena branding, private constructors, and `for<'gc>` confinement prevent `'gc` values from escaping; the deliberate cross-arena `Gc::from_ptr` path is limited to tracing and cannot escape.
 - `F9.MetadataArenaOutlivesDescriptors`: owner-tied `Arc<MetadataArena>` metadata keeps leaked descriptor allocations alive for all descriptor users.
@@ -53,14 +53,50 @@ also does not validate or guard guest uses of a pointer after its frame's locall
 
 Remaining ownership and memory-safety work is outside M1c:
 
-- p09 and addressable local/argument frame homes remain M3 work; static storage ownership and
-  address/lifetime repairs remain M3/M1d work. Heap and static storage have not migrated to
-  `GuestBlock`.
+- p09 and addressable local/argument frame homes remain M3 work; static observation and
+  alignment remain M3 work. M1d tested a narrower static allocation-lifetime hypothesis. Heap
+  and static storage have not migrated to `GuestBlock`.
 - Connecting per-thread host-allocation accounting to GC/VM-wide pressure remains M3/M4 work, as
   does the eventual shared-memory access protocol.
 - The implementation does not reject `localloc` in exception blocks. Nested-filter suspended-frame
   behavior (F-LIFE-004) also remains unaddressed; the ordinary catch/unwind coverage does not
   establish that nested-filter lifecycle.
+
+## M1d Pointer Ownership and Access
+
+`PointerOrigin::Transient` holds a shared `Arc<Object>`: clones retain the same storage, and
+`normalize` and `ManagedPtr::from_info_full` preserve that owner. A value type converted to a
+Transient origin is initially a snapshot; sharing subsequent clones does not make it a writable
+stack home. Fallible memory stores reject Transient byrefs and native-integer conversions and
+`Unsafe.AsPointer` and CLI-to-CTS numeric narrowing reject Transient ownership escape; this is not a redesign of every infallible
+raw codec.
+
+Access-performing stack pops use `RetainedPtr` to keep the popped `StackValue` alive for the
+synchronous operation; with `multithreading`, cross-arena managed operands also retain an arena
+lease. Observation-only `pop_address` carries no owner. `resolve_address` borrows the origin;
+its result and `ManagedPtr::observe_address` are address observations, not access permission and
+not a lasting lease, storage guard, root, or range proof. Callers still owe provenance, extent,
+initialization, alignment, aliasing, rooting and synchronization for every access.
+
+Selected cross-arena checked accesses take a lease per closure or operation; observation and
+resolution take only a temporary lease. `unregister_arena` removes the registry entry before
+waiting for in-flight leases, so fresh acquisition fails while the entry is absent and a pre-existing lease can complete.
+With `memory-validation`, the holder thread's tracked lease permits its in-flight validation after
+removal, without authorizing a fresh lease. Drop leases before parking at a safepoint. A lease
+protects arena teardown for the covered access, not object reachability or shared-memory ordering;
+P/Invoke's cross-arena guard boundary remains M2.
+
+Previously recorded Miri tests exposed dangling Transient accesses and cross-arena teardown UAF
+before repair; the scoped regressions passed after repair. p36's one-byte direct static access
+survived a forced collection, refuting only that controlled allocation-lifetime hypothesis; p12
+hit an alignment debug assertion, not a teardown proof. See the [M1d evidence](pointer-provenance/INVENTORY.md#m1d-baseline-and-outcomes). Permissive Tree Borrows is not strict-provenance evidence or a soundness proof.
+
+Remaining obligations include p09 stack-home relocation and final pointer codecs/layout (M3),
+static `GuestBlock` alignment (M3), GC transport and root publication (M1e/M1g), arena-ID and
+generation identity (M1g), the shared-memory/atomic protocol (M4), P/Invoke pin/guard and ABI
+(M2), and `cpblk`/`initblk`/`Memmove` yield resumption (M1f/M5). The source-inferred nested-filter
+suspended-frame overwrite (F-LIFE-004) is not fixed, and strict-provenance evidence (M0/M6) remains
+open; no strict lane was run for M1d.
 
 ## Arena Architecture
 
@@ -192,9 +228,9 @@ Cross-arena registration is backed by `ArenaState` entries in a global registry:
 - `try_acquire_lease(arena_id)` returns an `ArenaLease` guard that increments `active_leases`.
 - `unregister_arena` removes the entry, flips `is_alive`, then waits until `active_leases == 0` before returning.
 
-This closes the dereference TOCTOU window because in-flight dereferences hold a lease while reading cross-arena pointers.
+For the covered access paths, an in-flight lease prevents teardown completion during access; it does not protect a later use of an observed address. The original arena must remain identifiable, and not every cross-arena consumer has been migrated.
 
-Recorded cross-arena references are generation-stamped as `(arena_id, raw_ptr, generation)`. At harvest, callers reacquire a lease and compare `lease.generation()` with the recorded generation; mismatches are discarded as stale pointers after unregister/re-register cycles.
+Outside STW tracing, recorded cross-arena references carry `(arena_id, raw_ptr, generation)`. At GC harvest, a fresh lease is compared with the recorded generation and mismatches are discarded. STW tracing records a sentinel accepted at harvest under the STW protocol instead. Ordinary `CrossArenaObjectRef` origins do not carry a recorded generation; acquiring a lease by ID alone cannot detect unregister/re-register ABA (M1g).
 
 ### How References Are Recorded
 - Memory mutations occur through `RawMemoryAccess` (`dotnet-runtime-memory/src/access.rs`).

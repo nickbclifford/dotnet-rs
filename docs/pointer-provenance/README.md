@@ -1,6 +1,6 @@
 # Pointer / provenance review evidence and current status
 
-The pointer/provenance plan remains **In progress — scoped M1a heap-access containment, M1b pointer semantics, and M1c stable frame-local `localloc` storage complete; partial M0 (VM probe harness and controls)**. These scoped implementations and evidence do not complete M0, the broader M1 exits, or M3. See the [unified plan](../plans/01-pointer-provenance.md) and the [durable evidence inventory](INVENTORY.md) for the baseline table, probe catalog, R-row task status, and detailed results.
+The pointer/provenance plan remains **In progress — scoped M1a heap-access containment, M1b pointer semantics, M1c stable frame-local `localloc` storage, and M1d owner/guard work complete; partial M0 (VM probe harness and controls)**. These scoped implementations and evidence do not complete M0, the broader M1 exits, or M3. See the [unified plan](../plans/01-pointer-provenance.md) and the [durable evidence inventory](INVENTORY.md) for the baseline table, probe catalog, R-row task status, and detailed results.
 
 ## M1a outcomes
 
@@ -20,7 +20,7 @@ At the M1a stage, the pointer runner had **11 exact controls in 6 shards** acros
 
 ## M1b outcomes
 
-At M1b completion, the catalog contained **31 entries: 24 controls and 7 diagnostic-only probes**. Those 24 controls were grouped as follows; all 12 shards had documented passing outcomes in both no-features and multithreading configurations (shards 1–5 use the earlier final-lane measurements; shards 6–12 use Phase 6 results). The current promoted catalog is 37 entries (31 controls, 6 diagnostic-only probes) across 16 shards; see [M1c outcomes](#m1c-outcomes).
+At M1b completion, the catalog contained **31 entries: 24 controls and 7 diagnostic-only probes**. Those 24 controls were grouped as follows; all 12 shards had documented passing outcomes in both no-features and multithreading configurations (shards 1–5 use the earlier final-lane measurements; shards 6–12 use Phase 6 results). At M1c completion the catalog had 37 entries (31 controls, 6 diagnostic-only probes) across 16 shards; see [M1c outcomes](#m1c-outcomes). The current M1d catalog is described below.
 
 | Shard | Controls |
 |---:|---|
@@ -54,15 +54,33 @@ M1c replaces the growing frame `Vec<u8>` used by IL `localloc` with frame-owned,
 | p33 exception-unwind cleanup | 357 | 314 |
 | p34 executor-teardown cleanup | 283 | 248 |
 
-The promoted catalog now has **37 entries: 31 blocking controls and 6 diagnostic-only probes** in 16 shards; `verify-controls` discovered all 31 in both configurations. p04 and p29–p34 are in blocking shards 13–16. Under pinned permissive-Tree-Borrows Miri, `raw_block::` passed 7 tests in each configuration (1.413 s no-features; 1.475 s multithreading), and the initial `frame_alloc::` run passed 7 in each (0.958 s; 0.969 s), with those walls measured for test-plus-log/count pipelines. The finalizer's expanded `frame_alloc::` suite passed 8 in each configuration, including data-structure-level suspension/restoration. Detailed rows and measured outcomes are in the [M1c inventory](INVENTORY.md#m1c-baseline-and-outcomes).
+At M1c completion the promoted catalog had **37 entries: 31 blocking controls and 6 diagnostic-only probes** in 16 shards; `verify-controls` discovered all 31 in both configurations. p04 and p29–p34 are in blocking shards 13–16. Under pinned permissive-Tree-Borrows Miri, `raw_block::` passed 7 tests in each configuration (1.413 s no-features; 1.475 s multithreading), and the initial `frame_alloc::` run passed 7 in each (0.958 s; 0.969 s), with those walls measured for test-plus-log/count pipelines. The finalizer's expanded `frame_alloc::` suite passed 8 in each configuration, including data-structure-level suspension/restoration. Detailed rows and measured outcomes are in the [M1c inventory](INVENTORY.md#m1c-baseline-and-outcomes).
 
-M1c does **not** close the p09 stack-home lifetime or p12 static-address/storage obligations (M3/M1d), broader owner/guard escape work (M1d), or final pointer representation/codecs (M3). The possible nested-filter suspended-frame overwrite noted as F-LIFE-004 was identified by inspection, not reproduced or fixed; p33 observed no suspension in an ordinary catch. These filtered permissive-TB passes are not strict-provenance evidence, not a full VM Miri suite, and not a soundness proof.
+M1c did **not** close the p09 stack-home lifetime or p12 static-address/storage obligations, owner/guard escape work, or final pointer representation/codecs. M1d subsequently completed its scoped owner/guard work; the remaining stack/static and codec obligations are M3. The possible nested-filter suspended-frame overwrite noted as F-LIFE-004 was identified by inspection, not reproduced or fixed; p33 observed no suspension in an ordinary catch. These filtered permissive-TB passes are not strict-provenance evidence, not a full VM Miri suite, and not a soundness proof.
+
+## M1d outcomes
+
+Independent pre-repair recreations (not recovered pass-1 tests) showed native Transient owner-liveness and clone-identity failures and pinned-Miri dangling accesses after normalization, reconstruction and stack pop in both configurations. After repair those library regressions passed natively and under pinned Miri. Transient origins share an `Arc`-owned object across clones, normalization and `ManagedPtr::from_info_full`; access-performing pops retain their `StackValue` via `RetainedPtr`, while observation-only pops return addresses. Fallible stores, native-integer conversion and CLI-to-CTS numeric narrowing reject unsupported Transient ownership escape. Resolution borrows the origin; an address alone retains no owner or access guard.
+
+A controlled multithreading cross-arena teardown produced a pre-repair Miri use-after-free; post-repair Miri tests passed for rejection after unregister and an in-flight closure protected by a lease. `RetainedPtr` holds a cross-arena lease for synchronous block operations. The byte Fill fast path was repaired after a controlled reproduction of its observation-to-access gap, but end-to-end reachability remains unconfirmed. A one-byte direct-static p36 access after forced collection passed in both configurations, refuting that particular allocation-lifetime hypothesis, not proving the nested resolver or synchronization safe. p12 instead hit a four-byte alignment `debug_assert` in both configurations: not Miri UB and not a teardown proof. p35 passed post-repair in both configurations; its pre-repair exception type-resolution failure was not a Miri UB report, and its snapshot read does not prove stack-home write-through.
+
+The current catalog has **39 entries: 33 blocking controls and 6 diagnostic-only probes** in 17 shards. All 33 controls passed in both configurations in the final pinned-Miri sweep; p35 joins p34 in shard 16 and p36 is in shard 17. Library M1d selectors and cross-arena tests also passed in their applicable configurations. See the [M1d inventory](INVENTORY.md#m1d-baseline-and-outcomes) for commands, counts, times and evidence limits. These are filtered permissive Tree Borrows results, not strict-provenance evidence or a soundness proof.
 
 ## Repaired heap paths and remaining boundaries
 
 M1a repaired heap `ManagedPtr::with_data` to validate checked ranges against actual payload extent and create only the requested slice; separated heap address observation from access using retained allocation bases and wrapping formation; routed heap `StackValue::as_ptr` and VM `resolve_address` through that observer; fixed both distinct integer conversions, `conv.u` and `conv.u8`; fixed heap-origin `AsPointer`/Unsafe and buffer address helpers; and kept retained-base derivation independent of a payload-slice reborrow so pointers survive ordinary typed writes.
 
-The following remain out of scope: Stack/Static observation and the `with_data` stack fallback (M3); any writable contract for strings/interned Arc data; P/Invoke pinning, guards, ABI and return/copy semantics (M2); and general `cpblk`/`initblk` correctness (M1f/M5: count width, full checked ranges, barriers/rooting and yield state). The short valid p14/p16 block probes only validate the M1a address path. M1b's scoped arithmetic, comparison, `Unsafe.ByteOffset`, and pointer/native-integer store/load paths are covered as described below; M1c now covers frame-local `localloc` block stability and the tested return, tail-call, unwind, and executor-teardown release paths. Remaining obligations include p09 stack homes and p12 statics (M3/M1d), M1d owner/guard escape, M1f/M5 block operations and negative-index exception behavior, M3 signed/wider managed offsets and final pointer-codec/struct layout, M4 shared-memory/atomic protocol, M2 native ABI, and strict-provenance evidence (M0/M6). The nested-filter suspended-frame overwrite (F-LIFE-004) remains unfixed. Negative or beyond-compact managed offsets still return an interim `NotImplemented` error; remaining narrow/overflow-checking `conv.*` pointer cases are unchanged. The repeated M1a no-features performance regressions remain an open PERF item. R01's M1a heap reproduction is closed; broader R01/M3 and R06/R07/R10 follow-ups remain as detailed in the [R-row map](INVENTORY.md#finding-to-work-map).
+Remaining obligations, not fixed by the scoped M1d work, include:
+
+- **M3:** p09 stack-home relocation, Stack/Static observation and stack fallback, final pointer codecs and struct layout, and static `GuestBlock` alignment (p12); p36 addresses only the tested static allocation lifetime.
+- **M1e/M1g:** GC transport, root publication and arena-ID/generation identity. A lease does not itself establish a GC root, range, synchronization or an origin's generation.
+- **M4:** a shared-memory/atomic protocol, including overlapping and static/raw accesses.
+- **M2:** P/Invoke pin/guard lifetime, cross-arena access, ABI and return/copy semantics.
+- **M1f/M5:** block-operation count width, complete ranges, barriers/rooting and `cpblk`/`initblk`/`Memmove` yield/resumption; negative-index exception behavior also remains open.
+- **F-LIFE-004:** the source-inferred nested-filter suspended-frame overwrite, neither reproduced nor fixed.
+- **M0/M6:** strict-provenance evidence; no strict lane was run for M1d.
+
+The writable contract for interned Arc-backed strings, M3 signed/wider managed offsets, and remaining narrow/overflow-checking `conv.*` pointer cases remain open; negative or beyond-compact managed offsets still return an interim `NotImplemented` error. The repeated M1a no-features performance regressions remain an open PERF item. See the [R-row map](INVENTORY.md#finding-to-work-map) for scoped results and follow-ups.
 
 ## Historical evidence and limits
 
@@ -72,7 +90,7 @@ All pointer-lane Miri results here are from a **filtered permissive Tree Borrows
 
 ## Current executable records and safe operation
 
-- [`INVENTORY.md`](INVENTORY.md) records the outcomes and limits, R01–R13 task updates, all 37 catalog entries (31 controls and 6 diagnostic-only), refreshed source line anchors, control results and still-open work.
+- [`INVENTORY.md`](INVENTORY.md) records the outcomes and limits, R01–R13 task updates, all 39 catalog entries (33 controls and 6 diagnostic-only), refreshed source line anchors, control results and still-open work.
 - [`pointer_provenance_tests.rs`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) is the owning VM test source; [`pointer_provenance.sh`](../../scripts/pointer_provenance.sh) owns catalog discovery, guarded control shards and bounded diagnostics.
 - Only p19 is permitted for native diagnostics. Never run known-UB probes natively or ignored tests outside the runner's diagnostic entrypoint.
 - The source test anchors in the inventory are manually refreshed; they are not machine-checked.

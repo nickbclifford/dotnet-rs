@@ -114,6 +114,16 @@ dotnet-benchmarks
 - **GcScopeGuard**: To prevent deadlocks during STW, `GcScopeGuard` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
 - **Collect Trait**: Every type stored on the heap or containing GC references must implement the `Collect` trait to allow the tracer to find nested references.
 
+### Pointer owners and scoped access
+
+Transient pointer origins share an owned object across clones; access-performing stack pops use
+`RetainedPtr` to retain the popped value, and cross-arena operands also retain a lease during the
+synchronous operation. Address observation alone retains no access guard or root. These mechanisms
+do not replace range, provenance, rooting or synchronization requirements, and leases must end
+before safepoint parking. Stack-home relocation, final codecs/layout and the shared-memory protocol
+remain future work. See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access)
+for the scoped M1d results and boundaries.
+
 ### Frame-local `localloc` storage
 
 Each active method's `MethodState` owns a `FrameAllocations` collection. Every IL `localloc`

@@ -138,6 +138,22 @@ The path to thread suspension:
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.
 6. Once the STW guard is dropped, the condition variable is pulsed, the state resets to `Running`, and execution resumes.
 
+### Cross-arena leases and shared access
+
+Under `multithreading`, selected cross-arena checked operations acquire an `ArenaLease` for
+each synchronous access or closure. `unregister_arena` removes the registry entry before waiting
+for outstanding leases: a new acquisition fails while the entry is absent, while an in-flight lease delays
+teardown until dropped. Under `memory-validation`, a thread's already-held lease also permits
+validation of that in-flight access after removal. Address observation and `resolve_address`
+release their temporary lease before returning; later use needs its own protection. `RetainedPtr`
+keeps a lease across the synchronous block operation, but must be dropped before the scheduler
+parks at a safepoint. The ordinary P/Invoke cross-arena path is still an M2 boundary.
+
+A lease is not a payload lock, GC root, range check, or shared-memory ordering protocol. M4 must
+still define synchronization for overlapping raw, locked, atomic and static accesses; M1g must
+address arena-ID reuse because ordinary pointer origins carry no recorded generation. The scoped
+M1d teardown tests do not establish those broader properties; see [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access).
+
 ## Monitor Synchronization (`sync/`)
 
 ### `SyncManagerOps` and `SyncBlockOps` Traits (`sync/mod.rs`)

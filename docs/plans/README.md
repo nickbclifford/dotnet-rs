@@ -6,7 +6,7 @@ Historical assurance-plan links elsewhere in the documentation refer to plans re
 
 | ID | Plan | Priority | Status | Dependencies |
 |---|---|---|---|---|
-| 01 | [Pointer/provenance model](01-pointer-provenance.md) | First | In progress — scoped M1b pointer semantics and scoped M1c stable localloc storage complete; partial M0 (VM probe harness and controls) | None; internal milestone dependencies are in the plan |
+| 01 | [Pointer/provenance model](01-pointer-provenance.md) | First | In progress — scoped M1b pointer semantics, M1c stable localloc storage and M1d owner/guard work complete; partial M0 (VM probe harness and controls) | None; internal milestone dependencies are in the plan |
 
 Keep the status here synchronized with the plan's `Status` header. Validate with
 `bash scripts/check_plan_queue.sh`.

@@ -1,6 +1,6 @@
 # Unified pointer/provenance project plan
 
-**Status:** In progress — scoped M1b pointer semantics and scoped M1c stable localloc storage complete; partial M0 (VM probe harness and controls)
+**Status:** In progress — scoped M1b pointer semantics, M1c stable localloc storage and M1d owner/guard work complete; partial M0 (VM probe harness and controls)
 **Prepared:** 2026-10-29
 **Baseline:** `b49f5df8` (also HEAD when this plan was prepared)
 **Scope:** Guest storage, pointer operations, GC transport/barriers, concurrency, and native-call boundaries.
@@ -13,9 +13,9 @@ Native-integer conversions remain available through an explicit exposed-provenan
 This is the implementation plan derived from all three [reviews](../pointer-provenance/README.md).
 The underlying historical pass archives and raw logs are not present in this checkout; current evidence
 limits and source-recovery tasks are recorded in the [inventory](../pointer-provenance/INVENTORY.md).
-The scoped M1a heap-access repairs, M1b pointer-semantics work, and M1c stable frame-local `localloc`
-storage have been implemented and recorded, but the broader M0 evidence inventory and remaining M1/M2
-work remain open. No broader milestone exit is claimed. Milestone IDs below are the work-item IDs; split
+The scoped M1a heap-access repairs, M1b pointer-semantics work, M1c stable frame-local `localloc`
+storage and M1d owner/guard work have been implemented and recorded, but the broader M0 evidence
+inventory and remaining M1/M2 work remain open. No broader milestone exit is claimed. Milestone IDs below are the work-item IDs; split
 them into focused changes while retaining their acceptance criteria. Ownership is assigned by subsystem,
 not by an assumed individual or schedule.
 
@@ -87,10 +87,10 @@ discovery rather than waiting for the final copy API.
 ### M0 — Make failures and controls executable
 
 **Current progress — partial M0:** The durable [inventory](../pointer-provenance/INVENTORY.md)
-maps R01–R13 and catalogs 37 VM entries. The guarded lane has 31 exact blocking controls in both
-no-features and multithreading configurations across shards 1–16; all have documented passing results.
-The other 6 catalogued probes remain ignored and diagnostic-only. Shards 1–5 retain their earlier
-final-lane measurements; shards 6–12 have Phase 6 outcomes, and shards 13–16 add the M1c controls.
+maps R01–R13 and the harness catalogs 39 VM entries. The guarded lane has 33 exact blocking controls in both
+no-features and multithreading configurations across shards 1–17; all passed the M1d final sweep.
+The other 6 catalogued probes remain ignored and diagnostic-only. Shards 1–16 each contain two
+controls; shard 17 contains p36. Shard 16 pairs p34 with the M1d p35 control.
 These are filtered permissive Tree Borrows results, not a full VM Miri suite, strict-provenance
 evidence, or a claim of runtime soundness.
 
@@ -105,7 +105,7 @@ evidence, or a claim of runtime soundness.
   FFI as appropriate. Tests that deliberately exhibit UB stay ignored with a finding/work-item ID
   until fixed; do not execute UB as ordinary native tests. Keep known-failure reproductions in the
   explicit diagnostic lane and run failing Miri reproducers separately.
-- The 31 passing pointer controls have a blocking lane, but they do not close M0. Add permanent
+- The 33 passing pointer controls have a blocking lane, but they do not close M0. Add permanent
   gates for recovered evidence and expand VM coverage beyond `jmp_tests`, `tail_calls`, and
   `fault_tests`. Recover exact strict filters and reasons where possible; current dependency traces and
   historical filters are unavailable, and exposed reconstruction remains an explicit strict-provenance
@@ -128,7 +128,7 @@ evidence limits, owners and reproduction tasks. The historical pass-1/2/3 archiv
 raw transcripts, most original library/model/FFI sources and patch sources are absent from this tree;
 their external recovery location is unknown. Two M1a library regressions independently recreate the missing test intents, and the p20 baseline
 was recorded, but neither recovers the missing historical source or archive. The
-31 filtered permissive-TB controls do not establish full M0, strict Miri or runtime soundness.
+33 filtered permissive-TB controls do not establish full M0, strict Miri or runtime soundness.
 
 - Recover and integrate the remaining pass-1 library probes, standalone E1–E13 models and
   `gc_model::e11*`, preserving the distinction between model, library and real-VM evidence. Recover
@@ -170,7 +170,7 @@ configurations. This status does not close M0 or the broader M1 milestone.
 |---|---|---|
 | `dotnet-value` regressions `pointer::tests::m1a_one_byte_heap_read`, `m1a_safe_oob_address_observation`, and `m1a_heap_pointer_survives_typed_write` | Each exact test passed in both configurations (1 passed, 0 failed, 0 ignored per run). | The first two independently recreate missing test intents; the third is a new interleaving test. Original pass-1 sources are absent, so no identity claim. |
 | VM heap probes p10, p13, p14, p16, p20 | All five are promoted controls and passed individually in both configurations. | Original IL and assertions are unchanged. p13's `memory-validation` native bounds trap remains an intentional conditional ignore; the separate far-OOB `conv.u8` regression is conditionally ignored for the same reason. |
-| Blocking VM pointer-control lane | At the M1a snapshot, 11 exact controls passed in each configuration across shards 1–6. At M1b completion, the lane had 24 controls across shards 1–12 (31 catalog entries, 7 diagnostic-only). After M1c promotion, the current lane has 31 exact controls across shards 1–16 and 37 entries (6 diagnostic-only). | Filtered permissive Tree Borrows only; see the [M1b coverage table](#m1b-status-and-coverage-2026-10-29), [M1c status and coverage](#m1c-status-and-coverage-2026-10-29), and [CI shard layout](../CI.md). |
+| Blocking VM pointer-control lane | At the M1a snapshot, 11 exact controls passed in each configuration across shards 1–6. At M1b completion, the lane had 24 controls across shards 1–12 (31 catalog entries, 7 diagnostic-only). At M1c completion, the lane had 31 exact controls across shards 1–16 and 37 entries (6 diagnostic-only). The current M1d lane has 33 controls across 17 shards and 39 entries (6 diagnostic-only). | Filtered permissive Tree Borrows only; see the [M1b coverage table](#m1b-status-and-coverage-2026-10-29), [M1c status and coverage](#m1c-status-and-coverage-2026-10-29), and [CI shard layout](../CI.md). |
 | Heap access paths | Exact payload-extent reads; slice-free heap observation in `PointerLike`, `StackValue::as_ptr`, VM address resolution, `conv.u`/`conv.u8`, Unsafe helpers, buffer and P/Invoke heap branches; retained-base typed-write interleaving covered. | Observation does not retain an owner, root, or guard; strings have no new writable contract. |
 
 Remaining obligations are explicit and are not implied complete by this table:
@@ -184,7 +184,7 @@ Remaining obligations are explicit and are not implied complete by this table:
   store/load work is implemented; see [M1b status and coverage](#m1b-status-and-coverage-2026-10-29).
   This does not close the remaining storage, ownership, representation, ABI, access-protocol or strict-
   provenance obligations listed in that status and below.
-- **M1d:** owner/guard escape from `pop_ptr` and `resolve_address`, plus Transient ownership.
+- **M1d:** scoped owner/guard work is complete; see [M1d status and coverage](#m1d-status-and-coverage-2026-10-30). Ownership alone does not satisfy the remaining GC, access-protocol, ABI or codec obligations.
 - **M1e/M1g:** GC transport/lease behavior and arena/address identity encoding.
 - **M0/M6:** provenance-lint migration and recovery of strict-provenance evidence. Permissive Tree
   Borrows results do not satisfy this obligation.
@@ -199,8 +199,8 @@ diagnostics, and source/audit claims; Phase 6 control outcomes are recorded in d
 | Coverage | Current result | Boundary |
 |---|---|---|
 | Eight `dotnet-value` `pointer::tests::m1b_` regressions | Native tests and pinned permissive-TB Miri each reported 8 passed, 0 failed, 0 ignored in both no-features and multithreading configurations. | With `memory-validation`, 7 passed and 1 intentionally ignored by the F-TEST-003 guard for deliberate heap-owner out-of-bounds arithmetic. These results are not strict-provenance evidence. |
-| Blocking VM pointer-control lane | At M1b completion, 24 exact non-ignored controls had passed across shards 1–12 in both configurations; `verify-controls` found 24 controls and the catalog had 31 entries (7 diagnostic-only). After M1c promotion, the current lane has 31 controls across shards 1–16 and 37 entries (6 diagnostic-only). | Shards 1–5 retain their earlier final-lane measurements; shards 6–12 have Phase 6 outcomes and shards 13–16 add M1c controls. Discovery is metadata, not execution; see the inventory for provenance and per-shard walls. |
-| Address arithmetic, comparisons and `Unsafe.ByteOffset` | p06/p08, p17/p18, p21–p24 and `p_null_through_pointer_local_address` passed as controls in both configurations. | Address formation on these covered paths is wrapping, not allocation-bounded in-bounds arithmetic; observation alone does not grant dereference permission. Stable frame-local `localloc` storage and its tested lifecycle paths are covered by M1c; stack homes and statics remain M3/M1d work (see [M1c status and coverage](#m1c-status-and-coverage-2026-10-29)). |
+| Blocking VM pointer-control lane | At M1b completion, 24 exact non-ignored controls had passed across shards 1–12 in both configurations; `verify-controls` found 24 controls and the catalog had 31 entries (7 diagnostic-only). At M1c completion, it had 31 controls across shards 1–16 and 37 entries (6 diagnostic-only). The current M1d lane has 33 controls across 17 shards and 39 entries (6 diagnostic-only). | The M1d final sweep passed all shards in both configurations. Discovery is metadata, not execution; see [M1d status](#m1d-status-and-coverage-2026-10-30) for limits. |
+| Address arithmetic, comparisons and `Unsafe.ByteOffset` | p06/p08, p17/p18, p21–p24 and `p_null_through_pointer_local_address` passed as controls in both configurations. | Address formation on these covered paths is wrapping, not allocation-bounded in-bounds arithmetic; observation alone does not grant dereference permission. Stable frame-local `localloc` storage and its tested lifecycle paths are covered by M1c; stack homes and broader static storage remain M3 work (see [M1c status and coverage](#m1c-status-and-coverage-2026-10-29)). |
 | Pointer conversion and native-integer round trips | p25–p28 passed as controls in both configurations; the assertions include store/load round trips followed by real dereferences. | This covers only the asserted `conv.i`/`conv.i8`, `stind.i` and native-width cases; it does not prove every conversion opcode or ABI boundary. |
 | Fresh-pointer `stind.i` controls p27 and p28 (shard 12) | Under `bash scripts/pointer_provenance.sh controls --configuration CFG --shard 12`, both passed: no-features p27 296 s / p28 302 s; multithreading p27 348 s / p28 321 s; each configuration totaled 2 passed, 0 failed. | Filtered permissive-TB Miri evidence; p27 tests the local-slot path and p28 the heap-memory path. The measurements are per-probe runner wall seconds, not native timings. |
 | Native diagnostics and source/audit | The p17/p18 pre-repair native assertion failures are historical diagnostics; no new native diagnostic result is claimed here. Source review confirms `managed_ptr_to_raw` uses the M1a retained-base observer and the covered address-formation paths no longer use in-bounds arithmetic. | Native diagnostics, where permitted, are distinct from Miri. The current documentation does not claim a native diagnostic pass for the M1b control lane. |
@@ -209,8 +209,8 @@ A final audit also repaired arithmetic from a canonical unmanaged-origin managed
 
 Remaining M1b boundaries and related obligations are explicit:
 
-- **M1c:** scoped stable frame-local `localloc` storage is implemented and covered by the blocking p04 and p29–p34 controls; see [M1c status and coverage](#m1c-status-and-coverage-2026-10-29). This does not close p09/stack-home lifetime or static-storage/address work, which remains M3/M1d scope.
-- **M1d:** owner/guard escape from `pop_ptr`/`resolve_address` and Transient ownership.
+- **M1c:** scoped stable frame-local `localloc` storage is implemented and covered by the blocking p04 and p29–p34 controls; see [M1c status and coverage](#m1c-status-and-coverage-2026-10-29). This does not close p09/stack-home lifetime or broader static-storage/address work (M3).
+- **M1d:** scoped owner/guard work is complete; see [M1d status and coverage](#m1d-status-and-coverage-2026-10-30) for remaining boundaries.
 - **M1f/M5:** block operations (`cpblk`/`initblk`, count width, ranges, barriers and yield state) and the negative array-index managed-exception case.
 - **M3:** signed/wider managed offsets and final pointer structs/codecs. Negative or beyond-compact managed offsets currently return an interim `NotImplemented` error; the final representation is not implemented.
 - **M4:** shared host memory-access protocol; **M2:** native ABI and pinned-address boundary.
@@ -222,10 +222,13 @@ Remaining M1b boundaries and related obligations are explicit:
   The p04/p05, repeated-allocation/alignment, nested-call, return, unwind, tail-call and teardown
   regressions passed and are recorded in the M1c table. This reuses the M3 block contract but does not
   migrate stack homes, statics or heap storage.
-- **M1d, owners/guards:** replace naked-pointer escape from `pop_ptr`, `normalize`/`from_info_full`, and
-  `resolve_address` with retained ownership or scoped access. Hold static/cross-arena stabilization
-  through use. Unsupported ownership conversions must fail explicitly. Gates: pass-1 transient
-  destruction probes, static access, and arena teardown/access races.
+- **M1d, owners/guards:** scoped work complete: `RetainedPtr` retains popped operands, Transient
+  origins share their owner and survive normalization/reconstruction, and `resolve_address` borrows its
+  origin. Cross-arena accesses use scoped leases; covered block operations retain leases through
+  synchronous access. Unsupported Transient native-integer conversion and fallible memory stores are
+  explicitly rejected. Independent owner/access regressions, p35/p36 and controlled teardown results
+  are recorded below; the original pass-1 probes were not recovered. This does not complete M0/M1
+  or the remaining GC, synchronization, static/stack, codec and native-call obligations.
 - **M1e, GC transport/publication:** carry opaque pointers or validated handles through recording,
   harvest, coordinator sets and mark commands. Numeric identity keys may coexist with retained pointers.
   Use root-barrier publication (`mutate_root` where required), and unregister/drain outstanding leases
@@ -260,9 +263,9 @@ configurations. These results are not strict-provenance, leak-check, full-VM Mir
 | p34 release on executor teardown | Pass (283 s) | Pass (248 s) | Live blocks return to baseline after dropping the executor arena. |
 | `raw_block::` library tests | 7 passed / 0 failed / 0 ignored (1.413 s) | 7 passed / 0 failed / 0 ignored (1.475 s) | Allocation layout, alignment, initialization, bounds, failures and release gauge. |
 | `frame_alloc::` library tests | Initial 7 passed (0.958 s); finalizer 8 passed / 0 failed / 0 ignored (1.105 s) | Initial 7 passed (0.969 s); finalizer 8 passed / 0 failed / 0 ignored (1.036 s) | Request/frame/thread budgets, allocation failure, accounting cleanup, and frame suspension/restoration. Initial walls include the log/count pipeline; finalizer walls are direct commands. |
-| Remaining storage and ownership obligations | — | — | M1c does not close p09 or addressable stack homes (M3), statics/static-address lifetime and ownership (M3/M1d), or heap/static `GuestBlock` migration (M3). Pointer representation/codecs, M1d owner/guard repairs, and strict-provenance evidence also remain open. |
+| Remaining storage and ownership obligations | — | — | M1c does not close p09 or addressable stack homes, static alignment or heap/static `GuestBlock` migration (M3). M1d subsequently completed its scoped owner/guard work; pointer representation/codecs, other lifetime obligations and strict-provenance evidence remain open. |
 
-Final local verification discovered and passed all 31 guarded controls in each configuration across
+At M1c completion, final local verification discovered and passed all 31 guarded controls in each configuration across
 16 shards. Four sequential batches of four parallel shards took 4222.037 s (no-features) and
 3871.943 s (multithreading), excluding standalone discovery; slowest shard walls were 1103.821 s
 and 1011.151 s. See the [inventory](../pointer-provenance/INVENTORY.md#m1c-final-verification) for
@@ -274,8 +277,46 @@ multithreading,validation-all respectively. Hosted CI timing remains unmeasured.
 accesses. On covered M1a/M1b paths, address formation uses wrapping operations rather than
 allocation-bounded in-bounds pointer arithmetic; formation alone does not authorize dereference. Scoped
 stable frame-local `localloc` storage passes the M1c regressions and blocking controls. Stack-home and
-local-assignment interleaving (including p09), static exposure/storage (including p12), and remaining
-owner/guard obligations remain M3/M1d work; this does not close the broader milestone exits.
+local-assignment interleaving (including p09), static exposure/storage (including p12), and the
+remaining ownership, GC and access-protocol obligations remain open; this does not close the broader
+milestone exits.
+
+#### M1d status and coverage (2026-10-30)
+
+The scoped M1d repairs are complete, not the broader M1 exit. The following are **measured**
+pre-repair and post-repair results from independent recreations; the missing pass-1 sources were not
+recovered, so no test-identity claim is made. Miri runs use `nightly-2026-05-27` with
+`-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks`, in no-features and
+multithreading unless noted. Commands, diagnostics and per-shard timings are recorded in the
+[durable inventory](../pointer-provenance/INVENTORY.md#m1d-baseline-and-outcomes). Native and Miri outcomes are distinct; permissive Tree
+Borrows is neither strict-provenance evidence nor a soundness proof.
+
+| Coverage | Current result | Boundary |
+|---|---|---|
+| Normalize, from-info and stack-pop owner/access regressions | Before repair, native liveness assertions failed in both configurations (owner count 1 instead of 2); pinned Miri found dangling reads after normalization/pop and a dangling reference after from-info. After repair, the corresponding real-access tests passed native and Miri in both configurations. | The pop tests now use `pop_retained_ptr`. Transient origins share the same owner and survive normalize/from-info; this does not prove a root, range, synchronization or arbitrary codec round trip. |
+| Transient clone and ownership conversion | Pre-repair native clone identity assertions failed in both configurations; the original and clone had different owner-storage addresses. Pre-repair fallible store accepted undecodable metadata, and address observation returned a Transient address. Repaired clone, store-rejection and native-integer-rejection regressions passed native and pinned Miri in both configurations. | The fallible memory store rejects Transient before writing; `conv.i/u/i8/u8`, `Unsafe.AsPointer`, and CLI-to-CTS numeric narrowing reject its ownership escape. Infallible codecs and final representation remain M3; not every byte copy is covered. |
+| Library blocking lanes | `dotnet-value` `m1d_` after the CLI-to-CTS audit repair: 11 passed, 0 ignored without features; 14 passed, 1 ignored historical UB diagnostic with multithreading. `dotnet-vm-data` `stack::tests::m1d_`: 8 passed, 0 ignored in each configuration. Before the audit regression was added, the full default `dotnet-value` Miri suite reported 73 unit tests passed and 3 ignored, plus 1 integration test passed. | Cross-arena tests exist only with multithreading; the historical Fill reproducer stays ignored and must not run natively. Stack-level P/Invoke handoff models are not actual libffi calls. |
+| p35 `ldflda` on a stack value | Before repair, both Miri configurations produced `System.NullReferenceException` type-resolution failure, not Miri UB; after repair, both passed the diagnostic and then the blocking control. | The exact pre-repair origin/throw site was not established. The passing probe reads a snapshot, not stack-home write-through; p09 and addressable homes remain M3. |
+| Static p36 and p12 | p36's one-byte static write/read after forced collection passed pinned Miri in both configurations and is blocking. The earlier p12 diagnostic hit a four-byte alignment `debug_assert` panic in both configurations, not Miri UB. | p36 refutes the proposed allocation-lifetime failure only for that controlled collection and direct static path; p12 is not a teardown proof. Static alignment/`GuestBlock` and legacy Static access remain M3; synchronization remains M4. |
+| Cross-arena teardown and synchronous operations | Pre-repair multithreading Miri reported use-after-free accessing the freed owner lock; post-repair teardown rejection and the in-flight lease control passed Miri. `RetainedPtr` lease tests passed multithreading Miri, including with `memory-validation`. | Fresh accesses fail after unregister begins; in-flight leases drain before teardown completes. Leases do not root objects, prove ranges or synchronize payloads, and must not span scheduler parking. Arena-ID reuse remains M1g. No-features has no CrossArena variant. |
+| Fill fast-path hazard | A pre-repair-pattern diagnostic measured a dangling write under multithreading Miri; the production byte fast path now retains a lease through synchronous fill. | IL reachability is source-inferred, not VM-confirmed; no end-to-end Miri fixture exercises the fixed Fill path. Yield resumption remains M1f/M5. |
+| VM control sweep | All 33 exact controls passed in both configurations across 17 shards under pinned permissive Miri; 39 catalog entries include 6 diagnostic-only probes. Shard 16 contains p34/p35 and shard 17 p36. | Filtered controls are not the full VM suite; discovery alone is not execution. Existing 31 controls remain included. |
+
+**Remaining obligations, not claimed fixed:**
+
+- **M3:** p09 stack-home relocation and write-through (Transient is a snapshot), final pointer
+  codecs and struct layout, legacy Stack/Static access and static `GuestBlock` alignment (p12).
+- **M1e/M1g:** GC transport, root publication and teardown ordering; arena-ID/generation reuse and
+  identity encoding. Per-access leases are not a generation or GC-root proof.
+- **M4:** a shared-memory/atomic protocol, including raw pointers escaping scoped access; leases are
+  allocation-lifetime protection, not synchronization.
+- **F-LIFE-004:** nested-filter suspended-frame overwrite remains source-only, unreproduced and open.
+- **M2:** P/Invoke pin/guard lifetime, CrossArena native access, callbacks and ABI remain open; the
+  Transient clone tests model the handoff but do not exercise libffi.
+- **M1f/M5:** `cpblk`/`initblk`/`Memmove` and Fill resumability after `Yield`, count/range and barrier
+  correctness remain open.
+- **M0/M6:** strict-provenance evidence and wider Miri coverage remain open; no strict lane is
+  claimed by the M1d results.
 
 ### M2 — Repair the native boundary
 
@@ -384,9 +425,9 @@ Evidence: **VM-M** = real VM Miri, **LIB-M** = library Miri, **N** = native repr
 |---|---|---|
 | Oversized heap slice; shared-derived writable address; safe OOB formation | Pass 1 LIB-M; pass 3 VM-M p10/p13/p14/p16, 3c2 controls | M1a/M3: one-byte real read, p20, writes and checked access |
 | Slot assignment invalidates byref; stack growth invalidates native int | Pass 1 LIB-M; pass 3 VM-M/N p09, MODEL E12b/E13 | M3: assign home then dereference, recursion/suspend/restore |
-| Transient destruction; expired static/arena guards | Pass 1 LIB-M for pop/normalize; R for resolver guards | M1d/M3: access after pop/codec and concurrent teardown |
+| Transient destruction; expired static/arena guards | Historical pass-1 LIB-M reports; original sources absent. Independent M1d library recreations measured pre-repair UAFs and now pass; controlled cross-arena teardown was confirmed, while p36 refuted the proposed static allocation-lifetime failure for its one-byte scenario. p35 pre-repair reported an exception-resolution failure, not Miri UB. | **Scoped M1d owner/guard repairs complete**, including real access after owner/info consumption and per-access leases; see [coverage](#m1d-status-and-coverage-2026-10-30). M3 codecs, stack homes and static alignment; M1e/M1g GC/identity; M4 synchronization and M2 native guards remain open. |
 | Unmanaged serde loses exposure; integer GC transport loses provenance | Pass 1 LIB-M; pass 3 p05 refutes unconditional failure | M1e/M3: decode and dereference without unrelated exposure; strict GC transport |
-| Repeated localloc; unsafe arithmetic; null/wrapping and comparison gaps | Phase 6 controls p06, p08, p17, p18, p21–p24 and p_null passed in both configurations; p07 remains a passing control. The pre-repair p06/p08 diagnostics were VM-M `miri-ub`, and p17/p18 had native/VM-M assertion failures. M1c controls p04 and p29–p34 passed in both configurations. | **M1b covered arithmetic/comparison/null paths closed** for wrapping, signed extremes, wrap-to-zero, comparisons, subtraction and dereference. **M1c scoped stable frame-local `localloc` storage and tested lifecycle paths closed**; see the M1c table. **M3 remains open** for p09/stack homes, statics (including p12), signed/wider managed offsets, heap/static storage migration and final pointer structs/codecs; M1d owner/guard work remains open. Unrepresentable negative or beyond-compact managed offsets return interim `NotImplemented`. |
+| Repeated localloc; unsafe arithmetic; null/wrapping and comparison gaps | Phase 6 controls p06, p08, p17, p18, p21–p24 and p_null passed in both configurations; p07 remains a passing control. The pre-repair p06/p08 diagnostics were VM-M `miri-ub`, and p17/p18 had native/VM-M assertion failures. M1c controls p04 and p29–p34 passed in both configurations. | **M1b covered arithmetic/comparison/null paths closed** for wrapping, signed extremes, wrap-to-zero, comparisons, subtraction and dereference. **M1c scoped stable frame-local `localloc` storage and tested lifecycle paths closed**; see the M1c table. **M3 remains open** for p09/stack homes, statics (including p12), signed/wider managed offsets, heap/static storage migration and final pointer structs/codecs; M1d scoped owner/guard work is complete, with separate boundaries above. Unrepresentable negative or beyond-compact managed offsets return interim `NotImplemented`. |
 | Pinned payload address; FFI return overwrite | Pass 2 R; pass 3 Rust address test/N libffi | M2: IL pinned cases and native fixture guard bytes |
 | By-ref/out, temp growth, null and string ABI | Pass 3 R | M2: native type-sized copy and lifetime fixtures |
 | Cross-arena root barrier/teardown; arena/address packing | Pass 3 MODEL E11/R; pass 1 LIB-M ID 40000 | M1e/M1g/M5: actual VM GC, lease/ID reuse, codec boundaries |
@@ -404,7 +445,7 @@ tests during iteration; reserve the full matrix and benchmarks for milestones an
 
 Use the pinned `nightly-2026-05-27` and recorded flags initially for comparable evidence; changing
 Miri versions requires recording both versions' outcomes. The blocking pointer lane currently runs
-31 exact controls in each of two configurations across shards 1–16; the per-shard test names are in
+33 exact controls in each of two configurations across shards 1–17; the per-shard test names are in
 [CI](../CI.md). The six remaining VM catalog entries are diagnostic-only; run known failures
 individually, and treat setup failures/timeouts separately from UB. The three M1a library regressions
 run in the blocking `miri-value` job's default (multithreading) suite and its separate no-features

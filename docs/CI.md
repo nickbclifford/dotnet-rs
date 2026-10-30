@@ -4,13 +4,13 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Design Principle
 
-Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, the `dotnet-utils`/`dotnet-vm-data` frame-block Miri tests, the filtered VM pointer-control Miri lane, and corpus replay for all four fuzz targets. The pointer lane runs only 31 guarded controls, not the VM Miri suite. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the advisory Miri matrix, and Valgrind are informative and non-blocking.
+Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, the `dotnet-utils`/`dotnet-vm-data` frame-block Miri tests, the `dotnet-vm-data` owner-retention lane, the filtered VM pointer-control Miri lane, and corpus replay for all four fuzz targets. The pointer lane runs only 33 guarded controls, not the VM Miri suite. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the advisory Miri matrix, and Valgrind are informative and non-blocking.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus three no-features M1a and eight no-features M1b regressions), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-pointer-controls` (31 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -31,21 +31,24 @@ Jobs:
 6. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
 7. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
 8. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
-9. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading), plus exact no-features runs of the three `m1a_` and eight `m1b_` library regressions; the no-features steps are not a full-crate Miri suite
+9. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions; the no-features steps are not a full-crate Miri suite
 10. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
-11. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
-12. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
+11. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
+12. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
+13. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
-features, which include `multithreading`; the `m1a_` and `m1b_` library regressions are part of
-that suite. Two further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
-and check the logs for exactly three and eight passing tests respectively, with zero ignored:
+features, which include `multithreading`; the `m1a_`, `m1b_` and enabled `m1d_` library regressions are part of
+that suite, including multithreading-only cross-arena tests. Three further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
+and check the logs for exactly three, eight and eleven passing tests respectively, with zero ignored:
 
 ```bash
 cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
   pointer::tests::m1a_ -- --test-threads=1
 cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
   pointer::tests::m1b_ -- --test-threads=1
+cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
+  pointer::tests::m1d_ -- --test-threads=1
 ```
 
 This adds no-features coverage for those regressions, not a second full-crate Miri configuration. The
@@ -62,13 +65,21 @@ The latter includes frame suspension/restoration at the data-structure level. Th
 two components only: it is not VM Miri coverage, does not establish strict provenance, and is not a
 soundness proof.
 
+### Blocking `miri-owner-retention` lane
+
+This library lane uses pinned `nightly-2026-05-27`,
+`MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"` and a
+15-minute timeout. It runs `dotnet-vm-data` `stack::tests::m1d_` with no features and
+with `multithreading`, requiring eight passed and zero ignored in each run. It is not a VM
+Miri suite, strict-provenance evidence, or a soundness proof.
+
 ### Blocking `miri-pointer-controls` lane
 
-This job is a deliberately narrow gate for the 31 enabled VM controls, not a VM Miri suite. It pins
+This job is a deliberately narrow gate for the 33 enabled VM controls, not a VM Miri suite. It pins
 `nightly-2026-05-27` and
 `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`, has a 45-minute
 timeout per matrix leg, and runs a fail-fast-disabled matrix of two configurations (`no-features`
-and `multithreading`) by sixteen guarded shards:
+and `multithreading`) by seventeen guarded shards:
 
 | Shard | Exact controls |
 |---|---|
@@ -87,14 +98,17 @@ and `multithreading`) by sixteen guarded shards:
 | 13 | `p04_double_localloc_write_first`, `p29_localloc_blocks_survive_growth_and_are_16_byte_aligned` |
 | 14 | `p30_localloc_block_survives_nested_callee_localloc`, `p31_localloc_blocks_released_on_return_and_pooling` |
 | 15 | `p32_localloc_blocks_released_on_tail_call_replacement`, `p33_localloc_blocks_released_on_exception_unwind` |
-| 16 | `p34_localloc_blocks_released_on_executor_teardown` |
+| 16 | `p34_localloc_blocks_released_on_executor_teardown`, `p35_ldflda_on_stack_value_type_then_ldind` |
+| 17 | `p36_static_address_survives_forced_collection` |
 
 Each leg first runs `bash scripts/pointer_provenance.sh verify-controls --configuration <configuration>`,
-then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16>`.
+then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17>`.
 The runner checks exact native discovery and runs the assigned tests without ignored-test flags. The
 workflow also installs the pinned Miri component, cargo-nextest, .NET SDK and `libffi-dev`, and uses
 a Rust cache keyed by configuration and shard. Recorded local pinned permissive Tree Borrows runs
-discovered and passed all 31 controls in both configurations. In the final local sweep, four sequential
+discovered and passed all 33 controls in both configurations in the M1d sweep; see the
+[inventory](pointer-provenance/INVENTORY.md#m1d-baseline-and-outcomes) for per-shard counts and walls.
+In the earlier M1c sweep of 31 controls, four sequential
 batches of four parallel shards took 4222.037 s (no-features) and 3871.943 s (multithreading),
 excluding standalone discovery. The slowest shard walls were 1103.821 s and 1011.151 s, below the
 45-minute leg limit; see the [inventory](pointer-provenance/INVENTORY.md#m1c-final-verification) for
@@ -105,7 +119,7 @@ guarantee hosted timing. The lane does not enable `memory-validation`: p13 and t
 `conv_u8_after_far_oob_managed_add_does_not_panic` regression are conditionally ignored with
 that feature because their deliberate 4096-byte managed offsets trigger its debug bounds trap.
 
-The final local `./check.sh --fast` run passed in 88.442 s, with nextest reporting 554 passed / 9
+The earlier M1c `./check.sh --fast` run passed in 88.442 s, with nextest reporting 554 passed / 9
 skipped (no features), 625 / 7 (multithreading), and 639 / 9 (multithreading,validation-all).
 
 This lane does not execute the remaining ignored probes, establish strict provenance, cover all unsafe
@@ -324,7 +338,7 @@ DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 
 ### Multithreading cfg-Occurrence Budget
 
-The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 413; it lives in the script and is lowered whenever the canonical count drops.
+The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 424; it lives in the script and is lowered whenever the canonical count drops.
 
 Run it locally with:
 
@@ -442,35 +456,35 @@ cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --feature
 
 ### VM pointer-provenance harness and lane limits
 
-`scripts/pointer_provenance.sh list` shows the explicit 37-entry catalog, classifications, native
-diagnostic permissions and control shards. The 31 controls run as ordinary tests without
+`scripts/pointer_provenance.sh list` shows the explicit 39-entry catalog, classifications, native
+diagnostic permissions and control shards. The 33 controls run as ordinary tests without
 `memory-validation`; p13 is ignored with that feature. The M1c controls include p04 and p29–p34;
 six probes remain ignored and diagnostic-only. The blocking `miri-pointer-controls` job and its
-two-configuration, sixteen-shard mapping are documented above. Its permissive Tree Borrows results
+two-configuration, seventeen-shard mapping are documented above. Its permissive Tree Borrows results
 are not a full VM Miri suite, strict-provenance evidence, or a runtime-soundness claim.
 
 The only entrypoint for executing ignored pointer probes is the explicit diagnostic command:
 
 ```bash
-bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p04_double_localloc_write_first
+bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p19_ldelem_negative_index
 # Preview a known-UB reproducer without running it:
 bash scripts/pointer_provenance.sh diagnostic --configuration multithreading \
-  --probe p04_double_localloc_write_first --dry-run
+  --probe p09_ldloca_convu_survives_callee_stack_growth --dry-run
 ```
 
 Miri diagnostics pin nightly-2026-05-27 and
 `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`.
 All diagnostic lanes run one exact probe per process with a 45-minute process timeout, retain output
 in a printed temporary directory, and report exit status and wall time. `--all` explicitly explores
-the 6 diagnostic-only probes, not the 31 enabled controls, and is not a CI lane; inspect individual
+the 6 diagnostic-only probes, not the 33 enabled controls, and is not a CI lane; inspect individual
 logs on failure (a Cargo failure is not automatically Miri UB). Native diagnostics require
 `--lane native` and are restricted to p19; never run other ignored probes natively.
 Known-UB probes must not be run natively or outside the diagnostic entrypoint.
 
 `verify-controls --configuration no-features` and its `multithreading` variant check exact native
-discovery and nextest metadata confirming all 31 controls are enabled; neither command runs a probe.
+discovery and nextest metadata confirming all 33 controls are enabled; neither command runs a probe.
 `controls --configuration no-features --shard 1` runs the guarded p00/p02 pair under Miri without
-ignored-test flags and checks each exact run count. The table above lists all sixteen shards; either
+ignored-test flags and checks each exact run count. The table above lists all seventeen shards; either
 configuration can be `multithreading`. Add `--dry-run` to preview discovery and shard commands without invoking Cargo. Safe tooling self-tests use a fake
 Cargo executable: `python3 scripts/tests/test_pointer_provenance.py`; deliberate stale/misspelled-name
 cases confirm the control guard rejects catalog mismatches.
