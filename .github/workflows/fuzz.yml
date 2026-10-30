@@ -16,9 +16,16 @@ on:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    env:
+      CARGO_FUZZ_VERSION: "0.13.1"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.8.2
@@ -42,22 +49,32 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-fuzz
-          key: ${{ runner.os }}-cargo-fuzz
+          # Bump the schema and key if the build toolchain, target, or install flags change.
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-fuzz-v2-${{ env.CARGO_FUZZ_VERSION }}-build-1.95.0-locked-default
 
       - name: Install cargo-fuzz
         if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
-        run: cargo install cargo-fuzz
+        run: cargo +1.95.0 install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+      - name: Verify cargo-fuzz and toolchains
+        run: |
+          rustc +1.95.0 --version
+          cargo +1.95.0 --version
+          rustc +nightly-2026-05-27 --version
+          cargo +nightly-2026-05-27 --version
+          version="$(cargo +nightly-2026-05-27 fuzz --version)"
+          echo "$version"
+          test "$version" = "cargo-fuzz $CARGO_FUZZ_VERSION"
       - name: Fuzz ManagedPtr Roundtrip
         continue-on-error: true
-        run: cargo fuzz run fuzz_managed_ptr_roundtrip -- -max_total_time=60
+        run: cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -max_total_time=60
         working-directory: crates/dotnet-value
       - name: Fuzz ManagedPtr Offset
         continue-on-error: true
-        run: cargo fuzz run fuzz_managed_ptr_offset -- -max_total_time=60
+        run: cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -max_total_time=60
         working-directory: crates/dotnet-value
       - name: Fuzz Raw Memory Access
         continue-on-error: true
-        run: cargo fuzz run fuzz_raw_memory_access -- -max_total_time=60
+        run: cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -max_total_time=60
         working-directory: crates/dotnet-value
 
       - name: Generate structured corpus (executor)
@@ -66,14 +83,14 @@ jobs:
       - name: Fuzz Executor (300s)
         id: fuzz_executor
         continue-on-error: true
-        run: cargo +nightly fuzz run fuzz_executor corpus/fuzz_executor -- -max_total_time=300
+        run: cargo +nightly-2026-05-27 fuzz run fuzz_executor corpus/fuzz_executor -- -max_total_time=300
         working-directory: crates/dotnet-vm/fuzz
       - name: Minimize crashes (if any)
         if: always() && steps.fuzz_executor.outcome == 'failure'
         run: |
           for crash in artifacts/fuzz_executor/crash-*; do
             if [ -f "$crash" ]; then
-              cargo +nightly fuzz tmin fuzz_executor "$crash" -- -max_total_time=30
+              cargo +nightly-2026-05-27 fuzz tmin fuzz_executor "$crash" -- -max_total_time=30
             fi
           done
         working-directory: crates/dotnet-vm/fuzz

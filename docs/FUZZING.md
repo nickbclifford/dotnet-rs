@@ -13,6 +13,8 @@ The project uses [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (backed b
 
 Additionally, the `fuzzing.rs` module in `dotnet-vm` contains Miri-compatible unit tests that exercise the same `FuzzProgram` harness without requiring the full fuzzing toolchain.
 
+The advisory Fuzz workflow builds cargo-fuzz 0.13.1 with Rust 1.95.0 and `--locked`, then runs targets and crash minimization with `nightly-2026-05-27` (rather than floating nightly). Its green status does not establish that advisory targets passed or that checked-in corpora were replayed.
+
 ## Prerequisites
 
 ```bash
