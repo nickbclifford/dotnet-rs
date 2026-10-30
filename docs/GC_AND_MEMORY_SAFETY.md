@@ -22,6 +22,46 @@ This document describes the garbage collection subsystem, memory safety invarian
 - `F6.NoEscapeAcrossArena`: arena branding, private constructors, and `for<'gc>` confinement prevent `'gc` values from escaping; the deliberate cross-arena `Gc::from_ptr` path is limited to tracing and cannot escape.
 - `F9.MetadataArenaOutlivesDescriptors`: owner-tied `Arc<MetadataArena>` metadata keeps leaked descriptor allocations alive for all descriptor users.
 
+## Frame-Owned `localloc` Allocations
+
+`localloc` storage is host allocation owned by the active method frame, not storage managed by the
+`HeapManager`. `MethodState::allocations` retains one zero-initialized, non-resizing `RawBlock` per
+request. Each block has at least 16-byte alignment, a retained allocation base and `Layout`, and a
+separate payload extent; zero-byte requests still own a real one-byte block. Pointers are derived
+from the retained base without forming an intermediate payload reference. This follows the
+localloc-relevant allocation contract planned for M3 `GuestBlock`, but does not implement or migrate
+the general `GuestBlock` storage model.
+
+The default limits are 128 MiB per request and per frame, and 512 MiB per thread. Checked accounting
+charges at least 64 bytes for each block. A negative signed request maps to `System.OverflowException`;
+request, frame, or thread budget exhaustion and other allocation failures map to
+`System.OutOfMemoryException`.
+
+Allocation lifetime follows frame ownership rather than the lifetime of a caller's local pointer:
+
+- A caller's blocks stay live while nested callee frames execute. Suspending and restoring frames
+  moves the owning frames and does not release their blocks.
+- Normal return and exception unwind retire frames through the frame-recycling path, which releases
+  their blocks before a frame can be reused. Tail-call and `jmp` replacement use that same recycling
+  path, so the replaced frame's blocks end with it.
+- Clearing the frame stack or dropping the executor releases blocks still owned by active,
+  suspended, or pooled frames through normal Rust destruction.
+
+The allocation budget is a thread-local limit for these frame allocations; it is not an aggregate
+host-memory ledger and is not connected to `HeapManager` allocation pressure or GC triggering. M1c
+also does not validate or guard guest uses of a pointer after its frame's localloc lifetime ends.
+
+Remaining ownership and memory-safety work is outside M1c:
+
+- p09 and addressable local/argument frame homes remain M3 work; static storage ownership and
+  address/lifetime repairs remain M3/M1d work. Heap and static storage have not migrated to
+  `GuestBlock`.
+- Connecting per-thread host-allocation accounting to GC/VM-wide pressure remains M3/M4 work, as
+  does the eventual shared-memory access protocol.
+- The implementation does not reject `localloc` in exception blocks. Nested-filter suspended-frame
+  behavior (F-LIFE-004) also remains unaddressed; the ordinary catch/unwind coverage does not
+  establish that nested-filter lifecycle.
+
 ## Arena Architecture
 
 ### Per-Thread Arenas

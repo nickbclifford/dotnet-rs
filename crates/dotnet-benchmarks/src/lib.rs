@@ -445,7 +445,7 @@ impl BenchHarness {
 
 /// Cold-start run: builds a *fresh* `AssemblyLoader` (so `System.Private.CoreLib` and every
 /// framework dependency are re-parsed and re-resolved from scratch), parses the entry DLL with
-/// the given `options`, and executes to completion. Unlike [`BenchHarness::run_dll`], nothing is
+/// the given `options`, and executes to completion. Unlike [`BenchHarness::run_prepared`], nothing is
 /// cached across calls — this is what measures end-to-end metadata-load cost (parse + on-demand
 /// lazy decode during execution) for a real workload.
 ///

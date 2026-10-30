@@ -14,7 +14,7 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 - `F3.StackSlotMatchesView`: raw evaluation-stack access reads a slot only through the type used to push it; enum discriminants and instruction stack discipline establish this locally.
 - `F3.InteriorPointerRebased`: an interior pointer retains its originating slot association and is re-established by `apply_reallocation_fixup()` after stack-vector reallocation.
 - `F10.RawMemoryAccessValid`: raw reads, writes, copies, and pointer derivations stay in live storage with the required range, initialization, alignment, and aliasing conditions. A nearby bounds/integrity check or the immediate unsafe function's caller contract establishes that condition.
-- `F10.RawAllocationOwnership`: `Box::into_raw`/`Box::leak` pointers are converted or reclaimed only through their single matching ownership operation; other raw-pointer conversions rely on their documented provenance and lifetime contract.
+- `F10.RawAllocationOwnership`: a raw allocation is converted to a reference or reclaimed only with the provenance, lifetime, and unique ownership supplied by its originating allocation protocol. `Box::into_raw`/`Box::leak` pointers are converted or reclaimed only through their single matching ownership operation; `alloc_zeroed` allocations are paired with `dealloc` exactly once by their unique owner using the retained matching `Layout`. Other raw-pointer conversions rely on their documented provenance and lifetime contract.
 - `F10.BorrowedStorageStable`: pointers obtained from managed or shared backing storage are used only while the borrow, closure, or lock that stabilizes the allocation remains active.
 - `F10.ArchIntrinsicPrecondition`: a target-feature function or architecture intrinsic executes only when its ISA feature is guaranteed by the compilation target or by successful runtime detection at the dispatch site.
 - `F11.CliLoadKindMatchesStorage`: an atomic scalar is decoded only by the CLI `LoadType` with its storage bit-width and signedness; the object-handle case relies on its explicit caller contract.
@@ -113,6 +113,29 @@ dotnet-benchmarks
 - **STW Coordination**: When a GC is triggered, all threads are brought to a "Safe Point" (e.g., at a loop back-edge or method call). Once all threads are paused, the collector traces all reachable objects across all arenas.
 - **GcScopeGuard**: To prevent deadlocks during STW, `GcScopeGuard` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
 - **Collect Trait**: Every type stored on the heap or containing GC references must implement the `Collect` trait to allow the tracer to find nested references.
+
+### Frame-local `localloc` storage
+
+Each active method's `MethodState` owns a `FrameAllocations` collection. Every IL `localloc`
+request receives its own zero-initialized `RawBlock`; later requests cannot resize or invalidate an
+earlier block. The block retains its allocation base and `Layout`, and returned pointers are derived
+from that base without first creating a payload reference. Payload extent is tracked separately from
+the host layout. Blocks have at least 16-byte alignment, and even a zero-byte request receives a
+real one-byte allocation.
+
+The default limits are 128 MiB for a single request, 128 MiB of accounted allocations per frame,
+and 512 MiB per thread. Checked accounting charges at least 64 bytes per block. A negative signed
+request becomes `System.OverflowException`; an over-limit request or any other allocation failure
+becomes `System.OutOfMemoryException`.
+
+The owning frame keeps its blocks across nested calls and while it is suspended and later restored.
+Retiring a frame releases its blocks on normal return, exception unwind, or tail-call/`jmp` frame
+replacement; pooling explicitly clears its allocations, and dropping the executor tears down any
+frames still active. A pointer must not be used after its frame's allocation lifetime ends.
+
+This is the localloc-specific application of the allocation portion of the planned M3 `GuestBlock`
+contract. `RawBlock` is not the general `GuestBlock` abstraction: this change does not migrate heap,
+static, local, or argument storage to it.
 
 ## Threading Model
 
