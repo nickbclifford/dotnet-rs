@@ -4,7 +4,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 
 ## Phase 0: Baseline and exact gates
 - [x] 0.1 Refresh hosted baseline evidence and record the current merged-tree SHA, failure classes, annotations, and timing limitations in memory. [effort: default] — refs REVIEW.md#F-EVID-001
-- [ ] 0.2 Run the exact CI rustdoc gate locally and record the committed link correction and any nonfatal diagnostics. [effort: default] — refs REVIEW.md#F-DOC-001
+- [x] 0.2 Run the exact CI rustdoc gate locally and record the committed link correction and any nonfatal diagnostics. [effort: default] — refs REVIEW.md#F-DOC-001
 - [ ] 0.3 Add workflow_dispatch to CI, Miri, and Fuzz without changing push/PR/schedule behavior; validate YAML and document branch-dispatch and same-SHA job-rerun commands. [effort: default] — refs REVIEW.md#F-EVID-001
 
 ## Phase 1: Compatible and accountable corpus replay
