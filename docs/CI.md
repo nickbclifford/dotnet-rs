@@ -10,10 +10,29 @@ Deterministic correctness checks are blocking, including the bounded exhaustive 
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
-| `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
-| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | Fuzzing coverage                     |
+| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
+
+## Branch dispatch and targeted repeats
+
+After pushing the candidate to `supervised/unblock-ci`, dispatch whole workflows:
+
+```bash
+gh workflow run ci.yml --ref supervised/unblock-ci
+gh workflow run miri.yml --ref supervised/unblock-ci
+gh workflow run fuzz.yml --ref supervised/unblock-ci
+```
+
+GitHub requires the workflow to exist with `workflow_dispatch` on the default branch
+before dispatch is available. Alternatively observe the PR-triggered run for the exact
+commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
+`gh run watch RUN --exit-status` to monitor, and `gh run view RUN --job JOB --log` for
+execution evidence. A targeted `gh run rerun RUN --job JOB` repeats a job on that
+run's original SHA, not a newer commit. Dispatch selects a workflow, not individual jobs.
+Avoid another push while useful evidence is running: concurrency can cancel older runs.
+Advisory success alone does not prove that all tests completed; inspect job and step logs.
 
 ## `ci.yml` — Blocking Correctness Gate
 
