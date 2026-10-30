@@ -317,6 +317,40 @@ jobs:
           cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-m1b-no-features.log"
           grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-m1b-no-features.log"
 
+  miri-frame-blocks:
+    name: Miri frame blocks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - uses: Swatinem/rust-cache@v2.8.2
+      - name: Miri raw blocks (no features)
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features raw_block:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-raw-block-no-features.log"
+          grep -F 'test result: ok. 7 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-raw-block-no-features.log"
+      - name: Miri raw blocks (multithreading)
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features --features multithreading raw_block:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-raw-block-multithreading.log"
+          grep -F 'test result: ok. 7 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-raw-block-multithreading.log"
+      - name: Miri frame allocations (no features)
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-frame-alloc-no-features.log"
+          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-frame-alloc-no-features.log"
+      - name: Miri frame allocations (multithreading)
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading frame_alloc:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-frame-alloc-multithreading.log"
+          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-frame-alloc-multithreading.log"
+
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -327,7 +361,7 @@ jobs:
       fail-fast: false
       matrix:
         configuration: [no-features, multithreading]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust

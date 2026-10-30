@@ -25,6 +25,10 @@ CONTROLS_BY_SHARD = {
     10: ["p23_localloc_pointer_loop_unsigned_branch_compare", "p24_unsafe_byte_offset_direction_and_deref"],
     11: ["p25_convi_and_stind_i_pointer_roundtrip_deref", "p26_native_int_boundary_store_load_roundtrip"],
     12: ["p27_stind_i_fresh_pointer_through_local_slot_dereferences", "p28_stind_i_fresh_pointer_through_heap_memory_dereferences"],
+    13: ["p04_double_localloc_write_first", "p29_localloc_blocks_survive_growth_and_are_16_byte_aligned"],
+    14: ["p30_localloc_block_survives_nested_callee_localloc", "p31_localloc_blocks_released_on_return_and_pooling"],
+    15: ["p32_localloc_blocks_released_on_tail_call_replacement", "p33_localloc_blocks_released_on_exception_unwind"],
+    16: ["p34_localloc_blocks_released_on_executor_teardown"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 FAKE = r'''#!/usr/bin/env python3

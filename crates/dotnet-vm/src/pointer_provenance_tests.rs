@@ -1,5 +1,5 @@
 //! Bounded IL-level pointer provenance probes on the real VM.
-//! The 31-entry catalog has 24 controls and 7 diagnostic-only probes. Recorded local
+//! The 37-entry catalog has 31 controls and 6 diagnostic-only probes. Recorded local
 //! pinned permissive Tree Borrows runs pass the controls in both configurations. p13 is
 //! additionally ignored when memory-validation is enabled; only p19 permits native diagnostics.
 //!
@@ -12,7 +12,7 @@
 //! | `p01_ldloca_convu_stind_i4` | slot/byref | M3 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
 //! | `p02_ldloca_stind_i4_control` | slot/byref control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
 //! | `p03_ldloca_convu_ldind_i4` | slot/byref read control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p04_double_localloc_write_first` | localloc/arithmetic | M1c | diagnostic-permissive-TB | group UB historically reported; exact current outcome unknown |
+//! | `p04_double_localloc_write_first` | localloc/arithmetic | M1c | blocking-native + blocking-permissive-TB | M1c repair passed in both configurations; pre-repair Miri UB (`access.rs:1172`) |
 //! | `p05_single_localloc_roundtrip` | serde/transport control; localloc | M1c/M1e/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
 //! | `p06_localloc_minus_one_then_plus_one` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair Miri UB |
 //! | `p07_localloc_one_past_end` | localloc/arithmetic control | M1b | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
@@ -37,6 +37,12 @@
 //! | `p26_native_int_boundary_store_load_roundtrip` | native-int width/sign | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features diagnostic passed |
 //! | `p27_stind_i_fresh_pointer_through_local_slot_dereferences` | pointer store/local slot | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (296/348 s) |
 //! | `p28_stind_i_fresh_pointer_through_heap_memory_dereferences` | pointer store/heap memory | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (302/321 s) |
+//! | `p29_localloc_blocks_survive_growth_and_are_16_byte_aligned` | localloc allocation/alignment | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p30_localloc_block_survives_nested_callee_localloc` | localloc allocation/nested call | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p31_localloc_blocks_released_on_return_and_pooling` | localloc allocation/return lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p32_localloc_blocks_released_on_tail_call_replacement` | localloc allocation/tail-call lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p33_localloc_blocks_released_on_exception_unwind` | localloc allocation/unwind lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p34_localloc_blocks_released_on_executor_teardown` | localloc allocation/teardown lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
 //! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | blocking-native + blocking-permissive-TB | step 0.1 and Phase 6 control passes in both configurations |
 //! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | baseline and current outcome unknown |
 
@@ -70,6 +76,7 @@ use dotnet_value::{
 };
 use dotnet_vm_ops::ops::EvalStackOps;
 use dotnetdll::{
+    binary::signature::kinds::CallingConvention,
     prelude::*,
     resolved::{
         members::Method,
@@ -83,6 +90,51 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
     let mut obj = TypeDefinition::new(None, "Object");
     obj.namespace = Some("System".into());
     let obj_idx = res.push_type_definition(obj);
+    let void_sig = MethodSignature {
+        instance: true,
+        explicit_this: false,
+        calling_convention: CallingConvention::Default,
+        parameters: vec![],
+        return_type: ReturnType(vec![], None),
+        varargs: None,
+    };
+    res.push_method(
+        obj_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig.clone(),
+            ".ctor",
+            Some(body::Method {
+                header: body::Header {
+                    maximum_stack_size: 1,
+                    local_variables: vec![],
+                    initialize_locals: true,
+                },
+                instructions: vec![Instruction::Return],
+                data_sections: vec![],
+            }),
+        ),
+    );
+    let mut exception = TypeDefinition::new(None, "Exception");
+    exception.namespace = Some("System".into());
+    let exception_idx = res.push_type_definition(exception);
+    res.push_method(
+        exception_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig,
+            ".ctor",
+            Some(body::Method {
+                header: body::Header {
+                    maximum_stack_size: 1,
+                    local_variables: vec![],
+                    initialize_locals: true,
+                },
+                instructions: vec![Instruction::Return],
+                data_sections: vec![],
+            }),
+        ),
+    );
     let mut vt = TypeDefinition::new(None, "ValueType");
     vt.namespace = Some("System".into());
     vt.extends = Some(obj_idx.into());
@@ -164,6 +216,50 @@ fn run_i32_entrypoint(shared: Arc<SharedGlobalState>, entrypoint: MethodDescript
         }
     }
     final_int.expect("entrypoint did not produce an Int32 return value")
+}
+
+enum Observe {
+    Continue,
+    Stop,
+}
+
+fn run_entrypoint_observed(
+    shared: Arc<SharedGlobalState>,
+    entrypoint: MethodDescription,
+    mut observer: impl for<'gc> FnMut(
+        &mut crate::dispatch::ExecutionEngine<'gc>,
+        &StepResult,
+    ) -> Observe,
+) {
+    let mut arena = new_test_arena(&shared);
+
+    arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+        let gc_handle = unsafe { test_gc_handle(gc, engine) };
+        let info = shared
+            .caches
+            .get_method_info(entrypoint.clone(), &Default::default(), shared.clone())
+            .expect("Failed to resolve entrypoint");
+        engine
+            .ves_context(gc_handle)
+            .entrypoint_frame(info, Default::default(), vec![])
+            .expect("Failed to set up entrypoint frame");
+    });
+
+    for _ in 0..100_000 {
+        let should_stop = arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
+            let gc_handle = unsafe { test_gc_handle(gc, engine) };
+            let step_result = engine.step(gc_handle);
+            let observer_stop = matches!(observer(engine, &step_result), Observe::Stop);
+            observer_stop || should_break_after_step(step_result)
+        });
+        if should_stop {
+            break;
+        }
+    }
+
+    drop(arena);
 }
 
 fn local(base: BaseType<MethodType>) -> LocalVariable {
@@ -311,9 +407,8 @@ fn p03_ldloca_convu_ldind_i4() {
     assert_eq!(r, 9);
 }
 
-// ---- Claim 2: double localloc -> first pointer dangles after pool Vec reallocation -------------
+// ---- Historical Claim 2 (pre-M1c): Vec-backed localloc could invalidate the first pointer; M1c now uses stable frame-owned blocks. ----
 #[test]
-#[ignore = "M1c: p04 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
 fn p04_double_localloc_write_first() {
     let r = run_il(
         "P04",
@@ -1739,4 +1834,754 @@ fn p_wide_store_into_int_local() {
         ],
     );
     assert_eq!(r, 0x55);
+}
+
+#[test]
+fn p29_localloc_blocks_survive_growth_and_are_16_byte_aligned() {
+    const SIZES: [i32; 7] = [1, 16, 17, 0, 4096, 65536, 15];
+
+    let mut instructions = Vec::new();
+    for (index, &size) in SIZES.iter().enumerate() {
+        let local_index = index as u16;
+        instructions.extend([
+            I::LoadConstantInt32(size),
+            I::LocalMemoryAllocate,
+            I::StoreLocal(local_index),
+            I::LoadLocal(local_index),
+            conv_u(),
+            I::LoadConstantInt32(15),
+            I::And,
+            I::LoadConstantInt32(0),
+            I::CompareEqual,
+        ]);
+        if index != 0 {
+            instructions.push(I::And);
+        }
+
+        let first_value = 0x20 + index as i32;
+        instructions.extend([
+            I::LoadLocal(local_index),
+            I::LoadConstantInt32(first_value),
+            stind(StoreType::Int8),
+        ]);
+        if size > 1 {
+            let last_value = 0x90 + index as i32;
+            instructions.extend([
+                I::LoadLocal(local_index),
+                I::LoadConstantInt32(size - 1),
+                I::Add,
+                I::LoadConstantInt32(last_value),
+                stind(StoreType::Int8),
+            ]);
+        }
+        // For size 0 the guaranteed one-byte backing block, like a one-byte request,
+        // has the same address for its first and last byte.
+    }
+
+    for (index, &size) in SIZES.iter().enumerate() {
+        let local_index = index as u16;
+        let first_value = 0x20 + index as i32;
+        instructions.extend([
+            I::LoadLocal(local_index),
+            ldind(LoadType::UInt8),
+            I::LoadConstantInt32(first_value),
+            I::CompareEqual,
+            I::And,
+        ]);
+
+        let last_offset = if size > 1 { size - 1 } else { 0 };
+        let last_value = if size > 1 {
+            0x90 + index as i32
+        } else {
+            first_value
+        };
+        instructions.extend([
+            I::LoadLocal(local_index),
+            I::LoadConstantInt32(last_offset),
+            I::Add,
+            ldind(LoadType::UInt8),
+            I::LoadConstantInt32(last_value),
+            I::CompareEqual,
+            I::And,
+        ]);
+    }
+    instructions.push(I::Return);
+
+    let r = run_il(
+        "LocallocBlocksGrowthAlignment",
+        4,
+        (0..SIZES.len()).map(|_| local(BaseType::IntPtr)).collect(),
+        instructions,
+    );
+    assert_eq!(r, 1);
+}
+
+#[test]
+fn p30_localloc_block_survives_nested_callee_localloc() {
+    let r = run_program("LocallocNestedCallee", |res, type_idx| {
+        let callee_body = make_test_method!(
+            max_stack: 3,
+            instructions: vec![
+                Instruction::LoadConstantInt32(8192),
+                Instruction::LocalMemoryAllocate,
+                Instruction::StoreLocal(0),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(8191),
+                Instruction::Add,
+                Instruction::LoadConstantInt32(0x5a),
+                stind(StoreType::Int8),
+                Instruction::Return,
+            ],
+            locals: vec![local(BaseType::IntPtr)],
+        );
+        let callee_idx = res.push_method(
+            type_idx,
+            Method::new(
+                Accessibility::Public,
+                void_sig(),
+                "Callee",
+                Some(callee_body),
+            ),
+        );
+
+        (
+            3,
+            vec![local(BaseType::IntPtr)],
+            vec![
+                Instruction::LoadConstantInt32(16),
+                Instruction::LocalMemoryAllocate,
+                Instruction::StoreLocal(0),
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(0x2a),
+                stind(StoreType::Int8),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(callee_idx)),
+                },
+                Instruction::LoadLocal(0),
+                ldind(LoadType::UInt8),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 0x2a);
+}
+
+#[test]
+fn p31_localloc_blocks_released_on_return_and_pooling() {
+    let baseline = dotnet_utils::raw_block::live_blocks();
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+    let (mut res, _, type_idx) = make_test_assembly!(
+        "LocallocReturnPooling.dll".to_string(),
+        "LocallocReturnPoolingAssembly".to_string(),
+        "LocallocReturnPoolingType".to_string()
+    );
+
+    let callee_body = make_test_method!(
+        max_stack: 2,
+        instructions: vec![
+            Instruction::LoadConstantInt32(32),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let callee_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Callee",
+            Some(callee_body),
+        ),
+    );
+
+    let caller_body = make_test_method!(
+        max_stack: 2,
+        instructions: vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(callee_idx)),
+            },
+            Instruction::LoadConstantInt32(1),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let caller_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "Run",
+            Some(caller_body),
+        ),
+    );
+
+    let res_s = loader.register_owned_assembly(res);
+    let method_def = &res_s.definition()[caller_idx];
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .expect("method must exist in type definition");
+    let entrypoint = MethodDescription::new(
+        td,
+        GenericLookup::default(),
+        res_s,
+        MethodMemberIndex::Method(method_index),
+    );
+
+    let mut previous_depth = 1;
+    let mut caller_allocated = false;
+    let mut callee_allocated = false;
+    let mut callee_returned = false;
+    let mut caller_returned = false;
+    run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
+        let frame_stack = &engine.stack.execution.frame_stack;
+        let depth = frame_stack.len();
+        let blocks = dotnet_utils::raw_block::live_blocks();
+        assert!(depth <= 2, "unexpected frame depth: {depth}");
+        match depth {
+            0 => assert_eq!(blocks, baseline),
+            1 => assert!(blocks == baseline || blocks == baseline + 1),
+            2 => assert!(blocks == baseline + 1 || blocks == baseline + 2),
+            _ => unreachable!(),
+        }
+
+        if depth == 1 && blocks == baseline + 1 {
+            assert_eq!(frame_stack.frames[0].state.allocations.len(), 1);
+            caller_allocated = true;
+        }
+        if depth == 2 {
+            assert!(caller_allocated, "callee ran before caller localloc");
+            if blocks == baseline + 2 {
+                assert_eq!(frame_stack.frames[0].state.allocations.len(), 1);
+                assert_eq!(frame_stack.frames[1].state.allocations.len(), 1);
+                callee_allocated = true;
+            } else {
+                assert_eq!(blocks, baseline + 1);
+            }
+        }
+
+        if previous_depth == 2 && depth == 1 {
+            assert!(callee_allocated, "callee returned before its localloc");
+            assert_eq!(blocks, baseline + 1);
+            assert_eq!(frame_stack.frames[0].state.allocations.len(), 1);
+            assert!(
+                frame_stack
+                    .pooled_frames
+                    .iter()
+                    .all(|frame| frame.state.allocations.is_empty()),
+                "returned callee's pooled frame retained localloc blocks"
+            );
+            callee_returned = true;
+        }
+
+        if depth == 0 {
+            assert!(callee_returned, "caller returned before callee");
+            assert_eq!(blocks, baseline);
+            assert!(matches!(step_result, StepResult::Return));
+            assert!(frame_stack.pooled_frames.len() >= 2);
+            assert!(
+                frame_stack
+                    .pooled_frames
+                    .iter()
+                    .all(|frame| frame.state.allocations.is_empty()),
+                "returned pooled frames retained localloc blocks"
+            );
+            caller_returned = true;
+        }
+
+        previous_depth = depth;
+        if caller_returned {
+            Observe::Stop
+        } else {
+            Observe::Continue
+        }
+    });
+
+    assert!(caller_allocated, "caller localloc was not observed");
+    assert!(callee_allocated, "callee localloc was not observed");
+    assert!(callee_returned, "callee return was not observed");
+    assert!(caller_returned, "caller return was not observed");
+    assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
+}
+
+#[test]
+fn p32_localloc_blocks_released_on_tail_call_replacement() {
+    let baseline = dotnet_utils::raw_block::live_blocks();
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+    let (mut res, _, type_idx) = make_test_assembly!(
+        "LocallocTailReplacement.dll".to_string(),
+        "LocallocTailReplacementAssembly".to_string(),
+        "LocallocTailReplacementType".to_string()
+    );
+
+    let callee_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(32),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let callee_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Callee",
+            Some(callee_body),
+        ),
+    );
+
+    let caller_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Call {
+                tail_call: true,
+                param0: MethodSource::User(UserMethod::Definition(callee_idx)),
+            },
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let caller_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Caller",
+            Some(caller_body),
+        ),
+    );
+
+    let res_s = loader.register_owned_assembly(res);
+    let method_def = &res_s.definition()[caller_idx];
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .expect("method must exist in type definition");
+    let entrypoint = MethodDescription::new(
+        td,
+        GenericLookup::default(),
+        res_s,
+        MethodMemberIndex::Method(method_index),
+    );
+
+    let mut caller_allocated = false;
+    let mut tail_replaced = false;
+    let mut callee_allocated = false;
+    let mut callee_returned = false;
+    let mut max_blocks = baseline;
+    run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
+        let frame_stack = &engine.stack.execution.frame_stack;
+        let depth = frame_stack.len();
+        let blocks = dotnet_utils::raw_block::live_blocks();
+        max_blocks = max_blocks.max(blocks);
+        assert!(
+            blocks <= baseline + 1,
+            "tail-call replacement retained overlapping caller and callee blocks: {blocks} blocks"
+        );
+        assert!(depth <= 1, "valid tail call grew frame depth to {depth}");
+
+        if depth == 1 {
+            let allocations = frame_stack.frames[0].state.allocations.len();
+            if !caller_allocated {
+                if allocations == 1 {
+                    assert_eq!(blocks, baseline + 1);
+                    caller_allocated = true;
+                } else {
+                    assert_eq!(allocations, 0);
+                    assert_eq!(blocks, baseline);
+                }
+            } else if !tail_replaced {
+                if allocations == 0 && matches!(step_result, StepResult::FramePushed) {
+                    assert_eq!(blocks, baseline, "caller block survived tail replacement");
+                    assert!(
+                        frame_stack
+                            .pooled_frames
+                            .iter()
+                            .all(|frame| frame.state.allocations.is_empty()),
+                        "replaced caller's pooled frame retained localloc blocks"
+                    );
+                    tail_replaced = true;
+                } else {
+                    assert_eq!(allocations, 1);
+                    assert_eq!(blocks, baseline + 1);
+                }
+            } else if allocations == 1 {
+                assert_eq!(blocks, baseline + 1);
+                callee_allocated = true;
+            } else {
+                assert_eq!(allocations, 0);
+                assert_eq!(blocks, baseline);
+            }
+        } else {
+            assert!(
+                tail_replaced,
+                "entrypoint ended before tail-call replacement"
+            );
+            assert!(callee_allocated, "callee returned before its localloc");
+            assert_eq!(blocks, baseline);
+            assert!(matches!(step_result, StepResult::Return));
+            callee_returned = true;
+        }
+
+        if callee_returned {
+            Observe::Stop
+        } else {
+            Observe::Continue
+        }
+    });
+
+    assert!(caller_allocated, "caller localloc was not observed");
+    assert!(tail_replaced, "valid tail call was not honored");
+    assert!(callee_allocated, "callee localloc was not observed");
+    assert!(callee_returned, "callee return was not observed");
+    assert!(max_blocks <= baseline + 1);
+    assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
+}
+
+#[test]
+fn p33_localloc_blocks_released_on_exception_unwind() {
+    let baseline = dotnet_utils::raw_block::live_blocks();
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+    let (mut res, system_runtime, type_idx) = make_test_assembly!(
+        "LocallocExceptionUnwind.dll".to_string(),
+        "LocallocExceptionUnwindAssembly".to_string(),
+        "LocallocExceptionUnwindType".to_string()
+    );
+
+    let exception_type_ref =
+        res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
+            Some("System".into()),
+            "Exception",
+            dotnetdll::resolved::types::ResolutionScope::Assembly(system_runtime),
+        ));
+    let exception_ctor =
+        res.push_method_reference(dotnetdll::resolved::members::ExternalMethodReference {
+            parent: dotnetdll::resolved::members::MethodReferenceParent::Type(MethodType::Base(
+                Box::new(BaseType::class(exception_type_ref)),
+            )),
+            name: ".ctor".into(),
+            signature: MethodSignature {
+                instance: true,
+                explicit_this: false,
+                calling_convention: CallingConvention::Default,
+                parameters: vec![],
+                return_type: ReturnType(vec![], None),
+                varargs: None,
+            },
+            attributes: vec![],
+        });
+
+    let thrower_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(64),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::NewObject(UserMethod::Reference(exception_ctor)),
+            Instruction::Throw,
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let thrower_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Thrower",
+            Some(thrower_body),
+        ),
+    );
+
+    let callee_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(32),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(thrower_idx)),
+            },
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let callee_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Callee",
+            Some(callee_body),
+        ),
+    );
+
+    let caller_body = make_test_method!(
+        max_stack: 2,
+        instructions: vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(callee_idx)),
+            },
+            Instruction::LoadConstantInt32(0),
+            Instruction::Return,
+            Instruction::Pop,
+            Instruction::LoadConstantInt32(42),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+        data_sections: vec![body::DataSection::ExceptionHandlers(vec![body::Exception {
+            kind: body::ExceptionKind::TypedException(MethodType::Base(Box::new(
+                BaseType::class(exception_type_ref),
+            ))),
+            try_offset: 3,
+            try_length: 1,
+            handler_offset: 6,
+            handler_length: 3,
+        }])],
+    );
+    let caller_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "Run",
+            Some(caller_body),
+        ),
+    );
+
+    let res_s = loader.register_owned_assembly(res);
+    let method_def = &res_s.definition()[caller_idx];
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .expect("method must exist in type definition");
+    let entrypoint = MethodDescription::new(
+        td,
+        GenericLookup::default(),
+        res_s,
+        MethodMemberIndex::Method(method_index),
+    );
+
+    let mut caller_allocated = false;
+    let mut callee_allocated = false;
+    let mut thrower_allocated = false;
+    let mut handler_started = false;
+    let mut caller_returned = false;
+    let mut max_suspended_frames = 0;
+    run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
+        let frame_stack = &engine.stack.execution.frame_stack;
+        let depth = frame_stack.len();
+        let blocks = dotnet_utils::raw_block::live_blocks();
+        max_suspended_frames = max_suspended_frames.max(frame_stack.suspended_frames.len());
+        assert_eq!(
+            frame_stack.suspended_frames.len(),
+            0,
+            "ordinary catch handling unexpectedly suspended frames"
+        );
+        assert!(depth <= 4, "unexpected exception frame depth: {depth}");
+
+        let active_allocations = frame_stack
+            .frames
+            .iter()
+            .map(|frame| frame.state.allocations.len())
+            .sum::<usize>();
+        assert_eq!(blocks, baseline + active_allocations);
+
+        if depth > 0 && frame_stack.frames[0].state.allocations.len() == 1 {
+            caller_allocated = true;
+        }
+        if depth > 1 && frame_stack.frames[1].state.allocations.len() == 1 {
+            assert!(caller_allocated, "callee allocated before caller");
+            callee_allocated = true;
+        }
+        if depth > 2 && frame_stack.frames[2].state.allocations.len() == 1 {
+            assert!(callee_allocated, "thrower allocated before callee");
+            thrower_allocated = true;
+        }
+
+        if depth == 1
+            && matches!(step_result, StepResult::Exception)
+            && frame_stack.frames[0].state.ip == 6
+        {
+            assert!(caller_allocated, "handler began before caller localloc");
+            assert!(callee_allocated, "handler began before callee localloc");
+            assert!(thrower_allocated, "handler began before thrower localloc");
+            assert_eq!(blocks, baseline + 1, "unwound blocks survived into catch");
+            assert_eq!(frame_stack.frames[0].state.allocations.len(), 1);
+            assert!(
+                frame_stack
+                    .pooled_frames
+                    .iter()
+                    .all(|frame| frame.state.allocations.is_empty()),
+                "unwound pooled frames retained localloc blocks"
+            );
+            handler_started = true;
+        }
+
+        if depth == 0 {
+            assert!(
+                handler_started,
+                "entrypoint returned without entering catch"
+            );
+            assert_eq!(blocks, baseline);
+            assert!(matches!(step_result, StepResult::Return));
+            caller_returned = true;
+        }
+
+        if caller_returned {
+            Observe::Stop
+        } else {
+            Observe::Continue
+        }
+    });
+
+    assert!(caller_allocated, "caller localloc was not observed");
+    assert!(callee_allocated, "callee localloc was not observed");
+    assert!(thrower_allocated, "thrower localloc was not observed");
+    assert!(handler_started, "catch handler was not observed");
+    assert!(caller_returned, "caller return was not observed");
+    assert_eq!(max_suspended_frames, 0);
+    assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
+}
+
+#[test]
+fn p34_localloc_blocks_released_on_executor_teardown() {
+    let baseline = dotnet_utils::raw_block::live_blocks();
+    let loader = get_mock_loader();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+    let (mut res, _, type_idx) = make_test_assembly!(
+        "LocallocExecutorTeardown.dll".to_string(),
+        "LocallocExecutorTeardownAssembly".to_string(),
+        "LocallocExecutorTeardownType".to_string()
+    );
+
+    let callee_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(32),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let callee_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            void_sig(),
+            "Callee",
+            Some(callee_body),
+        ),
+    );
+
+    let caller_body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(16),
+            Instruction::LocalMemoryAllocate,
+            Instruction::StoreLocal(0),
+            Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(callee_idx)),
+            },
+            Instruction::LoadConstantInt32(0),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::IntPtr)],
+    );
+    let caller_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "Run",
+            Some(caller_body),
+        ),
+    );
+
+    let res_s = loader.register_owned_assembly(res);
+    let method_def = &res_s.definition()[caller_idx];
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .expect("method must exist in type definition");
+    let entrypoint = MethodDescription::new(
+        td,
+        GenericLookup::default(),
+        res_s,
+        MethodMemberIndex::Method(method_index),
+    );
+
+    let mut observed_two_live_blocks = false;
+    run_entrypoint_observed(shared, entrypoint, |engine, _step_result| {
+        let frame_stack = &engine.stack.execution.frame_stack;
+        let blocks = dotnet_utils::raw_block::live_blocks();
+        assert!(
+            blocks <= baseline + 2,
+            "unexpected localloc block count: {blocks}"
+        );
+
+        if blocks == baseline + 2 {
+            assert_eq!(
+                frame_stack.len(),
+                2,
+                "expected caller and callee to remain active"
+            );
+            let active_allocations = frame_stack
+                .frames
+                .iter()
+                .map(|frame| frame.state.allocations.len())
+                .sum::<usize>();
+            assert_eq!(active_allocations, 2);
+            observed_two_live_blocks = true;
+            Observe::Stop
+        } else {
+            Observe::Continue
+        }
+    });
+
+    assert!(
+        observed_two_live_blocks,
+        "two active localloc blocks were not observed"
+    );
+    assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
 }

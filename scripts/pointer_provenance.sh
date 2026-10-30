@@ -28,6 +28,13 @@ expected_controls=(
 'pointer_provenance_tests::p26_native_int_boundary_store_load_roundtrip|11'
 'pointer_provenance_tests::p27_stind_i_fresh_pointer_through_local_slot_dereferences|12'
 'pointer_provenance_tests::p28_stind_i_fresh_pointer_through_heap_memory_dereferences|12'
+'pointer_provenance_tests::p04_double_localloc_write_first|13'
+'pointer_provenance_tests::p29_localloc_blocks_survive_growth_and_are_16_byte_aligned|13'
+'pointer_provenance_tests::p30_localloc_block_survives_nested_callee_localloc|14'
+'pointer_provenance_tests::p31_localloc_blocks_released_on_return_and_pooling|14'
+'pointer_provenance_tests::p32_localloc_blocks_released_on_tail_call_replacement|15'
+'pointer_provenance_tests::p33_localloc_blocks_released_on_exception_unwind|15'
+'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|16'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -36,7 +43,7 @@ catalog=(
 'pointer_provenance_tests::p01_ldloca_convu_stind_i4|suspected-ub|no|-'
 'pointer_provenance_tests::p02_ldloca_stind_i4_control|control|no|1'
 'pointer_provenance_tests::p03_ldloca_convu_ldind_i4|control|no|2'
-'pointer_provenance_tests::p04_double_localloc_write_first|reported-ub|no|-'
+'pointer_provenance_tests::p04_double_localloc_write_first|control|no|13'
 'pointer_provenance_tests::p05_single_localloc_roundtrip|control|no|2'
 'pointer_provenance_tests::p06_localloc_minus_one_then_plus_one|control|no|7'
 'pointer_provenance_tests::p07_localloc_one_past_end|control|no|3'
@@ -62,6 +69,12 @@ catalog=(
 'pointer_provenance_tests::p26_native_int_boundary_store_load_roundtrip|control|no|11'
 'pointer_provenance_tests::p27_stind_i_fresh_pointer_through_local_slot_dereferences|control|no|12'
 'pointer_provenance_tests::p28_stind_i_fresh_pointer_through_heap_memory_dereferences|control|no|12'
+'pointer_provenance_tests::p29_localloc_blocks_survive_growth_and_are_16_byte_aligned|control|no|13'
+'pointer_provenance_tests::p30_localloc_block_survives_nested_callee_localloc|control|no|14'
+'pointer_provenance_tests::p31_localloc_blocks_released_on_return_and_pooling|control|no|14'
+'pointer_provenance_tests::p32_localloc_blocks_released_on_tail_call_replacement|control|no|15'
+'pointer_provenance_tests::p33_localloc_blocks_released_on_exception_unwind|control|no|15'
+'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|control|no|16'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
