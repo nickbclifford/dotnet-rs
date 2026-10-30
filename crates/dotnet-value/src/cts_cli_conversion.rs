@@ -9,23 +9,28 @@ use std::{any, error::Error, mem::size_of};
 
 // Heap origins use wrapping address observation only; the raw address retains
 // neither the pointer's root nor its borrow/lock and grants no access right.
-fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> *const u8 {
-    match pointer.origin() {
-        PointerOrigin::Heap(_) => pointer
-            .observe_address()
-            .map_or(std::ptr::null(), |address| address.as_ptr().cast_const()),
+fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> Result<*const u8, TypeResolutionError> {
+    let observed = pointer.try_observe_address().map_err(|_| {
+        TypeResolutionError::InvalidLayout(
+            "cannot convert a Transient managed pointer to an integer".into(),
+        )
+    })?;
+    Ok(match pointer.origin() {
+        PointerOrigin::Heap(_) => {
+            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
+        }
         #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(_, _) => pointer
-            .observe_address()
-            .map_or(std::ptr::null(), |address| address.as_ptr().cast_const()),
+        PointerOrigin::CrossArenaObjectRef(_, _) => {
+            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
+        }
         _ => {
             // SAFETY: F10.RawMemoryAccessValid — Non-heap conversion retains the legacy
             // zero-length `with_data` address path; the caller still supplies its
             // validity/lifetime contract. Stack/Static migration is M3; Transient
-            // owner/guard escape is M1d. The observed address is not a root or access right.
+            // was rejected above because an integer cannot retain its owner.
             unsafe { pointer.with_data(0, |data| data.as_ptr()) }
         }
-    }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,7 +259,7 @@ impl CliToCts {
             StackValue::NativeInt(i) => Ok((i as usize) as u32),
             StackValue::UnmanagedPtr(p) => Ok(p.0.as_ptr().addr() as u32),
             StackValue::ManagedPtr(p) => {
-                let ptr = managed_ptr_address(&p);
+                let ptr = managed_ptr_address(&p)?;
                 Ok(ptr.addr() as u32)
             }
             other => Err(TypeResolutionError::InvalidLayout(
@@ -292,7 +297,7 @@ impl CliToCts {
                 )
             }),
             StackValue::ManagedPtr(p) => {
-                let ptr = managed_ptr_address(&p);
+                let ptr = managed_ptr_address(&p)?;
                 ptr.addr().try_into().map_err(|_| {
                     TypeResolutionError::InvalidLayout(
                         format!(

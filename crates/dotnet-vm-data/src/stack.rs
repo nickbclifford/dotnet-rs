@@ -10,7 +10,7 @@ use dotnet_utils::{ByteOffset, StackSlotIndex};
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, RetainedPtr},
 };
 use gc_arena::{Collect, collect::Trace};
 use smallvec::SmallVec;
@@ -289,8 +289,22 @@ impl<'gc> EvaluationStack<'gc> {
         self.pop().as_object_ref()
     }
 
-    pub fn pop_ptr(&mut self) -> *mut u8 {
-        self.pop().as_ptr()
+    /// Pops a pointer-like value, retaining its owner for the lifetime of the result.
+    ///
+    /// # Panics
+    /// Panics on stack underflow, a non-pointer operand, or an unavailable
+    /// cross-arena owner.
+    pub fn pop_retained_ptr(&mut self) -> RetainedPtr<'gc> {
+        RetainedPtr::try_from_stack_value(self.pop()).expect("expected pointer on stack")
+    }
+
+    /// Pops a pointer-like value and observes its address without exposing provenance.
+    /// The address does not retain an owner or authorize access.
+    ///
+    /// # Panics
+    /// Panics on stack underflow or a non-pointer operand.
+    pub fn pop_address(&mut self) -> usize {
+        self.pop().as_ptr().addr()
     }
 
     pub fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc> {
@@ -436,6 +450,177 @@ impl<'gc> EvaluationStack<'gc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn m1d_transient_stack() -> (
+        EvaluationStack<'static>,
+        dotnet_utils::sync::Arc<dotnet_value::layout::FieldLayoutManager>,
+    ) {
+        use dotnet_utils::sync::Arc;
+        use dotnet_value::{
+            layout::{FieldLayoutManager, GcDesc},
+            storage::FieldStorage,
+        };
+        use hashbrown::HashMap;
+
+        let layout = Arc::new(FieldLayoutManager {
+            fields: HashMap::new(),
+            total_size: 1,
+            alignment: 1,
+            gc_desc: GcDesc::default(),
+            has_ref_fields: false,
+        });
+        let probe = Arc::clone(&layout);
+        let obj = ObjectInstance::new(
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            FieldStorage::new(layout, vec![0xA5]),
+        );
+        let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+        let mut stack = EvaluationStack::new();
+        stack.push_managed_ptr(ManagedPtr::new_transient(
+            Some(base),
+            TypeDescription::NULL,
+            obj,
+            ByteOffset::new(0),
+        ));
+        (stack, probe)
+    }
+
+    #[test]
+    fn m1d_pop_retained_ptr_keeps_transient_owner_alive() {
+        let (mut stack, probe) = m1d_transient_stack();
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
+        let pointer = stack.pop_retained_ptr();
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
+        // SAFETY: F10.RawMemoryAccessValid — The retained transient owner contains
+        // the initialized byte, and remains alive throughout this in-range read.
+        assert_eq!(unsafe { pointer.as_ptr().read() }, 0xA5);
+        drop(pointer);
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 1);
+    }
+
+    #[test]
+    fn m1d_pop_address_matches_stack_value_pointer() {
+        let (mut stack, probe) = m1d_transient_stack();
+        let expected = stack.stack.last().unwrap().as_ptr().addr();
+        assert_eq!(stack.pop_address(), expected);
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 1);
+    }
+
+    #[test]
+    fn m1d_pointer_pops_reject_non_pointers() {
+        let mut stack = EvaluationStack::new();
+        stack.push_i32(1);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                stack.pop_retained_ptr()
+            }))
+            .is_err()
+        );
+        stack.push_i32(1);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { stack.pop_address() }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn m1d_pop_ptr_retains_transient_owner() {
+        let (mut stack, probe) = m1d_transient_stack();
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
+        let _pointer = stack.pop_retained_ptr();
+        assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
+    }
+
+    #[test]
+    fn m1d_pop_ptr_access_after_pop() {
+        let (mut stack, _probe) = m1d_transient_stack();
+        let pointer = stack.pop_retained_ptr();
+        // SAFETY: F10.RawMemoryAccessValid — The retained owner contains the
+        // initialized byte and remains alive throughout this in-range read.
+        let byte = unsafe { pointer.as_ptr().read() };
+        assert_eq!(byte, 0xA5);
+    }
+
+    /// 4.6: the P/Invoke non-ref marshalling shape (`call.rs` pass 1): a
+    /// `peek_stack_at` clone derives a raw address, is dropped, and the address
+    /// is then used while the original stack slot is still alive.
+    #[test]
+    fn m1d_peek_clone_drop_keeps_transient_address_valid() {
+        use dotnet_utils::sync::Arc;
+        let (stack, probe) = m1d_transient_stack();
+        assert_eq!(Arc::strong_count(&probe), 2);
+        let peeked = stack.peek_stack_at(0);
+        // The clone shares the owner rather than forking the buffer.
+        assert_eq!(Arc::strong_count(&probe), 2);
+        let StackValue::ManagedPtr(p) = &peeked else {
+            panic!("expected managed pointer");
+        };
+        // SAFETY: F10.RawMemoryAccessValid — in-range transient access, as in
+        // the non-ref P/Invoke arm.
+        let ptr = unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) };
+        drop(peeked);
+        assert_eq!(Arc::strong_count(&probe), 2);
+        // SAFETY: F10.RawMemoryAccessValid — the original stack slot still
+        // retains the shared Transient owner, so the byte is live.
+        assert_eq!(unsafe { ptr.read() }, 0xA5);
+        assert_eq!(
+            ptr.addr(),
+            stack.stack.last().unwrap().as_ptr().addr(),
+            "peek clone and original slot must agree on the address"
+        );
+    }
+
+    /// 4.6: ref write-back clones the origin; it must retain the same owner
+    /// and stay valid after the argument slots are popped.
+    #[test]
+    fn m1d_write_back_origin_clone_retains_transient_owner() {
+        use dotnet_utils::sync::Arc;
+        let (mut stack, probe) = m1d_transient_stack();
+        let peeked = stack.peek_stack_at(0);
+        let StackValue::ManagedPtr(p) = &peeked else {
+            panic!("expected managed pointer");
+        };
+        let origin = p.origin().clone();
+        let offset = p.byte_offset();
+        drop(peeked);
+        drop(stack.pop_retained_ptr());
+        assert_eq!(
+            Arc::strong_count(&probe),
+            2,
+            "write-back origin is sole owner"
+        );
+        let dotnet_value::pointer::PointerOrigin::Transient(obj) = &origin else {
+            panic!("origin must stay Transient");
+        };
+        assert_eq!(offset.as_usize(), 0);
+        assert_eq!(obj.with_data(|data| data[0]), 0xA5);
+    }
+
+    /// 4.6: a TypedRef slot clones with the stack value and keeps the owner.
+    #[test]
+    fn m1d_typed_ref_clone_retains_transient_owner() {
+        use dotnet_utils::sync::Arc;
+        use dotnet_value::TypedReferenceSlot;
+        let (mut stack, probe) = m1d_transient_stack();
+        let StackValue::ManagedPtr(p) = stack.pop() else {
+            panic!("expected managed pointer");
+        };
+        let slot = TypedReferenceSlot::new(p, Arc::new(TypeDescription::NULL));
+        stack.push(StackValue::TypedRef(slot));
+        assert_eq!(Arc::strong_count(&probe), 2);
+        let peeked = stack.peek_stack_at(0);
+        assert_eq!(Arc::strong_count(&probe), 2);
+        let StackValue::TypedRef(s) = &peeked else {
+            panic!("expected typedref");
+        };
+        // SAFETY: F10.RawMemoryAccessValid — in-range transient access, as in
+        // the typedref P/Invoke fallback arm.
+        let ptr = unsafe { s.value().with_data(0, |data| data.as_ptr().cast_mut()) };
+        drop(peeked);
+        // SAFETY: F10.RawMemoryAccessValid — the original slot retains the owner.
+        assert_eq!(unsafe { ptr.read() }, 0xA5);
+    }
 
     fn int_stack(values: &[i32]) -> EvaluationStack<'static> {
         let mut stack = EvaluationStack::new();

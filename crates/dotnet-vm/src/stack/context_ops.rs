@@ -716,8 +716,9 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
         };
 
         if let Some(owner) = owner {
-            let layout =
-                memory.get_layout_from_owner(dotnet_runtime_memory::MemoryOwner::Local(owner));
+            let layout = memory
+                .get_layout_from_owner(dotnet_runtime_memory::MemoryOwner::Local(owner))
+                .expect("local owner cannot fail arena lease acquisition");
             let (base, _) = memory.get_storage_base(owner);
             let base_addr = if base.is_null() {
                 None

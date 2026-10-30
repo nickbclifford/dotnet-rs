@@ -7,7 +7,7 @@ use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::ObjectRef,
-    pointer::{ManagedPtr, PointerOrigin, unmanaged_ptr_from_addr},
+    pointer::{ManagedPtr, PointerOrigin, RetainedPtr, unmanaged_ptr_from_addr},
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, TypedStackOps};
@@ -20,8 +20,8 @@ use std::ptr::{self, NonNull};
 /// allocation base. The returned raw pointer carries no root or borrow/lock and
 /// grants no read/write/copy/atomic right; the caller must separately retain the
 /// owner and establish the required access contract. Other origins retain the
-/// legacy zero-length `with_data` fallback (Stack/Static: M3; Transient and
-/// owner/guard escape: M1d); it does not extend their lifetime or access rights.
+/// zero-length `with_data` fallback (Stack/Static migration: M3). Transient
+/// ownership is shared, but this address does not retain it or grant access.
 pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
     match m.origin() {
         PointerOrigin::Heap(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
@@ -50,7 +50,24 @@ pub fn intrinsic_unsafe_as_pointer<
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = match val {
-        StackValue::ManagedPtr(m) => managed_ptr_address(&m),
+        StackValue::ManagedPtr(m) => {
+            let observed = match m.try_observe_address() {
+                Ok(address) => address,
+                Err(_) => {
+                    return StepResult::not_implemented(
+                        "Unsafe.AsPointer cannot convert a Transient managed pointer to an integer",
+                    );
+                }
+            };
+            match m.origin() {
+                // Preserve the legacy zero-length access path for these origins.
+                PointerOrigin::Stack(_) | PointerOrigin::Static(_) | PointerOrigin::Unmanaged => {
+                    managed_ptr_address(&m)
+                }
+                // Heap and cross-arena observation was already performed above.
+                _ => observed.map_or(ptr::null_mut(), NonNull::as_ptr),
+            }
+        }
         StackValue::NativeInt(i) => {
             // SAFETY: F10.RawMemoryAccessValid — `Unsafe.AsPointer` reconstructs an
             // unmanaged address from NativeInt only. The integer does not root storage
@@ -230,8 +247,8 @@ pub fn intrinsic_unsafe_are_same<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let m1 = ctx.pop_ptr();
-    let m2 = ctx.pop_ptr();
+    let m1 = ctx.pop_address();
+    let m2 = ctx.pop_address();
     ctx.push_i32((m1 == m2) as i32);
     StepResult::Continue
 }
@@ -253,8 +270,8 @@ pub fn intrinsic_unsafe_is_address_ordered<'gc, T: EvalStackOps<'gc> + TypedStac
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let right = ctx.pop_ptr().addr();
-    let left = ctx.pop_ptr().addr();
+    let right = ctx.pop_address();
+    let left = ctx.pop_address();
 
     let method_name = method.method().name.as_ref();
     let is_true = match method_name {
@@ -634,9 +651,9 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let target = ctx.pop_ptr();
-    let origin = ctx.pop_ptr();
-    let offset = target.addr().wrapping_sub(origin.addr()) as isize;
+    let target = ctx.pop_address();
+    let origin = ctx.pop_address();
+    let offset = target.wrapping_sub(origin) as isize;
     ctx.push_isize(offset);
     StepResult::Continue
 }
@@ -748,17 +765,17 @@ pub fn intrinsic_unsafe_copy_block<
     _generics: &GenericLookup,
 ) -> StepResult {
     let size = ctx.pop_i32() as u32 as usize;
-    let src = ctx.pop_ptr();
-    let dest = ctx.pop_ptr();
+    let src = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
+    let dest = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
     if src.is_null() || dest.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    validate_atomic_access(src, false);
-    validate_atomic_access(dest, false);
+    validate_atomic_access(src.as_ptr(), false);
+    validate_atomic_access(dest.as_ptr(), false);
 
-    chunked_copy_with_safe_point(ctx, src, dest, size)
+    chunked_copy_with_safe_point(ctx, src.as_ptr(), dest.as_ptr(), size)
 }
 
 #[dotnet_intrinsic(
@@ -783,13 +800,13 @@ pub fn intrinsic_unsafe_init_block<
 ) -> StepResult {
     let size = ctx.pop_i32() as u32 as usize;
     let val = ctx.pop_i32() as u8;
-    let addr = ctx.pop_ptr();
+    let addr = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    validate_atomic_access(addr, false);
+    validate_atomic_access(addr.as_ptr(), false);
 
-    chunked_fill_with_safe_point(ctx, addr, size, val)
+    chunked_fill_with_safe_point(ctx, addr.as_ptr(), size, val)
 }

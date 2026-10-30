@@ -30,7 +30,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
-    error::{ExecutionError, PointerDeserializationError, TypeResolutionError},
+    error::{ExecutionError, MemoryAccessError, PointerDeserializationError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -68,11 +68,13 @@ pub trait VmStackOps<'gc>: StackOps<'gc> {
 }
 
 pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {
+    /// Observes an address without retaining an owner or access guard.
+    /// Callers must separately ensure the requirements for any subsequent access.
     fn resolve_address(
         &self,
-        origin: PointerOrigin<'gc>,
+        origin: &PointerOrigin<'gc>,
         offset: ByteOffset,
-    ) -> std::ptr::NonNull<u8>;
+    ) -> Result<std::ptr::NonNull<u8>, MemoryAccessError>;
 
     fn localloc(&mut self, size: usize) -> Result<std::ptr::NonNull<u8>, FrameAllocationError>;
 }

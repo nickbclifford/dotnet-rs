@@ -85,6 +85,345 @@ fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc>
     )
 }
 
+fn m1d_transient_object() -> (Object<'static>, Arc<FieldLayoutManager>) {
+    let layout = Arc::new(FieldLayoutManager {
+        fields: HashMap::new(),
+        total_size: 1,
+        alignment: 1,
+        gc_desc: GcDesc::default(),
+        has_ref_fields: false,
+    });
+    let probe = Arc::clone(&layout);
+    let storage = FieldStorage::new(layout, vec![0xA5]);
+    (
+        Object::new(TypeDescription::NULL, GenericLookup::default(), storage),
+        probe,
+    )
+}
+
+#[test]
+fn m1d_transient_native_int_conversion_is_rejected() {
+    let (obj, _probe) = m1d_transient_object();
+    let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+    let transient =
+        ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
+    assert_eq!(transient.observe_address(), Some(base));
+    assert_eq!(
+        transient.try_observe_address(),
+        Err(ManagedPtrOwnershipError::TransientEscapes)
+    );
+    let (obj, _probe) = m1d_transient_object();
+    let null_transient =
+        ManagedPtr::new_transient(None, TypeDescription::NULL, obj, ByteOffset::new(0));
+    assert_eq!(
+        null_transient.try_observe_address(),
+        Err(ManagedPtrOwnershipError::TransientEscapes)
+    );
+
+    let mut bytes = [0xA5u8; 2];
+    let base = NonNull::new(bytes.as_mut_ptr()).unwrap();
+    let unmanaged = ManagedPtr::new(Some(base), TypeDescription::NULL, None, false, None);
+    let null = ManagedPtr::new(None, TypeDescription::NULL, None, false, None);
+    let static_ptr = ManagedPtr::new_static(
+        Some(base),
+        TypeDescription::NULL,
+        TypeDescription::NULL,
+        GenericLookup::default(),
+        false,
+        ByteOffset::new(0),
+    );
+    let stack = static_ptr.with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+    for ptr in [&unmanaged, &null, &stack, &static_ptr] {
+        assert_eq!(ptr.try_observe_address(), Ok(ptr.observe_address()));
+    }
+    assert_eq!(unmanaged.try_observe_address(), Ok(Some(base)));
+    assert_eq!(null.try_observe_address(), Ok(None));
+    assert_eq!(stack.try_observe_address(), Ok(Some(base)));
+    assert_eq!(static_ptr.try_observe_address(), Ok(Some(base)));
+
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 2,
+            },
+            vec![0xA5; 2],
+            vec![2],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let heap = ManagedPtr::new(
+            None,
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(1)),
+        );
+        let expected =
+            owner.with_data(|data| NonNull::new(data.as_ptr().wrapping_add(1).cast_mut()));
+        assert_eq!(heap.try_observe_address(), Ok(expected));
+        assert_eq!(heap.try_observe_address(), Ok(heap.observe_address()));
+    });
+}
+
+#[test]
+fn m1d_cli_to_cts_rejects_transient_integer_escape() {
+    use crate::{
+        StackValue,
+        cts_cli_conversion::{CliToCts, CtsScalarKind},
+    };
+    use dotnet_types::error::TypeResolutionError;
+
+    for null in [false, true] {
+        let (obj, _probe) = m1d_transient_object();
+        let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()));
+        let managed = ManagedPtr::new_transient(
+            if null { None } else { base },
+            TypeDescription::NULL,
+            obj,
+            ByteOffset::new(0),
+        );
+        let value = || StackValue::ManagedPtr(managed.clone().into());
+        assert!(matches!(
+            CliToCts::convert_u32(value()),
+            Err(TypeResolutionError::InvalidLayout(_))
+        ));
+        assert!(matches!(
+            CliToCts::convert_num::<usize>(value()),
+            Err(TypeResolutionError::InvalidLayout(_))
+        ));
+        for kind in [
+            CtsScalarKind::UInt32,
+            CtsScalarKind::NativeInt,
+            CtsScalarKind::NativeUInt,
+        ] {
+            assert!(matches!(
+                CliToCts::narrow_scalar_value(value(), kind),
+                Err(TypeResolutionError::InvalidLayout(_))
+            ));
+        }
+    }
+    let mut byte = 0xA5u8;
+    let base = NonNull::from(&mut byte);
+    let unmanaged = ManagedPtr::new(Some(base), TypeDescription::NULL, None, false, None);
+    assert_eq!(
+        CliToCts::convert_u32(StackValue::ManagedPtr(unmanaged.clone().into())),
+        Ok(base.as_ptr().addr() as u32)
+    );
+    assert_eq!(
+        CliToCts::convert_num::<usize>(StackValue::ManagedPtr(unmanaged.into())),
+        Ok(base.as_ptr().addr())
+    );
+    with_test_gc_context(|gc| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc, HeapStorage::Vec(Box::new(vector)));
+        let heap = managed_ptr_to_heap_object_start(owner);
+        let expected = heap.observe_address().unwrap().as_ptr().addr();
+        assert_eq!(
+            CliToCts::convert_num::<usize>(StackValue::ManagedPtr(heap.into())),
+            Ok(expected)
+        );
+    });
+}
+
+#[test]
+fn m1d_retained_ptr_keeps_transient_owner_alive() {
+    let (obj, probe) = m1d_transient_object();
+    let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+    let managed =
+        ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
+    let value = crate::StackValue::ManagedPtr(managed.into());
+    assert_eq!(Arc::strong_count(&probe), 2);
+    let retained = RetainedPtr::try_from_stack_value(value).unwrap();
+    assert_eq!(Arc::strong_count(&probe), 2);
+    assert!(!retained.is_null());
+    assert_eq!(retained.addr(), base.as_ptr().addr());
+    // SAFETY: F10.RawMemoryAccessValid — The retained transient owner holds the
+    // initialized one-byte storage, and the read is in range while it is alive.
+    assert_eq!(unsafe { retained.as_ptr().read() }, 0xA5);
+    drop(retained);
+    assert_eq!(Arc::strong_count(&probe), 1);
+}
+
+#[test]
+fn m1d_retained_ptr_heap_origin_reads_through_owner() {
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let obj = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let value = crate::StackValue::ManagedPtr(managed_ptr_to_heap_object_start(obj).into());
+        let retained = RetainedPtr::try_from_stack_value(value).unwrap();
+        assert!(!retained.is_null());
+        // SAFETY: F1.GcHandleRooted — The arena mutation keeps the object live
+        // with no collection or competing access, and the read is within its
+        // initialized one-byte payload. The retained value itself is not a GC root.
+        assert_eq!(unsafe { retained.as_ptr().read() }, 0xA5);
+        drop(retained);
+    });
+}
+
+#[test]
+fn m1d_retained_ptr_rejects_non_pointer_values() {
+    use crate::StackValue;
+    use dotnet_types::error::ExecutionError;
+
+    let (obj, _probe) = m1d_transient_object();
+    for (value, kind) in [
+        (StackValue::Int32(7), "Int32"),
+        (StackValue::Int64(7), "Int64"),
+        (StackValue::NativeFloat(1.0), "NativeFloat"),
+        (StackValue::ObjectRef(ObjectRef(None)), "ObjectRef"),
+        (StackValue::ValueType(obj), "ValueType"),
+        (StackValue::UninitializedTypedRef, "UninitializedTypedRef"),
+    ] {
+        assert_eq!(
+            RetainedPtr::try_from_stack_value(value).unwrap_err(),
+            ExecutionError::TypeMismatch {
+                expected: "pointer",
+                actual: kind.into(),
+            }
+        );
+    }
+}
+
+#[test]
+fn m1d_retained_ptr_null() {
+    use crate::{StackValue, TypedReferenceSlot};
+
+    let null_managed = ManagedPtr::new(None, TypeDescription::NULL, None, false, None);
+    let values = [
+        StackValue::NativeInt(0),
+        StackValue::ManagedPtr(null_managed.clone().into()),
+        StackValue::TypedRef(TypedReferenceSlot::new(
+            null_managed.into(),
+            Arc::new(TypeDescription::NULL),
+        )),
+    ];
+    for value in values {
+        let retained = RetainedPtr::try_from_stack_value(value).unwrap();
+        assert!(retained.is_null());
+        assert!(retained.as_ptr().is_null());
+        assert_eq!(retained.addr(), 0);
+    }
+
+    let mut byte = 0xA5u8;
+    let raw = &raw mut byte;
+    let retained = RetainedPtr::try_from_stack_value(StackValue::unmanaged_ptr(raw)).unwrap();
+    assert!(!retained.is_null());
+    assert_eq!(retained.as_ptr(), raw);
+    assert_eq!(retained.addr(), raw.addr());
+}
+
+#[test]
+fn m1d_normalize_retains_transient_owner() {
+    let (obj, probe) = m1d_transient_object();
+    assert_eq!(Arc::strong_count(&probe), 2);
+    let normalized = PointerOrigin::new_transient(obj).normalize();
+    assert_eq!(
+        Arc::strong_count(&probe),
+        2,
+        "normalized origin: {normalized:?} (discriminant {})",
+        normalized.discriminant()
+    );
+    assert!(matches!(normalized, PointerOrigin::Transient(_)));
+}
+
+#[test]
+fn m1d_normalize_transient_access_after_consume() {
+    let (obj, _probe) = m1d_transient_object();
+    let base = obj.with_data(|data| data.as_ptr());
+    let normalized = PointerOrigin::new_transient(obj).normalize();
+    // SAFETY: F10.RawMemoryAccessValid — normalized retains the one-byte
+    // initialized storage through this read.
+    let byte = unsafe { base.read() };
+    assert_eq!(byte, 0xA5);
+    drop(normalized);
+}
+
+#[test]
+fn m1d_from_info_full_retains_transient_owner() {
+    let (obj, probe) = m1d_transient_object();
+    let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+    let info = ManagedPtrInfo {
+        address: Some(base),
+        origin: PointerOrigin::new_transient(obj),
+        offset: ByteOffset::new(0),
+    };
+    assert_eq!(Arc::strong_count(&probe), 2);
+    let m = ManagedPtr::from_info_full(info, TypeDescription::NULL, false);
+    assert_eq!(
+        Arc::strong_count(&probe),
+        2,
+        "reconstructed origin: {:?} (discriminant {})",
+        m.origin(),
+        m.origin().discriminant()
+    );
+    assert!(matches!(m.origin(), PointerOrigin::Transient(_)));
+}
+
+#[test]
+fn m1d_from_info_full_transient_access_after_info_consumed() {
+    let (obj, _probe) = m1d_transient_object();
+    let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+    let info = ManagedPtrInfo {
+        address: Some(base),
+        origin: PointerOrigin::new_transient(obj),
+        offset: ByteOffset::new(0),
+    };
+    let m = ManagedPtr::from_info_full(info, TypeDescription::NULL, false);
+    // SAFETY: F10.RawMemoryAccessValid — m retains the initialized one-byte
+    // storage throughout both reads, without competing access.
+    let byte = unsafe { m.with_data(1, |data| data[0]) };
+    assert_eq!(byte, 0xA5);
+    assert_eq!(m.pointer(), Some(base));
+    // SAFETY: F10.RawMemoryAccessValid — The cached base belongs to the same
+    // live transient owner and points to its initialized byte.
+    assert_eq!(unsafe { m.pointer().unwrap().as_ptr().read() }, 0xA5);
+}
+
+#[test]
+fn m1d_transient_managed_ptr_clone_aliases_owner_storage() {
+    let (obj, probe) = m1d_transient_object();
+    let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
+    let original =
+        ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
+    let cloned = original.clone();
+    // SAFETY: F10.RawMemoryAccessValid — Both live transient owners contain
+    // initialized storage; these zero-length slices are only used to observe addresses.
+    let original_addr = unsafe { original.with_data(0, |data| data.as_ptr().addr()) };
+    // SAFETY: F10.RawMemoryAccessValid — The cloned owner is alive and the
+    // zero-length slice is only used to observe its address.
+    let cloned_addr = unsafe { cloned.with_data(0, |data| data.as_ptr().addr()) };
+    assert_eq!(original_addr, cloned_addr);
+    assert_eq!(original_addr, original.pointer().unwrap().as_ptr().addr());
+    assert_eq!(cloned_addr, cloned.pointer().unwrap().as_ptr().addr());
+    drop(original);
+    assert_eq!(Arc::strong_count(&probe), 2);
+    // SAFETY: F10.RawMemoryAccessValid — The clone retains the shared initialized
+    // one-byte owner through both reads, with no competing access.
+    assert_eq!(unsafe { cloned.with_data(1, |data| data[0]) }, 0xA5);
+    // SAFETY: F10.RawMemoryAccessValid — The cached pointer addresses that same
+    // live one-byte owner, which the clone retains until after this read.
+    assert_eq!(unsafe { cloned.pointer().unwrap().as_ptr().read() }, 0xA5);
+    drop(cloned);
+    assert_eq!(Arc::strong_count(&probe), 1);
+}
+
 #[test]
 fn m1a_one_byte_heap_read() {
     with_test_gc_context(|gc_handle| {
@@ -1831,4 +2170,243 @@ fn m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
         let actual = unsafe { restored.with_data(1, |bytes| bytes[0]) };
         assert_eq!(actual, 0xA5);
     });
+}
+
+#[cfg(feature = "multithreading")]
+mod m1d_cross_arena {
+    use super::*;
+    use crate::{ArenaId, object::ObjectPtr, test_helpers::next_test_arena_id};
+    use dotnet_utils::{
+        gc::{ArenaHandle, GCHandle, register_arena, try_acquire_lease, unregister_arena},
+        sync::{AtomicBool, MANAGED_THREAD_ID, Ordering},
+    };
+    use std::thread;
+
+    type TestRoot = Rootable![()];
+
+    /// A registered arena owning a one-byte vector (`0xA5`), plus the pieces of a
+    /// cross-arena pointer to it. Dropping the fields in declaration order is not
+    /// relied upon; tests tear down explicitly.
+    struct CrossArenaFixture {
+        arena: Arena<TestRoot>,
+        handle_owner: ArenaHandle,
+        arena_id: ArenaId,
+        object_ptr: ObjectPtr,
+        base: NonNull<u8>,
+    }
+
+    impl CrossArenaFixture {
+        fn new() -> Self {
+            let arena_id = next_test_arena_id();
+            register_arena(arena_id, Arc::new(AtomicBool::new(false)));
+            MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
+            let handle_owner = ArenaHandle::new(arena_id);
+            // SAFETY: F1.GcHandleRooted — `handle_owner` outlives every `GCHandle` built from
+            // this reference; the fixture only drops it after the arena has been dropped.
+            let handle = unsafe {
+                std::mem::transmute::<
+                    &dotnet_utils::gc::ArenaHandleInner,
+                    &'static dotnet_utils::gc::ArenaHandleInner,
+                >(handle_owner.as_inner())
+            };
+            let arena = Arena::<TestRoot>::new(|_mc| ());
+            let (object_ptr, base) = arena.mutate(|gc, _root| {
+                let gc_handle = GCHandle::new(
+                    gc,
+                    handle,
+                    #[cfg(feature = "memory-validation")]
+                    arena_id,
+                );
+                let vector = Vector::new(
+                    ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+                    ArrayLayoutManager {
+                        element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                        length: 1,
+                    },
+                    vec![0xA5],
+                    vec![1],
+                );
+                let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+                let base = owner.pointer().expect("heap payload base");
+                let (object_ptr, tid) = owner.as_ptr_info().expect("cross-arena pointer info");
+                assert_eq!(tid, arena_id);
+                (object_ptr, base)
+            });
+            Self {
+                arena,
+                handle_owner,
+                arena_id,
+                object_ptr,
+                base,
+            }
+        }
+
+        fn managed_ptr<'gc>(&self) -> ManagedPtr<'gc> {
+            ManagedPtr::new_cross_arena(
+                Some(self.base),
+                TypeDescription::NULL,
+                self.object_ptr,
+                self.arena_id,
+                ByteOffset::new(0),
+            )
+        }
+
+        /// Drop the arena (freeing the object) and then its handle.
+        fn drop_arena(self) {
+            drop(self.arena);
+            drop(self.handle_owner);
+            MANAGED_THREAD_ID.with(|id| id.set(None));
+        }
+    }
+
+    #[test]
+    fn m1d_cross_arena_access_after_owner_teardown_is_rejected() {
+        let fixture = CrossArenaFixture::new();
+        let ptr = fixture.managed_ptr();
+        unregister_arena(fixture.arena_id);
+        fixture.drop_arena();
+
+        // Both accesses reject the unregistered arena without touching the freed object.
+        assert_eq!(ptr.observe_address(), None);
+        // SAFETY: F1.GcHandleRooted — the absent arena lease prevents any access to the freed owner.
+        let byte = unsafe { ptr.try_with_data(1, |data| data[0]) };
+        assert_eq!(byte, None);
+    }
+
+    #[test]
+    fn m1d_cross_arena_lease_holds_teardown_until_access_completes() {
+        let fixture = CrossArenaFixture::new();
+        let ptr = fixture.managed_ptr();
+        let unregistered = Arc::new(AtomicBool::new(false));
+        let arena_id = fixture.arena_id;
+        let access = |data: &[u8]| {
+            let flag = Arc::clone(&unregistered);
+            let teardown = thread::spawn(move || {
+                unregister_arena(arena_id);
+                flag.store(true, Ordering::Release);
+            });
+            while try_acquire_lease(arena_id).is_some() {
+                thread::yield_now();
+            }
+            assert!(!unregistered.load(Ordering::Acquire));
+            assert_eq!(data[0], 0xA5);
+            assert_eq!(ptr.observe_address(), None);
+            // SAFETY: F1.GcHandleRooted — the absent lease rejects the nested access.
+            assert_eq!(unsafe { ptr.try_with_data(1, |_| ()) }, None);
+            assert!(!unregistered.load(Ordering::Acquire));
+            teardown
+        };
+        // SAFETY: F1.GcHandleRooted — the per-access lease keeps the owner alive
+        // until this closure returns; the fixture drops the arena only after join.
+        let teardown = unsafe { ptr.try_with_data(1, access) }
+            .expect("registered owner must allow the in-flight read");
+        teardown.join().expect("teardown thread");
+        assert!(unregistered.load(Ordering::Acquire));
+        fixture.drop_arena();
+    }
+
+    #[test]
+    fn m1d_retained_ptr_cross_arena_lease_blocks_teardown() {
+        use crate::{StackValue, TypedReferenceSlot};
+        use dotnet_types::error::ExecutionError;
+
+        // Exercise both pointer-like operands accepted by RetainedPtr.
+        for typed_ref in [false, true] {
+            let fixture = CrossArenaFixture::new();
+            let arena_id = fixture.arena_id;
+            let managed = fixture.managed_ptr();
+            let fresh = managed.clone();
+            let after_teardown = managed.clone();
+            let value = if typed_ref {
+                StackValue::TypedRef(TypedReferenceSlot::new(
+                    managed.into(),
+                    Arc::new(TypeDescription::NULL),
+                ))
+            } else {
+                StackValue::ManagedPtr(managed.into())
+            };
+            let retained = RetainedPtr::try_from_stack_value(value).expect("registered owner");
+            let unregistered = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&unregistered);
+            let teardown = thread::spawn(move || {
+                unregister_arena(arena_id);
+                flag.store(true, Ordering::Release);
+            });
+            while try_acquire_lease(arena_id).is_some() {
+                thread::yield_now();
+            }
+            assert!(!unregistered.load(Ordering::Acquire));
+            // SAFETY: F10.RawMemoryAccessValid — the retained lease keeps the
+            // fixture's initialized one-byte payload live and no other thread
+            // accesses it; the fixture does not collect during this copy.
+            let byte = unsafe { retained.as_ptr().read() };
+            assert_eq!(byte, 0xA5);
+            let fresh = if typed_ref {
+                StackValue::TypedRef(TypedReferenceSlot::new(
+                    fresh.into(),
+                    Arc::new(TypeDescription::NULL),
+                ))
+            } else {
+                StackValue::ManagedPtr(fresh.into())
+            };
+            assert!(matches!(
+                RetainedPtr::try_from_stack_value(fresh),
+                Err(ExecutionError::InternalError(_))
+            ));
+            assert!(!unregistered.load(Ordering::Acquire));
+            drop(retained);
+            teardown.join().expect("teardown thread");
+            assert!(unregistered.load(Ordering::Acquire));
+            fixture.drop_arena();
+            assert!(matches!(
+                RetainedPtr::try_from_stack_value(StackValue::ManagedPtr(after_teardown.into())),
+                Err(ExecutionError::InternalError(_))
+            ));
+        }
+    }
+
+    /// F-GUARD-101 / 5.7: the pre-repair `SpanHelpers.Fill` byte fast path observed the
+    /// destination address under `observe_address`'s temporary lease and then wrote with
+    /// only the `StackValue` retained. Teardown after observation leaves the write
+    /// dangling. Known-dangling by construction: run under pinned Miri `--ignored` only.
+    #[test]
+    #[ignore = "F-GUARD-101: documents the pre-repair Fill fast-path pattern (observe, then write unprotected); known-dangling, Miri --ignored only"]
+    #[allow(
+        clippy::undocumented_unsafe_blocks,
+        reason = "intentional UB diagnostic: no safety predicate holds, so a `// SAFETY:` registry citation would be false"
+    )]
+    fn m1d_fill_fast_path_observed_pointer_dangles_after_teardown() {
+        let fixture = CrossArenaFixture::new();
+        let observed = fixture
+            .managed_ptr()
+            .observe_address()
+            .expect("registered owner");
+        unregister_arena(fixture.arena_id);
+        fixture.drop_arena();
+        // KNOWN-UB (deliberately not a SAFETY claim): the owner arena and payload are freed; Miri must flag this write.
+        unsafe { observed.as_ptr().write(7) };
+    }
+
+    /// F-GUARD-103: validation must accept an object access made under a lease
+    /// acquired before teardown removed the registry entry, while a fresh
+    /// lease is still refused.
+    #[test]
+    #[cfg(feature = "memory-validation")]
+    fn m1d_cross_arena_validation_accepts_in_flight_lease() {
+        let fixture = CrossArenaFixture::new();
+        let arena_id = fixture.arena_id;
+        let object_ptr = fixture.object_ptr;
+        // The fixture thread is the owner; pretend to be another thread so the
+        // cross-arena validation path runs.
+        MANAGED_THREAD_ID.with(|id| id.set(Some(next_test_arena_id())));
+        let lease = try_acquire_lease(arena_id).expect("registered owner");
+        let teardown = thread::spawn(move || unregister_arena(arena_id));
+        while try_acquire_lease(arena_id).is_some() {
+            thread::yield_now();
+        }
+        assert_eq!(object_ptr.as_heap_storage(|s| s.payload_len()), 1);
+        drop(lease);
+        teardown.join().expect("teardown thread");
+        fixture.drop_arena();
+    }
 }

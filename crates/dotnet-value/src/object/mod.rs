@@ -112,7 +112,13 @@ impl<'gc> ObjectInner<'gc> {
 
                 #[cfg(feature = "multithreading")]
                 {
-                    if !is_valid_cross_arena_ref(owner_id) {
+                    // A lease held by this thread keeps the arena's memory live
+                    // even after teardown removed its registry entry, so an
+                    // in-flight access is valid; fresh accesses cannot obtain
+                    // a lease and still fail here.
+                    if !is_valid_cross_arena_ref(owner_id)
+                        && !dotnet_utils::gc::current_thread_holds_lease(owner_id)
+                    {
                         panic!(
                             "Dangling cross-arena reference: arena {:?} is no longer valid (thread exited?)",
                             owner_id

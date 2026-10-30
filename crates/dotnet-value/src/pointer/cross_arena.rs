@@ -82,6 +82,26 @@ pub(crate) unsafe fn cross_arena_ptr_from_ptr<T>(
 
 #[cfg(feature = "multithreading")]
 impl<'gc> ManagedPtr<'gc> {
+    pub(crate) fn retained_stack_value_lease(
+        value: &crate::StackValue<'gc>,
+    ) -> Result<Option<dotnet_utils::gc::ArenaLease>, dotnet_types::error::ExecutionError> {
+        let pointer = match value {
+            crate::StackValue::ManagedPtr(pointer) => pointer,
+            crate::StackValue::TypedRef(slot) => slot.value(),
+            _ => return Ok(None),
+        };
+        match pointer.origin() {
+            PointerOrigin::CrossArenaObjectRef(_, tid) => {
+                try_acquire_lease(*tid).map(Some).ok_or_else(|| {
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "cross-arena owner is unavailable".into(),
+                    )
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub fn new_cross_arena(
         value: Option<NonNull<u8>>,
         inner_type: dotnet_types::TypeDescription,

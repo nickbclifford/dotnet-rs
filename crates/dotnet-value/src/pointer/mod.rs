@@ -19,9 +19,11 @@
 //! `try_with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> Option<T>`
 //! returns `None` without calling `f` for a rejected heap range. This is not a
 //! promise to catch callback panics or change legacy non-heap behavior.
-//! `Stack` and `Static` retain their legacy fallback (M3); `Transient` and
-//! owner/guard escape remain M1d debt. `Unmanaged` retains its existing caller
-//! contract. None of these paths is covered by the heap observation/read rules.
+//! `Stack` and `Static` retain their legacy fallback (M3). `Transient` origins
+//! share ownership, but raw observations do not retain that owner or grant access;
+//! native-integer conversion and fallible Transient pointer stores are rejected.
+//! `Unmanaged` retains its caller contract. These non-heap paths are not covered
+//! by the heap observation/read rules.
 //!
 //! This design does not change `ObjectRef`/`ManagedPtr` serialization words,
 //! pointer atomics (`AtomicPtr`), or write barriers. `memory-validation`'s
@@ -52,9 +54,11 @@ use arbitrary::Arbitrary;
 
 pub mod cross_arena;
 pub mod origin;
+pub mod retained;
 pub mod serde;
 
 pub use origin::*;
+pub use retained::*;
 
 /// Reconstructs a raw pointer at an unmanaged integer address.
 ///
@@ -227,6 +231,13 @@ pub enum ManagedPtrOffsetError {
     CompactRangeExceeded,
     /// A non-unmanaged cached address wrapped to null.
     NullCachedAddress,
+}
+
+/// An ownership-preserving conversion cannot be performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedPtrOwnershipError {
+    /// A native address cannot retain the transient owner.
+    TransientEscapes,
 }
 
 #[derive(Clone)]
@@ -506,6 +517,12 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
+    /// Constructs a pointer from its address, offset, and origin.
+    ///
+    /// A Transient origin retains its shared object owner; the supplied address
+    /// must refer to that owner's storage if it is to be used for access. Only
+    /// null Heap origins are canonicalized to Unmanaged. Retaining an origin
+    /// does not establish a range, a storage borrow, a GC root, or an arena lease.
     pub fn from_info_full(
         info: ManagedPtrInfo<'gc>,
         inner_type: TypeDescription,
@@ -568,7 +585,8 @@ impl<'gc> ManagedPtr<'gc> {
                 }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)?;
                 if allow_short {
                     ptr.with_data_up_to(offset, size, f)
                 } else {
@@ -583,7 +601,8 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// For Heap and CrossArenaObjectRef origins, the requested window is checked
     /// against the actual payload length before any byte slice is formed; an
-    /// invalid or overflowing window returns `None` without invoking `f`.
+    /// invalid or overflowing window or unavailable cross-arena owner returns `None`
+    /// without invoking `f`. The closure must not park at a safepoint.
     /// Other origins retain their legacy `with_data` behavior and return
     /// `Some` unless that behavior panics.
     ///
@@ -675,7 +694,7 @@ impl<'gc> ManagedPtr<'gc> {
                         size
                     )
                 }),
-            // Legacy Transient access remains outside the heap payload contract (M1d).
+            // Transient access uses its shared owner, outside the heap payload contract.
             PointerOrigin::Transient(obj) => obj.with_data(|data| {
                 let (offset, to_access) = self.access_window(data.len(), size);
                 f(&data[offset..offset + to_access])
@@ -684,8 +703,8 @@ impl<'gc> ManagedPtr<'gc> {
                 // SAFETY: F10.RawMemoryAccessValid — This retains the legacy non-heap
                 // slice path and its caller-provided range/lifetime contract; it does
                 // not use the heap payload extent or establish a new access right.
-                // Stack/Static migration belongs to M3; Transient owner/guard
-                // escape belongs to M1d. Inline resolution preserves existing aliasing behavior.
+                // Stack/Static migration belongs to M3. Inline resolution preserves
+                // existing aliasing behavior.
                 let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
                     // Stack pointer - use cached value
                     self._value
@@ -906,8 +925,8 @@ impl<'gc> ManagedPtr<'gc> {
     /// Wrapping formation is observation only, not an access check or permission
     /// to dereference. The returned address retains allocation provenance only;
     /// it neither roots the owner nor retains a borrow, arena lease, or lock.
-    /// Other origins return their legacy cached value (Stack/Static: M3;
-    /// Transient owner/guard escape: M1d).
+    /// Other origins return their cached value; Stack/Static migration is M3.
+    /// A Transient address does not retain its shared owner.
     pub fn observe_address(&self) -> Option<NonNull<u8>> {
         self.validate_magic();
         let base = match &self.origin {
@@ -916,12 +935,26 @@ impl<'gc> ManagedPtr<'gc> {
                 handle.borrow().storage.observe_payload_base()
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)?;
                 ptr.as_heap_storage(|storage| storage.observe_payload_base())
             }
             _ => return self._value,
         };
         observed_address(base, self.byte_offset().as_usize())
+    }
+
+    /// Observes an address for conversion to a representation that cannot retain an owner.
+    ///
+    /// Transient origins are rejected even if their cached address is null. Other
+    /// origins have exactly the observation and access limitations of
+    /// [`Self::observe_address`]; the returned pointer does not retain a root or guard.
+    pub fn try_observe_address(&self) -> Result<Option<NonNull<u8>>, ManagedPtrOwnershipError> {
+        if matches!(self.origin(), PointerOrigin::Transient(_)) {
+            Err(ManagedPtrOwnershipError::TransientEscapes)
+        } else {
+            Ok(self.observe_address())
+        }
     }
 }
 
@@ -933,8 +966,8 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
             PointerOrigin::Heap(_) => self.observe_address(),
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(_, _) => self.observe_address(),
-            // Legacy cached-address fallback for non-heap origins; Stack/Static
-            // migration is M3 and Transient owner/guard escape is M1d.
+            // Cached-address fallback for non-heap origins; Stack/Static migration
+            // is M3. A Transient address alone does not retain its shared owner.
             _ => self._value,
         }
     }

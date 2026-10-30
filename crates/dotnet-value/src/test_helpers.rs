@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "multithreading")]
-fn next_test_arena_id() -> crate::ArenaId {
+pub(crate) fn next_test_arena_id() -> crate::ArenaId {
     crate::ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, Ordering::Relaxed))
 }
 

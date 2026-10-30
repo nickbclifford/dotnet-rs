@@ -48,6 +48,7 @@ pub(crate) fn get_ptr_info<'gc, T: ExceptionOps<'gc>>(
             dotnet_utils::ByteOffset::new(*p as usize),
         )),
         StackValue::ValueType(obj) => Ok((
+            // Snapshot the stack value once; subsequent origin clones share it.
             PointerOrigin::new_transient(obj.clone()),
             dotnet_utils::ByteOffset::new(0),
         )),

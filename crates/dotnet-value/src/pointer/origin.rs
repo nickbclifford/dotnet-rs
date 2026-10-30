@@ -4,8 +4,9 @@ use crate::{
     pointer::StaticMetadata,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_utils::sync::Arc;
 use gc_arena::{Collect, collect::Trace};
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 #[cfg(feature = "multithreading")]
 use crate::{ArenaId, object::ObjectPtr};
@@ -21,7 +22,7 @@ pub enum PointerOrigin<'gc> {
     #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
     /// A value type resident on the evaluation stack (transient).
-    Transient(Box<Object<'gc>>),
+    Transient(Arc<Object<'gc>>),
 }
 
 #[cfg(feature = "fuzzing")]
@@ -40,7 +41,9 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
             4 => Ok(Self::CrossArenaObjectRef(u.arbitrary()?, u.arbitrary()?)),
             #[cfg(not(feature = "multithreading"))]
             4 => Ok(Self::Unmanaged),
-            5 => Ok(Self::Transient(Box::new(u.arbitrary()?))),
+            // Shared ownership is required even when Object is not Sync.
+            #[allow(clippy::arc_with_non_send_sync)]
+            5 => Ok(Self::Transient(Arc::new(u.arbitrary()?))),
             _ => unreachable!(),
         }
     }
@@ -57,7 +60,7 @@ unsafe impl<'gc> Collect<'gc> for PointerOrigin<'gc> {
             Self::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
             }
-            Self::Transient(obj) => obj.trace(cc),
+            Self::Transient(obj) => obj.as_ref().trace(cc),
             _ => {}
         }
     }
@@ -71,8 +74,11 @@ impl<'gc> PointerOrigin<'gc> {
         }))
     }
 
+    // Arc preserves clone identity across feature configurations; it does not
+    // by itself make Object thread-safe or permit transfer across threads.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new_transient(obj: Object<'gc>) -> Self {
-        Self::Transient(Box::new(obj))
+        Self::Transient(Arc::new(obj))
     }
 
     pub fn static_metadata(&self) -> Option<&StaticMetadata> {
@@ -108,10 +114,11 @@ impl<'gc> PointerOrigin<'gc> {
         }
     }
 
+    /// Canonicalizes a null Heap origin to Unmanaged, preserving all other
+    /// origins, including the owner retained by Transient.
     pub fn normalize(self) -> Self {
         match self {
             Self::Heap(r) if r.0.is_none() => Self::Unmanaged,
-            Self::Transient(_) => Self::Unmanaged,
             other => other,
         }
     }
@@ -136,7 +143,7 @@ impl<'gc> PointerOrigin<'gc> {
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().addr());
             }
-            PointerOrigin::Transient(obj) => obj.resurrect(fc, visited, depth),
+            PointerOrigin::Transient(obj) => obj.as_ref().resurrect(fc, visited, depth),
             _ => {}
         }
     }

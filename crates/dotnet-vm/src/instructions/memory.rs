@@ -9,7 +9,7 @@ use dotnet_utils::{ByteOffset, StackSlotIndex, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
-    pointer::{PointerOrigin, UnmanagedPtr},
+    pointer::{PointerOrigin, RetainedPtr, UnmanagedPtr},
 };
 use dotnet_vm_data::frame_alloc::{FrameAllocationError, FrameAllocations};
 use dotnetdll::prelude::*;
@@ -25,8 +25,11 @@ pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as usize;
-    let src = vm_pop!(ctx).as_ptr();
-    let dest = vm_pop!(ctx).as_ptr();
+    // Retain both operands through every chunk and until the instruction returns.
+    let src_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
+    let src = src_owner.as_ptr();
+    let dest_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
+    let dest = dest_owner.as_ptr();
 
     if src.is_null() || dest.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -64,7 +67,9 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 ) -> StepResult {
     let size = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as usize;
     let val = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as u8;
-    let addr = vm_pop!(ctx).as_ptr();
+    // Retain the operand through every chunk and until the instruction returns.
+    let addr_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
+    let addr = addr_owner.as_ptr();
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

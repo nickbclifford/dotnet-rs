@@ -30,7 +30,7 @@ mod validation_tests;
 
 pub use crate::{
     object::{HeapStorage, Object, ObjectHandle, ObjectPtr, ObjectRef},
-    pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
+    pointer::{ManagedPtr, ManagedPtrOwnershipError, PointerOrigin, UnmanagedPtr},
     stack_value::{
         ManagedExceptionError, StackManagedPtr, StackValue, StackValueError, TypedReferenceSlot,
     },

@@ -616,8 +616,8 @@ impl<'gc> StackValue<'gc> {
                 // SAFETY: F10.RawMemoryAccessValid — This deliberately keeps the legacy
                 // non-heap `with_data(0, ..)` address path; the caller still supplies
                 // its validity and lifetime contract, and observation grants no access
-                // right. Stack/Static migration belongs to M3; Transient owner/guard
-                // escape belongs to M1d. Do not apply the heap observation rules here.
+                // right. Stack/Static migration belongs to M3; Transient ownership is
+                // shared but the observed address alone does not retain it.
                 unsafe { pointer.with_data(0, |data| data.as_ptr() as *mut u8) }
             }
         }

@@ -168,15 +168,19 @@ pub fn write_span_fields<'gc, T: RawMemoryOps<'gc>>(
     Ok(())
 }
 
-pub(crate) fn heap_payload_len(pointer: &ManagedPtr<'_>) -> Option<usize> {
-    match pointer.origin() {
+pub(crate) fn heap_payload_len(
+    pointer: &ManagedPtr<'_>,
+) -> Result<Option<usize>, MemoryAccessError> {
+    Ok(match pointer.origin() {
         PointerOrigin::Heap(owner) => owner.0.map(|handle| handle.borrow().storage.payload_len()),
         #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+        PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+                .ok_or(MemoryAccessError::CrossArenaViolation)?;
             Some(ptr.as_heap_storage(|storage| storage.payload_len()))
         }
         _ => None,
-    }
+    })
 }
 
 fn memory_bounds_error(offset: usize, size: usize, len: usize) -> IntrinsicError {
@@ -213,7 +217,7 @@ pub fn with_span_data<
         ));
     }
     let offset = m_ptr.byte_offset().as_usize();
-    let payload_len = heap_payload_len(&m_ptr);
+    let payload_len = heap_payload_len(&m_ptr).map_err(IntrinsicError::Memory)?;
     let total_size = if let Some(payload_len) = payload_len {
         len.checked_mul(element_size)
             .ok_or_else(|| memory_bounds_error(offset, usize::MAX, payload_len))?
@@ -247,12 +251,16 @@ pub fn with_span_data<
     if let Some(payload_len) = payload_len {
         // SAFETY: F10.RawMemoryAccessValid — the exact read validates the heap
         // range again under the storage guard before exposing the requested bytes.
-        unsafe { m_ptr.try_with_data(total_size, f) }
-            .ok_or_else(|| memory_bounds_error(offset, total_size, payload_len))
+        unsafe { m_ptr.try_with_data(total_size, f) }.ok_or_else(|| {
+            match heap_payload_len(&m_ptr) {
+                Err(error) => IntrinsicError::Memory(error),
+                _ => memory_bounds_error(offset, total_size, payload_len),
+            }
+        })
     } else {
         // SAFETY: F10.RawMemoryAccessValid — Non-heap origins retain their legacy
         // access behavior and caller-provided validity contract. Stack/Static
-        // migration belongs to M3; Transient owner/guard escape belongs to M1d.
+        // migration belongs to M3; a Transient pointer retains its shared owner.
         Ok(unsafe { m_ptr.with_data(total_size, f) })
     }
 }

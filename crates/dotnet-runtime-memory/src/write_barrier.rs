@@ -1,3 +1,4 @@
+use dotnet_types::error::MemoryAccessError;
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use std::{cell::RefCell, marker::PhantomData};
@@ -174,27 +175,49 @@ impl<'gc> MemoryOwner<'gc> {
         }
     }
 
-    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+    /// A cross-arena lease covers `f`; the closure must not park at a safepoint.
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> Result<T, MemoryAccessError> {
         match self {
-            Self::Local(r) => r.with_data(f),
+            Self::Local(r) => Ok(r.with_data(f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _, _) => p.with_data(f),
+            Self::CrossArena(p, tid, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+                    .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                Ok(p.with_data(f))
+            }
         }
     }
 
-    pub fn with_data_mut<T>(&self, gc: GCHandle<'gc>, f: impl FnOnce(&mut [u8]) -> T) -> T {
+    /// A cross-arena lease covers `f`; the closure must not park at a safepoint.
+    pub fn with_data_mut<T>(
+        &self,
+        gc: GCHandle<'gc>,
+        f: impl FnOnce(&mut [u8]) -> T,
+    ) -> Result<T, MemoryAccessError> {
         match self {
-            Self::Local(r) => r.with_data_mut(gc, f),
+            Self::Local(r) => Ok(r.with_data_mut(gc, f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _, _) => p.with_data_mut(gc, f),
+            Self::CrossArena(p, tid, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+                    .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                Ok(p.with_data_mut(gc, f))
+            }
         }
     }
 
-    pub fn as_heap_storage<T>(&self, f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T) -> T {
+    /// A cross-arena lease covers `f`; the closure must not park at a safepoint.
+    pub fn as_heap_storage<T>(
+        &self,
+        f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T,
+    ) -> Result<T, MemoryAccessError> {
         match self {
-            Self::Local(r) => r.as_heap_storage(f),
+            Self::Local(r) => Ok(r.as_heap_storage(f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _, _) => p.as_heap_storage(f),
+            Self::CrossArena(p, tid, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+                    .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                Ok(p.as_heap_storage(f))
+            }
         }
     }
 }

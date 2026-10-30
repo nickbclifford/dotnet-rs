@@ -44,8 +44,13 @@ where
 }
 
 fn heap_read_error(pointer: &ManagedPtr<'_>, size: usize) -> StepResult {
-    let len = heap_payload_len(pointer)
-        .expect("only heap-origin exact reads can reject a range without panicking");
+    let len = match heap_payload_len(pointer) {
+        Ok(Some(len)) => len,
+        Err(error) => return StepResult::Error(error.into()),
+        Ok(None) => {
+            unreachable!("only heap-origin exact reads can reject a range without panicking")
+        }
+    };
     StepResult::Error(
         MemoryAccessError::BoundsCheck {
             offset: pointer.byte_offset().as_usize(),
@@ -492,5 +497,50 @@ mod tests {
 
         assert_eq!(res, Ok(true));
         assert_eq!(chunks, 2);
+    }
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn cross_arena_span_read_rejects_torn_down_owner() {
+        use dotnet_utils::{
+            ArenaId, ByteOffset,
+            gc::{ThreadSafeLock, register_arena, unregister_arena},
+            sync::{Arc, AtomicBool},
+        };
+        use dotnet_value::{
+            CLRString,
+            object::{HeapStorage, ObjectInner, ObjectPtr},
+        };
+
+        let id = ArenaId::new(908_731);
+        register_arena(id, Arc::new(AtomicBool::new(false)));
+        let raw = Box::into_raw(Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(CLRString::from("x")),
+            id,
+        ))));
+        // SAFETY: F10.RawAllocationOwnership — raw is the live boxed lock until teardown below.
+        let object = unsafe { ObjectPtr::from_raw(raw) }.unwrap();
+        let ptr = ManagedPtr::new_cross_arena(
+            None,
+            TypeDescription::NULL,
+            object,
+            id,
+            ByteOffset::new(0),
+        );
+        unregister_arena(id);
+        // SAFETY: F10.RawAllocationOwnership — raw is uniquely owned after unregistration.
+        unsafe {
+            drop(Box::from_raw(raw));
+        }
+
+        assert!(matches!(
+            heap_payload_len(&ptr),
+            Err(MemoryAccessError::CrossArenaViolation)
+        ));
+        assert_eq!(
+            heap_read_error(&ptr, 1),
+            StepResult::Error(MemoryAccessError::CrossArenaViolation.into())
+        );
+        // SAFETY: F1.GcHandleRooted — a missing lease prevents dereference of the freed lock.
+        assert!(unsafe { ptr.try_with_data(1, |_| ()) }.is_none());
     }
 }

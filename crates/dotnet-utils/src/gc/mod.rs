@@ -20,10 +20,10 @@ pub use arena::{ALLOCATION_THRESHOLD, ArenaHandle, ArenaHandleInner};
 #[cfg(feature = "multithreading")]
 pub use cross_arena::{
     ArenaLease, ArenaState, STW_TRACING_GENERATION_SENTINEL, clear_tracing_state,
-    get_currently_tracing, is_stw_in_progress, is_valid_cross_arena_ref, record_cross_arena_ref,
-    register_arena, reset_arena_registry, set_currently_tracing, set_currently_tracing_with_stw,
-    set_stw_in_progress, take_found_cross_arena_refs_with_generation, try_acquire_lease,
-    unregister_arena,
+    current_thread_holds_lease, get_currently_tracing, is_stw_in_progress,
+    is_valid_cross_arena_ref, record_cross_arena_ref, register_arena, reset_arena_registry,
+    set_currently_tracing, set_currently_tracing_with_stw, set_stw_in_progress,
+    take_found_cross_arena_refs_with_generation, try_acquire_lease, unregister_arena,
 };
 
 /// A handle to the GC mutation context.

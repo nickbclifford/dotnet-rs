@@ -850,9 +850,9 @@ fn external_call_impl<'gc>(
                     _ => {
                         // SAFETY: F10.RawMemoryAccessValid — This keeps the legacy non-heap
                         // `with_data(0, ..)` path and its caller-provided P/Invoke lifetime
-                        // contract. Stack/Static fallback migration belongs to M3; Transient
-                        // owner/guard escape belongs to M1d. The returned address itself does
-                        // not retain the slot's root/guard or grant a native access right.
+                        // contract. Stack/Static fallback migration belongs to M3. Transient
+                        // clones share their owner, but the address itself retains no owner
+                        // or guard and grants no native access right; P/Invoke guards are M2.
                         unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) }
                     }
                 };
@@ -935,8 +935,8 @@ fn external_call_impl<'gc>(
                         // observes the retained allocation base; that address itself is not a
                         // root/guard or access right. Its pin/guard is retained separately in
                         // `local_guards`. Other origin variants keep their legacy forwarding
-                        // path here, including CrossArena; Stack/Static migration is M3 and
-                        // Transient/CrossArena owner/guard escape is M1d.
+                        // path here, including CrossArena. Transient clones share their owner;
+                        // CrossArena P/Invoke lease/guard handling remains M2, Stack/Static M3.
                         unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
@@ -963,8 +963,8 @@ fn external_call_impl<'gc>(
                     // SAFETY: F10.RawMemoryAccessValid — The explicit Heap owner is pinned
                     // and its guard remains in `local_guards`; the raw address itself does
                     // not provide that lifetime or an access right. Other origins retain the
-                    // legacy caller-provided native-call validity contract (Stack/Static: M3;
-                    // Transient/CrossArena owner/guard escape: M1d).
+                    // legacy caller-provided native-call validity contract. Transient clones
+                    // share their owner; CrossArena P/Invoke guards remain M2, Stack/Static M3.
                     if let Err(e) = unsafe {
                         push_ptr_arg(
                             &mut temp_buffers,

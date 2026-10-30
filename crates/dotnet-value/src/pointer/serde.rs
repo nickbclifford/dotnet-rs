@@ -719,6 +719,8 @@ impl<'gc> ManagedPtr<'gc> {
                 // SAFETY: F3.InteriorPointerRebased — `dest` was just filled with one complete ManagedPtr encoding above.
                 unsafe { Self::read_resolved_unchecked(dest, &resolver) }
                     .expect("ManagedPtr::write: recovery failed");
+            // Canonicalize null Heap origins for comparison. Transient origins
+            // retain their owner but are excluded here because they cannot be decoded.
             let self_origin_norm = self.origin.clone().normalize();
             let recovered_origin_norm = recovered.origin.clone().normalize();
 

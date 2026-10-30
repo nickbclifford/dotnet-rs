@@ -452,8 +452,10 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
 
         ctx.push(StackValue::ManagedPtr(managed_ptr.into()));
     } else {
-        // Regular field - use parent's origin + field offset
-        let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
+        // Resolve against the same origin moved into the pointer: a Transient
+        // origin owns the snapshot containing this address. This retains no
+        // additional storage guard or arena lease.
+        let field_ptr = dotnet_vm_ops::vm_try!(ctx.resolve_address(&origin, field_offset));
         let info = ManagedPtrInfo {
             address: Some(field_ptr),
             origin,

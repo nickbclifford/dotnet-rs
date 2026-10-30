@@ -22,7 +22,7 @@ use dotnet_value::{
     CLRString, StackValue,
     layout::LayoutManager,
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::{ManagedPtr, PointerOrigin, RetainedPtr},
 };
 use dotnet_vm_data::{MethodState, StepResult};
 use std::sync::Arc;
@@ -159,9 +159,23 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     fn pop_obj(&mut self) -> ObjectRef<'gc> {
         self.pop().as_object_ref()
     }
+    /// Pops a pointer-like value and retains its owner in the result.
+    ///
+    /// # Panics
+    /// Panics on stack underflow, a non-pointer operand, or an unavailable
+    /// cross-arena owner.
     #[must_use]
-    fn pop_ptr(&mut self) -> *mut u8 {
-        self.pop().as_ptr()
+    fn pop_retained_ptr(&mut self) -> RetainedPtr<'gc> {
+        RetainedPtr::try_from_stack_value(self.pop()).expect("expected pointer on stack")
+    }
+    /// Observes a popped pointer's address without exposing provenance or retaining an owner.
+    /// The address does not authorize access.
+    ///
+    /// # Panics
+    /// Panics on stack underflow or a non-pointer operand.
+    #[must_use]
+    fn pop_address(&mut self) -> usize {
+        self.pop().as_ptr().addr()
     }
     #[must_use]
     fn pop_value_type(&mut self) -> dotnet_value::object::Object<'gc> {
@@ -657,4 +671,78 @@ crate::trait_alias! {
         + ResolutionOps<'gc>
         + VesInternals<'gc>
         + StaticsOps<'gc>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dotnet_vm_data::stack::EvaluationStack;
+
+    struct CountingStack {
+        stack: EvaluationStack<'static>,
+        pops: usize,
+    }
+
+    impl EvalStackOps<'static> for CountingStack {
+        fn push(&mut self, value: StackValue<'static>) {
+            self.stack.push(value);
+        }
+        fn pop(&mut self) -> StackValue<'static> {
+            self.pops += 1;
+            self.stack.pop()
+        }
+        fn pop_safe(&mut self) -> Result<StackValue<'static>, VmError> {
+            self.stack.pop_safe()
+        }
+        fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'static>> {
+            let mut values: Vec<_> = (0..count).map(|_| self.pop()).collect();
+            values.reverse();
+            values
+        }
+        fn peek(&self) -> Option<StackValue<'static>> {
+            (self.stack.top_of_stack().as_usize() != 0).then(|| self.stack.peek_stack())
+        }
+        fn peek_stack(&self) -> StackValue<'static> {
+            self.stack.peek_stack()
+        }
+        fn peek_stack_at(&self, offset: usize) -> StackValue<'static> {
+            self.stack.peek_stack_at(offset)
+        }
+        fn top_of_stack(&self) -> StackSlotIndex {
+            self.stack.top_of_stack()
+        }
+    }
+
+    impl TypedStackOps<'static> for CountingStack {
+        fn push_string(&mut self, _: CLRString) {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn m1d_pointer_pops_use_trait_pop_and_reject_non_pointers() {
+        let mut stack = CountingStack {
+            stack: EvaluationStack::new(),
+            pops: 0,
+        };
+        let mut byte = 0xA5u8;
+        let ptr = &raw mut byte;
+        stack.push(StackValue::unmanaged_ptr(ptr));
+        let retained = stack.pop_retained_ptr();
+        assert_eq!(retained.as_ptr(), ptr);
+        assert_eq!(stack.pops, 1);
+        stack.push(StackValue::unmanaged_ptr(ptr));
+        assert_eq!(stack.pop_address(), ptr.addr());
+        assert_eq!(stack.pops, 2);
+        stack.push_i32(1);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stack.pop_retained_ptr()))
+                .is_err()
+        );
+        stack.push_i32(1);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stack.pop_address())).is_err()
+        );
+        assert_eq!(stack.pops, 4);
+    }
 }

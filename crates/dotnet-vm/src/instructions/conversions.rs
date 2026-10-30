@@ -16,6 +16,19 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
 ) -> StepResult {
     let value = vm_pop!(ctx).coerce_enum_to_underlying();
 
+    macro_rules! managed_address {
+        ($m:expr) => {
+            match $m.try_observe_address() {
+                Ok(address) => address.map_or(0, |address| address.as_ptr().expose_provenance()),
+                Err(_) => {
+                    return StepResult::not_implemented(
+                        "Cannot convert a Transient managed pointer to an integer",
+                    );
+                }
+            }
+        };
+    }
+
     macro_rules! simple_cast {
         ($t:ty) => {
             match value {
@@ -62,10 +75,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
         ConversionType::Int64 => {
             let i = match value {
                 // Observation and exposure do not retain an owner or grant access.
-                StackValue::ManagedPtr(m) => m
-                    .observe_address()
-                    .map_or(0, |address| address.as_ptr().expose_provenance())
-                    as i64,
+                StackValue::ManagedPtr(m) => managed_address!(m) as i64,
                 _ => simple_cast!(i64),
             };
             ctx.push(StackValue::Int64(i));
@@ -82,10 +92,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 // slice or access check. Exposing provenance supports an integer-address
                 // round trip only; the integer retains no owner/root or borrow/lock and grants
                 // no access right.
-                StackValue::ManagedPtr(m) => m
-                    .observe_address()
-                    .map_or(0, |address| address.as_ptr().expose_provenance())
-                    as u64,
+                StackValue::ManagedPtr(m) => managed_address!(m) as u64,
                 StackValue::NativeFloat(f) => f as u64,
                 _ => {
                     return ctx.throw_by_name_with_message(
@@ -99,10 +106,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
         ConversionType::IntPtr => {
             let i = match value {
                 // Observation and exposure do not retain an owner or grant access.
-                StackValue::ManagedPtr(m) => m
-                    .observe_address()
-                    .map_or(0, |address| address.as_ptr().expose_provenance())
-                    as isize,
+                StackValue::ManagedPtr(m) => managed_address!(m) as isize,
                 _ => simple_cast!(isize),
             };
             ctx.push(StackValue::NativeInt(i));
@@ -117,9 +121,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
                 // slice or access check. Exposing provenance supports an integer-address
                 // round trip only; the integer retains no owner/root or borrow/lock and grants
                 // no access right.
-                StackValue::ManagedPtr(m) => m
-                    .observe_address()
-                    .map_or(0, |address| address.as_ptr().expose_provenance()),
+                StackValue::ManagedPtr(m) => managed_address!(m),
                 StackValue::NativeFloat(f) => f as usize,
                 _ => {
                     return ctx.throw_by_name_with_message(
@@ -267,6 +269,77 @@ mod tests {
         object::{HeapStorage, ObjectRef, Vector},
         pointer::ManagedPtr,
     };
+
+    #[test]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn transient_pointer_integer_conversions_and_as_pointer_are_rejected() {
+        use dotnet_intrinsics_unsafe::unsafe_ptr::intrinsic_unsafe_as_pointer;
+        use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+        use dotnet_value::{
+            layout::{FieldLayoutManager, GcDesc},
+            object::Object,
+            storage::FieldStorage,
+        };
+        use dotnetdll::prelude::MethodMemberIndex;
+        use std::ptr::NonNull;
+
+        let loader = Arc::new(AssemblyLoader::new_bare("conv_transient_test".into()).unwrap());
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the arena root stays live throughout this mutation.
+            let gc_handle = unsafe { test_gc_handle(gc, engine) };
+            let mut ctx = engine.ves_context(gc_handle);
+            let transient = || {
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 1,
+                    alignment: 1,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                let object = Object::new(
+                    TypeDescription::NULL,
+                    GenericLookup::default(),
+                    FieldStorage::new(layout, vec![0xA5]),
+                );
+                let address = object.with_data(|data| NonNull::new(data.as_ptr().cast_mut()));
+                ManagedPtr::new_transient(
+                    address,
+                    TypeDescription::NULL,
+                    object,
+                    ByteOffset::new(0),
+                )
+            };
+            for conversion in [
+                ConversionType::IntPtr,
+                ConversionType::UIntPtr,
+                ConversionType::Int64,
+                ConversionType::UInt64,
+            ] {
+                ctx.push(StackValue::ManagedPtr(transient().into()));
+                assert_eq!(
+                    conv(&mut ctx, conversion),
+                    StepResult::not_implemented(
+                        "Cannot convert a Transient managed pointer to an integer"
+                    )
+                );
+            }
+            ctx.push(StackValue::ManagedPtr(transient().into()));
+            let method = MethodDescription::new(
+                TypeDescription::NULL,
+                GenericLookup::default(),
+                ResolutionS::NULL,
+                MethodMemberIndex::Method(0),
+            );
+            assert_eq!(
+                intrinsic_unsafe_as_pointer(&mut ctx, method, &GenericLookup::default()),
+                StepResult::not_implemented(
+                    "Unsafe.AsPointer cannot convert a Transient managed pointer to an integer"
+                )
+            );
+        });
+    }
 
     #[test]
     #[allow(clippy::arc_with_non_send_sync)]

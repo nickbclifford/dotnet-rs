@@ -121,6 +121,39 @@ pub struct ArenaLease {
     /// that stored this value can compare it against a freshly acquired
     /// lease's generation to detect an intervening unregister/re-register.
     generation: u64,
+    /// Arena this lease pins; used to record the lease in the holder thread's
+    /// `HELD_LEASES` so validation can accept an in-flight access.
+    #[cfg(feature = "memory-validation")]
+    arena_id: ArenaId,
+    /// Leases are tracked in thread-locals, so they must be dropped on the
+    /// thread that acquired them.
+    #[cfg(feature = "memory-validation")]
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(feature = "memory-validation")]
+thread_local! {
+    /// Leases currently held by this thread, as `(arena, count)`.
+    static HELD_LEASES: RefCell<Vec<(ArenaId, usize)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Returns `true` if the current thread holds an [`ArenaLease`] on `arena_id`.
+///
+/// Unlike [`is_valid_cross_arena_ref`], this stays `true` after
+/// `unregister_arena` removes the registry entry, because the held lease keeps
+/// the arena's memory live until it drops. It never authorises a fresh access:
+/// acquiring a new lease still fails once the entry is removed.
+///
+/// Lease bookkeeping exists only under `memory-validation`; without it this
+/// always returns `false`.
+pub fn current_thread_holds_lease(arena_id: ArenaId) -> bool {
+    #[cfg(feature = "memory-validation")]
+    return HELD_LEASES.with(|h| h.borrow().iter().any(|(id, _)| *id == arena_id));
+    #[cfg(not(feature = "memory-validation"))]
+    {
+        let _ = arena_id;
+        false
+    }
 }
 
 impl ArenaLease {
@@ -159,6 +192,16 @@ impl Drop for ArenaLease {
     fn drop(&mut self) {
         // Use Release so that any writes performed while holding the lease are
         // visible to the unregister_arena spin-check on Acquire.
+        #[cfg(feature = "memory-validation")]
+        HELD_LEASES.with(|h| {
+            let mut h = h.borrow_mut();
+            if let Some(i) = h.iter().position(|(id, _)| *id == self.arena_id) {
+                h[i].1 -= 1;
+                if h[i].1 == 0 {
+                    h.swap_remove(i);
+                }
+            }
+        });
         self.state.active_leases.fetch_sub(1, Ordering::Release);
     }
 }
@@ -300,7 +343,23 @@ pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
     drop(guard); // read lock released here; unregister may now take write lock
     // and will see active_leases > 0, so it will spin.
 
-    Some(ArenaLease { state, generation })
+    #[cfg(feature = "memory-validation")]
+    HELD_LEASES.with(|h| {
+        let mut h = h.borrow_mut();
+        match h.iter_mut().find(|(id, _)| *id == target_id) {
+            Some(e) => e.1 += 1,
+            None => h.push((target_id, 1)),
+        }
+    });
+
+    Some(ArenaLease {
+        state,
+        generation,
+        #[cfg(feature = "memory-validation")]
+        arena_id: target_id,
+        #[cfg(feature = "memory-validation")]
+        _not_send: std::marker::PhantomData,
+    })
 }
 
 // ---------------------------------------------------------------------------

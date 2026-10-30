@@ -155,7 +155,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
@@ -247,7 +247,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
@@ -321,7 +321,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.write_bytes_ptr(ptr, data) }
@@ -378,7 +378,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.read_bytes_ptr(ptr, dest) }
@@ -528,7 +528,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 Ok(previous)
             }
             PointerOrigin::Stack(_) => {
-                let slot = self.resolve_address(origin, offset);
+                let slot = self.resolve_address(&origin, offset)?;
                 let mut memory = RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The caller guarantees the resolved stack slot is valid.
                 unsafe { memory.object_atomic_ptr(slot, op) }
@@ -605,7 +605,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self
+                    .resolve_address(&origin, offset)
+                    .map_err(CompareExchangeError::Bounds)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
@@ -697,7 +699,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.exchange_atomic_ptr(abs_ptr, value, size, ordering) }
             }
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.exchange_atomic_ptr(ptr, value, size, ordering) }
@@ -778,7 +780,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.exchange_add_atomic_ptr(abs_ptr, value, size, ordering) }
             }
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.exchange_add_atomic_ptr(ptr, value, size, ordering) }
@@ -851,7 +853,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 })
             }
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.load_atomic_ptr(ptr, size, ordering) }
@@ -930,7 +932,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 })
             }
             PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(origin, offset);
+                let ptr = self.resolve_address(&origin, offset)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe { memory.store_atomic_ptr(ptr, value, size, ordering) }
@@ -987,10 +989,14 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
         self.state_mut().allocations.allocate(size)
     }
 
-    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
-        match origin {
+    fn resolve_address(
+        &self,
+        origin: &PointerOrigin<'gc>,
+        offset: ByteOffset,
+    ) -> Result<NonNull<u8>, MemoryAccessError> {
+        Ok(match origin {
             PointerOrigin::Stack(idx) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let slot = self.evaluation_stack.get_slot_ref(*idx);
                 let base_ptr = slot.data_location().as_ptr();
                 #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the offset raw address and wrapping the proven non-null result share one stack-address proof")]
                 // SAFETY: F10.RawMemoryAccessValid — This legacy Stack path retains its
@@ -1027,15 +1033,17 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     .expect("resolve_address: null unmanaged pointer (offset=0)")
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+                    .ok_or(MemoryAccessError::CrossArenaViolation)?;
                 ptr.as_heap_storage(|storage| {
                     storage
                         .observe_address(offset.as_usize())
                         .expect("resolve_address: cross-arena address is null or wrapped to zero")
                 })
             }
-            // Legacy Transient address resolution remains unchanged; owner/guard
-            // escape and its access contract are M1d follow-up work.
+            // The borrowed Transient origin retains its shared owner during resolution;
+            // the returned address alone retains no owner or access guard.
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the transient offset address and wrapping its proven non-null result share one storage proof")]
                 // SAFETY: F10.RawMemoryAccessValid — This legacy path retains its
@@ -1043,6 +1051,6 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // itself grants no later access right.
                 unsafe { NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut()) }
             }),
-        }
+        })
     }
 }

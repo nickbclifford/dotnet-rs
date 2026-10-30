@@ -1,14 +1,13 @@
 use crate::mem_helpers::{chunked_copy_with_safe_point, chunked_fill_with_safe_point};
-use crate::unsafe_ptr::managed_ptr_address;
 use crate::{NULL_REF_MSG, UnsafeIntrinsicHost, ptr_info};
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{error::ExecutionError, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::HeapStorage,
-    pointer::unmanaged_ptr_from_addr,
+    pointer::RetainedPtr,
 };
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::ops::{EvalStackOps, ExceptionOps, LoaderOps, TypedStackOps};
@@ -25,25 +24,17 @@ fn stack_value_to_byte<'gc>(value: &StackValue<'gc>) -> Option<u8> {
     }
 }
 
-#[inline]
-fn stack_value_as_ptr<'gc>(value: &StackValue<'gc>) -> Option<*mut u8> {
+/// Retains a non-null pointer-like fill destination, including the arena lease
+/// of a cross-arena managed pointer, for the whole synchronous fill.
+fn retained_fill_destination<'gc>(
+    value: &StackValue<'gc>,
+) -> Result<Option<RetainedPtr<'gc>>, ExecutionError> {
     match value {
-        StackValue::NativeInt(v) => {
-            // SAFETY: F10.RawMemoryAccessValid — This reconstructs an unmanaged address
-            // from NativeInt only. The integer does not root storage or grant access;
-            // the caller must supply provenance, lifetime, range, and synchronization validity.
-            Some(unsafe { unmanaged_ptr_from_addr(*v as usize) })
+        StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => {
+            let retained = RetainedPtr::try_from_stack_value(value.clone())?;
+            Ok((!retained.is_null()).then_some(retained))
         }
-        StackValue::UnmanagedPtr(ptr) => Some(ptr.0.as_ptr()),
-        StackValue::ManagedPtr(ptr) => {
-            if ptr.is_null() {
-                None
-            } else {
-                let address = managed_ptr_address(ptr);
-                (!address.is_null()).then_some(address)
-            }
-        }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -83,8 +74,8 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let len = ctx.pop_isize();
-    let src = ctx.pop_ptr();
-    let dst = ctx.pop_ptr();
+    let src = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
+    let dst = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
     let total_count = if generics.method_generics.is_empty() {
         len as usize
@@ -94,7 +85,7 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
         (layout.size() * (len as usize)).as_usize()
     };
 
-    chunked_copy_with_safe_point(ctx, src, dst, total_count)
+    chunked_copy_with_safe_point(ctx, src.as_ptr(), dst.as_ptr(), total_count)
 }
 
 #[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(ref byte, nuint)")]
@@ -106,10 +97,10 @@ pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHo
     _generics: &GenericLookup,
 ) -> StepResult {
     let len = ctx.pop_isize();
-    let dst = ctx.pop_ptr();
+    let dst = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
     let total_count = len.max(0) as usize;
 
-    chunked_clear_with_safe_point(ctx, dst, total_count)
+    chunked_clear_with_safe_point(ctx, dst.as_ptr(), total_count)
 }
 
 #[dotnet_intrinsic("static void System.SpanHelpers::Fill<T>(T&, nuint, T)")]
@@ -141,12 +132,14 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
             layout.as_ref(),
             LayoutManager::Scalar(Scalar::Int8 | Scalar::UInt8)
         )
-        && let (Some(dst), Some(byte_value)) = (
-            stack_value_as_ptr(&destination),
-            stack_value_to_byte(&value),
-        )
+        && let Some(byte_value) = stack_value_to_byte(&value)
+        && let Some(dst) = dotnet_vm_ops::vm_try!(retained_fill_destination(&destination))
     {
-        return chunked_fill_with_safe_point(ctx, dst, len, byte_value);
+        // `dst` keeps any cross-arena owner leased through the synchronous fill
+        // and is dropped before a `Yield` reaches the scheduler.
+        let result = chunked_fill_with_safe_point(ctx, dst.as_ptr(), len, byte_value);
+        drop(dst);
+        return result;
     }
 
     for i in 0..len {

@@ -14,16 +14,13 @@ use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
-    pointer::{ManagedPtr, NoManagedPtrResolver, unmanaged_ptr_from_addr},
+    pointer::{ManagedPtr, NoManagedPtrResolver, PointerOrigin, unmanaged_ptr_from_addr},
     storage::FieldStorage,
 };
 use std::{ptr, ptr::NonNull, sync::Arc};
 
 #[cfg(all(feature = "bench-instrumentation", feature = "multithreading"))]
 use std::time::Instant;
-
-#[cfg(feature = "multithreading")]
-use dotnet_value::pointer::PointerOrigin;
 
 use crate::write_barrier::*;
 
@@ -157,7 +154,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, std::mem::size_of::<*mut u8>())?;
                 // SAFETY: F10.RawMemoryAccessValid — Bounds and the owner guard establish a live synchronized slot.
                 unsafe { op.execute(ptr) }.ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
-            })?;
+            })??;
             if written {
                 Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
                 #[cfg(feature = "multithreading")]
@@ -223,10 +220,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
     ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
-            owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
+            owner.as_heap_storage(|_storage| {})?; // Ensure object is valid and magic matches
 
             // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
-            let dest_layout = self.get_layout_from_owner(owner);
+            let dest_layout = self.get_layout_from_owner(owner)?;
 
             // SAFETY: F10.RawMemoryAccessValid — with_data_mut provides exclusive access for the duration of the closure.
             // write_value_internal will copy the data.
@@ -262,10 +259,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
         if let Some(owner) = owner {
-            owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
+            owner.as_heap_storage(|_storage| {})?; // Ensure object is valid and magic matches
 
             // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
-            let src_layout = self.get_layout_from_owner(owner);
+            let src_layout = self.get_layout_from_owner(owner)?;
 
             // SAFETY: F10.RawMemoryAccessValid — with_data provides stable shared access for the duration of the closure.
             // read_value_internal will read the data.
@@ -287,7 +284,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // SAFETY: F10.RawMemoryAccessValid — The closure keeps `owner`'s storage stable; the preceding bounds and
                 // layout checks prove this derived pointer is valid for the requested read.
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
-            })
+            })?
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
             // valid unmanaged address for this read.
@@ -317,11 +314,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         data: &[u8],
     ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
-            owner.as_heap_storage(|_storage| {});
+            owner.as_heap_storage(|_storage| {})?;
 
             // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             #[cfg(feature = "multithreading")]
-            let layout = self.get_layout_from_owner(owner);
+            let layout = self.get_layout_from_owner(owner)?;
 
             // The panic-flush guard preserves unwind safety while allowing
             // normal-path write-barrier batching.
@@ -376,7 +373,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         }
                     }
                     Ok(())
-                })
+                })?
             })
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
@@ -446,7 +443,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 dest.copy_from_slice(&data[start..end]);
                 Ok(())
-            })
+            })?
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
             // valid unmanaged address for this byte read.
@@ -503,33 +500,35 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         failure: dotnet_utils::sync::Ordering,
     ) -> Result<u64, CompareExchangeError> {
         if let Some(owner) = owner {
-            let result = owner.with_data_mut(gc, |data| {
-                let base = data.as_mut_ptr();
-                let len = data.len();
-                // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
-                // The result may be out-of-bounds, but `check_bounds_internal`
-                // (called immediately after) validates the range before any
-                // dereference.  The slice length is bounded by `isize::MAX`, so
-                // the arithmetic does not overflow.
-                let ptr = unsafe { base.add(offset.as_usize()) };
+            let result = owner
+                .with_data_mut(gc, |data| {
+                    let base = data.as_mut_ptr();
+                    let len = data.len();
+                    // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
+                    // The result may be out-of-bounds, but `check_bounds_internal`
+                    // (called immediately after) validates the range before any
+                    // dereference.  The slice length is bounded by `isize::MAX`, so
+                    // the arithmetic does not overflow.
+                    let ptr = unsafe { base.add(offset.as_usize()) };
 
-                self.check_bounds_internal(ptr, base, len, size)
-                    .map_err(CompareExchangeError::Bounds)?;
+                    self.check_bounds_internal(ptr, base, len, size)
+                        .map_err(CompareExchangeError::Bounds)?;
 
-                if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-                    return Err(CompareExchangeError::Bounds(
-                        MemoryAccessError::UnalignedAccess(ptr as usize),
-                    ));
-                }
+                    if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
+                        return Err(CompareExchangeError::Bounds(
+                            MemoryAccessError::UnalignedAccess(ptr as usize),
+                        ));
+                    }
 
-                // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
-                unsafe {
-                    StandardAtomicAccess::compare_exchange_atomic_sized(
-                        ptr, size, expected, new, success, failure,
-                    )
-                }
-                .map_err(CompareExchangeError::Mismatch)
-            });
+                    // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
+                    unsafe {
+                        StandardAtomicAccess::compare_exchange_atomic_sized(
+                            ptr, size, expected, new, success, failure,
+                        )
+                    }
+                    .map_err(CompareExchangeError::Mismatch)
+                })
+                .map_err(CompareExchangeError::Bounds)?;
 
             // Successful CAS mutates heap storage in-place. Treat it like any
             // other heap write so incremental GC revisits the parent object.
@@ -622,7 +621,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(unsafe {
                     StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering)
                 })
-            });
+            })?;
 
             if result.is_ok() {
                 Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
@@ -703,7 +702,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering)
                     },
                 )
-            })
+            })?
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
             // be a valid synchronized unmanaged address for this operation.
@@ -769,7 +768,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, size)?;
                 // SAFETY: F10.RawMemoryAccessValid — Bounds and the storage guard provide valid synchronized access.
                 Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
-            })
+            })?
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
             // be a valid synchronized unmanaged address for this load.
@@ -828,7 +827,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // SAFETY: F10.RawMemoryAccessValid — Bounds and the storage guard provide valid synchronized access.
                 unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
                 Ok(())
-            });
+            })?;
 
             if result.is_ok() {
                 Self::backward_barrier_for_heap_atomic_write(gc, Some(owner));
@@ -926,7 +925,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         Ok(())
     }
 
-    pub fn get_layout_from_owner(&self, owner: MemoryOwner<'gc>) -> Option<LayoutManager> {
+    pub fn get_layout_from_owner(
+        &self,
+        owner: MemoryOwner<'gc>,
+    ) -> Result<Option<LayoutManager>, MemoryAccessError> {
         owner.as_heap_storage(|storage| match storage {
             HeapStorage::Obj(o) => Some(LayoutManager::Field(
                 o.instance_storage.layout().as_ref().clone(),
@@ -975,7 +977,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         &mut recorder,
                     )
                 }
-            })
+            })?
         })
     }
 
@@ -993,9 +995,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
     ) -> Result<(), MemoryAccessError> {
         let owner = target.0;
-        owner.as_heap_storage(|_storage| {});
+        owner.as_heap_storage(|_storage| {})?;
 
-        let dest_layout = self.get_layout_from_owner(owner);
+        let dest_layout = self.get_layout_from_owner(owner)?;
 
         self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
     }
@@ -1189,6 +1191,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                     Scalar::ManagedPtr => {
                         if let StackValue::ManagedPtr(m) = value {
+                            if matches!(m.origin(), PointerOrigin::Transient(_)) {
+                                return Err(MemoryAccessError::InvalidOrigin);
+                            }
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
                             #[cfg(feature = "multithreading")]
@@ -1606,6 +1611,88 @@ mod tests {
     use dotnet_utils::ArenaId;
     use dotnet_value::layout::{FieldLayoutManager, GcDesc};
 
+    #[test]
+    fn m1d_transient_managed_ptr_store_is_rejected() {
+        use dotnet_types::{TypeDescription, generics::GenericLookup};
+        use dotnet_utils::{ByteOffset, gc::GCHandle, sync::Arc};
+        use dotnet_value::{
+            StackValue,
+            layout::{LayoutManager, Scalar},
+            object::Object,
+            pointer::ManagedPtr,
+            storage::FieldStorage,
+        };
+
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_| ());
+        let _arena_id = ArenaId::new(4050);
+        #[cfg(feature = "multithreading")]
+        let arena_handle = Box::into_raw(Box::new(ArenaHandle::new(_arena_id)));
+
+        arena.mutate(|mc, _| {
+            let gc = GCHandle::new(
+                mc,
+                #[cfg(feature = "multithreading")]
+                // SAFETY: F1.GcHandleRooted — The boxed arena handle remains live until after mutate returns.
+                unsafe {
+                    (&*arena_handle).as_inner()
+                },
+                #[cfg(feature = "memory-validation")]
+                _arena_id,
+            );
+            let layout = Arc::new(FieldLayoutManager {
+                fields: Default::default(),
+                total_size: 1,
+                alignment: 1,
+                gc_desc: GcDesc::default(),
+                has_ref_fields: false,
+            });
+            let obj = Object::new(
+                TypeDescription::NULL,
+                GenericLookup::default(),
+                FieldStorage::new(layout, vec![0xA5]),
+            );
+            let base = obj.with_data(|d| std::ptr::NonNull::new(d.as_ptr().cast_mut()).unwrap());
+            let managed = ManagedPtr::new_transient(
+                Some(base),
+                TypeDescription::NULL,
+                obj,
+                ByteOffset::new(0),
+            );
+            let heap = crate::heap::HeapManager::new();
+            let mut memory = super::RawMemoryAccess::new(&heap);
+            let mut dest = [0xA5u8; ManagedPtr::SIZE];
+            // SAFETY: F10.RawMemoryAccessValid — `dest` is live, exclusively owned writable storage of the layout size.
+            let result = unsafe {
+                memory.write_to_unmanaged(
+                    gc,
+                    dest.as_mut_ptr(),
+                    StackValue::ManagedPtr(managed.into()),
+                    &LayoutManager::Scalar(Scalar::ManagedPtr),
+                )
+            };
+            assert_eq!(result, Err(MemoryAccessError::InvalidOrigin));
+            assert_eq!(dest, [0xA5; ManagedPtr::SIZE]);
+
+            // SAFETY: F10.RawMemoryAccessValid — The same exclusive destination remains writable.
+            let result = unsafe {
+                memory.write_to_unmanaged(
+                    gc,
+                    dest.as_mut_ptr(),
+                    StackValue::ManagedPtr(ManagedPtr::null().into()),
+                    &LayoutManager::Scalar(Scalar::ManagedPtr),
+                )
+            };
+            assert_eq!(result, Ok(()));
+            assert_eq!(dest, [0; ManagedPtr::SIZE]);
+        });
+        #[cfg(feature = "multithreading")]
+        // SAFETY: F10.RawMemoryAccessValid — The handle was allocated above and mutate has finished using it.
+        unsafe {
+            drop(Box::from_raw(arena_handle))
+        };
+    }
+
     /// `check_bounds` is the gate used by `compare_exchange_atomic` to detect
     /// out-of-bounds accesses.  These tests confirm it produces the correct
     /// `MemoryAccessError::BoundsCheck` payload that gets wrapped into
@@ -1945,15 +2032,14 @@ mod tests {
     }
 
     #[cfg(feature = "multithreading")]
-    use super::MemoryOwner;
-    #[cfg(feature = "multithreading")]
-    use dotnet_utils::gc::{ArenaHandle, GCHandle, ThreadSafeLock};
+    use dotnet_utils::gc::{
+        ArenaHandle, GCHandle, ThreadSafeLock, register_arena, unregister_arena,
+    };
     #[cfg(feature = "multithreading")]
     use dotnet_value::{
         CLRString,
         object::{HeapStorage, ObjectInner, ObjectPtr},
     };
-    #[cfg(feature = "multithreading")]
     use gc_arena::{Arena, Rootable};
 
     #[cfg(feature = "multithreading")]
@@ -1967,12 +2053,12 @@ mod tests {
         ptr: ObjectPtr,
         tid: ArenaId,
     ) -> bool {
-        let owner = MemoryOwner::cross_arena(gc, ptr, tid);
-        owner.as_heap_storage(storage_is_string)
+        let owner = super::MemoryOwner::cross_arena(gc, ptr, tid);
+        owner
+            .as_heap_storage(storage_is_string)
+            .expect("registered arena")
     }
 
-    #[cfg(feature = "multithreading")]
-    use dotnet_utils::gc::{register_arena, unregister_arena};
     #[cfg(feature = "multithreading")]
     use std::sync::{Arc, atomic::AtomicBool};
 
@@ -2011,20 +2097,76 @@ mod tests {
             );
             cross_arena_with_short_lifetime(gc, ptr, arena_id)
         }));
-        // SAFETY: F10.RawMemoryAccessValid — `arena_handle` came from `Box::into_raw` above and remains
-        // uniquely owned here; reconstructing it drops the allocation exactly once.
-        unsafe {
-            drop(Box::from_raw(arena_handle));
-        }
-
         unregister_arena(arena_id);
 
-        // Fix leak for Miri
-        // SAFETY: F10.RawMemoryAccessValid — `raw` was obtained from `Box::leak` earlier in this test;
-        // we reconstruct the `Box` to release the memory.  No other owner
-        // exists at this point, so this is the unique drop.
+        // SAFETY: F10.RawMemoryAccessValid — `raw` was obtained from `Box::leak`;
+        // reconstructing it releases the allocation once, after unregistration.
         unsafe {
-            let _ = Box::from_raw(raw as *mut ThreadSafeLock<ObjectInner<'static>>);
+            drop(Box::from_raw(
+                raw as *mut ThreadSafeLock<ObjectInner<'static>>,
+            ));
+        }
+
+        arena.mutate(|mc, _| {
+            // SAFETY: F10.RawMemoryAccessValid — the handle is retained through this mutation.
+            let arena_inner = unsafe { (&*arena_handle).as_inner() };
+            let gc = GCHandle::new(
+                mc,
+                arena_inner,
+                #[cfg(feature = "memory-validation")]
+                arena_id,
+            );
+            let owner = super::MemoryOwner::cross_arena(gc, ptr, arena_id);
+            assert!(matches!(
+                owner.as_heap_storage(|_| ()),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+            assert!(matches!(
+                owner.with_data(|_| ()),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+            assert!(matches!(
+                owner.with_data_mut(gc, |_| ()),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+            let heap = crate::heap::HeapManager::new();
+            let mut memory = super::RawMemoryAccess::new(&heap);
+            let mut dest = [0x5a];
+            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the raw read.
+            let read = unsafe {
+                memory.read_bytes(Some(owner), dotnet_utils::ByteOffset::new(0), &mut dest)
+            };
+            assert!(matches!(read, Err(MemoryAccessError::CrossArenaViolation)));
+            assert_eq!(dest, [0x5a]);
+            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the raw write.
+            let write = unsafe {
+                memory.write_bytes(gc, Some(owner), dotnet_utils::ByteOffset::new(0), &[1])
+            };
+            assert!(matches!(write, Err(MemoryAccessError::CrossArenaViolation)));
+            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the atomic access.
+            let cas = unsafe {
+                memory.compare_exchange_atomic(
+                    gc,
+                    Some(owner),
+                    dotnet_utils::ByteOffset::new(0),
+                    0,
+                    1,
+                    1,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                    dotnet_utils::sync::Ordering::SeqCst,
+                )
+            };
+            assert!(matches!(
+                cas,
+                Err(CompareExchangeError::Bounds(
+                    MemoryAccessError::CrossArenaViolation
+                ))
+            ));
+        });
+        // SAFETY: F10.RawMemoryAccessValid — `arena_handle` came from `Box::into_raw`
+        // and is uniquely owned here after both mutations.
+        unsafe {
+            drop(Box::from_raw(arena_handle));
         }
     }
 }
