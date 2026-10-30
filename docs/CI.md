@@ -25,9 +25,7 @@ gh workflow run miri.yml --ref supervised/unblock-ci
 gh workflow run fuzz.yml --ref supervised/unblock-ci
 ```
 
-GitHub requires the workflow to exist with `workflow_dispatch` on the default branch
-before dispatch is available. Alternatively observe the PR-triggered run for the exact
-commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
+Alternatively observe the PR-triggered run for the exact commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
 `gh run watch RUN --exit-status` to monitor, and `gh run view RUN --job JOB --log` for
 execution evidence. A targeted `gh run rerun RUN --job JOB` repeats a job on that
 run's original SHA, not a newer commit. Dispatch selects a workflow, not individual jobs.
