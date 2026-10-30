@@ -706,6 +706,7 @@ dependencies = [
  "gc-arena",
  "hashbrown 0.17.1",
  "smallvec",
+ "static_assertions",
 ]
 
 [[package]]

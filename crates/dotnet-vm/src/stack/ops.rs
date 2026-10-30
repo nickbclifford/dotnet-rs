@@ -40,6 +40,7 @@ use dotnet_value::{
     object::{Object as ObjectInstance, ObjectRef},
     pointer::{ManagedPtrInfo, PointerOrigin},
 };
+use dotnet_vm_data::frame_alloc::FrameAllocationError;
 use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 use gc_arena::Mutation;
 
@@ -73,7 +74,7 @@ pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {
         offset: ByteOffset,
     ) -> std::ptr::NonNull<u8>;
 
-    fn localloc(&mut self, size: usize) -> *mut u8;
+    fn localloc(&mut self, size: usize) -> Result<std::ptr::NonNull<u8>, FrameAllocationError>;
 }
 
 /// Decodes serialized managed pointers through the CallStack-owned Heap cache.

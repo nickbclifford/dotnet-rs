@@ -14,6 +14,7 @@ smallvec = { workspace = true }
 
 [dev-dependencies]
 hashbrown = { workspace = true }
+static_assertions = "1"
 
 [features]
 default = ["multithreading"]

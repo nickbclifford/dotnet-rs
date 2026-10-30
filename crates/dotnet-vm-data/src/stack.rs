@@ -106,6 +106,7 @@ impl<'gc> StackFrame<'gc> {
     }
 
     pub fn prepare_for_pool(&mut self) {
+        self.state.allocations.release_all();
         self.stack_height = StackSlotIndex::new(0);
         self.base = BasePointer::default();
         self.exception_stack.clear();

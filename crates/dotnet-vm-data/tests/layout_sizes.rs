@@ -26,9 +26,10 @@ const EXCEPTION_STATE_SIZE_MATRIX: [(bool, usize); 2] = [
 #[cfg(target_pointer_width = "64")]
 const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Memoized descriptor hashes add 24 bytes through frame lookup/method state.
+    // FrameAllocations adds an 8-byte usage counter to the previous Vec storage.
     // (multithreading, expected_size)
-    (false, 520),
-    (true, 520),
+    (false, 528),
+    (true, 528),
 ];
 
 #[cfg(target_pointer_width = "64")]

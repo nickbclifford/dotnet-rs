@@ -30,6 +30,7 @@ use std::{
 pub mod atomic;
 pub mod gc;
 pub mod newtypes;
+pub mod raw_block;
 pub mod sync;
 
 pub use newtypes::{

@@ -20,6 +20,7 @@ use gc_arena::{Collect, static_collect};
 use std::sync::Arc;
 
 pub mod exceptions;
+pub mod frame_alloc;
 pub mod stack;
 
 pub use exceptions::{
@@ -54,15 +55,14 @@ pub enum VmContinuation<'gc> {
 ///
 /// This corresponds to the ECMA-335 I.12.3.2 method-state model. `ip` is the
 /// current instruction pointer (index into `info_handle.instructions`).
-/// `memory_pool` is the frame-local byte allocation pool used by `localloc`.
-#[derive(Clone)]
+/// `allocations` owns the frame-local blocks used by `localloc`.
 pub struct MethodState {
     /// Current instruction pointer into `info_handle.instructions`.
     pub ip: usize,
     /// Parsed method metadata and instruction stream for this frame.
     pub info_handle: MethodInfo<'static>,
-    /// Frame-local byte allocation pool used by `localloc`.
-    pub memory_pool: Vec<u8>,
+    /// Frame-local blocks used by `localloc`.
+    pub allocations: frame_alloc::FrameAllocations,
 }
 
 impl MethodState {
@@ -70,10 +70,13 @@ impl MethodState {
         Self {
             ip: 0,
             info_handle,
-            memory_pool: vec![],
+            allocations: frame_alloc::FrameAllocations::default(),
         }
     }
 }
+
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(MethodState: Clone);
 
 static_collect!(MethodState);
 

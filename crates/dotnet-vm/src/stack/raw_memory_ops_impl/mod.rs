@@ -15,6 +15,7 @@ use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
     pointer::{PointerOrigin, unmanaged_ptr_from_addr},
 };
+use dotnet_vm_data::frame_alloc::FrameAllocationError;
 use std::ptr::NonNull;
 
 /// # Safety
@@ -982,20 +983,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
 
 impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn localloc(&mut self, size: usize) -> *mut u8 {
-        let s = self.state_mut();
-        // Ensure 8-byte alignment for the allocated block
-        let current_len = s.memory_pool.len();
-        let aligned_len = (current_len + 7) & !7;
-        let padding = aligned_len - current_len;
-
-        if padding > 0 {
-            s.memory_pool.resize(aligned_len, 0);
-        }
-
-        let loc = s.memory_pool.len();
-        s.memory_pool.resize(loc + size, 0);
-        s.memory_pool[loc..].as_mut_ptr()
+    fn localloc(&mut self, size: usize) -> Result<NonNull<u8>, FrameAllocationError> {
+        self.state_mut().allocations.allocate(size)
     }
 
     fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {

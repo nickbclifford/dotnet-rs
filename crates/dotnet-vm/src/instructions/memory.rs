@@ -11,6 +11,7 @@ use dotnet_value::{
     layout::{LayoutManager, Scalar},
     pointer::{PointerOrigin, UnmanagedPtr},
 };
+use dotnet_vm_data::frame_alloc::{FrameAllocationError, FrameAllocations};
 use dotnetdll::prelude::*;
 use std::ptr;
 
@@ -97,24 +98,18 @@ pub fn localloc<'gc, T: StackOps<'gc> + VmRawMemoryOps<'gc> + ExceptionOps<'gc>>
     ctx: &mut T,
 ) -> StepResult {
     let size_isize = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize());
-    if size_isize < 0 {
-        return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
-    }
-    let size = size_isize as usize;
+    let ptr = match FrameAllocations::request_size(size_isize).and_then(|size| ctx.localloc(size)) {
+        Ok(ptr) => ptr,
+        Err(FrameAllocationError::NegativeSize) => {
+            return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
+        }
+        Err(_) => {
+            return ctx
+                .throw_by_name_with_message("System.OutOfMemoryException", OUT_OF_MEMORY_MSG);
+        }
+    };
 
-    // Defensive check: limit local allocation to 128MB
-    if size > 0x800_0000 {
-        return ctx.throw_by_name_with_message("System.OutOfMemoryException", OUT_OF_MEMORY_MSG);
-    }
-
-    let ptr = ctx.localloc(size);
-    if ptr.is_null() {
-        return ctx.throw_by_name_with_message("System.OutOfMemoryException", OUT_OF_MEMORY_MSG);
-    }
-
-    ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(
-        ptr::NonNull::new(ptr).expect("null checked above"),
-    )));
+    ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(ptr)));
     StepResult::Continue
 }
 
