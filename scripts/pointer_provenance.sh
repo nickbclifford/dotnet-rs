@@ -35,6 +35,8 @@ expected_controls=(
 'pointer_provenance_tests::p32_localloc_blocks_released_on_tail_call_replacement|15'
 'pointer_provenance_tests::p33_localloc_blocks_released_on_exception_unwind|15'
 'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|16'
+'pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind|16'
+'pointer_provenance_tests::p36_static_address_survives_forced_collection|17'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -75,6 +77,8 @@ catalog=(
 'pointer_provenance_tests::p32_localloc_blocks_released_on_tail_call_replacement|control|no|15'
 'pointer_provenance_tests::p33_localloc_blocks_released_on_exception_unwind|control|no|15'
 'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|control|no|16'
+'pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind|control|no|16'
+'pointer_provenance_tests::p36_static_address_survives_forced_collection|control|no|17'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'

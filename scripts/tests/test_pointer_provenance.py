@@ -28,7 +28,8 @@ CONTROLS_BY_SHARD = {
     13: ["p04_double_localloc_write_first", "p29_localloc_blocks_survive_growth_and_are_16_byte_aligned"],
     14: ["p30_localloc_block_survives_nested_callee_localloc", "p31_localloc_blocks_released_on_return_and_pooling"],
     15: ["p32_localloc_blocks_released_on_tail_call_replacement", "p33_localloc_blocks_released_on_exception_unwind"],
-    16: ["p34_localloc_blocks_released_on_executor_teardown"],
+    16: ["p34_localloc_blocks_released_on_executor_teardown", "p35_ldflda_on_stack_value_type_then_ldind"],
+    17: ["p36_static_address_survives_forced_collection"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 FAKE = r'''#!/usr/bin/env python3

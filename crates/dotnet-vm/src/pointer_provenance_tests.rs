@@ -1,5 +1,5 @@
 //! Bounded IL-level pointer provenance probes on the real VM.
-//! The 37-entry catalog has 31 controls and 6 diagnostic-only probes. Recorded local
+//! The 39-entry catalog has 33 controls and 6 diagnostic-only probes. Recorded local
 //! pinned permissive Tree Borrows runs pass the controls in both configurations. p13 is
 //! additionally ignored when memory-validation is enabled; only p19 permits native diagnostics.
 //!
@@ -20,7 +20,7 @@
 //! | `p09_ldloca_convu_survives_callee_stack_growth` | slot/byref | M3 | diagnostic-permissive-TB | UB historically reported; exact current outcome unknown |
 //! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations; pre-repair Miri UB |
 //! | `p11_ldelema_stind_heap_array_control` | heap slice/address control | M1a/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
+//! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | alignment debug assertion in both configs; no UB reported, not a teardown proof |
 //! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configs; conditionally ignored with memory-validation |
 //! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations |
 //! | `p15_initblk_stack_local_via_managed_ptr` | slot/byref; block | M3/M1f/M5 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
@@ -43,6 +43,8 @@
 //! | `p32_localloc_blocks_released_on_tail_call_replacement` | localloc allocation/tail-call lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
 //! | `p33_localloc_blocks_released_on_exception_unwind` | localloc allocation/unwind lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
 //! | `p34_localloc_blocks_released_on_executor_teardown` | localloc allocation/teardown lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
+//! | `p35_ldflda_on_stack_value_type_then_ldind` | slot/byref; owner retention | M1d | blocking-native + blocking-permissive-TB | post-repair Miri pass in both configs; pre-repair exception resolution failure, source of throw inferred to be `ldind.i4` (no UB reported) |
+//! | `p36_static_address_survives_forced_collection` | static allocation lifetime | M1d | blocking-native + blocking-permissive-TB | Miri pass after forced collection in both configs |
 //! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | blocking-native + blocking-permissive-TB | step 0.1 and Phase 6 control passes in both configurations |
 //! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | baseline and current outcome unknown |
 
@@ -221,6 +223,7 @@ fn run_i32_entrypoint(shared: Arc<SharedGlobalState>, entrypoint: MethodDescript
 enum Observe {
     Continue,
     Stop,
+    Collect,
 }
 
 fn run_entrypoint_observed(
@@ -247,13 +250,19 @@ fn run_entrypoint_observed(
     });
 
     for _ in 0..100_000 {
-        let should_stop = arena.mutate_root(|gc, engine| {
+        let (should_stop, should_collect) = arena.mutate_root(|gc, engine| {
             // SAFETY: F1.GcHandleRooted — engine is the live arena root and the handle stays within this mutation.
             let gc_handle = unsafe { test_gc_handle(gc, engine) };
             let step_result = engine.step(gc_handle);
-            let observer_stop = matches!(observer(engine, &step_result), Observe::Stop);
-            observer_stop || should_break_after_step(step_result)
+            let action = observer(engine, &step_result);
+            (
+                matches!(action, Observe::Stop) || should_break_after_step(step_result),
+                matches!(action, Observe::Collect),
+            )
         });
+        if should_collect {
+            arena.finish_cycle();
+        }
         if should_stop {
             break;
         }
@@ -573,6 +582,17 @@ fn run_program(
         dotnetdll::prelude::TypeIndex,
     ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
 ) -> i32 {
+    run_program_with_collection(asm, setup, false)
+}
+
+fn run_program_with_collection(
+    asm: &str,
+    setup: impl FnOnce(
+        &mut Resolution<'static>,
+        dotnetdll::prelude::TypeIndex,
+    ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
+    collect_after_local_store: bool,
+) -> i32 {
     let loader = get_mock_loader();
     #[allow(clippy::arc_with_non_send_sync)]
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));
@@ -607,7 +627,27 @@ fn run_program(
         res_s,
         MethodMemberIndex::Method(method_index),
     );
-    run_i32_entrypoint(shared, entrypoint)
+    if !collect_after_local_store {
+        return run_i32_entrypoint(shared, entrypoint);
+    }
+    let mut collected = false;
+    let mut result = None;
+    run_entrypoint_observed(shared, entrypoint, |engine, step| {
+        if matches!(step, StepResult::Return) {
+            match engine.stack.execution.evaluation_stack.pop() {
+                StackValue::Int32(value) => result = Some(value),
+                other => panic!("Expected Int32 return, got {:?}", other),
+            }
+        }
+        let frames = &engine.stack.execution.frame_stack;
+        if !collected && frames.len() == 1 && frames.frames[0].state.ip == 3 {
+            collected = true;
+            return Observe::Collect;
+        }
+        Observe::Continue
+    });
+    assert!(collected, "collection point was not reached");
+    result.expect("entrypoint did not produce an Int32 return value")
 }
 
 // Stale-address probe: `ldloca; conv.u` then a callee needing a big evaluation stack forces the
@@ -743,6 +783,82 @@ fn p12_ldsflda_convu_stind_static() {
         )
     });
     assert_eq!(r, 7);
+}
+
+// The static address is stored as a native integer before a full arena collection.
+#[test]
+fn p36_static_address_survives_forced_collection() {
+    let r = run_program_with_collection(
+        "P36",
+        |res, type_idx| {
+            let f = FieldSource::Definition(res.push_field(
+                type_idx,
+                new_static_field("Slot", BaseType::<MemberType>::UInt8),
+            ));
+            (
+                2,
+                vec![local(BaseType::UIntPtr)],
+                vec![
+                    Instruction::LoadStaticFieldAddress(f),
+                    conv_u(),
+                    Instruction::StoreLocal(0),
+                    Instruction::LoadLocal(0),
+                    Instruction::LoadConstantInt32(7),
+                    stind(StoreType::Int8),
+                    Instruction::LoadStaticField {
+                        param0: f,
+                        volatile: false,
+                    },
+                    Instruction::Return,
+                ],
+            )
+        },
+        true,
+    );
+    assert_eq!(r, 7);
+}
+
+// `ldflda` on a stack-resident value type followed by `ldind.i4` (M1d F-OWN-102).
+#[test]
+fn p35_ldflda_on_stack_value_type_then_ldind() {
+    let r = run_program("P35", |res, _type_idx| {
+        // The mock loader registers two corlib copies; `ValueType` must resolve through the one
+        // `corlib_wkt` uses (mscorlib) or `is_value_type` is false and the local initialises null.
+        let system_runtime = res.push_assembly_reference(
+            dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
+        );
+        let value_type_ref =
+            res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
+                Some("System".into()),
+                "ValueType",
+                dotnetdll::resolved::types::ResolutionScope::Assembly(system_runtime),
+            ));
+        let mut struct_def = TypeDefinition::new(None, "P35Struct");
+        struct_def.extends = Some(value_type_ref.into());
+        let struct_idx = res.push_type_definition(struct_def);
+        let field = FieldSource::Definition(res.push_field(
+            struct_idx,
+            Field {
+                static_member: false,
+                ..new_static_field("F", BaseType::<MemberType>::Int32)
+            },
+        ));
+        let struct_ty = BaseType::Type {
+            source: TypeSource::User(UserType::Definition(struct_idx)),
+            value_kind: Some(ValueKind::ValueType),
+        };
+        (
+            2,
+            vec![local(struct_ty)],
+            vec![
+                Instruction::LoadLocal(0),
+                Instruction::LoadFieldAddress(field),
+                ldind(LoadType::Int32),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 0);
 }
 
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):

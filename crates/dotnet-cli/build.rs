@@ -217,11 +217,14 @@ fn main() {
             }
             ignore_prefix = "#[ignore] ".to_string();
         } else if is_fuzzing_enabled
-            && (is_pinvoke_fixture || test_name == "memory_nullable_boxing_42")
+            && (is_pinvoke_fixture
+                || test_name == "memory_nullable_boxing_42"
+                || test_name == "gc_finalizer_after_entrypoint_0")
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
             // fixtures that rely on libc/libm entry points (and console code paths
-            // that transitively use them) are expected to fail.
+            // that transitively use them, e.g. Console.WriteLine -> SystemNative_SetErrNo)
+            // are expected to fail.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
             || file_name == "circular_init_mt_42")
