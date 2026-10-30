@@ -491,8 +491,12 @@ jobs:
           version="$(cargo +nightly-2026-05-27 fuzz --version)"
           echo "$version"
           test "$version" = "cargo-fuzz $CARGO_FUZZ_VERSION"
+      - name: Test corpus replay guard
+        run: python3 scripts/tests/test_replay_fuzz_corpus.py
       - name: Replay ${{ matrix.target }} corpus
         run: |
-          test -n "$(find "${{ matrix.corpus }}" -type f -print -quit)"
-          cargo +nightly-2026-05-27 fuzz run ${{ matrix.target }} -- -runs=0
-        working-directory: ${{ matrix.working-directory }}
+          python3 scripts/replay_fuzz_corpus.py \
+            --workdir '${{ matrix.working-directory }}' \
+            --corpus '${{ matrix.corpus }}' \
+            --target '${{ matrix.target }}' \
+            --output-dir "$RUNNER_TEMP/fuzz-replay"
