@@ -8,7 +8,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 - [x] 0.3 Add workflow_dispatch to CI, Miri, and Fuzz without changing push/PR/schedule behavior; validate YAML and document branch-dispatch and same-SHA job-rerun commands. [effort: default] — refs REVIEW.md#F-EVID-001
 
 ## Phase 1: Compatible and accountable corpus replay
-- [ ] 1.1 Install cargo-fuzz 0.13.1 with Rust 1.95.0 and --locked, retain nightly-2026-05-27 for replay, and version the binary cache by all build inputs; verify installation and one local corpus replay. [effort: high] — refs REVIEW.md#F-FUZZ-001
+- [x] 1.1 Install cargo-fuzz 0.13.1 with Rust 1.95.0 and --locked, retain nightly-2026-05-27 for replay, and version the binary cache by all build inputs; verify installation and one local corpus replay. [effort: high] — refs REVIEW.md#F-FUZZ-001
 - [ ] 1.2 Add explicit corpus paths and a fail-closed libFuzzer execution-count guard for all four corpora; test valid, empty, skipped, truncated, and mismatched logs locally. [effort: high] — refs REVIEW.md#F-FUZZ-002
 - [ ] 1.3 Align fuzz.yml installation/cache/runtime invocation with the proven pair without changing exploratory durations or advisory status; validate YAML and command expansion. [effort: default] — refs REVIEW.md#F-FUZZ-003
 - [ ] 1.4 Push the scoped changes and dispatch or observe CI on that SHA; require all four fuzz-corpus-replay jobs to pass with file counts and executed counts, and record run URLs and SHA. [effort: high] — refs REVIEW.md#F-FUZZ-002
