@@ -228,7 +228,12 @@ PY
 # A bounded process per exact selector; retain complete output for diagnosis.
 # Controls use the same count guard but never the ignored-test option.
 if ((!dry)); then
-    logdir=$(mktemp -d "${TMPDIR:-/tmp}/pointer-provenance.XXXXXXXX") || exit 1
+    if [[ -n ${POINTER_PROVENANCE_LOG_DIR:-} ]]; then
+        logdir=$POINTER_PROVENANCE_LOG_DIR
+        mkdir -p -- "$logdir" || exit 1
+    else
+        logdir=$(mktemp -d "${TMPDIR:-/tmp}/pointer-provenance.XXXXXXXX") || exit 1
+    fi
     echo "output directory: $logdir"
 fi
 failures=0; passes=0
@@ -244,9 +249,10 @@ for name in "${selected[@]}"; do
     ((dry)) && continue
     start=$(date +%s)
     logfile="$logdir/${name##*::}.log"
-    timeout -k 10s 2700s "${cmd[@]}" > "$logfile" 2>&1
-    rc=$?; elapsed=$(( $(date +%s) - start ))
-    cat "$logfile"
+    timeout -k 10s 2700s "${cmd[@]}" 2>&1 | tee "$logfile"
+    statuses=("${PIPESTATUS[@]}")
+    rc=${statuses[0]}; elapsed=$(( $(date +%s) - start ))
+    if ((statuses[1] != 0 && rc == 0)); then rc=${statuses[1]}; fi
     if ((rc == 0)) && recognized_single_pass "$name" "$logfile"; then
         outcome=pass; ((passes+=1))
     else

@@ -53,6 +53,7 @@ elif 'nextest' in a:
           'status': 'skipped' if mode == 'not-listed' else 'listed', 'testcases': cases}}}))
 else:
     name = a[a.index('--exact') + 1]
+    print('fake stderr marker', file=sys.stderr)
     if mode == 'fail-first' and name.endswith('p01_ldloca_convu_stind_i4'):
         print('error: Undefined Behavior: fake'); sys.exit(1)
     if mode == 'setup-first' and name.endswith('p01_ldloca_convu_stind_i4'):
@@ -151,6 +152,18 @@ class PointerScriptTests(unittest.TestCase):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
+
+    def test_caller_log_directory_retains_both_streams_and_failure(self):
+        logdir = self.path / 'durable logs'
+        self.env['POINTER_PROVENANCE_LOG_DIR'] = str(logdir)
+        args = ('controls', '--configuration', 'no-features', '--shard', '17')
+        output = self.invoke(*args)
+        log = (logdir / 'p36_static_address_survives_forced_collection.log').read_text()
+        self.assertIn('fake stderr marker', log)
+        self.assertIn('test result: ok. 1 passed;', log)
+        self.assertIn('fake stderr marker', output)
+        self.invoke(*args, mode='zero', ok=False)
+        self.assertIn('0 passed', (logdir / 'p36_static_address_survives_forced_collection.log').read_text())
 
     def test_controls_count_and_guard(self):
         shard = next(iter(CONTROLS_BY_SHARD))
