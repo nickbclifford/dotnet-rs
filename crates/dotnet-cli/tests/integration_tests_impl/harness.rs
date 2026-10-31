@@ -6,7 +6,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -211,11 +211,10 @@ impl TestHarness {
                     .statics
                     .get(program.clone(), &vm::GenericLookup::default());
                 let read = |name| {
-                    let bytes = storage.storage.get_field_atomic(
-                        program.clone(),
-                        name,
-                        std::sync::atomic::Ordering::Acquire,
-                    );
+                    let bytes =
+                        storage
+                            .storage
+                            .get_field_atomic(program.clone(), name, Ordering::Acquire);
                     i32::from_ne_bytes(bytes.try_into().expect("expected four-byte Int32"))
                 };
                 let actual = [
