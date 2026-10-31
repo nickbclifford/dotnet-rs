@@ -411,6 +411,34 @@ impl Executor {
     }
 
     // assumes args are already on stack
+    /// Decides whether the entry point's `StepResult::Return` ends the run.
+    ///
+    /// A collection requested by the last instruction can queue finalizers after `run` has
+    /// already completed the managed entry point. Returns `Ok(None)` to keep the executor alive
+    /// for another iteration so the finalizer-processing phase can start those frames before
+    /// reporting program exit; otherwise returns the process exit code.
+    fn complete_entrypoint_return(&self) -> Result<Option<u8>, VmError> {
+        let has_pending_finalizers = self.with_arena_ref(|arena| {
+            arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+        })?;
+        if has_pending_finalizers {
+            return Ok(None);
+        }
+
+        self.with_arena_ref(|arena| {
+            arena.mutate(
+                |_, c| match c.stack.execution.evaluation_stack.stack.first() {
+                    Some(StackValue::Int32(i)) => Ok(Some(*i as u8)),
+                    Some(v) => Err(VmError::Execution(ExecutionError::TypeMismatch {
+                        expected: "Int32",
+                        actual: format!("{:?}", v).into(),
+                    })),
+                    None => Ok(Some(0)),
+                },
+            )
+        })?
+    }
+
     pub fn run(&mut self) -> ExecutorResult {
         #[cfg(feature = "bench-instrumentation")]
         let metrics = self.shared.metrics.clone();
@@ -536,43 +564,11 @@ impl Executor {
             };
 
             match step_result {
-                StepResult::Return => {
-                    // A collection requested by the last instruction can queue finalizers after
-                    // `run` has already completed the managed entry point.  Keep the executor
-                    // alive for another iteration so the finalizer-processing phase above can
-                    // start those frames before reporting program exit.
-                    let has_pending_finalizers = match self.with_arena_ref(|arena| {
-                        arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
-                    }) {
-                        Ok(has_pending) => has_pending,
-                        Err(e) => break ExecutorResult::Error(e),
-                    };
-                    if has_pending_finalizers {
-                        continue;
-                    }
-
-                    let exit_code = match self
-                        .with_arena_ref(|arena| {
-                            arena.mutate(|_, c| {
-                                match c.stack.execution.evaluation_stack.stack.first() {
-                                    Some(StackValue::Int32(i)) => Ok(*i as u8),
-                                    Some(v) => {
-                                        Err(VmError::Execution(ExecutionError::TypeMismatch {
-                                            expected: "Int32",
-                                            actual: format!("{:?}", v).into(),
-                                        }))
-                                    }
-                                    None => Ok(0),
-                                }
-                            })
-                        })
-                        .and_then(|v| v)
-                    {
-                        Ok(v) => v,
-                        Err(e) => break ExecutorResult::Error(e),
-                    };
-                    break ExecutorResult::Exited(exit_code);
-                }
+                StepResult::Return => match self.complete_entrypoint_return() {
+                    Ok(Some(exit_code)) => break ExecutorResult::Exited(exit_code),
+                    Ok(None) => continue,
+                    Err(e) => break ExecutorResult::Error(e),
+                },
                 StepResult::MethodThrew(exc) => {
                     break ExecutorResult::Threw(exc);
                 }
@@ -786,5 +782,61 @@ impl Drop for Executor {
                 dotnet_utils::gc::cross_arena::unregister_arena(self.thread_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_value::object::ObjectRef;
+
+    /// Guards the pending-finalizer branch of the entry-point return: a collection requested by
+    /// the final instruction can queue finalizers after `run` completed `Main`, and the executor
+    /// must keep looping so they start before exit. A managed fixture cannot reach this branch
+    /// (the collect intrinsic yields and drains finalizers before `ret` executes), so the
+    /// pending state is seeded directly.
+    #[test]
+    fn entrypoint_return_defers_exit_while_finalizers_pending() {
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the executor unit test keeps shared state on its sole executor"
+        )]
+        let shared = Arc::new(SharedGlobalState::new(Arc::new(
+            AssemblyLoader::new_bare("mock_root_executor".to_string())
+                .expect("Failed to create mock AssemblyLoader"),
+        )));
+        let mut executor = Executor::new(shared);
+
+        assert_eq!(
+            executor.complete_entrypoint_return().unwrap(),
+            Some(0),
+            "no pending finalizers: the entry point return must report exit"
+        );
+
+        executor
+            .with_arena(|arena| {
+                arena.mutate(|_, c| {
+                    c.stack
+                        .local
+                        .heap
+                        .pending_finalization
+                        .borrow_mut()
+                        .push(ObjectRef(None));
+                })
+            })
+            .unwrap();
+        assert_eq!(
+            executor.complete_entrypoint_return().unwrap(),
+            None,
+            "pending finalizers must keep the executor running instead of exiting"
+        );
+
+        executor
+            .with_arena(|arena| {
+                arena.mutate(|_, c| c.stack.local.heap.pending_finalization.borrow_mut().clear())
+            })
+            .unwrap();
+        assert_eq!(executor.complete_entrypoint_return().unwrap(), Some(0));
     }
 }
