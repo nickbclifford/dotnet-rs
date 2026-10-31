@@ -217,9 +217,7 @@ fn main() {
             }
             ignore_prefix = "#[ignore] ".to_string();
         } else if is_fuzzing_enabled
-            && (is_pinvoke_fixture
-                || test_name == "memory_nullable_boxing_42"
-                || test_name == "gc_finalizer_after_entrypoint_0")
+            && (is_pinvoke_fixture || test_name == "memory_nullable_boxing_42")
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
             // fixtures that rely on libc/libm entry points (and console code paths
@@ -257,6 +255,13 @@ fn main() {
 
         if is_manually_registered {
             // The custom test below owns this fixture's registration.
+        } else if test_name == "gc_finalizer_after_entrypoint_0" {
+            writeln!(
+                f,
+                "finalizer_fixture_test!({}{}, {:?});",
+                ignore_prefix, test_name, source_path
+            )
+            .unwrap();
         } else if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled)
         {
             writeln!(

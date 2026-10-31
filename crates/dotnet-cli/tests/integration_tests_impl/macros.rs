@@ -1,3 +1,16 @@
+// The finalizer fixture needs post-executor state, not just its exit code.
+macro_rules! finalizer_fixture_test {
+    ($(#[$attr:meta])* $name:ident, $source_path:expr) => {
+        #[test]
+        $(#[$attr])*
+        fn $name() {
+            let harness = crate::integration_tests_impl::harness::TestHarness::get();
+            let dll = harness.ensure_dll(std::path::Path::new($source_path));
+            harness.assert_finalizer_lifecycle(&dll);
+        }
+    };
+}
+
 // used in generated tests from build.rs
 macro_rules! fixture_test {
     ($(#[$attr:meta])* $name:ident, $dll_path:expr, $expected:expr) => {
