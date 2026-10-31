@@ -16,10 +16,11 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 ## Phase 2: Native-free finalizer lifecycle fixture
 - [x] 2.1 Replace console-dependent finalizer observation with managed counters/phase state and a post-executor test assertion, restore the generated fuzzing test, and preserve the tail-collection and once-only lifecycle oracle; cover the executor's pending-finalizer return deferral with a dotnet-vm unit test that fails when the branch is bypassed; verify normal and fuzzing exact tests. [effort: high] — refs REVIEW.md#F-FIXT-001
 - [x] 2.2 Verify fixture cache invalidation from changed source, reject stale prebuilt artifacts, and observe CI Test Suite (fuzzing) plus a normal leg passing on the fixture commit; record SHA and run evidence. [effort: default] — refs REVIEW.md#F-FIXT-001
+- [ ] 2.3 Restore the blocking std::sync ceiling (71 > 70) broken by the finalizer observer's fully qualified `std::sync::atomic::Ordering::Acquire` in commit 1d53382d, without raising CEILING; verify `bash scripts/check_std_sync_ceiling.sh` and hosted Documentation and Source Policy Checks. [effort: default] — refs REVIEW.md#F-FIXT-001
 
 ## Phase 3: Durable diagnostics before long validation
 - [x] 3.1 Design and test a small phase-aware logging/classification wrapper with synthetic setup, test, UB, count-guard, timeout, and cancellation cases while preserving nonzero exits. [effort: high] — refs REVIEW.md#F-DIAG-001
-- [ ] 3.2 Wire persistent logs, explicit setup/compile/execute phases, inner time budgets, summaries, and always-upload artifacts into affected replay and Miri jobs; verify YAML, shell tests, and a hosted artifact/summary on the exact SHA. [effort: default] — refs REVIEW.md#F-DIAG-001
+- [x] 3.2 Wire persistent logs, explicit setup/compile/execute phases, inner time budgets, summaries, and always-upload artifacts into affected replay and Miri jobs; verify YAML, shell tests, and a hosted artifact/summary on the exact SHA. [effort: default] — refs REVIEW.md#F-DIAG-001
 
 ## Phase 4: Coverage-preserving Miri shards and budgets
 - [ ] 4.1 Split blocking pointer controls into the 33 exact singleton shards in REVIEW.md, update both script catalogs/counts/tests and cache layout identity, and verify both 33-control discoveries and partition equality locally. [effort: high] — refs REVIEW.md#F-MIRI-001
