@@ -1,0 +1,24 @@
+command: ['cargo', '+nightly-2026-05-27', 'miri', 'test', '--offline', '-p', 'effect-vm', '--lib', 'region_api_tests']
+environment: {'MIRIFLAGS': '-Zmiri-tree-borrows'}
+exit: 0
+wall seconds: 28.553
+
+   Compiling effect-ops v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/ops)
+   Compiling effect-intrinsics v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/intrinsics)
+   Compiling effect-vm v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/vm)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/effect_vm-a9e26289375d8397)
+
+running 10 tests
+test region_api_tests::async_closure_can_lend_a_guard_to_an_immediately_ready_helper ... ok
+test region_api_tests::async_closure_pending_rejects_suspension_and_drops_real_scope_guard ... ok
+test region_api_tests::cancelled_guard_acquisition_releases_roots_without_entering_the_scope ... ok
+test region_api_tests::checkpoint_defers_callback_until_after_collection ... ok
+test region_api_tests::escaped_access_capability_cannot_touch_a_destroyed_arena ... ok
+test region_api_tests::forgetting_the_access_guard_does_not_forget_a_heap_borrow ... ok
+test region_api_tests::raii_access_can_span_a_ready_await_then_release_before_a_vm_effect ... ok
+test region_api_tests::reflection_completion_and_throw_work_with_each_region_api ... ok
+test region_api_tests::region_api_candidates_keep_chunk_progress ... ok
+test region_api_tests::region_requests_complete_inline_without_a_stop ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 84.33s

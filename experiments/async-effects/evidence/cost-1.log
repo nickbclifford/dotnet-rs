@@ -1,0 +1,40 @@
+command: ['cargo', 'test', '--offline', '--release', '--workspace', '--lib', 'cost', '--', '--ignored', '--nocapture', '--test-threads=1']
+environment: {}
+exit: 0
+wall seconds: 0.119
+
+
+running 1 test
+test cost::per_op_overhead ... Cx::with round trip: 0.7 ns; spawn + 1 suspend + 2 polls + 2 with: 14.0 ns
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+
+running 2 tests
+test cost::native_overhead ... baseline 0.232 ns/op
+region 1.382 ns/op
+spawn suspend=false 66.014 ns/op (GC excluded)
+spawn suspend=true 94.572 ns/op (GC excluded)
+ok
+test raii_cost::chosen_raii_access_cost ... chosen RAII acquisition + scalar read 8.192 ns/op
+chosen RAII acquisition + rooted string read 8.784 ns/op
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.06s
+
+    Finished `release` profile [optimized] target(s) in 0.01s
+     Running unittests src/lib.rs (target/release/deps/async_effects_proto-4ff44fa7ecb6b2c0)
+     Running unittests src/lib.rs (target/release/deps/effect_intrinsics-70355f59653b5040)
+     Running unittests src/lib.rs (target/release/deps/effect_ops-a4c9d5888c26db51)
+     Running unittests src/lib.rs (target/release/deps/effect_vm-33df19aeb8a980e9)

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>async/await as VM effects — dotnet-rs feasibility</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<style>
+:root{--bg:#fbfbfa;--fg:#1d1d1f;--muted:#5f6368;--accent:#3d5a99;--border:#e2e2e0;--codebg:#f5f5f3;--good:#e9f5ec;--goodb:#3a8a52;--info:#eef2fa}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--fg:#e6e6e6;--muted:#9aa0a6;--accent:#8fb0ec;--border:#33363b;--codebg:#1f2125;--good:#16281c;--goodb:#5cbf7a;--info:#1b2333}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:2.5rem 1.5rem 5rem}
+h1{font-size:2rem;margin:0 0 .4rem}
+h2{margin-top:3rem;padding-bottom:.3rem;border-bottom:1px solid var(--border)}
+h3{margin-top:1.8rem}
+.sub{color:var(--muted);margin:0}
+nav{background:var(--codebg);border:1px solid var(--border);border-radius:8px;padding:.6rem 1.2rem;margin:1.8rem 0}
+nav ol{margin:.3rem 0;columns:2}
+a{color:var(--accent)}
+code{font:0.88em ui-monospace,"JetBrains Mono","Fira Code",monospace;background:var(--codebg);padding:.1em .3em;border-radius:4px}
+pre{background:var(--codebg);border:1px solid var(--border);border-radius:8px;padding:0;overflow-x:auto}
+pre code{display:block;padding:1rem 1.1rem;background:none!important;font-size:.84rem;line-height:1.5}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.94rem}
+th,td{border:1px solid var(--border);padding:.45rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--codebg)}
+td.ok{color:var(--goodb);font-weight:600;white-space:nowrap}
+td.note{color:var(--muted);font-size:.88rem;border-top:none}
+.callout{border-left:4px solid var(--accent);background:var(--info);padding:.8rem 1.1rem;border-radius:0 8px 8px 0;margin:1.2rem 0}
+.callout.good{border-color:var(--goodb);background:var(--good)}
+.caveat{color:var(--muted);font-size:.93rem}
+blockquote{margin:1rem 0;padding:.4rem 1.1rem;border-left:3px solid var(--border);color:var(--muted)}
+cite{display:block;font-style:normal;font-size:.85rem;margin-top:.3rem}
+</style>
+</head><body><main>
+
+<header>
+<h1>async/await as VM effects in dotnet-rs</h1>
+<p class="sub">Feasibility investigation · 2026-10-30 · stable rustc 1.95.0 · gc-arena 0.6.0 (also verified on 0.7.0)<br>
+Prototype: <code>../dotnet-rs-async/experiments/async-effects/</code> on branch <code>explore/async-effects</code> (uncommitted)</p>
+</header>
+
+<nav><ol>
+<li><a href="#verdict">Verdict</a></li>
+<li><a href="#july">What the July investigation got right — and what it ruled out</a></li>
+<li><a href="#design">The design: regions, stashes, effects</a></li>
+<li><a href="#intrinsics">What intrinsics look like</a></li>
+<li><a href="#evidence">Evidence</a></li>
+<li><a href="#piccolo">Prior art: piccolo already does this</a></li>
+<li><a href="#mapping">What it buys dotnet-rs</a></li>
+<li><a href="#open">Open problems</a></li>
+<li><a href="#gc07">gc-arena 0.7.0</a></li>
+<li><a href="#next">Recommended next step</a></li>
+</ol></nav>
+
+<section id="verdict">
+<h2>1. Verdict</h2>
+<div class="callout good"><strong>Feasible on stable Rust, no nightly features.</strong>
+The 2026-07-03 walls are real, but they only rule out one design: a future that <em>holds a <code>Gc&lt;'gc&gt;</code> across an <code>.await</code></em>.
+If GC access is instead confined to short scoped regions, <code>.await</code> points become <strong>effects</strong> and the executor becomes their <strong>handler</strong>.
+That is the monadic-effects reading made concrete. The borrow checker enforces the key soundness rule, and Miri (tree-borrows) is clean.</div>
+<p>The type-theoretic framing: each <code>cx.with(…)</code> is a <code>runST</code>-style region whose <code>for&lt;'gc&gt;</code> brand cannot escape. Stashing is the explicit lift of a value across an effect boundary. Each <code>.await</code> performs one operation, and the driver loop interprets it.</p>
+</section>
+
+<section id="july">
+<h2>2. What the July investigation got right — and what it ruled out</h2>
+<p>Both walls from 2026-07-03 still stand:</p>
+<ol>
+<li><strong><code>'gc</code> cannot escape <code>Arena::mutate</code>.</strong> The closure is <code>for&lt;'gc&gt; FnOnce(&amp;'gc Mutation&lt;'gc&gt;, …)</code>, so a future branded <code>'gc</code> can't be stored where collections happen.</li>
+<li><strong>An <code>async fn</code> state machine can't <code>impl Collect</code>.</strong> Any <code>Gc</code> it holds across <code>.await</code> would be untraced, then freed, then dangling.</li>
+</ol>
+<pre><code class="language-rust">// What July tried — and what genuinely cannot work:
+async fn intrinsic&lt;&#x27;gc&gt;(ctx: &amp;mut VesContext&lt;&#x27;gc&gt;, s: ObjectRef&lt;&#x27;gc&gt;) {
+    let chars = s.borrow();       // Gc&lt;&#x27;gc&gt; live…
+    safepoint().await;            // …across a point where the collector may run
+    use_it(chars);                // untraced: the async state machine can&#x27;t impl Collect
+}</code></pre>
+<p>The conclusion drawn at the time, “drop the async framing entirely”, went too far. Neither wall applies to a future that <em>never</em> holds a <code>Gc</code>, as long as it can still reach the heap whenever it is not suspended.</p>
+</section>
+
+<section id="design">
+<h2>3. The design: regions, stashes, effects</h2>
+<table>
+<tr><th>Piece</th><th>Role</th></tr>
+<tr><td><code>'static</code> future, outside the arena</td><td>The effectful computation. It never holds a <code>Gc</code>.</td></tr>
+<tr><td><code>cx.with(|mc, engine| …)</code></td><td>A GC region, a thin wrapper over <code>mutate_root</code>. Nothing <code>'gc</code>-branded can be returned from it.</td></tr>
+<tr><td><code>Stashed</code> / <code>DynamicRoot</code></td><td>The only way a GC reference crosses an <code>.await</code>. Traced from the root.</td></tr>
+<tr><td><code>cx.safepoint().await</code>, <code>cx.call_managed(m, args).await</code></td><td>Effect operations. Each records an <code>Effect</code> in a side channel and returns <code>Pending</code>.</td></tr>
+<tr><td><code>Vm::run</code></td><td>The handler. On <code>SafePoint</code> it runs a full GC. On <code>AwaitManagedReturn</code> it resumes the interpreter until the callee frame returns.</td></tr>
+</table>
+
+<h3>3.1 The region</h3>
+<pre><code class="language-rust">/// A task&#x27;s capability to touch the VM. Cheap to clone; `&#x27;static`.
+#[derive(Clone)]
+pub struct Cx(Rc&lt;Shared&gt;);
+
+impl Cx {
+    /// Enter a GC region. The closure is `for&lt;&#x27;gc&gt;`, so its return type `T`
+    /// cannot mention `&#x27;gc` — nothing GC-branded can reach an `.await`.
+    pub fn with&lt;T&gt;(
+        &amp;self,
+        f: impl for&lt;&#x27;gc&gt; FnOnce(&amp;&#x27;gc Mutation&lt;&#x27;gc&gt;, &amp;&#x27;gc mut Engine&lt;&#x27;gc&gt;) -&gt; T,
+    ) -&gt; T {
+        self.0
+            .arena
+            .try_borrow_mut()
+            .expect(&quot;Cx::with re-entered (nested GC regions are not allowed)&quot;)
+            .mutate_root(f)
+    }
+}</code></pre>
+<p>This fails to compile, which is the point (it is a <code>compile_fail</code> doctest in the crate):</p>
+<pre><code class="language-rust">async fn bad(cx: Cx) {
+    let held = cx.with(|_, e| e.stack[0]); // Value&lt;&#x27;gc&gt; escaping the region
+    cx.safepoint().await;
+    let _ = held;
+}</code></pre>
+<pre><code class="language-plaintext">error: lifetime may not live long enough
+  = note: requirement occurs because of the type `Value&lt;&#x27;_&gt;`, which makes the generic argument `&#x27;_` invariant
+  = note: the enum `Value&lt;&#x27;gc&gt;` is invariant over the parameter `&#x27;gc`</code></pre>
+<p>I extracted the doctest and compiled it by hand to confirm it fails for <em>this</em> reason, not an incidental one. The guard also caught a real slip while I wrote the benchmark: <code>cx.with(|_, e| e.stack.pop())</code> was rejected because it returned an <code>Option&lt;Value&lt;'gc&gt;&gt;</code>.</p>
+<p>The sanctioned version stashes first:</p>
+<pre><code class="language-rust">async fn good(cx: Cx) {
+    let held = cx.with(|mc, e| Stashed::stash(e.stack[0], mc, &amp;e.roots)); // &#x27;static handle
+    cx.safepoint().await;                                                 // GC may run here
+    cx.with(|_, e| { let _v = held.fetch(&amp;e.roots); });                   // re-brand inside a region
+}</code></pre>
+
+<h3>3.2 Stashing</h3>
+<pre><code class="language-rust">/// The `&#x27;static` mirror of `Value&lt;&#x27;gc&gt;`: what a task may hold across `.await`.
+#[derive(Clone)]
+pub enum Stashed {
+    Int(i64),
+    Arr(DynamicRoot&lt;Rootable![RefLock&lt;Vec&lt;i64&gt;&gt;]&gt;),
+}
+
+impl Stashed {
+    pub fn stash&lt;&#x27;gc&gt;(v: Value&lt;&#x27;gc&gt;, mc: &amp;Mutation&lt;&#x27;gc&gt;, roots: &amp;DynamicRootSet&lt;&#x27;gc&gt;) -&gt; Self {
+        match v {
+            Value::Int(i) =&gt; Stashed::Int(i),
+            Value::Arr(a) =&gt; Stashed::Arr(roots.stash::&lt;Rootable![RefLock&lt;Vec&lt;i64&gt;&gt;]&gt;(mc, a)),
+        }
+    }
+    pub fn fetch&lt;&#x27;gc&gt;(&amp;self, roots: &amp;DynamicRootSet&lt;&#x27;gc&gt;) -&gt; Value&lt;&#x27;gc&gt; {
+        match self {
+            Stashed::Int(i) =&gt; Value::Int(*i),
+            Stashed::Arr(a) =&gt; Value::Arr(roots.fetch(a)),
+        }
+    }
+}</code></pre>
+<p>Plain data (integers, here) needs no rooting. Only GC references pay for a root-set slot. Since 0.6, <code>DynamicRootSet</code> stores roots in slots with no per-root allocation.</p>
+
+<h3>3.3 Effects and the handler</h3>
+<pre><code class="language-rust">/// What a suspended task is waiting on. The driver is the handler.
+pub enum Effect {
+    /// Let the collector run, then resume me.
+    SafePoint,
+    /// I pushed a managed frame; resume me when it returns (value in `task_reply`).
+    AwaitManagedReturn,
+}
+
+impl Future for Perform {
+    type Output = ();
+    fn poll(mut self: Pin&lt;&amp;mut Self&gt;, _: &amp;mut Context&lt;&#x27;_&gt;) -&gt; Poll&lt;()&gt; {
+        match self.effect.take() {
+            Some(e) =&gt; { self.cx.0.effect.borrow_mut().replace(e); Poll::Pending }
+            None =&gt; Poll::Ready(()),
+        }
+    }
+}
+
+impl Cx {
+    pub fn safepoint(&amp;self) -&gt; Perform { self.perform(Effect::SafePoint) }
+
+    /// Call a managed method and await its return value — straight-line, from Rust.
+    pub async fn call_managed(&amp;self, method: usize, args: &amp;[Stashed]) -&gt; Stashed {
+        self.with(|_, e| {
+            let base = e.stack.len();
+            for a in args { e.stack.push(a.fetch(&amp;e.roots)); }
+            e.frames.push(Frame { method, ip: 0, base, ret: ReturnTo::Task });
+        });
+        self.perform(Effect::AwaitManagedReturn).await;
+        self.with(|mc, e| {
+            let v = e.task_reply.take().expect(&quot;resumed without a reply&quot;);
+            Stashed::stash(v, mc, &amp;e.roots)
+        })
+    }
+}</code></pre>
+<pre><code class="language-rust">pub fn run(&amp;mut self) -&gt; Vec&lt;String&gt; {
+    loop {
+        // 1. Resume the innermost task, if any, and handle the effect it performed.
+        if let Some(task) = self.tasks.last_mut() {
+            match task.as_mut().poll(&amp;mut Context::from_waker(Waker::noop())) {
+                Poll::Ready(v) =&gt; {
+                    self.tasks.pop();
+                    self.cx.with(|_, e| { let v = v.fetch(&amp;e.roots); e.stack.push(v); });
+                }
+                Poll::Pending =&gt; match self.cx.0.effect.borrow_mut().take().unwrap() {
+                    Effect::SafePoint =&gt; { self.full_gc(); continue; }   // re-poll same task
+                    Effect::AwaitManagedReturn =&gt; {}                      // fall into interpreter
+                },
+            }
+        }
+        // 2. Run the synchronous interpreter until something needs a task.
+        loop {
+            match self.cx.with(|mc, e| e.step(mc)) {
+                Step::Continue =&gt; {}
+                Step::Spawn(i, args) =&gt; { self.tasks.push(spawn(self.cx.clone(), i, args)); break; }
+                Step::TaskReply =&gt; break,
+                Step::Done =&gt; return self.cx.with(|_, e| std::mem::take(&amp;mut e.output)),
+            }
+        }
+    }
+}</code></pre>
+<p>The hot dispatch step (<code>Engine::step</code>) is ordinary synchronous code and never polls a future. Tasks form a stack parallel to the frame stack: a task can call managed code, and that code can start another task.</p>
+</section>
+
+<section id="intrinsics">
+<h2>4. What intrinsics look like</h2>
+<p>Notice what is <em>absent</em>: no <code>back_up_ip</code>, no retry flag, no continuation enum variant, no re-deriving progress after a yield.</p>
+<h3>Chunked work with safe points</h3>
+<pre><code class="language-rust">async fn chunked_sum(cx: Cx, arr: ArrRoot) -&gt; Stashed {
+    let len = cx.with(|_, e| e.roots.fetch(&amp;arr).borrow().len());
+    let (mut off, mut acc) = (0, 0i64);
+    while off &lt; len {
+        let end = (off + CHUNK).min(len);
+        acc += cx.with(|_, e| e.roots.fetch(&amp;arr).borrow()[off..end].iter().sum::&lt;i64&gt;());
+        off = end;
+        cx.safepoint().await;   // `off` and `acc` survive the collection
+    }
+    Stashed::Int(acc)
+}</code></pre>
+<h3>Calling back into managed code, straight-line</h3>
+<pre><code class="language-rust">async fn sort_with(cx: Cx, arr: ArrRoot, comparer: usize) -&gt; Stashed {
+    let len = cx.with(|_, e| e.roots.fetch(&amp;arr).borrow().len());
+    for i in 1..len {
+        let mut j = i;
+        while j &gt; 0 {
+            let (a, b) = cx.with(|_, e| {
+                let v = e.roots.fetch(&amp;arr);
+                let v = v.borrow();
+                (v[j - 1], v[j])
+            });
+            // a managed method runs here — the interpreter resumes, then returns to us
+            let c = cx.call_managed(comparer, &amp;[Stashed::Int(a), Stashed::Int(b)]).await;
+            if c.int() &lt;= 0 { break; }
+            cx.with(|mc, e| e.roots.fetch(&amp;arr).borrow_mut(mc).swap(j - 1, j));
+            j -= 1;
+        }
+    }
+    Stashed::Arr(arr)
+}</code></pre>
+</section>
+
+<section id="evidence">
+<h2>5. Evidence</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td><code>chunked_sum_keeps_progress_across_full_collections</code></td><td class="ok">pass</td></tr>
+<tr><td colspan="2" class="note">A full collection runs at every interpreter step and at every safe point. The answer is correct, with exactly 11 safe points for 11 chunks and no restarts.</td></tr>
+<tr><td><code>managed_callbacks_from_straight_line_rust</code></td><td class="ok">pass</td></tr>
+<tr><td colspan="2" class="note">Sorts with a managed comparer, including a comparer that itself starts a suspending task (nested tasks).</td></tr>
+<tr><td><code>stash_is_what_keeps_objects_alive</code></td><td class="ok">pass</td></tr>
+<tr><td colspan="2" class="note">A sentinel object with a <code>Drop</code> hook survives collections while stashed, and is collected once the stash is dropped.</td></tr>
+<tr><td><code>Cx::with</code> doctests (1 positive, 1 <code>compile_fail</code>)</td><td class="ok">pass</td></tr>
+<tr><td>Miri, tree-borrows (<code>nightly-2026-05-27</code>, the repo's Miri pin)</td><td class="ok">clean</td></tr>
+<tr><td>clippy <code>--all-targets</code></td><td class="ok">clean</td></tr>
+<tr><td>gc-arena 0.7.0 build + tests</td><td class="ok">pass, after deleting one dead metrics helper</td></tr>
+</table>
+<h3>Cost (release, toy arena, 2M iterations, 2 runs)</h3>
+<table>
+<tr><th>Operation</th><th>Time</th></tr>
+<tr><td><code>Cx::with</code> round trip</td><td>≈ 0.6–0.7 ns</td></tr>
+<tr><td>spawn + 1 suspend + 2 polls + 2 regions</td><td>≈ 11–14 ns</td></tr>
+</table>
+<p class="caveat">These numbers are optimistic. The real path goes through <code>with_arena</code>, <code>GCHandle::new</code> and <code>ves_context</code>, and costs more. That is still negligible for slow-path intrinsics, but it is a reason to keep tasks off the 128-instruction batch loop (<code>dispatch/mod.rs</code>).</p>
+<p>To reproduce:</p>
+<pre><code class="language-bash">cd ../dotnet-rs-async/experiments/async-effects
+cargo test                                                    # 3 unit tests + 2 doctests (one compile_fail)
+MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly-2026-05-27 miri test --lib
+cargo test --release --lib cost -- --ignored --nocapture      # overhead micro-bench</code></pre>
+</section>
+
+<section id="piccolo">
+<h2>6. Prior art: piccolo already does this</h2>
+<p>The July memo cited piccolo (kyren's Lua VM on gc-arena) as evidence that hand-written <code>Collect</code> <code>Sequence</code>s were the idiomatic answer, <em>not</em> async. piccolo's master branch has since added <code>src/async_callback.rs</code> (2024; <strong>not</strong> in any crates.io release, since 0.3.3 lacks it). Its own <code>Sequence</code>s are now implemented by async blocks:</p>
+<pre><code class="language-rust">// kyren/piccolo master, src/async_callback.rs (2024, unreleased)
+pub fn async_sequence&lt;&#x27;gc, F&gt;(
+    mc: &amp;Mutation&lt;&#x27;gc&gt;,
+    create: impl FnOnce(Locals&lt;&#x27;gc, &#x27;_&gt;, AsyncSequence) -&gt; F,
+) -&gt; BoxSequence&lt;&#x27;gc&gt;
+where
+    F: Future&lt;Output = Result&lt;SequenceReturn, StashedError&gt;&gt; + &#x27;static,
+
+impl AsyncSequence {
+    pub fn enter&lt;F, R&gt;(&amp;mut self, f: F) -&gt; R
+    where
+        F: for&lt;&#x27;gc&gt; FnOnce(Context&lt;&#x27;gc&gt;, Locals&lt;&#x27;gc, &#x27;_&gt;, Execution&lt;&#x27;gc, &#x27;_&gt;, Stack&lt;&#x27;gc, &#x27;_&gt;) -&gt; R,
+}</code></pre>
+<blockquote>“Can be used to implement <code>Sequence</code> in a way MUCH easier than manual state machines. … The returned future … <em>cannot</em> capture anything branded with a <code>'gc</code> lifetime … This is the reason why we provide a <code>Locals</code>: to instead allow the future to hold onto these GC values indirectly.” <cite>— piccolo docs</cite></blockquote>
+<h3>Two differences from the prototype</h3>
+<table>
+<tr><th></th><th>This prototype</th><th>piccolo</th></tr>
+<tr><td>Where the future is polled</td><td>Outside <code>mutate</code>; the arena sits in a <code>RefCell</code></td><td>Inside <code>mutate</code>; the future is wrapped in a <code>Collect</code> <code>BoxSequence</code> in the GC graph</td></tr>
+<tr><td>How regions get the context</td><td><code>mutate_root</code> per region</td><td>A lifetime-erased shared slot (~2 <code>unsafe</code> transmutes)</td></tr>
+<tr><td><code>unsafe</code></td><td>none</td><td>small, contained</td></tr>
+<tr><td>Root set</td><td>One global <code>DynamicRootSet</code> on the engine</td><td>One per sequence (<code>Locals</code>), traced <em>through</em> the sequence, so abandoned sequences and cycles are collected</td></tr>
+</table>
+<p>The global root set is acceptable for dotnet-rs, because a suspended .NET native frame is never garbage while its thread lives. Per-task sets still give cleaner teardown on thread exit or abort.</p>
+<div class="callout"><strong>Recommendation: piccolo's approach for dotnet-rs.</strong> A task can live in the root as something like <code>VmContinuation::Task(..)</code>, which subsumes the Tier-1 continuation type. An intrinsic can start and poll its task inside the same <code>mutate</code>, so a task that never suspends costs almost nothing. <code>Executor::run</code> and <code>with_arena</code> don't have to change. The cost is two small <code>unsafe</code> blocks, which fit the existing SAFETY-citation (F-code) discipline.</div>
+</section>
+
+<section id="mapping">
+<h2>7. What it buys dotnet-rs</h2>
+<h3>7.1 Chunked intrinsics stop restarting from zero</h3>
+<pre><code class="language-rust">// crates/dotnet-intrinsics-string/src/search.rs (today)
+let mut result_vec = Vec::with_capacity(l);
+let mut offset = 0;
+while offset &lt; l {
+    /* … copy one 64K-char chunk under a GcScopeGuard … */
+    offset += current_chunk;
+    if offset &lt; l &amp;&amp; ctx.check_gc_safe_point() {
+        return StepResult::Yield;   // result_vec and offset are discarded;
+    }                               // back_up_ip() re-runs the instruction from offset 0
+}</code></pre>
+<p>Under sustained GC-stop pressure, a long string operation redoes its copied prefix on every retry. With <code>safepoint().await</code>, progress survives the yield, as in <a href="#intrinsics"><code>chunked_sum</code></a>. Sites: <code>dotnet-intrinsics-string/src/search.rs:135,259</code> and the similar chunked loops in <code>operations.rs</code>, <code>constructors.rs</code>, span <code>equality.rs</code>, and unsafe <code>buffer.rs</code>/<code>mem_helpers.rs</code>. About 51 <code>Yield</code>/<code>should_yield</code> sites in total.</p>
+<h3>7.2 The Tier-1 residue</h3>
+<ul>
+<li><code>GC.WaitForPendingFinalizers</code> (<code>dotnet-vm/src/intrinsics/gc.rs:199</code>) currently “effectively spins until finalizers complete”.</li>
+<li>The static-init wait (<code>dotnet-vm/src/statics.rs:476</code>) returns a bare <code>should_yield</code> bool.</li>
+</ul>
+<p>Both become an <code>.await</code> on a condition effect.</p>
+<h3>7.3 Managed re-entry</h3>
+<p><code>FrameReturnAction::InvokeReturn</code> (reflection invoke) and <code>MulticastState</code> (multicast delegate invoke) are hand-written “call managed code, then continue” state machines. That is exactly what <code>call_managed(..).await</code> expresses directly.</p>
+</section>
+
+<section id="open">
+<h2>8. Open problems (not prototyped)</h2>
+<ul>
+<li><strong>Exceptions through a task boundary.</strong> The unwinder must stop at a <code>ReturnTo::Task</code> frame and deliver <code>Err</code> to the task. <code>call_managed</code> should return <code>Result</code>, and the task propagates with <code>?</code>. Stack traces need a synthetic native frame.</li>
+<li><strong>Multithreading.</strong> The <code>SafePoint</code> handler must take part in the stop-the-world handshake (<code>thread_manager.safe_point(..)</code> / <code>GCCoordinator</code>). Stashing a <em>cross-arena</em> reference into a per-thread <code>DynamicRootSet</code> is unverified.</li>
+<li><strong>Discipline the compiler doesn't check.</strong> Awaiting anything other than a <code>Cx</code> effect panics at runtime (“Pending without an effect”), and so does nesting <code>with</code> calls. piccolo has the same limitation.</li>
+<li><strong>Observability.</strong> Task state is opaque to the tracer and the instruction ring buffer.</li>
+<li><strong><code>!Send</code> futures.</strong> Fine as long as tasks never migrate between executor threads, which matches the current thread-affine design.</li>
+</ul>
+</section>
+
+<section id="gc07">
+<h2>9. gc-arena 0.7.0 (August 2026)</h2>
+<p>Orthogonal to this design; the prototype passes on it unchanged. It matters to dotnet-rs for other reasons:</p>
+<ul>
+<li><strong><code>Gc</code> now points to <code>T</code> directly.</strong> This removes the 0.6.1 soundness requirement that <code>Gc::cast</code> / <code>Gc::from_ptr</code> source and target share alignment. dotnet-rs has 4 such call sites, in <code>dotnet-runtime-memory/src/heap.rs</code> and <code>dotnet-value/src/object/mod.rs</code>. That is relevant to the pointer-provenance work.</li>
+<li><strong>Pacing counts <code>Gc</code> pointers, not bytes.</strong> Any tuned pacing factors (and the VM's allocation-pressure heuristics) would need revisiting. The <code>Metrics::total_gc_allocation</code> API changed too.</li>
+<li>New <code>ZstCache</code> for sharing one allocation among <code>Gc</code>s to zero-sized types.</li>
+</ul>
+</section>
+
+<section id="next">
+<h2>10. Recommended next step</h2>
+<p>A narrow vertical slice inside the real VM, using piccolo's approach:</p>
+<ol>
+<li>Add a <code>Collect</code> task wrapper plus a per-task <code>DynamicRootSet</code>, stored as a <code>VmContinuation</code> variant on <code>ThreadContext</code>.</li>
+<li>Add <code>StepResult</code>-level plumbing for “task suspended on effect X”, handled in <code>Executor::run</code>.</li>
+<li>Port <strong>one</strong> chunked string intrinsic (<code>search.rs</code>) to <code>safepoint().await</code>, and add a test proving progress is kept under forced GC-stop requests.</li>
+<li>Only then attempt <code>call_managed</code> with exception propagation, which is the real design risk.</li>
+</ol>
+</section>
+
+</main>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/languages/rust.min.js"></script>
+<script>window.hljs && hljs.highlightAll();</script>
+</body></html>

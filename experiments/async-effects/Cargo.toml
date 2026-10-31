@@ -1,0 +1,14 @@
+[package]
+name = "async-effects-proto"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: deliberately not a member of the dotnet-rs workspace.
+[workspace]
+members = ["layered/ops", "layered/intrinsics", "layered/vm"]
+resolver = "3"
+default-members = [".", "layered/ops", "layered/intrinsics", "layered/vm"]
+
+[dependencies]
+gc-arena = "0.6.0"

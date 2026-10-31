@@ -1,0 +1,59 @@
+// Verbatim snapshot: crates/dotnet-vm/src/statics.rs:476
+pub fn wait_for_init(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+        thread_manager: &impl ThreadManagerOps,
+        thread_id: dotnet_utils::ArenaId,
+        _gc_coordinator: &GCCoordinator,
+    ) -> bool {
+        let storage = self.get(description, generics);
+        let mut should_yield = false;
+        let edge_guard = WaitGraphEdgeGuard::new(&self.wait_graph, thread_id.as_u64());
+
+        #[allow(
+            clippy::never_loop,
+            reason = "single-threaded builds can reach this loop only through an invariant violation"
+        )]
+        loop {
+            // Check state before acquiring lock
+            let state = storage.init_state.load(Ordering::Acquire);
+            if state != INIT_STATE_INITIALIZING {
+                break;
+            }
+
+            // Ensure our wait edge is up-to-date
+            let target_thread = storage.initializing_thread.load(Ordering::Acquire);
+            edge_guard.update(target_thread);
+
+            // Check for GC safe point before waiting
+            if thread_manager.is_gc_stop_requested() {
+                should_yield = true;
+                break;
+            }
+
+            // Try to wait with a timeout
+            #[cfg(feature = "multithreading")]
+            {
+                let mut lock = storage.init_mutex.lock();
+                if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
+                    break;
+                }
+
+                // Wait for a short duration to allow periodic safe point checks
+                use std::time::Duration;
+                let _ = storage
+                    .init_cond
+                    .wait_for(lock.raw_mut(), Duration::from_millis(10));
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                unreachable!(
+                    "wait_for_init is unreachable in single-threaded builds: StaticInitResult::Waiting cannot be produced when only one thread exists"
+                );
+            }
+        }
+
+        drop(edge_guard);
+        should_yield
+    }

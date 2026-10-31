@@ -1,0 +1,3 @@
+// No exact existing intrinsic. Probe for a rooted heap slot after suspension.
+// Arbitrary ManagedPtr transport remains excluded; see Monitor.ReliableEnter
+// in crates/dotnet-intrinsics-threading/src/monitor.rs:141-200.

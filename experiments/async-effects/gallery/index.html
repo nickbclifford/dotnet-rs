@@ -1,0 +1,866 @@
+<!doctype html><meta charset="utf-8"><title>Native continuation syntax gallery</title>
+<style>body{font:16px system-ui;margin:2rem;color:#202124;background:#fafafa}a{color:#315b9c}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}pre{font:12px/1.5 ui-monospace,monospace;background:#f1f2f3;padding:1rem;overflow:auto;max-height:44rem;border:1px solid #ddd}h2{margin-top:3rem}h3{font-size:16px}header{max-width:70rem} @media(max-width:1000px){.grid{grid-template-columns:1fr}}</style>
+<header><h1>Native continuation syntax gallery</h1><p>Final choice: async VM access with RAII rooted views. Seven matching operations. Left: current VM source. Middle: chosen RAII bodies. Right: the superseded callback facade. The ports model metadata, not a drop-in real VM migration. See also <a href="region-api/index.html">the four-way VM access comparison</a>. Read <a href="README.md">the review and limits</a> and <a href="../DESIGN.md">the design</a>.</p><p>Lexical RAII scopes delimit VM access; short internal regions confine GC brands. Awaits perform effects before access is granted. Reflection preparation/completion is shared in <a href="../layered/intrinsics/src/lib.rs">the intrinsics crate</a>.</p></header><section><h2 id="substring">substring</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-intrinsics-string/src/search.rs:60
+pub fn intrinsic_string_substring&lt;
+    &#x27;gc,
+    T: TypedStackOps&lt;&#x27;gc&gt; + ExceptionOps&lt;&#x27;gc&gt; + RawMemoryOps&lt;&#x27;gc&gt;,
+&gt;(
+    ctx: &amp;mut T,
+    method: MethodDescription,
+    _generics: &amp;GenericLookup,
+) -&gt; StepResult {
+    let (start_at, length) = if method.signature().parameters.len() == 1 {
+        let start_at = ctx.peek_stack().as_i32();
+        (start_at as usize, None)
+    } else {
+        let length = ctx.peek_stack().as_i32();
+        let start_at = ctx.peek_stack_at(1).as_i32();
+        (start_at as usize, Some(length as usize))
+    };
+
+    let val = ctx.peek_stack_at(if length.is_some() { 2 } else { 1 });
+
+    let result_vec: Result&lt;Vec&lt;u16&gt;, String&gt; = match &amp;val {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) =&gt; {
+            let s_len = {
+                let inner = handle.borrow();
+                match &amp;inner.storage {
+                    HeapStorage::Str(s) =&gt; s.len(),
+                    _ =&gt; {
+                        return ctx.throw_by_name_with_message(
+                            &quot;System.ArgumentException&quot;,
+                            &quot;The argument must be a string.&quot;,
+                        );
+                    }
+                }
+            };
+
+            if start_at &gt; s_len {
+                return ctx.throw_by_name_with_message(
+                    &quot;System.ArgumentOutOfRangeException&quot;,
+                    &quot;startIndex&quot;,
+                );
+            }
+
+            let l = match length {
+                None =&gt; s_len - start_at,
+                Some(l) =&gt; {
+                    if start_at + l &gt; s_len {
+                        return ctx.throw_by_name_with_message(
+                            &quot;System.ArgumentOutOfRangeException&quot;,
+                            &quot;length&quot;,
+                        );
+                    }
+                    l
+                }
+            };
+
+            let mut result_vec = Vec::with_capacity(l);
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024 * 64; // 64K characters
+            while offset &lt; l {
+                let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
+                {
+                    let _gc_scope = GcScopeGuard::enter(
+                        ctx.as_borrow_scope(),
+                        ctx.as_borrow_scope().gc_ready_token(),
+                    );
+                    let inner = handle.borrow();
+                    match &amp;inner.storage {
+                        HeapStorage::Str(s) =&gt; {
+                            result_vec.extend_from_slice(
+                                &amp;s[start_at + offset..start_at + offset + current_chunk],
+                            );
+                        }
+                        _ =&gt; break,
+                    }
+                }
+                offset += current_chunk;
+                if offset &lt; l &amp;&amp; ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
+            }
+            Ok(result_vec)
+        }
+        StackValue::ObjectRef(ObjectRef(None)) =&gt; {
+            return ctx.throw_by_name_with_message(&quot;System.NullReferenceException&quot;, NULL_REF_MSG);
+        }
+        _ =&gt; {
+            return ctx.throw_by_name_with_message(
+                &quot;System.ArgumentException&quot;,
+                &quot;The argument must be a string.&quot;,
+            );
+        }
+    };
+
+    let value = match result_vec {
+        Ok(v) =&gt; v,
+        Err(e) =&gt; return StepResult::internal_error(e),
+    };
+
+    ctx.drop_top(if length.is_some() { 3 } else { 2 });
+    ctx.push_string(CLRString::new(value));
+    StepResult::Continue
+}
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn substring(
+    mut fx: VmEffects,
+    source: StringRoot,
+    start: i32,
+    length: Option&lt;i32&gt;,
+) -&gt; Outcome {
+    let count = {
+        let mut vm = fx.vm().await?;
+        vm.string(&amp;source).substring_len(start, length)?
+    };
+    let mut result = Vec::with_capacity(count);
+    let mut offset = 0;
+    const CHUNK_SIZE: usize = 1024 * 64;
+    while offset &lt; count {
+        let end = (offset + CHUNK_SIZE).min(count);
+        {
+            let mut vm = fx.vm().await?;
+            vm.string(&amp;source).copy_range(
+                start as usize + offset,
+                start as usize + end,
+                &amp;mut result,
+            )?;
+        }
+        offset = end;
+    }
+    let mut vm = fx.vm().await?;
+    Ok(vm.new_string(result))
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn substring(
+    mut fx: VmEffects,
+    source: StringRoot,
+    start: i32,
+    length: Option&lt;i32&gt;,
+) -&gt; Outcome {
+    let count = fx.enter(|c| {
+        let source = source.get(c);
+        let source = source.borrow();
+        let ObjectData::String(chars) = &amp;*source else {
+            return Err(Failure::Managed(&quot;ArgumentException&quot;));
+        };
+        if start &lt; 0 || start as usize &gt; chars.len() {
+            return Err(Failure::Managed(&quot;ArgumentOutOfRangeException:startIndex&quot;));
+        }
+        let count = length.unwrap_or((chars.len() - start as usize) as i32);
+        if count &lt; 0 || count as usize &gt; chars.len() - start as usize {
+            return Err(Failure::Managed(&quot;ArgumentOutOfRangeException:length&quot;));
+        }
+        Ok(count as usize)
+    })?;
+    let mut result = Vec::with_capacity(count);
+    let mut offset = 0;
+    const CHUNK_SIZE: usize = 1024 * 64;
+    while offset &lt; count {
+        let end = (offset + CHUNK_SIZE).min(count);
+        let requested = fx.enter(|c| {
+            let source = source.get(c);
+            {
+                let source = source.borrow();
+                let ObjectData::String(chars) = &amp;*source else {
+                    unreachable!()
+                };
+                result.extend_from_slice(&amp;chars[start as usize + offset..start as usize + end]);
+            }
+            c.host().copied(end - offset);
+            c.requested()
+        });
+        offset = end;
+        if offset &lt; count &amp;&amp; requested {
+            fx.safe_point().await?;
+        }
+    }
+    Ok(fx.enter(|c| c.string(result).0))
+}</pre></article></div></section><section><h2 id="wait_finalizers">wait_finalizers</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-vm/src/intrinsics/gc.rs:200
+pub fn intrinsic_gc_wait_for_pending_finalizers&lt;&#x27;gc, T: MemoryOps&lt;&#x27;gc&gt; + VesInternals&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    _method: MethodDescription,
+    _generics: &amp;GenericLookup,
+) -&gt; StepResult {
+    // If there are pending finalizers or we&#x27;re currently processing one,
+    // yield to wait (this effectively spins until finalizers complete)
+    if !ctx.heap().pending_finalization.borrow().is_empty() || ctx.heap().processing_finalizer.get()
+    {
+        return ctx.yield_spin();
+    }
+    StepResult::Continue
+}
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn wait_finalizers(mut fx: VmEffects) -&gt; Outcome {
+    fx.wait_finalizers().await?;
+    Ok(Stashed::Void)
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn wait_finalizers(mut fx: VmEffects) -&gt; Outcome {
+    fx.wait_finalizers().await?;
+    Ok(Stashed::Void)
+}</pre></article></div></section><section><h2 id="monitor_enter">monitor_enter</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-intrinsics-threading/src/monitor.rs:89
+pub fn intrinsic_monitor_enter_obj&lt;&#x27;gc, T: ThreadingIntrinsicHost&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    _method: MethodDescription,
+    _generics: &amp;GenericLookup,
+) -&gt; StepResult {
+    let gc = ctx.gc_with_token(&amp;ctx.no_active_borrows_token());
+    let obj_ref = ctx.peek_stack_at(0).as_object_ref();
+
+    if obj_ref.0.is_some() {
+        let thread_id = ctx.thread_id();
+        assert_ne!(
+            thread_id,
+            ArenaId::INVALID,
+            &quot;Monitor.Enter called from unregistered thread&quot;
+        );
+
+        let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
+
+        match ctx.monitor_enter_safe(&amp;sync_block, thread_id) {
+            MonitorLockResult::Success =&gt; {
+                let _ = ctx.pop();
+                StepResult::Continue
+            }
+            MonitorLockResult::Yield =&gt; StepResult::Yield,
+            MonitorLockResult::Timeout =&gt; unreachable!(&quot;Infinite timeout cannot time out&quot;),
+        }
+    } else {
+        let _ = ctx.pop();
+        ctx.throw_by_name_with_message(&quot;System.NullReferenceException&quot;, NULL_REF_MSG)
+    }
+}
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn monitor_enter(mut fx: VmEffects, object: Stashed) -&gt; Outcome {
+    if matches!(object, Stashed::Null) {
+        return Err(Failure::Managed(&quot;NullReferenceException&quot;));
+    }
+    fx.monitor_acquire(object, None).await?;
+    Ok(Stashed::Void)
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn monitor_enter(mut fx: VmEffects, object: Stashed) -&gt; Outcome {
+    if matches!(object, Stashed::Null) {
+        return Err(Failure::Managed(&quot;NullReferenceException&quot;));
+    }
+    fx.monitor_acquire(object, None).await?;
+    Ok(Stashed::Void)
+}</pre></article></div></section><section><h2 id="reflection_invoke">reflection_invoke</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-intrinsics-reflection/src/methods.rs:375
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+            let is_constructor = method.method().name == &quot;.ctor&quot;;
+
+            if is_constructor {
+                ctx.push(this_obj.clone());
+            }
+
+            let mut args = Vec::new();
+            if method.signature().instance {
+                args.push(this_obj);
+            }
+
+            let mut invoke_args =
+                match unmarshal_invoke_params(ctx, &amp;gc, &amp;method, &amp;lookup, parameters_obj) {
+                    Ok(a) =&gt; a,
+                    Err(res) =&gt; return res,
+                };
+            args.append(&amp;mut invoke_args);
+
+            let return_type = if is_constructor {
+                RuntimeType::Type(method.parent.clone())
+            } else {
+                resolve_return_type(ctx, &amp;method, &amp;lookup)
+            };
+
+            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(return_type));
+
+            for arg in args {
+                ctx.push(arg);
+            }
+
+            return ctx.reflection_dispatch_method(method, lookup);
+        }
+        (&quot;Invoke&quot;, 4) =&gt; {
+            let _culture = ctx.pop();
+            let parameters_obj = ctx.pop_obj();
+            let _binder = ctx.pop();
+            let _flags = ctx.pop_i32();
+            let method_obj = ctx.pop_obj();
+
+            let (method, lookup) =
+                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
+
+            let instance = dotnet_vm_ops::vm_try!(
+                ctx.reflection_new_object_with_lookup(method.parent.clone(), &amp;lookup)
+            );
+            let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
+            ctx.register_new_object(&amp;this_obj);
+
+            ctx.push_obj(this_obj);
+
+            let mut args = Vec::new();
+            args.push(StackValue::ObjectRef(this_obj));
+
+            let mut invoke_args =
+                match unmarshal_invoke_params(ctx, &amp;gc, &amp;method, &amp;lookup, parameters_obj) {
+                    Ok(a) =&gt; a,
+                    Err(res) =&gt; return res,
+                };
+            args.append(&amp;mut invoke_args);
+
+            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(RuntimeType::Type(
+                method.parent.clone(),
+            )));
+
+            for arg in args {
+                ctx.push(arg);
+            }
+
+            return ctx.reflection_dispatch_method(method, lookup);
+        }
+
+// Verbatim snapshot: crates/dotnet-intrinsics-reflection/src/methods.rs:1019
+fn unmarshal_invoke_params&lt;&#x27;gc, T: ReflectionIntrinsicHost&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    gc: &amp;GCHandle&lt;&#x27;gc&gt;,
+    method: &amp;MethodDescription,
+    lookup: &amp;GenericLookup,
+    parameters_obj: ObjectRef&lt;&#x27;gc&gt;,
+) -&gt; Result&lt;Vec&lt;StackValue&lt;&#x27;gc&gt;&gt;, StepResult&gt; {
+    let mut args = Vec::new();
+
+    if parameters_obj.0.is_some() {
+        let vector = match parameters_obj.as_heap_storage(|s| match s {
+            HeapStorage::Vec(v) =&gt; Ok(v.clone()),
+            other =&gt; Err(format!(&quot;{other:?}&quot;)),
+        }) {
+            Ok(v) =&gt; v,
+            Err(actual) =&gt; {
+                return Err(type_mismatch(&quot;object[]&quot;, actual));
+            }
+        };
+
+        let mut replacement_boxes = Vec::new();
+        let mut elements = vector.object_ref_elements(gc);
+        let element_size = vector.layout.element_layout.size();
+        for i in 0..vector.layout.length {
+            let arg_obj = elements
+                .next()
+                .expect(&quot;invoke parameters storage must match vector length&quot;);
+            let param_type = &amp;method.signature().parameters[i].1;
+            let byref_slot = InvokeByRefSlot {
+                owner: parameters_obj,
+                offset: element_size * i,
+            };
+            let arg = unbox_param_to_stack_value(
+                ctx,
+                arg_obj,
+                method,
+                param_type,
+                lookup,
+                Some(byref_slot),
+            )?;
+
+            if let Some(owner) = arg.replacement_box {
+                replacement_boxes.push((i, owner));
+            }
+
+            args.push(arg.stack_value);
+        }
+
+        if !replacement_boxes.is_empty() {
+            parameters_obj.as_vector_mut(*gc, |vector| {
+                let mut elements = vector.object_ref_elements(gc).collect::&lt;Vec&lt;_&gt;&gt;();
+                for (index, owner) in replacement_boxes {
+                    elements[index] = owner;
+                }
+                vector.write_object_ref_elements_mut(&amp;elements);
+            });
+        }
+    }
+
+    Ok(args)
+}
+
+// Byref implementation (same source):826
+struct InvokeByRefSlot&lt;&#x27;gc&gt; {
+    owner: ObjectRef&lt;&#x27;gc&gt;,
+    offset: ByteOffset,
+}
+
+struct UnboxedInvokeArg&lt;&#x27;gc&gt; {
+    stack_value: StackValue&lt;&#x27;gc&gt;,
+    replacement_box: Option&lt;ObjectRef&lt;&#x27;gc&gt;&gt;,
+}
+
+fn make_concrete_param&lt;&#x27;gc, T: ReflectionIntrinsicHost&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    lookup: &amp;GenericLookup,
+    method: &amp;MethodDescription,
+    t: &amp;dotnetdll::prelude::MethodType,
+) -&gt; Result&lt;(ConcreteType, TypeDescription, bool), StepResult&gt; {
+    let concrete_param_type =
+        match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
+            Ok(v) =&gt; v,
+            Err(e) =&gt; return Err(StepResult::Error(e.into())),
+        };
+    let td = ctx
+        .loader()
+        .find_concrete_type(concrete_param_type.clone())
+        .expect(&quot;Parameter type must exist for MethodInfo.Invoke&quot;);
+    let is_value_type = match ctx.reflection_is_value_type_with_lookup(td.clone(), lookup) {
+        Ok(v) =&gt; v,
+        Err(e) =&gt; return Err(StepResult::Error(e.into())),
+    };
+
+    Ok((concrete_param_type, td, is_value_type))
+}
+
+fn unbox_param_to_stack_value&lt;&#x27;gc, T: ReflectionIntrinsicHost&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    arg: ObjectRef&lt;&#x27;gc&gt;,
+    method: &amp;MethodDescription,
+    param_type: &amp;ParameterType&lt;dotnetdll::prelude::MethodType&gt;,
+    lookup: &amp;GenericLookup,
+    byref_slot: Option&lt;InvokeByRefSlot&lt;&#x27;gc&gt;&gt;,
+) -&gt; Result&lt;UnboxedInvokeArg&lt;&#x27;gc&gt;, StepResult&gt; {
+    match param_type {
+        ParameterType::TypedReference =&gt; {
+            if arg.0.is_none() {
+                return Err(type_mismatch(&quot;boxed System.TypedReference&quot;, &quot;null&quot;));
+            }
+
+            let val = match arg.as_heap_storage(|s| {
+                if let HeapStorage::Boxed(o) = s {
+                    let tr_type = ctx
+                        .loader()
+                        .corlib_wkt(WellKnown::TypedReference)
+                        .expect(&quot;System.TypedReference must exist&quot;);
+                    Ok(o.instance_storage
+                        .with_data(|data| ctx.read_cts_value(&amp;tr_type.into(), data)))
+                } else {
+                    Err(format!(&quot;{s:?}&quot;))
+                }
+            }) {
+                Ok(v) =&gt; v,
+                Err(actual) =&gt; {
+                    return Err(type_mismatch(&quot;boxed System.TypedReference&quot;, actual));
+                }
+            };
+
+            match val {
+                Ok(v) =&gt; Ok(UnboxedInvokeArg {
+                    stack_value: v.into_stack(),
+                    replacement_box: None,
+                }),
+                Err(e) =&gt; Err(StepResult::Error(e.into())),
+            }
+        }
+        ParameterType::Value(t) =&gt; {
+            let (concrete_param_type, _, is_value_type) =
+                make_concrete_param(ctx, lookup, method, t)?;
+
+            if is_value_type {
+                if arg.0.is_none() {
+                    Ok(UnboxedInvokeArg {
+                        stack_value: StackValue::null(),
+                        replacement_box: None,
+                    })
+                } else {
+                    let val = match arg.as_heap_storage(|s| {
+                        if let HeapStorage::Boxed(o) = s {
+                            Ok(o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&amp;concrete_param_type, data)))
+                        } else {
+                            Err(format!(&quot;{s:?}&quot;))
+                        }
+                    }) {
+                        Ok(v) =&gt; v,
+                        Err(actual) =&gt; {
+                            return Err(type_mismatch(&quot;boxed value&quot;, actual));
+                        }
+                    };
+
+                    match val {
+                        Ok(v) =&gt; Ok(UnboxedInvokeArg {
+                            stack_value: v.into_stack(),
+                            replacement_box: None,
+                        }),
+                        Err(e) =&gt; Err(StepResult::Error(e.into())),
+                    }
+                }
+            } else {
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::ObjectRef(arg),
+                    replacement_box: None,
+                })
+            }
+        }
+        ParameterType::Ref(t) =&gt; {
+            let (concrete_param_type, td, is_value_type) =
+                make_concrete_param(ctx, lookup, method, t)?;
+
+            if is_value_type {
+                let (arg_obj, replacement_box) = if arg.0.is_some() {
+                    (arg, None)
+                } else {
+                    let boxed_lookup = concrete_param_type.make_lookup();
+                    let boxed =
+                        match ctx.reflection_new_object_with_lookup(td.clone(), &amp;boxed_lookup) {
+                            Ok(v) =&gt; v,
+                            Err(e) =&gt; return Err(StepResult::Error(e.into())),
+                        };
+                    let token = ctx.no_active_borrows_token();
+                    let gc = ctx.gc_with_token(&amp;token);
+                    let obj = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(boxed)));
+                    ctx.register_new_object(&amp;obj);
+                    (obj, Some(obj))
+                };
+
+                let data_ptr = match arg_obj.as_heap_storage(|s| {
+                    if let HeapStorage::Boxed(o) = s {
+                        Ok(o.instance_storage
+                            .with_data(|data| data.as_ptr() as *mut u8))
+                    } else {
+                        Err(format!(&quot;{s:?}&quot;))
+                    }
+                }) {
+                    Ok(v) =&gt; v,
+                    Err(actual) =&gt; {
+                        return Err(type_mismatch(&quot;boxed value&quot;, actual));
+                    }
+                };
+
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::managed_ptr_with_owner(
+                        data_ptr,
+                        td,
+                        Some(arg_obj),
+                        false,
+                        None,
+                    ),
+                    replacement_box,
+                })
+            } else {
+                let slot = byref_slot.expect(
+                    &quot;MethodInfo.Invoke by-ref reference args require object[] slot backing&quot;,
+                );
+                let element_ptr = slot.owner.as_heap_storage(|s| match s {
+                    HeapStorage::Vec(v) =&gt; {
+                        Ok(v.get().as_ptr().wrapping_add(slot.offset.as_usize()) as *mut u8)
+                    }
+                    other =&gt; Err(format!(&quot;{other:?}&quot;)),
+                });
+
+                let data_ptr = match element_ptr {
+                    Ok(ptr) =&gt; ptr,
+                    Err(actual) =&gt; {
+                        return Err(type_mismatch(&quot;object[]&quot;, actual));
+                    }
+                };
+
+                // Reference-type by-ref parameters need writable slot backing so assignments like
+                // `ref SomeClass x; x = newObj;` update the original object[] argument array.
+                Ok(UnboxedInvokeArg {
+                    stack_value: StackValue::managed_ptr_with_owner(
+                        data_ptr,
+                        td,
+                        Some(slot.owner),
+                        false,
+                        Some(slot.offset),
+                    ),
+                    replacement_box: None,
+                })
+            }
+        }
+    }
+}
+// Return completion: crates/dotnet-vm/src/stack/context.rs:377
+        let frame_continuation = self
+            .frame_stack
+            .current_frame_opt_mut()
+            .and_then(|caller| caller.frame_continuation.take());
+
+        if let Some(FrameReturnAction::InvokeReturn(return_type)) = frame_continuation {
+            if matches!(return_type, RuntimeType::Void) {
+                self.push(StackValue::null());
+            } else {
+                let val = self.pop();
+                let return_concrete = return_type.to_concrete(&amp;*self.shared.loader);
+                let td = self
+                    .shared
+                    .loader
+                    .find_concrete_type(return_concrete.clone())
+                    .expect(&quot;Type must exist for return_frame&quot;);
+                if td
+                    .is_value_type(&amp;self.current_context())
+                    .expect(&quot;Failed to check if return type is value type&quot;)
+                {
+                    let boxed =
+                        dotnet_vm_ops::ops::MemoryOps::box_value(self, &amp;return_concrete, val)
+                            .expect(&quot;Failed to box return value&quot;);
+                    self.push_obj(boxed);
+                } else {
+                    // already a reference type (or null)
+                    self.push(val);
+                }
+            }
+        }
+
+        self.frame_stack.recycle_frame(frame);
+        StepResult::Continue
+    }
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn reflection_invoke(mut fx: VmEffects, spec: InvokeSpec) -&gt; Outcome {
+    let call = {
+        let mut vm = fx.vm().await?;
+        prepare_invoke_guarded(&amp;mut vm, &amp;spec)?
+    };
+    let result = fx.call_managed(call).await;
+    let mut vm = fx.vm().await?;
+    finish_invoke_guarded(&amp;mut vm, &amp;spec, result)
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn reflection_invoke(mut fx: VmEffects, spec: InvokeSpec) -&gt; Outcome {
+    let call = fx.enter(|c| prepare_invoke(c, &amp;spec))?;
+    let result = fx.call_managed(call).await;
+    // Byref writes are through owned cells. A transparent throw unwinds this native frame;
+    // normal completion alone reaches return boxing, matching the existing remote hook.
+    fx.enter(|c| finish_invoke(c, &amp;spec, result))
+}</pre></article></div></section><section><h2 id="multicast">multicast</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-intrinsics-delegates/src/invoke.rs:17
+pub(super) fn invoke_delegate&lt;&#x27;gc, T: DelegateIntrinsicHost&lt;&#x27;gc&gt; + DelegateInvokeHost&lt;&#x27;gc&gt;&gt;(
+    ctx: &amp;mut T,
+    invoke_method: MethodDescription,
+    _lookup: &amp;GenericLookup,
+) -&gt; StepResult {
+    let num_invoke_args = invoke_method.signature().parameters.len();
+
+    // Stack order: [delegate_instance, arg0, arg1, ..., argN]. Keep only the invoke arguments
+    // in the VM-owned reusable buffer, then pop the receiver separately. This avoids allocating
+    // a temporary argument vector and copying it again for the target call.
+    ctx.pop_call_args_into_buffer(num_invoke_args);
+    let delegate_value = ctx.pop();
+
+    let delegate_ref = match expect_stack_object_with_policy(
+        ctx,
+        &amp;delegate_value,
+        &quot;delegate object reference&quot;,
+        ArgPolicy::ManagedNullNre,
+    ) {
+        Ok(delegate_ref) =&gt; delegate_ref,
+        Err(step) =&gt; return step,
+    };
+
+    // Check for multicast targets
+    let multicast_targets = if let Some(targets_ref) = get_multicast_targets_ref(ctx, delegate_ref)
+    {
+        let targets_len = targets_ref.as_vector(|v| v.layout.length);
+        if targets_len &gt; 1 {
+            Some(
+                targets_ref
+                    .0
+                    .expect(&quot;get_multicast_targets_ref returned a non-null object reference&quot;),
+            )
+        } else {
+            // If len == 1, check if it&#x27;s not &#x27;this&#x27;
+            let first_target = targets_ref.as_vector(|v| {
+                let gc = ctx.gc_with_token(&amp;ctx.no_active_borrows_token());
+                v.object_ref_elements(&amp;gc)
+                    .next()
+                    .expect(&quot;multicast targets vector must contain first element&quot;)
+            });
+            if first_target != delegate_ref {
+                Some(
+                    targets_ref
+                        .0
+                        .expect(&quot;get_multicast_targets_ref returned a non-null object reference&quot;),
+                )
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(targets_handle) = multicast_targets {
+        // Push a dummy frame for the current Invoke method
+        let method_info = dotnet_vm_ops::vm_try!(ctx.delegate_method_info(invoke_method, _lookup));
+        let args = std::mem::take(ctx.call_args_buffer_mut());
+
+        // Push a copy for the first target&#x27;s frame while the multicast state retains the reusable
+        // vector for subsequent targets. The vector itself is moved; no argument-vector copy is
+        // made.
+        ctx.push(dotnet_value::StackValue::ObjectRef(delegate_ref));
+        for arg in &amp;args {
+            ctx.push(arg.clone());
+        }
+
+        dotnet_vm_ops::vm_try!(ctx.delegate_call_frame(method_info, _lookup.clone()));
+
+        // Set multicast state
+        ctx.frame_stack_mut().current_frame_mut().multicast_state = Some(MulticastState {
+            targets: targets_handle,
+            next_index: 0,
+            args,
+        });
+
+        return StepResult::FramePushed;
+    }
+
+    let (target, method_index) = get_delegate_info(ctx, delegate_ref);
+
+    // Look up the actual method from the registry
+    let (target_method, target_lookup) = ctx.delegate_lookup_method_by_index(method_index);
+    let mut args = std::mem::take(ctx.call_args_buffer_mut());
+
+    // Match PreparedCall::for_delegate_target without transferring ownership of the reusable
+    // buffer: an instance target (or a closed static target) is followed by the invoke arguments.
+    if target_method.signature().instance || target.0.is_some() {
+        ctx.push(dotnet_value::StackValue::ObjectRef(target));
+    }
+    for arg in args.drain(..) {
+        ctx.push(arg);
+    }
+    *ctx.call_args_buffer_mut() = args;
+
+    // Dispatch to the target method
+    ctx.delegate_dispatch_method(target_method, target_lookup)
+}
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn multicast(mut fx: VmEffects, methods: Vec&lt;usize&gt;, args: Vec&lt;Stashed&gt;) -&gt; Outcome {
+    let mut last = Stashed::Void;
+    for method in methods {
+        last = fx
+            .call_managed(Call {
+                propagation: Propagation::Transparent,
+                method,
+                args: args.clone(),
+                byrefs: vec![],
+            })
+            .await?;
+    }
+    Ok(last)
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn multicast(mut fx: VmEffects, methods: Vec&lt;usize&gt;, args: Vec&lt;Stashed&gt;) -&gt; Outcome {
+    let mut last = Stashed::Void;
+    for method in methods {
+        last = fx
+            .call_managed(Call {
+                propagation: Propagation::Transparent,
+                method,
+                args: args.clone(),
+                byrefs: vec![],
+            })
+            .await?;
+    }
+    Ok(last)
+}</pre></article></div></section><section><h2 id="ensure_static">ensure_static</h2><div class="grid"><article><h3>Today</h3><pre>// Verbatim snapshot: crates/dotnet-vm/src/statics.rs:476
+pub fn wait_for_init(
+        &amp;self,
+        description: TypeDescription,
+        generics: &amp;GenericLookup,
+        thread_manager: &amp;impl ThreadManagerOps,
+        thread_id: dotnet_utils::ArenaId,
+        _gc_coordinator: &amp;GCCoordinator,
+    ) -&gt; bool {
+        let storage = self.get(description, generics);
+        let mut should_yield = false;
+        let edge_guard = WaitGraphEdgeGuard::new(&amp;self.wait_graph, thread_id.as_u64());
+
+        #[allow(
+            clippy::never_loop,
+            reason = &quot;single-threaded builds can reach this loop only through an invariant violation&quot;
+        )]
+        loop {
+            // Check state before acquiring lock
+            let state = storage.init_state.load(Ordering::Acquire);
+            if state != INIT_STATE_INITIALIZING {
+                break;
+            }
+
+            // Ensure our wait edge is up-to-date
+            let target_thread = storage.initializing_thread.load(Ordering::Acquire);
+            edge_guard.update(target_thread);
+
+            // Check for GC safe point before waiting
+            if thread_manager.is_gc_stop_requested() {
+                should_yield = true;
+                break;
+            }
+
+            // Try to wait with a timeout
+            #[cfg(feature = &quot;multithreading&quot;)]
+            {
+                let mut lock = storage.init_mutex.lock();
+                if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
+                    break;
+                }
+
+                // Wait for a short duration to allow periodic safe point checks
+                use std::time::Duration;
+                let _ = storage
+                    .init_cond
+                    .wait_for(lock.raw_mut(), Duration::from_millis(10));
+            }
+            #[cfg(not(feature = &quot;multithreading&quot;))]
+            {
+                unreachable!(
+                    &quot;wait_for_init is unreachable in single-threaded builds: StaticInitResult::Waiting cannot be produced when only one thread exists&quot;
+                );
+            }
+        }
+
+        drop(edge_guard);
+        should_yield
+    }
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn ensure_static(mut fx: VmEffects, ty: usize) -&gt; Outcome {
+    loop {
+        let action = {
+            let mut vm = fx.vm().await?;
+            vm.static_action(ty)
+        };
+        match action {
+            StaticAction::Ready =&gt; return Ok(Stashed::Void),
+            StaticAction::Failed =&gt; return Err(Failure::Managed(&quot;TypeInitializationException&quot;)),
+            StaticAction::Run(method) =&gt; {
+                fx.call_managed(Call {
+                    propagation: Propagation::Transparent,
+                    method,
+                    args: vec![],
+                    byrefs: vec![],
+                })
+                .await?;
+            }
+            StaticAction::Wait =&gt; {
+                fx.wait_static_init(ty).await?;
+            }
+        }
+    }
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn ensure_static(mut fx: VmEffects, ty: usize) -&gt; Outcome {
+    loop {
+        match fx.enter(|c| c.host().static_action(ty)) {
+            StaticAction::Ready =&gt; return Ok(Stashed::Void),
+            StaticAction::Failed =&gt; return Err(Failure::Managed(&quot;TypeInitializationException&quot;)),
+            StaticAction::Run(method) =&gt; {
+                // VM marks initialized/failed on .cctor frame retirement, as today.
+                fx.call_managed(Call {
+                    propagation: Propagation::Transparent,
+                    method,
+                    args: vec![],
+                    byrefs: vec![],
+                })
+                .await?;
+            }
+            StaticAction::Wait =&gt; {
+                fx.wait_static_init(ty).await?;
+            }
+        }
+    }
+}</pre></article></div></section><section><h2 id="heap_slot_after_wait">heap_slot_after_wait</h2><div class="grid"><article><h3>Today</h3><pre>// No exact existing intrinsic. Probe for a rooted heap slot after suspension.
+// Arbitrary ManagedPtr transport remains excluded; see Monitor.ReliableEnter
+// in crates/dotnet-intrinsics-threading/src/monitor.rs:141-200.
+</pre></article><article><h3>Chosen · async RAII</h3><pre>pub async fn heap_slot_after_wait(mut fx: VmEffects, owner: ArrayRoot, index: usize) -&gt; Outcome {
+    fx.safe_point().await?;
+    let mut vm = fx.vm().await?;
+    vm.array_at(&amp;owner, index)
+}</pre></article><article><h3>Rejected · callback facade</h3><pre>pub async fn heap_slot_after_wait(mut fx: VmEffects, owner: ArrayRoot, index: usize) -&gt; Outcome {
+    fx.safe_point().await?;
+    fx.enter(|c| {
+        let object = owner.get(c);
+        let object = object.borrow();
+        let ObjectData::Array(values) = &amp;*object else {
+            return Err(Failure::Managed(&quot;ArgumentException&quot;));
+        };
+        let value = *values
+            .get(index)
+            .ok_or(Failure::Managed(&quot;IndexOutOfRangeException&quot;))?;
+        Ok(c.stash(value))
+    })
+}</pre></article></div></section>

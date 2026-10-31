@@ -1,0 +1,6 @@
+command: ['python3', 'evidence/check_compile_fail.py']
+environment: {}
+exit: 0
+wall seconds: 0.356
+
+15 negative examples failed for lifetime/borrow reasons; see evidence/compile-fail-diagnostics.log

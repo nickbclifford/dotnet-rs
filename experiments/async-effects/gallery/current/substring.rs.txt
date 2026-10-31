@@ -1,0 +1,102 @@
+// Verbatim snapshot: crates/dotnet-intrinsics-string/src/search.rs:60
+pub fn intrinsic_string_substring<
+    'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let (start_at, length) = if method.signature().parameters.len() == 1 {
+        let start_at = ctx.peek_stack().as_i32();
+        (start_at as usize, None)
+    } else {
+        let length = ctx.peek_stack().as_i32();
+        let start_at = ctx.peek_stack_at(1).as_i32();
+        (start_at as usize, Some(length as usize))
+    };
+
+    let val = ctx.peek_stack_at(if length.is_some() { 2 } else { 1 });
+
+    let result_vec: Result<Vec<u16>, String> = match &val {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let s_len = {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(s) => s.len(),
+                    _ => {
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentException",
+                            "The argument must be a string.",
+                        );
+                    }
+                }
+            };
+
+            if start_at > s_len {
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentOutOfRangeException",
+                    "startIndex",
+                );
+            }
+
+            let l = match length {
+                None => s_len - start_at,
+                Some(l) => {
+                    if start_at + l > s_len {
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentOutOfRangeException",
+                            "length",
+                        );
+                    }
+                    l
+                }
+            };
+
+            let mut result_vec = Vec::with_capacity(l);
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024 * 64; // 64K characters
+            while offset < l {
+                let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
+                {
+                    let _gc_scope = GcScopeGuard::enter(
+                        ctx.as_borrow_scope(),
+                        ctx.as_borrow_scope().gc_ready_token(),
+                    );
+                    let inner = handle.borrow();
+                    match &inner.storage {
+                        HeapStorage::Str(s) => {
+                            result_vec.extend_from_slice(
+                                &s[start_at + offset..start_at + offset + current_chunk],
+                            );
+                        }
+                        _ => break,
+                    }
+                }
+                offset += current_chunk;
+                if offset < l && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
+            }
+            Ok(result_vec)
+        }
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be a string.",
+            );
+        }
+    };
+
+    let value = match result_vec {
+        Ok(v) => v,
+        Err(e) => return StepResult::internal_error(e),
+    };
+
+    ctx.drop_top(if length.is_some() { 3 } else { 2 });
+    ctx.push_string(CLRString::new(value));
+    StepResult::Continue
+}

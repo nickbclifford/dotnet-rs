@@ -1,0 +1,14 @@
+// Verbatim snapshot: crates/dotnet-vm/src/intrinsics/gc.rs:200
+pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc> + VesInternals<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    // If there are pending finalizers or we're currently processing one,
+    // yield to wait (this effectively spins until finalizers complete)
+    if !ctx.heap().pending_finalization.borrow().is_empty() || ctx.heap().processing_finalizer.get()
+    {
+        return ctx.yield_spin();
+    }
+    StepResult::Continue
+}

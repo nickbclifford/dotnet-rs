@@ -1,0 +1,66 @@
+command: ['cargo', '+nightly-2026-05-27', 'miri', 'test', '--offline', '--workspace', '--lib']
+environment: {'MIRIFLAGS': '-Zmiri-tree-borrows'}
+exit: 0
+wall seconds: 61.298
+
+   Compiling effect-ops v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/ops)
+   Compiling effect-intrinsics v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/intrinsics)
+   Compiling effect-vm v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/vm)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/async_effects_proto-a4f9d62dbc36fc92)
+
+running 4 tests
+test cost::per_op_overhead ... ignored
+test tests::chunked_sum_keeps_progress_across_full_collections ... ok
+test tests::managed_callbacks_from_straight_line_rust ... ok
+test tests::stash_is_what_keeps_objects_alive ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.39s
+
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/effect_intrinsics-827465b64f3bc339)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/effect_ops-0949e70d6ebab7aa)
+
+running 3 tests
+test tests::escaped_effects_capability_cannot_enter - should panic ... ok
+test tests::handles_cannot_be_fetched_in_another_continuation - should panic ... ok
+test tests::slot_excludes_recursive_entry_and_clears_on_unwind ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/deps/effect_vm-a9e26289375d8397)
+
+running 27 tests
+test cost::native_overhead ... ignored
+test raii_cost::chosen_raii_access_cost ... ignored
+test region_api_tests::async_closure_can_lend_a_guard_to_an_immediately_ready_helper ... ok
+test region_api_tests::async_closure_pending_rejects_suspension_and_drops_real_scope_guard ... ok
+test region_api_tests::cancelled_guard_acquisition_releases_roots_without_entering_the_scope ... ok
+test region_api_tests::checkpoint_defers_callback_until_after_collection ... ok
+test region_api_tests::escaped_access_capability_cannot_touch_a_destroyed_arena ... ok
+test region_api_tests::forgetting_the_access_guard_does_not_forget_a_heap_borrow ... ok
+test region_api_tests::raii_access_can_span_a_ready_await_then_release_before_a_vm_effect ... ok
+test region_api_tests::ready_accesses_yield_a_bounded_quantum_without_a_gc_request ... ok
+test region_api_tests::reflection_completion_and_throw_work_with_each_region_api ... ok
+test region_api_tests::region_api_candidates_keep_chunk_progress ... ok
+test region_api_tests::region_requests_complete_inline_without_a_stop ... ok
+test tests::abort_and_budget_release_future_and_all_local_roots ... ok
+test tests::external_pending_is_rejected - should panic ... ok
+test tests::forgotten_real_scope_is_detected - should panic ... ok
+test tests::inline_first_poll_and_dyn_trampoline ... ok
+test tests::marshaled_owner_survives_gc_and_updates_on_exception ... ok
+test tests::multicast_stops_at_first_exception ... ok
+test tests::nested_managed_native_and_exception_reply ... ok
+test tests::reflection_boxing_and_byref_mutations_including_throw ... ok
+test tests::reflection_preserves_box_identity_and_reference_slot_assignment ... ok
+test tests::region_panic_restores_slot ... ok
+test tests::root_transfer_before_parent_resumes_and_source_drops ... ok
+test tests::substring_progress_survives_forced_gc_for_chosen_raii_and_gat ... ok
+test tests::transparent_throw_never_resumes_rust_catch_code ... ok
+test tests::wait_effects_and_static_trigger_for_both_candidates ... ok
+
+test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 169.24s
