@@ -13,23 +13,39 @@ SCRIPT = ROOT / "scripts/pointer_provenance.sh"
 SOURCE = ROOT / "crates/dotnet-vm/src/pointer_provenance_tests.rs"
 # Edit this mapping alongside the catalog and runner table when promoting a probe.
 CONTROLS_BY_SHARD = {
-    1: ["p00_smoke", "p02_ldloca_stind_i4_control"],
-    2: ["p03_ldloca_convu_ldind_i4", "p05_single_localloc_roundtrip"],
-    3: ["p07_localloc_one_past_end", "p11_ldelema_stind_heap_array_control"],
-    4: ["p10_ldelema_convu_stind_heap_array", "p20_heap_convu_then_typed_write_then_raw_store"],
-    5: ["p13_ldelema_managed_add_far_out_of_bounds_then_conv_u", "p14_initblk_heap_array_via_managed_ptr"],
-    6: ["p16_cpblk_heap_arrays_via_managed_ptr", "p_null_through_pointer_local_address"],
-    7: ["p06_localloc_minus_one_then_plus_one", "p08_localloc_overshoot"],
-    8: ["p17_localloc_ptr_ceq_self", "p18_localloc_ptr_clt"],
-    9: ["p21_localloc_signed_extreme_offsets_roundtrip", "p22_localloc_wrap_to_zero_roundtrip"],
-    10: ["p23_localloc_pointer_loop_unsigned_branch_compare", "p24_unsafe_byte_offset_direction_and_deref"],
-    11: ["p25_convi_and_stind_i_pointer_roundtrip_deref", "p26_native_int_boundary_store_load_roundtrip"],
-    12: ["p27_stind_i_fresh_pointer_through_local_slot_dereferences", "p28_stind_i_fresh_pointer_through_heap_memory_dereferences"],
-    13: ["p04_double_localloc_write_first", "p29_localloc_blocks_survive_growth_and_are_16_byte_aligned"],
-    14: ["p30_localloc_block_survives_nested_callee_localloc", "p31_localloc_blocks_released_on_return_and_pooling"],
-    15: ["p32_localloc_blocks_released_on_tail_call_replacement", "p33_localloc_blocks_released_on_exception_unwind"],
-    16: ["p34_localloc_blocks_released_on_executor_teardown", "p35_ldflda_on_stack_value_type_then_ldind"],
-    17: ["p36_static_address_survives_forced_collection"],
+    1: ["p00_smoke"],
+    2: ["p02_ldloca_stind_i4_control"],
+    3: ["p03_ldloca_convu_ldind_i4"],
+    4: ["p05_single_localloc_roundtrip"],
+    5: ["p07_localloc_one_past_end"],
+    6: ["p11_ldelema_stind_heap_array_control"],
+    7: ["p10_ldelema_convu_stind_heap_array"],
+    8: ["p20_heap_convu_then_typed_write_then_raw_store"],
+    9: ["p13_ldelema_managed_add_far_out_of_bounds_then_conv_u"],
+    10: ["p14_initblk_heap_array_via_managed_ptr"],
+    11: ["p16_cpblk_heap_arrays_via_managed_ptr"],
+    12: ["p_null_through_pointer_local_address"],
+    13: ["p06_localloc_minus_one_then_plus_one"],
+    14: ["p08_localloc_overshoot"],
+    15: ["p17_localloc_ptr_ceq_self"],
+    16: ["p18_localloc_ptr_clt"],
+    17: ["p21_localloc_signed_extreme_offsets_roundtrip"],
+    18: ["p22_localloc_wrap_to_zero_roundtrip"],
+    19: ["p23_localloc_pointer_loop_unsigned_branch_compare"],
+    20: ["p24_unsafe_byte_offset_direction_and_deref"],
+    21: ["p25_convi_and_stind_i_pointer_roundtrip_deref"],
+    22: ["p26_native_int_boundary_store_load_roundtrip"],
+    23: ["p27_stind_i_fresh_pointer_through_local_slot_dereferences"],
+    24: ["p28_stind_i_fresh_pointer_through_heap_memory_dereferences"],
+    25: ["p04_double_localloc_write_first"],
+    26: ["p29_localloc_blocks_survive_growth_and_are_16_byte_aligned"],
+    27: ["p30_localloc_block_survives_nested_callee_localloc"],
+    28: ["p31_localloc_blocks_released_on_return_and_pooling"],
+    29: ["p32_localloc_blocks_released_on_tail_call_replacement"],
+    30: ["p33_localloc_blocks_released_on_exception_unwind"],
+    31: ["p34_localloc_blocks_released_on_executor_teardown"],
+    32: ["p35_ldflda_on_stack_value_type_then_ldind"],
+    33: ["p36_static_address_survives_forced_collection"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 FAKE = r'''#!/usr/bin/env python3
@@ -40,15 +56,22 @@ with open(os.environ['CALLS'], 'a') as f:
     f.write(json.dumps({'args': a, 'flags': os.environ.get('MIRIFLAGS')}) + '\n')
 names = ['pointer_provenance_tests::' + n for n in json.loads(os.environ['CONTROLS'])]
 mode = os.environ.get('MODE', '')
+diagnostics = ['pointer_provenance_tests::' + n for n in json.loads(os.environ['DIAGNOSTICS'])]
+if mode in ('new-enabled', 'new-ignored'):
+    names.append('pointer_provenance_tests::p99_new_probe')
 if '--list' in a:
     if mode == 'missing': names.pop(0)
     if mode == 'typo': names[0] += '_typo'
     if mode == 'duplicate': names.append(names[0])
-    for n in names: print(n + ': test')
+    for n in names + diagnostics: print(n + ': test')
 elif 'nextest' in a:
     cases = {n: {'kind': 'test', 'ignored': mode == 'ignored' and i == 0,
                  'filter-match': {'status': 'mismatch' if mode == 'filter-mismatch' and i == 0 else 'matches'}}
              for i, n in enumerate(names)}
+    if mode == 'new-ignored':
+        cases[names[-1]].update(ignored=True, **{'filter-match': {'status': 'mismatch', 'reason': 'ignored'}})
+    cases.update({n: {'kind': 'test', 'ignored': True, 'filter-match': {'status': 'mismatch', 'reason': 'ignored'}}
+                  for n in diagnostics})
     print(json.dumps({'rust-suites': {'dotnet-vm': {'package-name': 'dotnet-vm', 'kind': 'lib',
           'status': 'skipped' if mode == 'not-listed' else 'listed', 'testcases': cases}}}))
 else:
@@ -87,7 +110,10 @@ class PointerScriptTests(unittest.TestCase):
         self.calls = self.path / 'calls'
         self.script = SCRIPT
         self.env = dict(os.environ, PATH=str(self.path) + os.pathsep + os.environ['PATH'],
-                        CALLS=str(self.calls), CONTROLS=json.dumps(CONTROLS), TMPDIR=str(self.path))
+                        CALLS=str(self.calls), CONTROLS=json.dumps(CONTROLS),
+                        DIAGNOSTICS=json.dumps(['p01_ldloca_convu_stind_i4', 'p09_ldloca_convu_survives_callee_stack_growth',
+                                                'p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
+                                                'p19_ldelem_negative_index', 'p_wide_store_into_int_local']), TMPDIR=str(self.path))
 
     def invoke(self, *args, mode='', ok=True):
         env = dict(self.env, MODE=mode)
@@ -144,19 +170,33 @@ class PointerScriptTests(unittest.TestCase):
                          ['p19_ldelem_negative_index'])
         self.assertEqual(self.recorded(), [])
 
+    def test_reviewed_manifest_matches_singleton_partition(self):
+        review = (ROOT / 'REVIEW.md').read_text()
+        section = review.split('### Blocking pointer singleton manifest', 1)[1].split('Partition proof', 1)[0]
+        reviewed = re.findall(r'\| (\d+) \| `pointer_provenance_tests::([^`]+)` \| 1 \|', section)
+        expected = [(str(shard), names[0]) for shard, names in CONTROLS_BY_SHARD.items()]
+        self.assertEqual(reviewed, expected)
+        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 34)))
+        self.assertEqual(len(set(CONTROLS)), 33)
+        for config in ('no-features', 'multithreading'):
+            for invalid in ('0', '34'):
+                self.invoke('controls', '--configuration', config, '--shard', invalid, '--dry-run', ok=False)
+        self.assertEqual(self.recorded(), [])
+
     def test_guard_good_and_stale_or_ignored(self):
         for config in ('no-features', 'multithreading'):
             count = 'six' if len(CONTROLS) == 6 else str(len(CONTROLS))
             self.assertIn(f'{count} exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
-            for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed'):
+            for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed', 'new-enabled'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
+        self.assertIn('33 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
     def test_caller_log_directory_retains_both_streams_and_failure(self):
         logdir = self.path / 'durable logs'
         self.env['POINTER_PROVENANCE_LOG_DIR'] = str(logdir)
-        args = ('controls', '--configuration', 'no-features', '--shard', '17')
+        args = ('controls', '--configuration', 'no-features', '--shard', '33')
         output = self.invoke(*args)
         log = (logdir / 'p36_static_address_survives_forced_collection.log').read_text()
         self.assertIn('fake stderr marker', log)
@@ -255,6 +295,8 @@ class PointerScriptTests(unittest.TestCase):
         self.assertEqual(len(ci_shards), len(set(ci_shards)))
         rows = [line.split('|') for line in self.invoke('list').splitlines()[1:]]
         self.assertEqual(set(ci_shards), {int(row[3]) for row in rows if row[1] == 'control'})
+        self.assertIn('key: miri-pointer-v2-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.shard }}',
+                      job.group('body'))
 
     def test_reject_invalid_control_table_before_cargo(self):
         original = SCRIPT.read_text()
@@ -294,17 +336,11 @@ class PointerScriptTests(unittest.TestCase):
                 self.calls.unlink(missing_ok=True)
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
                 self.assertEqual(self.recorded(), [])
+                # Even changing both catalogs cannot silently grow or pair the
+                # reviewed 33 singleton controls; a promotion needs a review.
                 self.script.write_text(catalog_only.replace(table_end, f"'{full}|{shard}'\n" + table_end))
                 self.env['CONTROLS'] = json.dumps(CONTROLS + [name])
-                count = len(CONTROLS_BY_SHARD.get(shard, [])) + 1
-                output = self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard))
-                self.assertIn(f'total: {count} passed, 0 failed', output)
-                calls = self.recorded()
-                self.assertEqual(len(calls), count + 2)
-                self.assertTrue(all('--ignored' not in c['args'] for c in calls))
-                self.assertIn(full, [c['args'][c['args'].index('--exact') + 1] for c in calls[2:]])
-                self.calls.unlink(missing_ok=True)
-                self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
+                self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
                 self.assertEqual(self.recorded(), [])
 
     def test_all_dry_runs_do_not_invoke_cargo(self):
