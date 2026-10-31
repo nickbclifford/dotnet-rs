@@ -18,7 +18,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 - [x] 2.2 Verify fixture cache invalidation from changed source, reject stale prebuilt artifacts, and observe CI Test Suite (fuzzing) plus a normal leg passing on the fixture commit; record SHA and run evidence. [effort: default] — refs REVIEW.md#F-FIXT-001
 
 ## Phase 3: Durable diagnostics before long validation
-- [ ] 3.1 Design and test a small phase-aware logging/classification wrapper with synthetic setup, test, UB, count-guard, timeout, and cancellation cases while preserving nonzero exits. [effort: high] — refs REVIEW.md#F-DIAG-001
+- [x] 3.1 Design and test a small phase-aware logging/classification wrapper with synthetic setup, test, UB, count-guard, timeout, and cancellation cases while preserving nonzero exits. [effort: high] — refs REVIEW.md#F-DIAG-001
 - [ ] 3.2 Wire persistent logs, explicit setup/compile/execute phases, inner time budgets, summaries, and always-upload artifacts into affected replay and Miri jobs; verify YAML, shell tests, and a hosted artifact/summary on the exact SHA. [effort: default] — refs REVIEW.md#F-DIAG-001
 
 ## Phase 4: Coverage-preserving Miri shards and budgets
