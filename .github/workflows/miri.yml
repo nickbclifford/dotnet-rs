@@ -38,18 +38,6 @@ jobs:
             configuration: no-features
             cargo-args: '--no-default-features'
             test-args: '--test-threads=1'
-          - crate: dotnet-assemblies
-            configuration: default-features
-            cargo-args: ''
-            test-args: '--test-threads=1'
-          - crate: dotnet-vm
-            configuration: no-features
-            cargo-args: '--no-default-features'
-            test-args: '--test-threads=1 jmp_tests tail_calls fault_tests'
-          - crate: dotnet-vm
-            configuration: multithreading
-            cargo-args: '--no-default-features --features multithreading'
-            test-args: '--test-threads=1 jmp_tests tail_calls fault_tests'
 
     steps:
       - name: Start diagnostics budget
@@ -111,6 +99,99 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-diagnostics-miri-${{ matrix.crate }}-${{ matrix.configuration }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The matrix comes from the reviewed manifest, not from the independent Miri listing.
+  # If generation fails, the invalid sentinel still creates an advisory guard failure.
+  advisory-matrix:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix || steps.fallback.outputs.matrix }}
+    steps:
+      - id: fallback
+        run: echo 'matrix={"include":[{"crate":"invalid","configuration":"invalid","shard":"invalid"}]}' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+      - id: matrix
+        run: |
+          python3 scripts/tests/test_miri_advisory.py
+          matrix="$(python3 scripts/miri_advisory.py matrix)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  advisory-shards:
+    name: Miri (${{ matrix.crate }}, ${{ matrix.configuration }}, ${{ matrix.shard }})
+    needs: advisory-matrix
+    runs-on: ubuntu-latest
+    # Provisional cold budget only: 5m setup + 5m compile + 45m execution,
+    # 25% headroom, rounded to 70m. Inner execution cap 50m; remeasure in 4.4.
+    timeout-minutes: 70
+    continue-on-error: true
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
+      CI_DIAG_FEATURES: ${{ matrix.configuration }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.advisory-matrix.outputs.matrix) }}
+    steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 70 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
+      - uses: actions/checkout@v4
+      - name: Setup Rust (nightly + miri)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - name: Rust Cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          shared-key: miri-advisory-v2-nightly-2026-05-27-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }}
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=miri-advisory-v2-nightly-2026-05-27-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }},rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+      - name: Setup .NET SDK (10.0.x)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 300 -- cargo +nightly-2026-05-27 miri setup
+      - name: Compile original Miri selection
+        run: |
+          features=()
+          if [ '${{ matrix.configuration }}' != default-features ]; then features+=(--no-default-features); fi
+          if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
+          python3 scripts/ci_diagnostics.py run --phase compile --case '${{ matrix.shard }}' --timeout 300 -- \
+            cargo +nightly-2026-05-27 miri test -p '${{ matrix.crate }}' "${features[@]}" --no-run
+      - name: Verify original Miri selection and singleton partition
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase guard --case '${{ matrix.shard }}' --timeout 300 -- \
+            python3 scripts/miri_advisory.py verify --configuration '${{ matrix.configuration }}'
+      - name: Run exact singleton
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase execute --case '${{ matrix.shard }}' --timeout 3000 -- \
+            python3 scripts/miri_advisory.py execute --configuration '${{ matrix.configuration }}' --shard '${{ matrix.shard }}'
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --advisory --outcome '${{ job.status }}' \
+              --title 'Miri (${{ matrix.crate }}, ${{ matrix.configuration }}, ${{ matrix.shard }})' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-diagnostics
           if-no-files-found: warn
           retention-days: 14
