@@ -1,5 +1,5 @@
-# This is the repository's stable default. The Miri-only nightly pin lives in
-# .github/workflows/miri.yml and is documented in docs/CI.md.
+# This is the repository's stable default. CI pins a separate nightly for Miri
+# and fuzz targets; see docs/CI.md and docs/FUZZING.md.
 [toolchain]
 channel = "1.95.0"
 components = ["clippy", "rustfmt"]
