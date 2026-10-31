@@ -4,16 +4,33 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Design Principle
 
-Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, the `dotnet-utils`/`dotnet-vm-data` frame-block Miri tests, the `dotnet-vm-data` owner-retention lane, the filtered VM pointer-control Miri lane, and corpus replay for all four fuzz targets. The pointer lane runs only 33 guarded controls, not the VM Miri suite. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the advisory Miri matrix, and Valgrind are informative and non-blocking.
+Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, the `dotnet-utils`/`dotnet-vm-data` frame-block Miri tests, the `dotnet-vm-data` owner-retention lane, the filtered VM pointer-control Miri lane, and corpus replay for the four assigned fuzz targets. The pointer lane runs only 33 guarded controls, not the VM Miri suite. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the advisory Miri matrix, and Valgrind are informative and non-blocking.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`     | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
-| `.github/workflows/fuzz.yml`     | nightly   | No (`continue-on-error`) | push/PR to `main` + daily cron | Fuzzing coverage                     |
-| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron | UB and memory-safety checks          |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | Fuzzing coverage                     |
+| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
+
+## Branch dispatch and targeted repeats
+
+After pushing the candidate to `supervised/unblock-ci`, dispatch whole workflows:
+
+```bash
+gh workflow run ci.yml --ref supervised/unblock-ci
+gh workflow run miri.yml --ref supervised/unblock-ci
+gh workflow run fuzz.yml --ref supervised/unblock-ci
+```
+
+Alternatively observe the PR-triggered run for the exact commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
+`gh run watch RUN --exit-status` to monitor, and `gh run view RUN --job JOB --log` for
+execution evidence. A targeted `gh run rerun RUN --job JOB` repeats a job on that
+run's original SHA, not a newer commit. Dispatch selects a workflow, not individual jobs.
+Avoid another push while useful evidence is running: concurrency can cancel older runs.
+Advisory success alone does not prove that all tests completed; inspect job and step logs.
 
 ## `ci.yml` — Blocking Correctness Gate
 
@@ -75,47 +92,52 @@ Miri suite, strict-provenance evidence, or a soundness proof.
 
 ### Blocking `miri-pointer-controls` lane
 
-This job is a deliberately narrow gate for the 33 enabled VM controls, not a VM Miri suite. It pins
-`nightly-2026-05-27` and
-`MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`, has a 45-minute
-timeout per matrix leg, and runs a fail-fast-disabled matrix of two configurations (`no-features`
-and `multithreading`) by seventeen guarded shards:
+This job gates 33 enabled VM controls, not the full VM suite. It uses
+`nightly-2026-05-27`, `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`,
+and two configurations (`no-features`, `multithreading`) with 33 singleton shards each.
+The exact manifest from `scripts/pointer_provenance.sh` is:
 
-| Shard | Exact controls |
+| Shard | Exact test |
 |---|---|
-| 1 | `p00_smoke`, `p02_ldloca_stind_i4_control` |
-| 2 | `p03_ldloca_convu_ldind_i4`, `p05_single_localloc_roundtrip` |
-| 3 | `p07_localloc_one_past_end`, `p11_ldelema_stind_heap_array_control` |
-| 4 | `p10_ldelema_convu_stind_heap_array`, `p20_heap_convu_then_typed_write_then_raw_store` |
-| 5 | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`, `p14_initblk_heap_array_via_managed_ptr` |
-| 6 | `p16_cpblk_heap_arrays_via_managed_ptr`, `p_null_through_pointer_local_address` |
-| 7 | `p06_localloc_minus_one_then_plus_one`, `p08_localloc_overshoot` |
-| 8 | `p17_localloc_ptr_ceq_self`, `p18_localloc_ptr_clt` |
-| 9 | `p21_localloc_signed_extreme_offsets_roundtrip`, `p22_localloc_wrap_to_zero_roundtrip` |
-| 10 | `p23_localloc_pointer_loop_unsigned_branch_compare`, `p24_unsafe_byte_offset_direction_and_deref` |
-| 11 | `p25_convi_and_stind_i_pointer_roundtrip_deref`, `p26_native_int_boundary_store_load_roundtrip` |
-| 12 | `p27_stind_i_fresh_pointer_through_local_slot_dereferences`, `p28_stind_i_fresh_pointer_through_heap_memory_dereferences` |
-| 13 | `p04_double_localloc_write_first`, `p29_localloc_blocks_survive_growth_and_are_16_byte_aligned` |
-| 14 | `p30_localloc_block_survives_nested_callee_localloc`, `p31_localloc_blocks_released_on_return_and_pooling` |
-| 15 | `p32_localloc_blocks_released_on_tail_call_replacement`, `p33_localloc_blocks_released_on_exception_unwind` |
-| 16 | `p34_localloc_blocks_released_on_executor_teardown`, `p35_ldflda_on_stack_value_type_then_ldind` |
-| 17 | `p36_static_address_survives_forced_collection` |
+| 1 | `pointer_provenance_tests::p00_smoke` |
+| 2 | `pointer_provenance_tests::p02_ldloca_stind_i4_control` |
+| 3 | `pointer_provenance_tests::p03_ldloca_convu_ldind_i4` |
+| 4 | `pointer_provenance_tests::p05_single_localloc_roundtrip` |
+| 5 | `pointer_provenance_tests::p07_localloc_one_past_end` |
+| 6 | `pointer_provenance_tests::p11_ldelema_stind_heap_array_control` |
+| 7 | `pointer_provenance_tests::p10_ldelema_convu_stind_heap_array` |
+| 8 | `pointer_provenance_tests::p20_heap_convu_then_typed_write_then_raw_store` |
+| 9 | `pointer_provenance_tests::p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` |
+| 10 | `pointer_provenance_tests::p14_initblk_heap_array_via_managed_ptr` |
+| 11 | `pointer_provenance_tests::p16_cpblk_heap_arrays_via_managed_ptr` |
+| 12 | `pointer_provenance_tests::p_null_through_pointer_local_address` |
+| 13 | `pointer_provenance_tests::p06_localloc_minus_one_then_plus_one` |
+| 14 | `pointer_provenance_tests::p08_localloc_overshoot` |
+| 15 | `pointer_provenance_tests::p17_localloc_ptr_ceq_self` |
+| 16 | `pointer_provenance_tests::p18_localloc_ptr_clt` |
+| 17 | `pointer_provenance_tests::p21_localloc_signed_extreme_offsets_roundtrip` |
+| 18 | `pointer_provenance_tests::p22_localloc_wrap_to_zero_roundtrip` |
+| 19 | `pointer_provenance_tests::p23_localloc_pointer_loop_unsigned_branch_compare` |
+| 20 | `pointer_provenance_tests::p24_unsafe_byte_offset_direction_and_deref` |
+| 21 | `pointer_provenance_tests::p25_convi_and_stind_i_pointer_roundtrip_deref` |
+| 22 | `pointer_provenance_tests::p26_native_int_boundary_store_load_roundtrip` |
+| 23 | `pointer_provenance_tests::p27_stind_i_fresh_pointer_through_local_slot_dereferences` |
+| 24 | `pointer_provenance_tests::p28_stind_i_fresh_pointer_through_heap_memory_dereferences` |
+| 25 | `pointer_provenance_tests::p04_double_localloc_write_first` |
+| 26 | `pointer_provenance_tests::p29_localloc_blocks_survive_growth_and_are_16_byte_aligned` |
+| 27 | `pointer_provenance_tests::p30_localloc_block_survives_nested_callee_localloc` |
+| 28 | `pointer_provenance_tests::p31_localloc_blocks_released_on_return_and_pooling` |
+| 29 | `pointer_provenance_tests::p32_localloc_blocks_released_on_tail_call_replacement` |
+| 30 | `pointer_provenance_tests::p33_localloc_blocks_released_on_exception_unwind` |
+| 31 | `pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown` |
+| 32 | `pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind` |
+| 33 | `pointer_provenance_tests::p36_static_address_survives_forced_collection` |
 
-Each leg first runs `bash scripts/pointer_provenance.sh verify-controls --configuration <configuration>`,
-then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17>`.
-The runner checks exact native discovery and runs the assigned tests without ignored-test flags. The
-workflow also installs the pinned Miri component, cargo-nextest, .NET SDK and `libffi-dev`, and uses
-a Rust cache keyed by configuration and shard. Recorded local pinned permissive Tree Borrows runs
-discovered and passed all 33 controls in both configurations in the M1d sweep; see the
-[inventory](pointer-provenance/INVENTORY.md#m1d-baseline-and-outcomes) for per-shard counts and walls.
-In the earlier M1c sweep of 31 controls, four sequential
-batches of four parallel shards took 4222.037 s (no-features) and 3871.943 s (multithreading),
-excluding standalone discovery. The slowest shard walls were 1103.821 s and 1011.151 s, below the
-45-minute leg limit; see the [inventory](pointer-provenance/INVENTORY.md#m1c-final-verification) for
-per-shard counts and walls. Earlier shard-12 runs measured p27/p28 at 296/302 s (no-features)
-and 348/321 s (multithreading), per runner summaries. These warm, contended local runs include
-discovery/build waits; hosted cold-build/cache timings remain unmeasured, so the timeout remains provisional and local runs do not
-guarantee hosted timing. The lane does not enable `memory-validation`: p13 and the separate
+Each leg runs `bash scripts/pointer_provenance.sh verify-controls --configuration <configuration>`
+then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1..33>`.
+Discovery and partition guards require 33 non-ignored controls; each shard requires one pass and zero
+ignored. The cache key is `miri-pointer-v2-nightly-2026-05-27-<configuration>-<shard>`.
+The lane does not enable `memory-validation`: p13 and the separate
 `conv_u8_after_far_oob_managed_add_does_not_panic` regression are conditionally ignored with
 that feature because their deliberate 4096-byte managed offsets trigger its debug bounds trap.
 
@@ -124,7 +146,7 @@ skipped (no features), 625 / 7 (multithreading), and 639 / 9 (multithreading,val
 
 This lane does not execute the remaining ignored probes, establish strict provenance, cover all unsafe
 VM paths, or imply runtime soundness. Ignored-probe execution is restricted to the diagnostic
-entrypoint documented below. The broader `miri.yml` VM jobs remain advisory and unchanged.
+entrypoint documented below. The broader `miri.yml` VM jobs remain advisory.
 
 Hang probes use tighter timeouts and run these filters individually:
 
@@ -365,49 +387,74 @@ The blocking `miri-value` and fuzz-corpus replay jobs above are also available a
 
 ## Fuzz corpus replay — Blocking Regression Checks
 
-The `fuzz-corpus-replay` matrix pins `nightly-2026-05-27` and cargo-fuzz 0.13.1, verifies each
-tracked corpus is nonempty, then replays every target without generating new cases:
-
-```bash
-cd crates/dotnet-value
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
-
-cd ../dotnet-vm/fuzz
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
-```
-
-`ASAN_OPTIONS=detect_leaks=0` avoids LeakSanitizer's ptrace incompatibility on sandboxed runners.
-The duration-based targets in `fuzz.yml`, including a second exploratory run of
-`fuzz_raw_memory_access`, remain advisory.
+The four replay paths, stable-built driver pin, count guard and observed executions are documented
+in [Blocking Corpus Regression](FUZZING.md#blocking-corpus-regression). They are distinct from the
+advisory duration-based campaigns.
 
 ## `miri.yml` — Non-Blocking UB Checks
 
 `miri.yml` remains an advisory matrix. Its `dotnet-value` entry provides additional scheduled coverage; the required `dotnet-value` Miri gate is the separate `miri-value` job in `ci.yml`.
 
-The workflow runs per crate (`fail-fast: false`):
+The retained advisory value/default and utils/no-features legs run the full respective suites.
+The singleton matrix has 38 `dotnet-assemblies` default-feature selections (A01–A38) and the
+same eight `dotnet-vm` selections (V01–V08) in each of no-features and multithreading: 54 jobs.
+Its Miri discovery guards verify the original assembly suite and VM `jmp_tests`, `tail_calls`,
+`fault_tests` union, no duplicates, no ignored selections and empty ancillary listings. Each shard
+requires one pass, zero failures and zero ignored. The manifest in
+`scripts/miri_advisory_manifest.json` is:
 
-| Crate               | Args                                                                    | Notes                                                           |
-|---------------------|-------------------------------------------------------------------------|-----------------------------------------------------------------|
-| `dotnet-value`      | `-- --test-threads=1`                                                   | Full crate test suite under Miri                                |
-| `dotnet-utils`      | `--no-default-features -- --test-threads=1`                             | Utility tests without default features                          |
-| `dotnet-assemblies` | `-- --test-threads=1`                                                   | Filesystem-dependent tests are conditionally skipped under Miri |
-| `dotnet-vm`         | `--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests` | Targeted VM unsafe-gate suite without multithreading            |
-| `dotnet-vm`         | `--no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests` | Same conservative VM unsafe-gate filters with multithreading paths enabled |
+| Shard | Exact library test |
+|---|---|
+| A01 | `drop_tests::test_assembly_loader_drop_keeps_descriptors_valid` |
+| A02 | `drop_tests::test_corlib_wkt_resolution_failures_are_retryable` |
+| A03 | `drop_tests::test_exception_dispatch_state_prefers_slash_then_falls_back_to_plus` |
+| A04 | `drop_tests::test_memory_extensions_slow_path_signature_uses_read_only_span` |
+| A05 | `drop_tests::test_type_description_keeps_arena_alive` |
+| A06 | `host::tests::classifies_bundle_signature_as_single_file` |
+| A07 | `host::tests::classifies_elf_as_nativeaot` |
+| A08 | `host::tests::classifies_managed_pe_with_cli_header` |
+| A09 | `host::tests::classifies_pe_without_cli_header_as_nativeaot` |
+| A10 | `host::tests::disable_policy_requires_exact_match` |
+| A11 | `host::tests::select_framework_version_applies_all_roll_forward_policies_for_10_0_0_request` |
+| A12 | `host::tests::short_or_unknown_input_defaults_to_managed` |
+| A13 | `support_contract_tests::every_generated_id_and_typed_accessor_resolves_its_prescribed_owner` |
+| A14 | `support_contract_tests::generated_runtime_slot_enum_is_in_embedded_support_assembly` |
+| A15 | `support_contract_tests::generated_slot_descriptors_preserve_stable_ids_and_exact_shapes` |
+| A16 | `support_contract_tests::handle_override_is_limited_to_the_support_descriptor` |
+| A17 | `support_contract_tests::loaded_support_metadata_has_an_independent_literal_slot_census` |
+| A18 | `support_contract_tests::runtime_type_handle_object_ref_and_usize_views_round_trip` |
+| A19 | `support_contract_tests::separate_span_layout_accessors_preserve_their_offsets` |
+| A20 | `support_contract_tests::test_registry_slot_count` |
+| A21 | `support_contract_validation_tests::duplicate_annotations_report_the_id_and_both_locations` |
+| A22 | `support_contract_validation_tests::exact_signature_mismatch_reports_expected_and_found_shape` |
+| A23 | `support_contract_validation_tests::generated_runtime_slot_ids_are_required` |
+| A24 | `support_contract_validation_tests::misplaced_id_reports_actual_and_expected_locations` |
+| A25 | `support_contract_validation_tests::missing_id_reports_its_exact_expected_slot` |
+| A26 | `support_contract_validation_tests::runtime_slot_field_without_used_implicitly_is_a_contract_violation` |
+| A27 | `support_contract_validation_tests::stub_schema_rejects_duplicate_targets_without_mutating_registered_maps` |
+| A28 | `support_contract_validation_tests::stub_schema_requires_exact_instance_string_in_place_of_field` |
+| A29 | `support_contract_validation_tests::stub_schema_requires_exactly_one_non_null_in_place_of_named_argument` |
+| A30 | `support_contract_validation_tests::unknown_id_is_a_contextual_contract_violation` |
+| A31 | `support_contract_validation_tests::wrong_staticness_reports_actual_and_expected_staticness` |
+| A32 | `validation_tests::tests::test_empty_method_name` |
+| A33 | `validation_tests::tests::test_empty_typedef_table` |
+| A34 | `validation_tests::tests::test_invalid_module_name` |
+| A35 | `validation_tests::tests::test_self_inheritance` |
+| A36 | `validation_tests::tests::test_valid_metadata` |
+| A37 | `version_tests::tests::test_version_equality` |
+| A38 | `version_tests::tests::test_version_parsing` |
+| V01 | `fault_tests::tests::test_fault_handler_executed_on_exception` |
+| V02 | `fault_tests::tests::test_fault_handler_skipped_on_normal_exit` |
+| V03 | `jmp_tests::tests::test_jmp_inside_try` |
+| V04 | `jmp_tests::tests::test_jmp_instruction` |
+| V05 | `jmp_tests::tests::test_jmp_invalid_stack` |
+| V06 | `jmp_tests::tests::test_jmp_signature_mismatch` |
+| V07 | `tail_calls_tests::non_tail_call_chain_grows_frame_depth` |
+| V08 | `tail_calls_tests::tail_call_chain_keeps_frame_depth_bounded` |
 
-The two `dotnet-vm` entries deliberately use the same `jmp_tests`, `tail_calls`, and
-`fault_tests` filter set. This keeps the Miri workload bounded while running the second entry
-with the VM's `multithreading` configuration enabled. That entry compiles the cross-arena and
-stop-the-world paths, but the filtered suite and local time box have not established that every
-such path is dynamically exercised. The filters are conservative because the transitive
-`parking_lot` stack has known Miri limitations. The separate `dotnet-utils` matrix leg remains
-advisory along with the other entries.
-
-The workflow sets `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`.
-Strict provenance is currently infeasible for `dotnet-vm` because dependency-level
-integer-to-pointer casts are reached during assembly parsing before VM unsafe
-sites execute.
+The cache shared key is `miri-advisory-v2-nightly-2026-05-27-<crate>-<configuration>-<shard>`.
+The filters do not prove all cross-arena or stop-the-world paths are dynamically exercised.
+The workflow uses `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`.
 
 ### Strict-provenance deferral
 
@@ -428,16 +475,6 @@ Reopening strict-provenance CI requires explicit authorization and a green local
 run for each intended leg. Do not enable a known-red matrix entry or infer strict
 coverage from the ordinary `miri-value` job in `ci.yml`.
 
-The workflow pins `nightly-2026-05-27`, which locally reports
-`rustc 1.98.0-nightly (d1fc603d1 2026-05-26)`. Both documented `dotnet-vm`
-unsafe-gate commands were attempted with that toolchain. The multithreading
-command completed `fault_tests::tests::test_fault_handler_executed_on_exception`,
-but, like the no-feature command, did not complete within five minutes after
-starting the second `fault_tests` test and emitting the known dependency
-integer-to-pointer-cast warnings. Consequently, this pin records attempted
-coverage rather than an established passing result for either targeted suite.
-The matrix job therefore remains explicitly non-blocking with `continue-on-error: true`.
-
 Local commands:
 
 ```bash
@@ -454,13 +491,52 @@ MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
+### Hosted evidence and budgets
+
+On 2026-10-31 candidate `b8e98239cec56a4e62c38682c27d3a59886262a0`, attempt 1:
+[CI](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237422062) passed 99/99 jobs,
+including 66 pointer shards and blocking library gates; [Miri](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237423847)
+passed 57/57 jobs, including all 54 guarded singleton executions. The later evidence and documentation
+commits are not that tested SHA. See the [evidence ledger](ci-evidence/2026-10-31-acceptance.md)
+for every job, artifact, counts and phase timings. [Fuzz](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237425991)
+was green with an advisory executor panic, not four successful campaigns; the
+[crash artifact](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237425991/artifacts/13055518930)
+is retained subject to Actions retention. Diagnostic p09 has a prior reported UB; no new UB was reported
+in these controls. Neither these results nor the budgets establish runtime soundness.
+
+Measured seconds from diagnostic phases (primary cache hits called warm; miss does not prove an empty
+runner). Compile ranges are individual phases; samples do not imply a universal bound:
+
+| Group/cache | n | Setup | Compile | Guard | Execute |
+|---|---:|---:|---:|---:|---:|
+| pointer/miss | 54 | 12.567–22.198 | 19.192–59.618 | — | 310.545–1039.753 |
+| pointer/hit | 12 | 13.095–20.504 | 4.156–34.188 | — | 345.014–820.099 |
+| assembly/miss | 32 | 12.703–22.276 | 13.544–33.741 | 5.125–9.782 | 2.001–967.304 |
+| assembly/hit | 6 | 15.569–20.285 | 6.803–14.713 | 7.067–9.417 | 2.901–985.964 |
+| VM no-features/miss | 8 | 13.641–20.481 | 23.003–39.662 | 15.252–24.454 | 492.103–798.104 |
+| VM multithreading/miss | 8 | 15.795–20.397 | 25.939–39.285 | 18.787–27.419 | 376.020–794.122 |
+
+Hits cover only 12 pointer and 6 assembly shards; no VM warm sample. Two earlier cold attempts on
+`0bedd2e08dca88078aca896d5afc772492999a91` reached 1658s pointer and 1396s assembly execution,
+so the latest sample is not a worst-case bound. Pointer job timeout is 45min, with a 42min shared
+inner deadline from diagnostics start, setup cap 600s, discovery and Miri build 1200s each, execute
+2700s (also bounded by the remaining deadline and script timeout). Advisory singleton jobs have a
+70min job timeout, 67min shared deadline, setup/compile/guard caps 300s each and execute cap 3000s.
+Both subtract three minutes for evidence when setting the deadline in the first step; startup time
+before that step can reduce the actual upload window, and hard cancellation can prevent upload.
+Caps are not additive. The earlier execution maxima are
+61% and 47% of their nominal execute caps, respectively, but actual headroom also depends on setup,
+compile, guard and the shared deadline. All sampled phases finished within effective budgets; cache
+residency and future timing are not guaranteed. The ledger records retained value/utils and focused
+library counts, and the nonfatal rustdoc private-link warning.
+
 ### VM pointer-provenance harness and lane limits
 
 `scripts/pointer_provenance.sh list` shows the explicit 39-entry catalog, classifications, native
 diagnostic permissions and control shards. The 33 controls run as ordinary tests without
 `memory-validation`; p13 is ignored with that feature. The M1c controls include p04 and p29–p34;
 six probes remain ignored and diagnostic-only. The blocking `miri-pointer-controls` job and its
-two-configuration, seventeen-shard mapping are documented above. Its permissive Tree Borrows results
+two-configuration, 33-singleton-shard mapping are documented above. Its permissive Tree Borrows results
 are not a full VM Miri suite, strict-provenance evidence, or a runtime-soundness claim.
 
 The only entrypoint for executing ignored pointer probes is the explicit diagnostic command:
@@ -483,8 +559,8 @@ Known-UB probes must not be run natively or outside the diagnostic entrypoint.
 
 `verify-controls --configuration no-features` and its `multithreading` variant check exact native
 discovery and nextest metadata confirming all 33 controls are enabled; neither command runs a probe.
-`controls --configuration no-features --shard 1` runs the guarded p00/p02 pair under Miri without
-ignored-test flags and checks each exact run count. The table above lists all seventeen shards; either
+`controls --configuration no-features --shard 1` runs the guarded p00 singleton under Miri without
+ignored-test flags and checks each exact run count. The table above lists all 33 shards; either
 configuration can be `multithreading`. Add `--dry-run` to preview discovery and shard commands without invoking Cargo. Safe tooling self-tests use a fake
 Cargo executable: `python3 scripts/tests/test_pointer_provenance.py`; deliberate stale/misspelled-name
 cases confirm the control guard rejects catalog mismatches.

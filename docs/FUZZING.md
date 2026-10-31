@@ -9,18 +9,20 @@ The project uses [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (backed b
 | Suite            | Location                    | Targets                                                                           | Focus                                                              |
 |------------------|-----------------------------|-----------------------------------------------------------------------------------|--------------------------------------------------------------------|
 | **dotnet-vm**    | `crates/dotnet-vm/fuzz/`    | `fuzz_executor`                                                                   | CIL instruction execution, control flow, memory, exceptions        |
-| **dotnet-value** | `crates/dotnet-value/fuzz/` | `fuzz_managed_ptr_offset`, `fuzz_managed_ptr_roundtrip`, `fuzz_raw_memory_access` | Pointer arithmetic, serialization roundtrips, atomic memory access |
+| **dotnet-value** | `crates/dotnet-value/fuzz/` | `fuzz_managed_ptr_offset`, `fuzz_managed_ptr_roundtrip`, `fuzz_raw_memory_access`, `fuzz_managed_ptr_rebase` | Pointer arithmetic, serialization roundtrips, atomic memory access |
 
 Additionally, the `fuzzing.rs` module in `dotnet-vm` contains Miri-compatible unit tests that exercise the same `FuzzProgram` harness without requiring the full fuzzing toolchain.
+
+The advisory Fuzz workflow builds cargo-fuzz 0.13.1 with Rust 1.95.0 and `--locked`, then runs targets and crash minimization with `nightly-2026-05-27` (rather than floating nightly). Its green status does not establish that advisory targets passed or that checked-in corpora were replayed.
 
 ## Prerequisites
 
 ```bash
-# Install cargo-fuzz
-cargo install cargo-fuzz
+# Install the CI driver with the stable build compiler
+cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked
 
-# Ensure you have a nightly Rust toolchain (required by libFuzzer)
-rustup install nightly
+# Install the target compiler used by CI
+rustup install nightly-2026-05-27
 
 # For the VM fuzz target, a .NET runtime must be installed
 # (System.Runtime.dll is needed to resolve base types like System.Object)
@@ -111,21 +113,47 @@ Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, size
 
 ## Blocking Corpus Regression
 
-Every target has a committed, nonempty corpus and is a blocking `ci.yml` gate. CI pins
-`nightly-2026-05-27` and cargo-fuzz 0.13.1, and replays only those inputs (`-runs=0`):
+Four assigned targets have committed, nonempty corpora and blocking `ci.yml` replay gates. The
+fourth value-workspace target `fuzz_managed_ptr_rebase` exists locally but is **not** one of those
+gates; no committed rebase corpus is implied. The repository stable default and driver build compiler
+are Rust 1.95.0. Install the driver with `cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked`;
+target compilation and replay use `nightly-2026-05-27`. The shared binary cache identity is
+`<runner.os>-<runner.arch>-cargo-fuzz-v2-0.13.1-build-1.95.0-locked-default` (Linux X64:
+`Linux-X64-cargo-fuzz-v2-0.13.1-build-1.95.0-locked-default`), without an older-key fallback.
+
+From the indicated working directories the explicit replay arguments are:
 
 ```bash
 cd crates/dotnet-value
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
-
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip fuzz/corpus/fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset fuzz/corpus/fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access fuzz/corpus/fuzz_raw_memory_access -- -runs=0
 cd ../dotnet-vm/fuzz
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor corpus/fuzz_executor -- -runs=0
 ```
 
-`ASAN_OPTIONS=detect_leaks=0` avoids LeakSanitizer's ptrace incompatibility on sandboxed runners.
-The duration-based jobs in `fuzz.yml` remain advisory and may generate new local inputs.
+CI uses `scripts/replay_fuzz_corpus.py` rather than these bare commands. It checks the Git-index
+inventory is nonempty and unchanged, with regular nonempty tracked files; loaded files and seed
+counts must equal that inventory. Child exit must succeed and ordered INITED, DONE and final counts
+must agree and be at least N+1. libFuzzer may rerun inputs, so equality to N+1 is not required;
+`corp:` retained representatives are not execution counts. Leak detection is disabled for sandboxed
+runners, not a claim about leaks.
+
+On tested candidate `b8e98239cec56a4e62c38682c27d3a59886262a0`, [CI attempt 1](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237422062)
+actually verified these counts (tracked/loaded seeds, then INITED/DONE/final callbacks):
+
+| Target | Files/seeds | Executions |
+|---|---:|---:|
+| `fuzz_managed_ptr_roundtrip` | 129/129 | 141 |
+| `fuzz_managed_ptr_offset` | 171/171 | 172 |
+| `fuzz_raw_memory_access` | 18/18 | 19 |
+| `fuzz_executor` | 252/252 | 505 |
+
+Executor driver cache hit; the other three missed and installed the stable-built driver. All target
+Rust caches missed. [Evidence ledger](ci-evidence/2026-10-31-acceptance.md) records jobs, artifacts,
+timings and later documentation versus tested SHA. The [advisory Fuzz attempt](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237425991)
+completed three value campaigns but executor panicked after initialization; its green job is not
+proof of a successful executor campaign. See the ledger for the retained crash and deferred findings.
 
 ## Seed Corpus & Dictionary
 
@@ -147,7 +175,7 @@ Pre-built seed inputs live in `crates/dotnet-vm/fuzz/corpus/fuzz_executor/` and 
 | `seed_stack_dup`             | Duplicate + arithmetic             |
 | `seed_stack_underflow`       | Pop from empty stack               |
 
-All four target corpus directories are tracked. Keep a corpus nonempty: the CI replay explicitly
+All four gated target corpus directories are tracked. Keep a corpus nonempty: the CI replay explicitly
 checks this before invoking libFuzzer. Crash artifacts remain local under `artifacts/`; minimize a
 relevant one and add the minimized input to its target's corpus before relying on it as a regression.
 
@@ -261,12 +289,11 @@ To reproduce a crash:
 cargo +nightly fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
 ```
 
-Both fuzz crates ignore crash artifacts and generated corpus inputs. The
-`fuzz_raw_memory_access` corpus is the narrow exception: it is committed for the blocking replay
-described above. The structured executor seed corpus is regenerated on demand via `corpus-tools`
-(as the `fuzz.yml` CI job does before each executor run). To keep a crash as a
-persistent regression input, add it to a Miri-compatible unit test in
-`crates/dotnet-vm/src/fuzzing.rs` (see "Miri-Compatible Unit Tests" below).
+Crash artifacts and generated inputs are ignored by default; the four gated corpus directories are
+explicitly tracked exceptions, including executor and all three value targets. The exploratory workflow
+also runs `corpus-tools` before its executor campaign; that does not replace the checked-in replay corpus.
+Minimize and deliberately add a relevant input to a tracked gated corpus, or add a Miri-compatible
+unit test in `crates/dotnet-vm/src/fuzzing.rs` for a persistent regression.
 
 ## Miri-Compatible Unit Tests
 

@@ -135,28 +135,31 @@ Why this is the project-standard invocation right now:
 - `-Zmiri-ignore-leaks` is needed for non-joined background worker threads that are not VM-unsafe regressions.
 
 Until upstream dependency behavior changes, strict-provenance is treated as infeasible for `dotnet-vm` unsafe-gate signoff.
-The Miri-only nightly is pinned separately because `rust-toolchain.toml` selects
-stable by default. As recorded in [`docs/CI.md`](docs/CI.md), neither targeted
-VM command completed within the local validation time box on this nightly, so
-the pin records the attempted toolchain rather than known-passing Miri results.
+The nightly used for Miri and fuzz targets is pinned separately because `rust-toolchain.toml`
+selects stable by default. Hosted advisory VM selections completed as guarded singleton shards
+in both configurations; see [`docs/CI.md`](docs/CI.md) for the tested SHA, timings and limits.
+This does not imply strict-provenance coverage or a soundness proof.
 
 ## Blocking fuzz corpus replay
 
-Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchain. All four
-replays are blocking CI gates:
+Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchains. Build
+cargo-fuzz 0.13.1 with stable Rust 1.95.0 and `--locked`; target compilation and execution use
+`nightly-2026-05-27`. All four replays are blocking CI gates:
 
 ```bash
+cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked
 cd crates/dotnet-value
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip fuzz/corpus/fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset fuzz/corpus/fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access fuzz/corpus/fuzz_raw_memory_access -- -runs=0
 
 cd ../dotnet-vm/fuzz
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor corpus/fuzz_executor -- -runs=0
 ```
 
-`ASAN_OPTIONS=detect_leaks=0` makes the deterministic libFuzzer replay usable on sandboxed
-runners; exploratory duration-based fuzzing remains advisory.
+These bare commands do not implement CI's inventory and execution-count guard; see
+[`docs/FUZZING.md`](docs/FUZZING.md#blocking-corpus-regression). `ASAN_OPTIONS=detect_leaks=0`
+makes replay usable on sandboxed runners; exploratory duration-based fuzzing remains advisory.
 
 ## Documentation drift check
 
@@ -164,7 +167,7 @@ If your change touches docs, run the doc drift gate and rustdoc link check:
 
 ```bash
 bash scripts/check_doc_drift.sh
-DOTNET_SKIP_BUILD=1 cargo doc --no-deps --no-default-features
+DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features
 ```
 
 ## Feature flag matrix reference
