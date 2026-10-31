@@ -298,7 +298,7 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != tracing_id {
-                        let ptr = Gc::as_ptr(h).addr();
+                        let ptr = Gc::as_ptr(h).expose_provenance();
                         if !record_cross_arena_ref(owner_id, ptr) {
                             return;
                         }
@@ -423,7 +423,7 @@ impl<'gc> ObjectRef<'gc> {
         let h = Gc::new(&gc, ThreadSafeLock::new(ObjectInner::new(value, owner_id)));
 
         #[cfg(feature = "fuzzing")]
-        register_object_ptr(Gc::as_ptr(h) as usize);
+        register_object_ptr(Gc::as_ptr(h).expose_provenance());
 
         Self(Some(h))
     }
@@ -517,7 +517,7 @@ impl<'gc> ObjectRef<'gc> {
             let Some(_lease) = try_acquire_lease(owner_id) else {
                 return ObjectRef(None);
             };
-            record_cross_arena_ref(owner_id, real_ptr.addr());
+            record_cross_arena_ref(owner_id, real_ptr.expose_provenance());
             let lock_ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
 
             #[cfg(any(feature = "memory-validation", debug_assertions))]

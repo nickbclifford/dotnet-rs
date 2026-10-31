@@ -684,8 +684,9 @@ fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
                 // SAFETY: F6.NoEscapeAcrossArena — The pointer was recorded from a live cross-arena reference.
                 // We hold a lease for `target_id`, so teardown cannot complete while
                 // reconstructing `ObjectPtr`.
-                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }
-                    .expect("ptr_usize was recorded from a live, non-null object reference");
+                let ptr =
+                    unsafe { ObjectPtr::from_raw(std::ptr::with_exposed_provenance(ptr_usize)) }
+                        .expect("ptr_usize was recorded from a live, non-null object reference");
                 coordinator.record_cross_arena_ref(target_id, ptr);
             } else {
                 warn!(

@@ -171,11 +171,11 @@ pub struct OpaqueObjectPtr(usize);
 #[cfg(feature = "multithreading")]
 impl OpaqueObjectPtr {
     pub fn from_raw(ptr: *const ()) -> Self {
-        Self(ptr as usize)
+        Self(ptr.expose_provenance())
     }
 
     pub fn as_ptr(self) -> *const () {
-        self.0 as *const ()
+        std::ptr::with_exposed_provenance(self.0)
     }
 }
 

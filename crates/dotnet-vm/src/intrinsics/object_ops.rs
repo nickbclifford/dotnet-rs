@@ -48,7 +48,7 @@ pub fn runtime_helpers_try_get_hash_code<'gc, T: TypedStackOps<'gc>>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let hash = obj.as_ptr().map_or(0, |ptr| {
-        let addr = ptr.as_ptr() as usize;
+        let addr = ptr.as_ptr().addr();
         let mixed = (addr ^ (addr >> 32)) as u32;
         let non_zero = if mixed == 0 { 1 } else { mixed };
         non_zero as i32

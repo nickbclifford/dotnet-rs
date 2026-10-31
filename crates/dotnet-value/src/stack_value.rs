@@ -206,7 +206,7 @@ unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
             }
             #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(ptr, tid) => {
-                record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
+                record_cross_arena_ref(*tid, ptr.as_ptr().expose_provenance());
             }
             _ => {}
         }
@@ -457,16 +457,16 @@ macro_rules! wrapping_arithmetic_op {
                 Ok(StackValue::NativeFloat(l $float_op r))
             }
             (StackValue::ObjectRef(l), StackValue::NativeInt(r)) => {
-                let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                let ptr = l.0.map(|p| Gc::as_ptr(p).expose_provenance() as isize).unwrap_or(0);
                 Ok(StackValue::NativeInt(ptr.$op(r)))
             }
             (StackValue::ObjectRef(l), StackValue::Int32(r)) => {
-                let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                let ptr = l.0.map(|p| Gc::as_ptr(p).expose_provenance() as isize).unwrap_or(0);
                 Ok(StackValue::NativeInt(ptr.$op(r as isize)))
             }
             (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => {
-                let ptr_l = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
-                let ptr_r = r.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                let ptr_l = l.0.map(|p| Gc::as_ptr(p).expose_provenance() as isize).unwrap_or(0);
+                let ptr_r = r.0.map(|p| Gc::as_ptr(p).expose_provenance() as isize).unwrap_or(0);
                 Ok(StackValue::NativeInt(ptr_l.$op(ptr_r)))
             }
             (l, r) => Err(ExecutionError::TypeMismatch {

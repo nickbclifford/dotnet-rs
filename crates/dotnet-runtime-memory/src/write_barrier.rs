@@ -117,7 +117,8 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             // moves nor mutates the object.
             let ref_tid = unsafe { (*ptr).owner_id() };
             if ref_tid != self.arena_id {
-                self.buffer.push((ref_tid, gc_arena::Gc::as_ptr(h).addr()));
+                self.buffer
+                    .push((ref_tid, gc_arena::Gc::as_ptr(h).expose_provenance()));
                 maybe_flush_write_barrier_entries(self.buffer);
             }
         }
@@ -130,7 +131,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 
         match target.origin() {
             PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
-                self.buffer.push((*ref_tid, p.as_ptr().addr()));
+                self.buffer.push((*ref_tid, p.as_ptr().expose_provenance()));
                 maybe_flush_write_barrier_entries(self.buffer);
             }
             PointerOrigin::Heap(r) => {

@@ -1113,7 +1113,7 @@ fn test_gc_alignment() {
     arena.mutate(|mc, _| {
         for _ in 0..1000 {
             let gc = Gc::new(mc, 0u64); // u64 should need 8-byte alignment
-            let ptr = Gc::as_ptr(gc) as usize;
+            let ptr = Gc::as_ptr(gc).addr();
             assert_eq!(ptr % 8, 0, "Gc pointer {:#x} is not 8-byte aligned", ptr);
         }
     });

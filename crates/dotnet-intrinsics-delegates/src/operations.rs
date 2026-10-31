@@ -203,7 +203,7 @@ pub fn delegate_get_hash_code<'gc, T: DelegateEqualsHost<'gc>>(
     if let Some(t) = target.0 {
         // SAFETY: F1.GcHandleRooted — `t` is a live GC handle from the delegate target; exposing its address only
         // derives the process-local hash component and neither dereferences nor mutates it.
-        hash ^= unsafe { t.as_ptr() as i32 };
+        hash ^= unsafe { t.as_ptr().addr() as i32 };
     }
 
     // For multicast, include targets?

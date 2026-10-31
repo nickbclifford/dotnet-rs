@@ -296,14 +296,14 @@ pub fn intrinsic_gchandle_internal_alloc<
         ctx.heap().pin_object(obj);
 
         if ctx.tracer_enabled() {
-            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
             ctx.tracer().trace_gc_pin(ctx.indent(), "PINNED", addr);
         }
     }
 
     if ctx.tracer_enabled() {
         let handle_type_str = format!("{:?}", handle_type);
-        let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+        let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
         ctx.tracer()
             .trace_gc_handle(ctx.indent(), "ALLOC", &handle_type_str, addr);
     }
@@ -349,7 +349,7 @@ pub fn intrinsic_gchandle_internal_free<
                 ctx.heap().unpin_object(obj);
 
                 if ctx.tracer_enabled() {
-                    let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                    let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
                     ctx.tracer().trace_gc_pin(ctx.indent(), "UNPINNED", addr);
                 }
             }
@@ -358,7 +358,7 @@ pub fn intrinsic_gchandle_internal_free<
                 && ctx.tracer_enabled()
             {
                 let handle_type_str = format!("{:?}", handle_type);
-                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p).addr()).unwrap_or(0);
                 ctx.tracer()
                     .trace_gc_handle(ctx.indent(), "FREE", &handle_type_str, addr);
             }
@@ -443,9 +443,9 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
             match &ptr.borrow().storage {
                 // SAFETY: F10.BorrowedStorageStable — The validated pinned GCHandle keeps `ptr` and its object lock alive;
                 // this branch only exposes that stable address for AddrOfPinnedObject.
-                HeapStorage::Obj(_) => unsafe { ptr.as_ptr() as isize },
-                HeapStorage::Vec(v) => v.get().as_ptr() as isize,
-                HeapStorage::Str(s) => s.as_ptr() as isize,
+                HeapStorage::Obj(_) => unsafe { ptr.as_ptr() }.expose_provenance() as isize,
+                HeapStorage::Vec(v) => v.get().as_ptr().expose_provenance() as isize,
+                HeapStorage::Str(s) => s.as_ptr().expose_provenance() as isize,
                 _ => 0,
             }
         } else {

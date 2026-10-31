@@ -482,7 +482,7 @@ impl<'gc> ManagedPtr<'gc> {
         };
         let offset = offset.unwrap_or_else(|| {
             if let PointerOrigin::Unmanaged = origin {
-                ByteOffset::new(value.map_or(0, |p| p.as_ptr() as usize))
+                ByteOffset::new(value.map_or(0, |p| p.as_ptr().expose_provenance()))
             } else {
                 ByteOffset::new(0)
             }

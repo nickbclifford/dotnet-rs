@@ -368,10 +368,10 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                         // If it's not the data, we should probably still calculate offset correctly if we want it to be stable.
                         // But RawArrayData is a hack anyway.
                         ByteOffset::new(
-                            (ptr as usize)
+                            ptr.addr()
                                 // SAFETY: F10.BorrowedStorageStable — `data` is still immutably borrowed and matched as vector
                                 // storage, so its backing allocation remains stable for this offset.
-                                .wrapping_sub(unsafe { data.storage.raw_data_ptr() } as usize),
+                                .wrapping_sub(unsafe { data.storage.raw_data_ptr() }.addr()),
                         )
                     };
                     drop(data);

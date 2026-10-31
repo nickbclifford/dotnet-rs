@@ -516,7 +516,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                     if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                         return Err(CompareExchangeError::Bounds(
-                            MemoryAccessError::UnalignedAccess(ptr as usize),
+                            MemoryAccessError::UnalignedAccess(ptr.addr()),
                         ));
                     }
 
@@ -543,7 +543,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                 return Err(CompareExchangeError::Bounds(
-                    MemoryAccessError::UnalignedAccess(ptr as usize),
+                    MemoryAccessError::UnalignedAccess(ptr.addr()),
                 ));
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity, and the preceding check proves alignment.
@@ -577,7 +577,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         let ptr = ptr.as_ptr();
         if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
             return Err(CompareExchangeError::Bounds(
-                MemoryAccessError::UnalignedAccess(ptr as usize),
+                MemoryAccessError::UnalignedAccess(ptr.addr()),
             ));
         }
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
@@ -614,7 +614,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, size)?;
 
                 if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-                    return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                    return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
                 }
 
                 // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
@@ -638,7 +638,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-                return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe { StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering) })
@@ -662,7 +662,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ) -> Result<u64, MemoryAccessError> {
         let ptr = ptr.as_ptr();
         if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-            return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+            return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
         }
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
         // proves that `ptr` is aligned for `size`.
@@ -693,7 +693,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, size)?;
 
                 if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-                    return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                    return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
                 }
 
                 Ok(
@@ -713,7 +713,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-                return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+                return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
             }
             // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
             Ok(unsafe {
@@ -739,7 +739,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ) -> Result<u64, MemoryAccessError> {
         let ptr = ptr.as_ptr();
         if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
-            return Err(MemoryAccessError::UnalignedAccess(ptr as usize));
+            return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
         }
         // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized storage, and the preceding check
         // proves that `ptr` is aligned for `size`.

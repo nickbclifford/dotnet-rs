@@ -70,7 +70,7 @@ impl<'gc> HeapManager<'gc> {
         let Some(ptr) = instance.0 else {
             return;
         };
-        let addr = Gc::as_ptr(ptr) as usize;
+        let addr = Gc::as_ptr(ptr).addr();
 
         #[cfg(feature = "heap-diagnostics")]
         {
@@ -162,7 +162,7 @@ impl<'gc> HeapManager<'gc> {
                     && Gc::is_dead(fc, *ptr)
                 {
                     if for_type == GCHandleType::WeakTrackResurrection
-                        && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
+                        && resurrected.contains(&(Gc::as_ptr(*ptr).addr()))
                     {
                         continue;
                     }
@@ -178,7 +178,7 @@ impl<'gc> HeapManager<'gc> {
                 let mut seen = HashSet::new();
                 for obj in queue.iter() {
                     let ptr = obj.0.expect("object in finalization queue is null");
-                    let addr = Gc::as_ptr(ptr) as usize;
+                    let addr = Gc::as_ptr(ptr).addr();
                     if !seen.insert(addr) {
                         // invariant: GC bug — finalization queue must not contain duplicates.
                         panic!(
@@ -243,7 +243,7 @@ impl<'gc> HeapManager<'gc> {
                     .0
                     .expect("finalization queue only ever holds non-null object references");
                 pending.push(obj);
-                if resurrected.insert(Gc::as_ptr(ptr) as usize) {
+                if resurrected.insert(Gc::as_ptr(ptr).addr()) {
                     // Trace resurrection event
                     if shared.tracer_enabled_relaxed() {
                         let obj_type_name = match &ptr.borrow().storage {
@@ -252,7 +252,7 @@ impl<'gc> HeapManager<'gc> {
                             HeapStorage::Str(_) => "String".to_string(),
                             HeapStorage::Boxed(_) => "Boxed".to_string(),
                         };
-                        let addr = Gc::as_ptr(ptr) as usize;
+                        let addr = Gc::as_ptr(ptr).addr();
                         shared.trace_gc_resurrection(indent, &obj_type_name, addr);
                     }
                     Gc::resurrect(fc, ptr);

@@ -76,6 +76,29 @@ jobs:
       - name: Run loom STW model
         run: RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features
 
+  provenance-lints:
+    name: Strict Provenance Lints
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Deny fuzzy/lossy provenance casts
+        run: bash scripts/check_provenance_lints.sh
+
   matrix-definitions:
     name: Resolve Feature Matrices
     runs-on: ubuntu-latest
@@ -341,6 +364,11 @@ jobs:
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1b-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1
+      - name: Miri atomic access regressions (no features)
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase execute --case value-atomic-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 5 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features atomic_tests:: -- --test-threads=1
       # Non-ignored multithreading-only cross-arena regressions run in the full default-feature step above.
       - name: Miri owner-retention regressions (no features)
         run: |

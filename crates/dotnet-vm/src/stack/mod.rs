@@ -376,7 +376,7 @@ impl<'gc: 'gc> CallStack<'gc> {
             let Some(ptr) = obj.0 else {
                 continue;
             };
-            let raw_ptr = Gc::<_>::as_ptr(ptr) as *const _ as usize;
+            let raw_ptr = Gc::<_>::as_ptr(ptr).addr();
             let borrowed = ptr.borrow();
             match &borrowed.storage {
                 HeapStorage::Obj(o) => {

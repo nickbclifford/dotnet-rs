@@ -16,6 +16,6 @@ pub trait PointerLike {
     /// Returns the exposed address of the pointer, if available.
     #[inline]
     fn addr(&self) -> Option<usize> {
-        self.pointer().map(|p| p.as_ptr() as usize)
+        self.pointer().map(|p| p.as_ptr().expose_provenance())
     }
 }

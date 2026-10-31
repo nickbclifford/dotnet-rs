@@ -453,8 +453,8 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: ReflectionIntrinsicHos
         }
     };
 
-    let mt_ptr = dotnet_vm_ops::vm_try!(object_type).definition() as *const _;
-    ctx.push_isize(mt_ptr as isize);
+    let mt_ptr = std::ptr::from_ref(dotnet_vm_ops::vm_try!(object_type).definition());
+    ctx.push_isize(mt_ptr.expose_provenance() as isize);
     StepResult::Continue
 }
 
@@ -604,7 +604,7 @@ fn resolve_method_table_type<T: LoaderOps>(
                 continue;
             };
             let td = TypeDescription::new(resolution.clone(), type_index);
-            let td_ptr = td.definition() as *const _ as usize;
+            let td_ptr = std::ptr::from_ref(td.definition()).addr();
             if td_ptr == method_table_ptr {
                 return Some(td);
             }

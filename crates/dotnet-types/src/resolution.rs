@@ -88,7 +88,7 @@ impl<'a> Arbitrary<'a> for ResolutionS {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
         let arena = Arc::new(MetadataArena::new());
-        Ok(Self::new(ptr_val as *const _, arena))
+        Ok(Self::new(std::ptr::without_provenance(ptr_val), arena))
     }
 }
 static_collect!(ResolutionS);

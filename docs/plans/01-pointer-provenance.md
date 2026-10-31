@@ -110,9 +110,7 @@ evidence, or a claim of runtime soundness.
   `fault_tests`. Recover exact strict filters and reasons where possible; current dependency traces and
   historical filters are unavailable, and exposed reconstruction remains an explicit strict-provenance
   boundary.
-- Inventory the 73 reported provenance-lint hits before denying `fuzzy_provenance_casts` and
-  `lossy_provenance_casts` in first-party code. Use explicit exposure/reconstruction helpers; record any
-  narrow exceptions. Do not deny everything before migration and call unrelated dependency failures fixes.
+- **Done (2026-10-31):** provenance-lint migration; see [M0 lint and atomic status](#m0-lint-and-atomic-status-2026-10-31).
 - Review native benchmark comparisons using the [benchmark workflow](../BENCHMARK_WORKFLOW.md),
   including memory/unsafe_buffer/span/dispatch and field/byref/native-int loops. The M1a
   `m1a-before` comparisons are recorded; repeated no-features regressions remain open for follow-up.
@@ -133,10 +131,8 @@ was recorded, but neither recovers the missing historical source or archive. The
 - Recover and integrate the remaining pass-1 library probes, standalone E1–E13 models and
   `gc_model::e11*`, preserving the distinction between model, library and real-VM evidence. Recover
   the missing address and libffi fixtures; retain the recorded p20 result as current-tree evidence.
-- Identify the two historically reported atomic tests, distinguish test-backing aliasing from their
-  historical Miri ICE reasons, and repair and validate them (M0/M6); their identities remain unknown.
-- Inventory and migrate the reported 73 provenance-lint hits before denying `fuzzy_provenance_casts`
-  and `lossy_provenance_casts`; document narrow exceptions (M0). The count is not a fresh audit.
+- ~~Identify and repair the two historically ignored atomic tests~~ and ~~migrate the provenance-lint
+  hits~~: done 2026-10-31, see [M0 lint and atomic status](#m0-lint-and-atomic-status-2026-10-31).
 - Review the recorded native benchmark comparisons for memory/unsafe_buffer/span/dispatch and
   field/byref/native-int paths (M0). Matching M1a comparisons are recorded in the
   [benchmark report](../BENCHMARK_WORKFLOW.md); the repeated no-features regressions still need
@@ -147,6 +143,55 @@ was recorded, but neither recovers the missing historical source or archive. The
   Observe hosted CI cold/cache timings before changing the provisional 45-minute control timeout.
 - Complete the M1–M6 pointer, storage, GC, ABI and concurrency repairs and their existing exits; the
   scoped M1a heap repair does not itself complete any broader milestone exit.
+
+#### M0 lint and atomic status (2026-10-31)
+
+**Provenance lints.** A fresh audit on `nightly-2026-05-27` found 59 first-party hits (the
+reported 73 was never a current count): 55 lossy pointer-to-integer casts and 4 fuzzy
+integer-to-pointer casts, across no-default, default and all-features builds and the fuzz crates.
+Each was classified by whether the integer can become a pointer again:
+
+- `.addr()`: alignment checks, error/trace addresses, hash codes, heap-registry and resurrection
+  keys, overlap tests and offset differences. None of these is reconstructed.
+- `.expose_provenance()`: integers that escape into guest-visible values (`NativeInt` from object
+  references, `AddrOfPinnedObject`, `refanytype`, `GetTypeHandle`-style method-table pointers),
+  unmanaged pointer offsets, the fuzzing object registry, `OpaqueObjectPtr`, and every
+  `record_cross_arena_ref` producer.
+- `with_exposed_provenance*`: `OpaqueObjectPtr::as_ptr`, cross-arena harvest in
+  `threading/basic.rs`, and `Span(void*, int)` from a native integer.
+- `without_provenance`: the fuzzing `Arbitrary` impl for `ResolutionS`, which fabricates an
+  address from input bytes.
+
+This exposed a latent defect. The write-barrier, object-storage-decode, `ObjectRef` tracing and
+`PointerOrigin` tracing producers recorded cross-arena references with `.addr()`, which does not
+expose provenance. The harvest in `threading/basic.rs` then rebuilt the pointer with an
+integer-to-pointer cast, so its provenance relied on the same object being exposed by some
+unrelated path. All producers now expose. This is an interim repair: M1e still replaces the
+numeric transport with retained pointers or validated handles.
+
+`scripts/check_provenance_lints.sh` runs as the blocking `provenance-lints` CI job and denies both
+lints. There are no exceptions or `allow`s. This is a source-level gate, not strict-provenance
+evidence: the remaining exposures are now explicit, and they are exactly what strict Miri would
+reject.
+
+**Atomic tests.** The historical pair is `test_atomic_load_store` and
+`test_concurrent_atomic_load_store` in `crates/dotnet-value/src/atomic_tests.rs`, ignored under
+Miri since 7a8babaf with "Miri ICE: weak_memory.rs:239". The third test with that reason,
+`test_atomic_object_load_store`, had already been repaired in 0c33dee6. Reproduced on the pinned
+nightly before repair:
+
+| Test | Tree Borrows | Stacked Borrows | Cause |
+|---|---|---|---|
+| `test_atomic_load_store` | UB: write through a frozen tag | Miri ICE `weak_memory.rs:239` | Test aliasing: direct reads of `data.0[0]` froze the raw pointer. Separately, the Miri bug is mixed-size atomics on one location. |
+| `test_concurrent_atomic_load_store` | UB: write through a frozen tag | UB: SharedReadOnly retag | Test backing: writes through a pointer derived from `&[u8; 8]` without `UnsafeCell`. |
+
+The repair touches only the test backing. The single-threaded test accesses each slot only
+through its raw pointer and gives each width its own slot, which avoids the Miri ICE. The
+concurrent test uses an `UnsafeCell` buffer, a bounded writer and a monotonicity check. All five
+`atomic_tests::` pass under pinned Miri with Tree Borrows and Stacked Borrows in both feature
+configurations. They run in the default `miri-value` suite and in a new exact no-features step
+(5 passed / 0 ignored). Mixed-size overlapping atomics remain an M4 (R09) concern and are not
+covered by these tests.
 
 ### M1 — Contain independently reproducible defects
 

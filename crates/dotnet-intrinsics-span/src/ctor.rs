@@ -58,7 +58,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, T: SpanIntrinsicHost<'gc>>(
             }
             // Create a ManagedPtr from the native pointer
             ManagedPtr::new(
-                NonNull::new(ptr as *mut u8),
+                NonNull::new(std::ptr::with_exposed_provenance_mut::<u8>(ptr as usize)),
                 element_desc,
                 None, // unmanaged pointer
                 false,

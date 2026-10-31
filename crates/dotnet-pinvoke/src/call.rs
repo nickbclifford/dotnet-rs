@@ -1111,7 +1111,7 @@ mod tests {
     fn value_type_return_buffer_honors_alignment_and_zero_init() {
         let mut buffer =
             AlignedReturnBuffer::new_zeroed(32, 16).expect("buffer allocation should succeed");
-        assert_eq!((buffer.as_mut_ptr() as usize) % 16, 0);
+        assert_eq!(buffer.as_mut_ptr().addr() % 16, 0);
         assert!(buffer.as_bytes().iter().all(|b| *b == 0));
     }
 

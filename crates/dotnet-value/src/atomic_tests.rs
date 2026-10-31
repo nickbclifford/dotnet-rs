@@ -2,36 +2,50 @@
 mod tests {
     use crate::{LoadType, StackValue, StoreType};
     use dotnet_utils::sync::Ordering as AtomicOrdering;
+    use std::cell::UnsafeCell;
     #[repr(align(8))]
     struct Aligned8([u8; 8]);
+    /// Runs `f` against a fresh, 8-byte-aligned slot that is only ever accessed through the
+    /// returned raw pointer (never through the owning place while the pointer is live), so the
+    /// pointer keeps write permission under Tree/Stacked Borrows.
+    fn with_atomic_slot(f: impl FnOnce(*mut u8)) {
+        let mut data = Aligned8([0u8; 8]);
+        f((&raw mut data.0).cast::<u8>());
+    }
+
+    // Each width gets its own slot: mixed-size atomic accesses to one location trip a Miri ICE
+    // in its weak-memory store buffer (weak_memory.rs:239, still present on nightly-2026-05-27),
+    // and width coverage, not mixed-size overlap, is what this test is for. Overlapping
+    // mixed-size access is an M4 (R09) concern.
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
-    )]
     #[expect(
         clippy::multiple_unsafe_ops_per_block,
         reason = "the test intentionally exercises a sequence of atomic operations over one owned buffer"
     )]
     fn test_atomic_load_store() {
-        let mut data = Aligned8([0u8; 8]);
-        let ptr = data.0.as_mut_ptr();
-        // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
-        unsafe {
+        // SAFETY: F4.WidthAligned — Every slot is a live, owned, 8-byte-aligned buffer accessed
+        // only through `ptr` for the duration of each closure.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(42));
-            assert_eq!(data.0[0], 42);
+            assert_eq!(ptr.read(), 42);
             StackValue::Int32(-1).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(-1));
-            assert_eq!(data.0[0], 255);
+            assert_eq!(ptr.read(), 255);
             StackValue::Int32(200).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::UInt8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(200));
+        });
+        // SAFETY: F4.WidthAligned — a fresh owned, 8-byte-aligned slot, accessed only through `ptr`.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::Int32(12345).store_atomic(ptr, StoreType::Int16, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int16, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(12345));
+        });
+        // SAFETY: F4.WidthAligned — a fresh owned, 8-byte-aligned slot, accessed only through `ptr`.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::Int32(0x12345678).store_atomic(
                 ptr,
                 StoreType::Int32,
@@ -39,6 +53,9 @@ mod tests {
             );
             let val = StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(0x12345678));
+        });
+        // SAFETY: F4.WidthAligned — a fresh owned, 8-byte-aligned slot, accessed only through `ptr`.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::Int64(0x123456789ABCDEF0).store_atomic(
                 ptr,
                 StoreType::Int64,
@@ -46,48 +63,45 @@ mod tests {
             );
             let val = StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int64(0x123456789ABCDEF0));
+        });
+        // SAFETY: F4.WidthAligned — a fresh owned, 8-byte-aligned slot, accessed only through `ptr`.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::NativeFloat(1.25).store_atomic(
                 ptr,
                 StoreType::Float32,
                 AtomicOrdering::SeqCst,
             );
             let val = StackValue::load_atomic(ptr, LoadType::Float32, AtomicOrdering::SeqCst);
-            if let StackValue::NativeFloat(f) = val {
-                assert_eq!(f, 1.25);
-            } else {
-                panic!("Expected NativeFloat");
-            }
+            assert_eq!(val, StackValue::NativeFloat(1.25));
+        });
+        // SAFETY: F4.WidthAligned — a fresh owned, 8-byte-aligned slot, accessed only through `ptr`.
+        with_atomic_slot(|ptr| unsafe {
             StackValue::NativeFloat(1.23456789).store_atomic(
                 ptr,
                 StoreType::Float64,
                 AtomicOrdering::SeqCst,
             );
             let val = StackValue::load_atomic(ptr, LoadType::Float64, AtomicOrdering::SeqCst);
-            if let StackValue::NativeFloat(f) = val {
-                assert_eq!(f, 1.23456789);
-            } else {
-                panic!("Expected NativeFloat");
-            }
-        }
+            assert_eq!(val, StackValue::NativeFloat(1.23456789));
+        });
     }
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
-    )]
     fn test_concurrent_atomic_load_store() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::thread;
-        let data = Arc::new(ThreadSafeBox([0u8; 8]));
+        // Bounded so the test stays fast under Miri; the reader runs until the writer finishes.
+        const WRITES: i64 = if cfg!(miri) { 200 } else { 100_000 };
+        let data = Arc::new(ThreadSafeBox(UnsafeCell::new([0u8; 8])));
         let stop = Arc::new(AtomicBool::new(false));
         let data_clone = data.clone();
         let stop_clone = stop.clone();
         let writer = thread::spawn(move || {
-            let ptr = data_clone.0.as_ptr() as *mut u8;
-            let mut i = 0;
-            while !stop_clone.load(Ordering::Relaxed) {
-                // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
+            // Derived from the `UnsafeCell`, so the shared buffer is writable through `ptr`.
+            let ptr = data_clone.0.get().cast::<u8>();
+            for i in 0..WRITES {
+                // SAFETY: F4.WidthAligned — `ptr` addresses the live, 8-byte-aligned shared
+                // buffer, and every concurrent access to it is atomic.
                 unsafe {
                     StackValue::Int64(i).store_atomic(
                         ptr,
@@ -95,26 +109,34 @@ mod tests {
                         AtomicOrdering::Release,
                     );
                 }
-                i += 1;
             }
+            stop_clone.store(true, Ordering::Release);
         });
         let data_clone2 = data.clone();
-        let stop_clone2 = stop.clone();
         let reader = thread::spawn(move || {
-            let ptr = data_clone2.0.as_ptr();
-            while !stop_clone2.load(Ordering::Relaxed) {
-                // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
-                unsafe {
-                    let val =
-                        StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire);
-                    if let StackValue::Int64(v) = val {
-                        assert!(v >= 0);
-                    }
+            let ptr = data_clone2.0.get().cast::<u8>().cast_const();
+            let mut last = 0;
+            loop {
+                let done = stop.load(Ordering::Acquire);
+                // SAFETY: F4.WidthAligned — as for the writer; this access is an atomic load.
+                let val = unsafe {
+                    StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire)
+                };
+                let StackValue::Int64(v) = val else {
+                    panic!("Expected Int64");
+                };
+                // A single writer stores increasing values, so observations never go backwards.
+                assert!(
+                    v >= last && v < WRITES,
+                    "torn or out-of-order read: {v} after {last}"
+                );
+                last = v;
+                if done {
+                    assert_eq!(v, WRITES - 1);
+                    break;
                 }
             }
         });
-        thread::sleep(std::time::Duration::from_millis(100));
-        stop.store(true, Ordering::Relaxed);
         writer.join().unwrap();
         reader.join().unwrap();
     }
@@ -201,5 +223,8 @@ mod tests {
     }
 
     #[repr(align(8))]
-    struct ThreadSafeBox([u8; 8]);
+    struct ThreadSafeBox(UnsafeCell<[u8; 8]>);
+    // SAFETY: F4.WidthAligned — threads share the cell only through aligned, width-matched atomic
+    // loads and stores, so concurrent access never races non-atomically.
+    unsafe impl Sync for ThreadSafeBox {}
 }

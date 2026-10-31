@@ -6,8 +6,8 @@ const MEM_OP_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
 
 #[inline]
 pub(crate) fn ranges_overlap(src: *const u8, dst: *mut u8, len: usize) -> bool {
-    let src_start = src as usize;
-    let dst_start = dst as usize;
+    let src_start = src.addr();
+    let dst_start = dst.addr();
     let src_end = src_start.saturating_add(len);
     let dst_end = dst_start.saturating_add(len);
     src_start < dst_end && dst_start < src_end
@@ -24,7 +24,7 @@ pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     }
 
     let overlap = ranges_overlap(src, dst, total_count);
-    let copy_backward = overlap && (dst as usize) > (src as usize);
+    let copy_backward = overlap && dst.addr() > src.addr();
 
     if overlap {
         if copy_backward {

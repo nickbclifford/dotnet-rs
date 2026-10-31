@@ -41,7 +41,7 @@ pub(crate) fn get_ptr_info<'gc, T: ExceptionOps<'gc>>(
         StackValue::ManagedPtr(m) => Ok((m.origin().clone(), m.byte_offset())),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => Ok((
             PointerOrigin::Unmanaged,
-            dotnet_utils::ByteOffset::new(p.as_ptr() as usize),
+            dotnet_utils::ByteOffset::new(p.as_ptr().expose_provenance()),
         )),
         StackValue::NativeInt(p) => Ok((
             PointerOrigin::Unmanaged,

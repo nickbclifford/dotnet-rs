@@ -712,7 +712,7 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
         let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
         let owner = match origin {
             dotnet_value::pointer::PointerOrigin::Heap(o) => Some(*o),
-            _ => self.local.heap.find_object(ptr as usize),
+            _ => self.local.heap.find_object(ptr.addr()),
         };
 
         if let Some(owner) = owner {
@@ -723,7 +723,7 @@ impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<
             let base_addr = if base.is_null() {
                 None
             } else {
-                Some(base as usize)
+                Some(base.addr())
             };
             (layout, base_addr)
         } else {
@@ -1085,7 +1085,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                     _ => unreachable!(),
                 };
                 let type_name = format!("{:?}", obj_type);
-                let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+                let addr = gc_arena::Gc::as_ptr(ptr).addr();
                 self.shared
                     .tracer
                     .trace_gc_finalization(self.indent(), &type_name, addr);

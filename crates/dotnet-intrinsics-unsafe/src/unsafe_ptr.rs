@@ -340,7 +340,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, T: UnsafeIntrinsicHost<'gc>>(
                 m,
                 target_type,
                 false,
-                Some(ByteOffset::new(m as usize)),
+                Some(ByteOffset::new(m.expose_provenance())),
             ));
         }
     }

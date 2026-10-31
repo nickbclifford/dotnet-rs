@@ -58,7 +58,7 @@ unsafe impl<'gc> Collect<'gc> for PointerOrigin<'gc> {
             Self::Heap(r) => r.trace(cc),
             #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(ptr, tid) => {
-                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
+                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().expose_provenance());
             }
             Self::Transient(obj) => obj.as_ref().trace(cc),
             _ => {}
@@ -141,7 +141,7 @@ impl<'gc> PointerOrigin<'gc> {
             PointerOrigin::Heap(r) => r.resurrect(fc, visited, depth),
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().addr());
+                dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().expose_provenance());
             }
             PointerOrigin::Transient(obj) => obj.as_ref().resurrect(fc, visited, depth),
             _ => {}

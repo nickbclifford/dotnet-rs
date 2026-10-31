@@ -10,7 +10,7 @@ Deterministic correctness checks are blocking, including the bounded exhaustive 
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | Source policy, format, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b and M1d selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | Source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
@@ -40,24 +40,25 @@ Jobs:
 
 1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh` and the direct-`std::sync` ceiling with `scripts/check_std_sync_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
-3. `loom`: stable, blocking exhaustive Loom model of the STW protocol. It runs exactly `RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features`; `RUSTFLAGS` selects the rustc cfg (rather than a nonexistent nextest `--cfg` option). The shared model builder is fixed at three total threads (the collector/model thread and two spawned mutators) and leaves preemption, permutation, and duration exploration uncapped.
-4. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
-5. `clippy`: feature matrix resolved from `xtask`
+3. `provenance-lints`: pinned-nightly (`nightly-2026-05-27`), blocking `scripts/check_provenance_lints.sh`, which denies `fuzzy_provenance_casts` and `lossy_provenance_casts` in every first-party crate (workspace with no, default and all features, plus both fuzz crates) by injecting `-Zcrate-attr=feature(strict_provenance_lints)`. This is a source-level gate on `as` casts between pointers and integers, not strict-provenance Miri evidence; see [Strict-provenance deferral](#strict-provenance-deferral)
+4. `loom`: stable, blocking exhaustive Loom model of the STW protocol. It runs exactly `RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features`; `RUSTFLAGS` selects the rustc cfg (rather than a nonexistent nextest `--cfg` option). The shared model builder is fixed at three total threads (the collector/model thread and two spawned mutators) and leaves preemption, permutation, and duration exploration uncapped.
+5. `matrix-definitions`: resolves the clippy/test feature matrices from `xtask`; the `clippy` and `test` jobs depend on it
+6. `clippy`: feature matrix resolved from `xtask`
    - source of truth: `cargo run --quiet -p xtask -- matrix clippy-features --format json`
    - CI sets `DOTNET_SKIP_BUILD=1` for this job as an explicit analysis-only guardrail
-6. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
-7. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
-8. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
-9. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions; the no-features steps are not a full-crate Miri suite
-10. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
-11. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
-12. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
-13. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
+7. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
+8. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
+9. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
+10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the five `atomic_tests::` tests; the no-features steps are not a full-crate Miri suite
+11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
+12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
+13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
+14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
-features, which include `multithreading`; the `m1a_`, `m1b_` and enabled `m1d_` library regressions are part of
-that suite, including multithreading-only cross-arena tests. Three further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
-and check the logs for exactly three, eight and eleven passing tests respectively, with zero ignored:
+features, which include `multithreading`; the `m1a_`, `m1b_`, enabled `m1d_` and `atomic_tests::` library regressions are part of
+that suite, including multithreading-only cross-arena tests. Four further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
+and check the logs for exactly three, eight, eleven and five passing tests respectively, with zero ignored:
 
 ```bash
 cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
@@ -66,6 +67,8 @@ cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features 
   pointer::tests::m1b_ -- --test-threads=1
 cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
   pointer::tests::m1d_ -- --test-threads=1
+cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \
+  atomic_tests:: -- --test-threads=1
 ```
 
 This adds no-features coverage for those regressions, not a second full-crate Miri configuration. The
@@ -470,6 +473,12 @@ accepted missing gate, not implied coverage. In particular:
   but it has never had an entry in this advisory matrix and was not added solely
   to satisfy the plan's stale gate wording.
 - both `dotnet-vm` entries retain their existing flags and filters unchanged.
+
+The blocking `provenance-lints` job in `ci.yml` (2026-10-31) is a separate,
+source-level gate: it denies implicit `as` casts between pointers and integers so
+every remaining exposure or reconstruction is spelled `expose_provenance` /
+`with_exposed_provenance*`. It does not run Miri and does not reopen this
+deferral; exposed-provenance paths remain and are what keep strict Miri red.
 
 Reopening strict-provenance CI requires explicit authorization and a green local
 run for each intended leg. Do not enable a known-red matrix entry or infer strict

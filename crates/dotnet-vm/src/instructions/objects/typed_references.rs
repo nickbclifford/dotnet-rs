@@ -37,7 +37,9 @@ pub fn refanytype<'gc, T: ExceptionOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T) ->
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
     // refanytype pushes a RuntimeTypeHandle (which is a pointer to the type)
-    ctx.push(StackValue::NativeInt(Arc::as_ptr(slot.type_desc()) as isize));
+    ctx.push(StackValue::NativeInt(
+        Arc::as_ptr(slot.type_desc()).expose_provenance() as isize,
+    ));
     StepResult::Continue
 }
 
