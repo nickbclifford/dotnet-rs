@@ -14,7 +14,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 - [x] 1.4 Push the scoped changes and dispatch or observe CI on that SHA; require all four fuzz-corpus-replay jobs to pass with file counts and executed counts, and record run URLs and SHA. [effort: high] — refs REVIEW.md#F-FUZZ-002
 
 ## Phase 2: Native-free finalizer lifecycle fixture
-- [ ] 2.1 Replace console-dependent finalizer observation with managed counters/phase state and a post-executor test assertion, restore the generated fuzzing test, and preserve the tail-collection regression and once-only oracle; verify normal and fuzzing exact tests. [effort: high] — refs REVIEW.md#F-FIXT-001
+- [x] 2.1 Replace console-dependent finalizer observation with managed counters/phase state and a post-executor test assertion, restore the generated fuzzing test, and preserve the tail-collection and once-only lifecycle oracle; cover the executor's pending-finalizer return deferral with a dotnet-vm unit test that fails when the branch is bypassed; verify normal and fuzzing exact tests. [effort: high] — refs REVIEW.md#F-FIXT-001
 - [ ] 2.2 Verify fixture cache invalidation from changed source, reject stale prebuilt artifacts, and observe CI Test Suite (fuzzing) plus a normal leg passing on the fixture commit; record SHA and run evidence. [effort: default] — refs REVIEW.md#F-FIXT-001
 
 ## Phase 3: Durable diagnostics before long validation
