@@ -15,7 +15,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 
 ## Phase 2: Native-free finalizer lifecycle fixture
 - [x] 2.1 Replace console-dependent finalizer observation with managed counters/phase state and a post-executor test assertion, restore the generated fuzzing test, and preserve the tail-collection and once-only lifecycle oracle; cover the executor's pending-finalizer return deferral with a dotnet-vm unit test that fails when the branch is bypassed; verify normal and fuzzing exact tests. [effort: high] — refs REVIEW.md#F-FIXT-001
-- [ ] 2.2 Verify fixture cache invalidation from changed source, reject stale prebuilt artifacts, and observe CI Test Suite (fuzzing) plus a normal leg passing on the fixture commit; record SHA and run evidence. [effort: default] — refs REVIEW.md#F-FIXT-001
+- [x] 2.2 Verify fixture cache invalidation from changed source, reject stale prebuilt artifacts, and observe CI Test Suite (fuzzing) plus a normal leg passing on the fixture commit; record SHA and run evidence. [effort: default] — refs REVIEW.md#F-FIXT-001
 
 ## Phase 3: Durable diagnostics before long validation
 - [ ] 3.1 Design and test a small phase-aware logging/classification wrapper with synthetic setup, test, UB, count-guard, timeout, and cancellation cases while preserving nonzero exits. [effort: high] — refs REVIEW.md#F-DIAG-001
