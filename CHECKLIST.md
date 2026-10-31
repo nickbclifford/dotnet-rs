@@ -25,7 +25,7 @@ Execute one flat-ID step at a time. Each step ends with verification, a memory e
 ## Phase 4: Coverage-preserving Miri shards and budgets
 - [x] 4.1 Split blocking pointer controls into the 33 exact singleton shards in REVIEW.md, update both script catalogs/counts/tests and cache layout identity, and verify both 33-control discoveries and partition equality locally. [effort: high] — refs REVIEW.md#F-MIRI-001
 - [x] 4.2 Split advisory VM and assembly selections into the exact singleton manifests in REVIEW.md, retain value/utils legs and all feature/Miri flags, and add Miri-aware union/duplicate/count guards and provisional cold budgets. [effort: high] — refs REVIEW.md#F-MIRI-002
-- [ ] 4.3 Validate YAML, shell guard self-tests, both pointer discoveries, and Miri --list manifests for every configuration without executing full local Miri suites; record counts and partition proof. [effort: default] — refs REVIEW.md#F-MIRI-001, REVIEW.md#F-MIRI-002
+- [x] 4.3 Validate YAML, shell guard self-tests, both pointer discoveries, and Miri --list manifests for every configuration without executing full local Miri suites; record counts and partition proof. [effort: default] — refs REVIEW.md#F-MIRI-001, REVIEW.md#F-MIRI-002
 - [ ] 4.4 Dispatch and monitor CI pointer/library gates and Miri advisory shards on the implementation SHA, collect cold and warm setup/compile/execute timings, and refine budgets only from evidence until all blocking controls pass and advisory suites terminate within budget. [effort: extra-high] — refs REVIEW.md#F-MIRI-001, REVIEW.md#F-MIRI-002, REVIEW.md#F-DIAG-001
 
 ## Phase 5: Hosted acceptance and documentation
