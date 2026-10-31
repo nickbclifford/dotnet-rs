@@ -20,7 +20,9 @@ class DiagnosticsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "diagnostics"
-        self.env = {**os.environ, "GITHUB_SHA": "a" * 40, "MIRIFLAGS": "-Zmiri-tree-borrows test"}
+        # Ignore any wrapper defaults exported by the CI job running these tests.
+        inherited = {key: value for key, value in os.environ.items() if not key.startswith("CI_DIAG_")}
+        self.env = {**inherited, "GITHUB_SHA": "a" * 40, "MIRIFLAGS": "-Zmiri-tree-borrows test"}
 
     def base(self, phase="execute", case="case"):
         return [sys.executable, str(SCRIPT), "run", "--dir", str(self.directory),
@@ -116,6 +118,31 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIsNone(status["received_signal"])
         self.assertIn("before deadline", self.log())
 
+    @unittest.skipUnless(Path("/proc").is_dir(), "descendant groups are discovered through /proc")
+    def test_timeout_kills_grandchild_in_its_own_process_group(self):
+        # Mimics GNU timeout inside the pointer script: a new group that also holds the output pipe.
+        pid_file = Path(self.temp.name) / "grandchild.pid"
+        code = ("import subprocess, sys, time; "
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], process_group=0); "
+                f"open({str(pid_file)!r}, 'w').write(str(child.pid)); "
+                "print('spawned', flush=True); time.sleep(60)")
+        began = time.monotonic()
+        result = self.launch(code, timeout="1")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(time.monotonic() - began, 9)
+        grandchild = int(pid_file.read_text())
+        limit = time.monotonic() + 3
+        while Path(f"/proc/{grandchild}").exists() and time.monotonic() < limit:
+            stat = Path(f"/proc/{grandchild}/stat").read_text() if Path(f"/proc/{grandchild}").exists() else ""
+            if stat.rsplit(")", 1)[-1].split()[:1] == ["Z"]:
+                break  # killed, awaiting reaping by init
+            time.sleep(0.05)
+        alive = Path(f"/proc/{grandchild}").exists() and Path(f"/proc/{grandchild}/stat").read_text().rsplit(")", 1)[-1].split()[0] != "Z"
+        if alive:
+            os.kill(grandchild, signal.SIGKILL)
+        self.assertFalse(alive, "grandchild in a separate process group survived the deadline")
+        self.assertEqual(self.evidence()[1]["classification"], "budget-exhaustion")
+
     def test_term_and_int_save_partial_status_and_nonzero(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
             with self.subTest(signal=sig):
@@ -149,12 +176,12 @@ class DiagnosticsTests(unittest.TestCase):
         status_path = self.directory / "execute--case.status.json"
         cmd = [sys.executable, str(SCRIPT), "finalize", "--dir", str(self.directory),
                "--phase", "execute", "--case", "case", "--outcome"]
-        self.assertEqual(subprocess.run(cmd + ["cancelled"], capture_output=True).returncode, 0)
+        self.assertEqual(subprocess.run(cmd + ["cancelled"], env=self.env, capture_output=True).returncode, 0)
         self.assertEqual(json.loads(status_path.read_text()), original)  # no overwrite
         for outcome, expected in (("cancelled", "cancelled-or-unknown"), ("success", "missing-status"),
                                   ("failure", "missing-status")):
             status_path.unlink()
-            self.assertEqual(subprocess.run(cmd + [outcome], capture_output=True).returncode, 0)
+            self.assertEqual(subprocess.run(cmd + [outcome], env=self.env, capture_output=True).returncode, 0)
             status = json.loads(status_path.read_text())
             self.assertEqual(status["classification"], expected)
             self.assertTrue(status["finalized_from_start_marker"])
@@ -162,27 +189,90 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(status["subphase"], start["subphase"])
         status_path.unlink()
         (self.directory / "execute--case.start.json").unlink()
-        self.assertEqual(subprocess.run(cmd + ["cancelled"], capture_output=True).returncode, 0)
+        self.assertEqual(subprocess.run(cmd + ["cancelled"], env=self.env, capture_output=True).returncode, 0)
         self.assertFalse(status_path.exists())
 
     def test_path_safety_collision_invalid_timeout_and_spawn_failure(self):
         for name in ("../outside", "/absolute", "..", "bad/name", "bad\nname"):
-            result = subprocess.run(self.base(case=name) + ["--", "true"], capture_output=True)
+            result = subprocess.run(self.base(case=name) + ["--", "true"], env=self.env, capture_output=True)
             self.assertNotEqual(result.returncode, 0, name)
         for timeout in ("0", "-1", "nan", "inf"):
             cmd = self.base()
             cmd[cmd.index("--timeout") + 1] = timeout
-            self.assertNotEqual(subprocess.run(cmd + ["--", "true"], capture_output=True).returncode, 0)
+            self.assertNotEqual(subprocess.run(cmd + ["--", "true"], env=self.env, capture_output=True).returncode, 0)
         self.assertEqual(self.launch("print('first')").returncode, 0)
         self.assertNotEqual(self.launch("print('second')").returncode, 0)
         self.assertIn("first", self.log())
         self.assertNotIn("second", self.log())
         self.directory = Path(self.temp.name) / "spawn"
-        result = subprocess.run(self.base("setup") + ["--", "/does-not-exist/command"], capture_output=True)
+        result = subprocess.run(self.base("setup") + ["--", "/does-not-exist/command"], env=self.env, capture_output=True)
         self.assertEqual(result.returncode, 127)
         _, status = self.evidence("setup")
         self.assertEqual(status["classification"], "setup-error")
         self.assertIn("could not start command", self.log("setup"))
+
+    def test_job_deadline_caps_timeout_and_skips_spent_budget(self):
+        self.env["CI_DIAG_DEADLINE"] = str(time.time() + 0.3)
+        began = time.monotonic()
+        result = self.launch("import time; print('started', flush=True); time.sleep(60)", timeout="30")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(time.monotonic() - began, 8)
+        start, status = self.evidence()
+        self.assertEqual(status["classification"], "budget-exhaustion")
+        self.assertLessEqual(start["effective_timeout_seconds"], 0.3)
+        self.assertEqual(start["timeout_seconds"], 30)
+        self.directory = Path(self.temp.name) / "spent"
+        self.env["CI_DIAG_DEADLINE"] = str(time.time() - 1)
+        marker = Path(self.temp.name) / "ran"
+        result = self.launch(f"open({str(marker)!r}, 'w').close()")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        _, status = self.evidence()
+        self.assertEqual((status["classification"], status["deadline_expired"]), ("budget-exhaustion", True))
+        self.assertIn("command not started", self.log())
+        self.assertFalse(marker.exists())
+
+    def test_environment_defaults_supply_directory_and_identity(self):
+        env = {**self.env, "CI_DIAG_DIR": str(self.directory), "CI_DIAG_FEATURES": "multithreading",
+               "CI_DIAG_TOOLCHAIN": "nightly-env", "CI_DIAG_CACHE": "rust-cache-hit=true"}
+        cmd = [sys.executable, str(SCRIPT), "run", "--phase", "setup", "--case", "case", "--timeout", "5",
+               "--", sys.executable, "-c", "print('ok')"]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        start, _ = self.evidence("setup")
+        self.assertEqual((start["features"], start["toolchain"], start["cache"]),
+                         ("multithreading", "nightly-env", "rust-cache-hit=true"))
+
+    def summarize(self, *options, outcome="failure"):
+        return subprocess.run([sys.executable, str(SCRIPT), "summarize", "--dir", str(self.directory),
+                               "--outcome", outcome, "--title", "Miri | demo", *options],
+                              capture_output=True, text=True)
+
+    def test_summarize_finalizes_interrupted_phases_and_never_fails(self):
+        result = self.summarize()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("No phase evidence was recorded", result.stdout)
+        self.assertEqual(self.launch("print('compiled')", phase="compile").returncode, 0)
+        self.assertEqual(self.launch("print('ok')").returncode, 0)
+        # An interrupted guard phase leaves only a start marker.
+        self.directory.joinpath("guard--case.start.json").write_text(json.dumps(
+            {"phase": "guard", "case": "case", "subphase": "", "started_utc": "9999-01-01T00:00:00.000Z"}))
+        result = self.summarize("--advisory", outcome="cancelled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("### CI diagnostics: Miri | demo", result.stdout)
+        self.assertIn("**Advisory diagnostic failure:** 1 phase(s)", result.stdout)
+        self.assertIn("| guard | - | case | cancelled-or-unknown |", result.stdout)
+        self.assertIn("| compile | sysroot | case | success |", result.stdout)
+        self.assertLess(result.stdout.index("| compile"), result.stdout.index("| execute"))
+        self.assertEqual(json.loads((self.directory / "guard--case.status.json").read_text())["classification"],
+                         "cancelled-or-unknown")
+        self.assertEqual((self.directory / "summary.md").read_text(), result.stdout)
+        blocking = self.summarize(outcome="failure")
+        self.assertIn("**Blocking failure:** 1 phase(s)", blocking.stdout)
+        (self.directory / "guard--case.start.json").write_text("{not json")
+        (self.directory / "guard--case.status.json").unlink()
+        result = self.summarize(outcome="success")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("All 2 recorded phase(s) succeeded.", result.stdout)
+        self.assertIn("Unreadable evidence: guard--case.start.json", result.stdout)
 
 
 if __name__ == "__main__":

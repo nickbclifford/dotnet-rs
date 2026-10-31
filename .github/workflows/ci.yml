@@ -293,36 +293,74 @@ jobs:
           done
           exit $FAIL
 
+  # Diagnostics-wrapped jobs: each risky command runs through scripts/ci_diagnostics.py as an
+  # explicit setup/compile/execute phase with durable logs and status metadata. CI_DIAG_DEADLINE
+  # ends every inner phase budget 3 minutes before timeout-minutes (keep both numbers in sync)
+  # so the always() summary and artifact upload still run after budget exhaustion.
   miri-value:
     name: Miri (dotnet-value)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 15 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - uses: Swatinem/rust-cache@v2.8.2
-      - run: cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
+        id: rust-cache
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
+      - name: Compile Miri tests
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase compile --case value-default --features default --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --no-run
+          python3 scripts/ci_diagnostics.py run --phase compile --case value-lib-no-features --features no-features --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --no-run
+      - name: Miri dotnet-value (default features)
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase execute --case value-default --features default --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
       - name: Miri heap regressions (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1a_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-no-features.log"
-          grep -F 'test result: ok. 3 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case value-m1a-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 3 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1a_ -- --test-threads=1
       - name: Miri pointer semantics regressions (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-m1b-no-features.log"
-          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-m1b-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case value-m1b-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1
       # Non-ignored multithreading-only cross-arena regressions run in the full default-feature step above.
       - name: Miri owner-retention regressions (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1d_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-value-m1d-no-features.log"
-          grep -F 'test result: ok. 11 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-value-m1d-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case value-m1d-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 11 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1d_ -- --test-threads=1
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri (dotnet-value)' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-value-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
 
   miri-frame-blocks:
     name: Miri frame blocks
@@ -330,33 +368,66 @@ jobs:
     timeout-minutes: 15
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 15 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - uses: Swatinem/rust-cache@v2.8.2
+        id: rust-cache
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
+      - name: Compile Miri tests
+        run: |
+          for crate in dotnet-utils dotnet-vm-data; do
+            python3 scripts/ci_diagnostics.py run --phase compile --case "$crate-no-features" --features no-features --timeout 900 -- \
+              cargo +nightly-2026-05-27 miri test -p "$crate" --lib --no-default-features --no-run
+            python3 scripts/ci_diagnostics.py run --phase compile --case "$crate-multithreading" --features multithreading --timeout 900 -- \
+              cargo +nightly-2026-05-27 miri test -p "$crate" --lib --no-default-features --features multithreading --no-run
+          done
       - name: Miri raw blocks (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features raw_block:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-raw-block-no-features.log"
-          grep -F 'test result: ok. 7 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-raw-block-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case raw-block-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 7 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features raw_block:: -- --test-threads=1
       - name: Miri raw blocks (multithreading)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features --features multithreading raw_block:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-raw-block-multithreading.log"
-          grep -F 'test result: ok. 7 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-raw-block-multithreading.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case raw-block-multithreading --features multithreading --timeout 900 \
+            --require 'test result: ok. 7 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib --no-default-features --features multithreading raw_block:: -- --test-threads=1
       - name: Miri frame allocations (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-frame-alloc-no-features.log"
-          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-frame-alloc-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case frame-alloc-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1
       - name: Miri frame allocations (multithreading)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading frame_alloc:: -- --test-threads=1 | tee "$RUNNER_TEMP/miri-frame-alloc-multithreading.log"
-          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-frame-alloc-multithreading.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case frame-alloc-multithreading --features multithreading --timeout 900 \
+            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading frame_alloc:: -- --test-threads=1
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri frame blocks' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-frame-blocks-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
 
   miri-owner-retention:
     name: Miri owner retention
@@ -364,23 +435,54 @@ jobs:
     timeout-minutes: 15
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 15 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - uses: Swatinem/rust-cache@v2.8.2
+        id: rust-cache
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
+      - name: Compile Miri tests
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase compile --case vm-data-no-features --features no-features --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --no-run
+          python3 scripts/ci_diagnostics.py run --phase compile --case vm-data-multithreading --features multithreading --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading --no-run
       - name: Miri stack owner retention (no features)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::m1d_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-owner-retention-no-features.log"
-          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-owner-retention-no-features.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-no-features --features no-features --timeout 900 \
+            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::m1d_ -- --test-threads=1
       - name: Miri stack owner retention (multithreading)
         run: |
-          set -o pipefail
-          cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::m1d_ -- --test-threads=1 | tee "$RUNNER_TEMP/miri-owner-retention-multithreading.log"
-          grep -F 'test result: ok. 8 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/miri-owner-retention-multithreading.log"
+          python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-multithreading --features multithreading --timeout 900 \
+            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::m1d_ -- --test-threads=1
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri owner retention' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-owner-retention-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
 
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
@@ -388,12 +490,19 @@ jobs:
     timeout-minutes: 45
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
+      CI_DIAG_FEATURES: ${{ matrix.configuration }}
     strategy:
       fail-fast: false
       matrix:
         configuration: [no-features, multithreading]
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 45 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -405,9 +514,12 @@ jobs:
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Rust Cache
+        id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           key: miri-pointer-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.shard }}
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
@@ -416,10 +528,38 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
       - name: Verify control discovery
-        run: bash scripts/pointer_provenance.sh verify-controls --configuration ${{ matrix.configuration }}
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase compile --subphase native-discovery --case control-discovery --timeout 1200 -- \
+            bash scripts/pointer_provenance.sh verify-controls --configuration ${{ matrix.configuration }}
+      - name: Compile Miri controls
+        run: |
+          features=(--no-default-features)
+          if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
+          python3 scripts/ci_diagnostics.py run --phase compile --subphase miri-build --case miri-controls --timeout 1200 -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm --lib "${features[@]}" --no-run
       - name: Run control shard
-        run: bash scripts/pointer_provenance.sh controls --configuration ${{ matrix.configuration }} --shard ${{ matrix.shard }}
+        run: |
+          POINTER_PROVENANCE_LOG_DIR="$CI_DIAG_DIR/pointer-logs" \
+            python3 scripts/ci_diagnostics.py run --phase execute --case 'shard-${{ matrix.shard }}' --timeout 2700 -- \
+            bash scripts/pointer_provenance.sh controls --configuration ${{ matrix.configuration }} --shard ${{ matrix.shard }}
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' \
+              --title 'Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-pointer-${{ matrix.configuration }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
 
   fuzz-corpus-replay:
     name: Fuzz ${{ matrix.target }} Corpus
@@ -430,6 +570,7 @@ jobs:
       # Corpus replay checks target behavior, not process-exit leak reporting.
       # This also keeps libFuzzer replay usable under sandboxed runners.
       ASAN_OPTIONS: "detect_leaks=0"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
     strategy:
       fail-fast: false
       matrix:
@@ -451,6 +592,11 @@ jobs:
             corpus: corpus/fuzz_executor
             fuzz-workspace: crates/dotnet-vm/fuzz
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 15 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -467,6 +613,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
       - name: Rust Cache
+        id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           workspaces: |
@@ -479,9 +626,13 @@ jobs:
           path: ~/.cargo/bin/cargo-fuzz
           # Bump the schema and key if the build toolchain, target, or install flags change.
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-fuzz-v2-${{ env.CARGO_FUZZ_VERSION }}-build-1.95.0-locked-default
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},cargo-fuzz-hit=${{ steps.cache-cargo-fuzz.outputs.cache-hit }}" >> "$GITHUB_ENV"
       - name: Install cargo-fuzz
         if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
-        run: cargo +1.95.0 install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase setup --subphase cargo-fuzz-install --case cargo-fuzz-install \
+            --toolchain 1.95.0 --timeout 600 -- cargo +1.95.0 install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
       - name: Verify cargo-fuzz and toolchains
         run: |
           rustc +1.95.0 --version
@@ -493,10 +644,30 @@ jobs:
           test "$version" = "cargo-fuzz $CARGO_FUZZ_VERSION"
       - name: Test corpus replay guard
         run: python3 scripts/tests/test_replay_fuzz_corpus.py
+      - name: Build ${{ matrix.target }}
+        working-directory: ${{ matrix.working-directory }}
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ci_diagnostics.py" run --phase compile --case '${{ matrix.target }}' --timeout 600 -- \
+            cargo +nightly-2026-05-27 fuzz build '${{ matrix.target }}'
       - name: Replay ${{ matrix.target }} corpus
         run: |
-          python3 scripts/replay_fuzz_corpus.py \
+          python3 scripts/ci_diagnostics.py run --phase execute --case '${{ matrix.target }}' --timeout 600 -- \
+            python3 scripts/replay_fuzz_corpus.py \
             --workdir '${{ matrix.working-directory }}' \
             --corpus '${{ matrix.corpus }}' \
             --target '${{ matrix.target }}' \
-            --output-dir "$RUNNER_TEMP/fuzz-replay"
+            --output-dir "$CI_DIAG_DIR/fuzz-replay"
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Fuzz ${{ matrix.target }} Corpus' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-replay-${{ matrix.target }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14

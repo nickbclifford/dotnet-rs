@@ -14,6 +14,9 @@ on:
     - cron: '0 2 * * *' # Daily at 02:00 UTC (offset from fuzz midnight cron)
 
 jobs:
+  # Each phase runs through scripts/ci_diagnostics.py with durable logs/status metadata.
+  # CI_DIAG_DEADLINE ends inner budgets 3 minutes before timeout-minutes (keep in sync) so an
+  # exhausted suite is recorded as budget exhaustion and its artifact still uploads.
   miri:
     name: Miri (${{ matrix.crate }}, ${{ matrix.configuration }})
     runs-on: ubuntu-latest
@@ -21,27 +24,40 @@ jobs:
     continue-on-error: true
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
+      CI_DIAG_FEATURES: ${{ matrix.configuration }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - crate: dotnet-value
             configuration: default-features
-            args: '-- --test-threads=1'
+            cargo-args: ''
+            test-args: '--test-threads=1'
           - crate: dotnet-utils
             configuration: no-features
-            args: '--no-default-features -- --test-threads=1'
+            cargo-args: '--no-default-features'
+            test-args: '--test-threads=1'
           - crate: dotnet-assemblies
             configuration: default-features
-            args: '-- --test-threads=1'
+            cargo-args: ''
+            test-args: '--test-threads=1'
           - crate: dotnet-vm
             configuration: no-features
-            args: '--no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests'
+            cargo-args: '--no-default-features'
+            test-args: '--test-threads=1 jmp_tests tail_calls fault_tests'
           - crate: dotnet-vm
             configuration: multithreading
-            args: '--no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests'
+            cargo-args: '--no-default-features --features multithreading'
+            test-args: '--test-threads=1 jmp_tests tail_calls fault_tests'
 
     steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 30 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
+
       - uses: actions/checkout@v4
 
       - name: Setup Rust (nightly + miri)
@@ -53,7 +69,11 @@ jobs:
           components: miri
 
       - name: Rust Cache
+        id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
 
       - name: Setup .NET SDK (10.0.x)
         uses: actions/setup-dotnet@v4
@@ -65,5 +85,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
+
+      - name: Compile Miri tests (${{ matrix.crate }}, ${{ matrix.configuration }})
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase compile --case '${{ matrix.crate }}-${{ matrix.configuration }}' --timeout 900 -- \
+            cargo +nightly-2026-05-27 miri test -p ${{ matrix.crate }} ${{ matrix.cargo-args }} --no-run
+
       - name: Run Miri (${{ matrix.crate }}, ${{ matrix.configuration }})
-        run: cargo +nightly-2026-05-27 miri test -p ${{ matrix.crate }} ${{ matrix.args }}
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase execute --case '${{ matrix.crate }}-${{ matrix.configuration }}' --timeout 1800 -- \
+            cargo +nightly-2026-05-27 miri test -p ${{ matrix.crate }} ${{ matrix.cargo-args }} -- ${{ matrix.test-args }}
+
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --advisory --outcome '${{ job.status }}' \
+              --title 'Miri (${{ matrix.crate }}, ${{ matrix.configuration }})' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-${{ matrix.crate }}-${{ matrix.configuration }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
