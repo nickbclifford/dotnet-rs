@@ -160,6 +160,19 @@ impl TestHarness {
         shared: Arc<state::SharedGlobalState>,
         timeout: Duration,
     ) -> ExecutionResult {
+        self.run_with_shared_timeout_observed(resolution, shared, timeout, |_, _, _| {})
+    }
+
+    fn run_with_shared_timeout_observed<F>(
+        &self,
+        resolution: ResolutionS,
+        shared: Arc<state::SharedGlobalState>,
+        timeout: Duration,
+        observe: F,
+    ) -> ExecutionResult
+    where
+        F: FnOnce(&state::SharedGlobalState, TypeDescription, &ExecutionResult),
+    {
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
         let abort_signal = shared.abort_signal();
         let timeout_waiter =
@@ -172,12 +185,54 @@ impl TestHarness {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => false,
             });
 
-        let result = self.run_with_shared_internal(resolution, shared, |_| {});
+        let result = self.run_with_shared_internal(resolution, shared, observe, |_| {});
         let _ = completion_tx.send(());
         if timeout_waiter.join().expect("Timeout waiter panicked") {
             panic!("Execution timed out after {:?}", timeout);
         }
         result
+    }
+
+    pub fn assert_finalizer_lifecycle(&self, dll_path: &Path) {
+        let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT harness keeps shared state on its sole executor"
+        )]
+        let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
+        let result = self.run_with_shared_timeout_observed(
+            resolution,
+            shared,
+            get_test_timeout(60),
+            |shared, program, result| {
+                assert_eq!(result.exit_code, 0, "fixture failed: {:?}", result.stderr);
+                assert_eq!(result.stderr, None, "fixture threw a managed exception");
+                let storage = shared
+                    .statics
+                    .get(program.clone(), &vm::GenericLookup::default());
+                let read = |name| {
+                    let bytes = storage.storage.get_field_atomic(
+                        program.clone(),
+                        name,
+                        std::sync::atomic::Ordering::Acquire,
+                    );
+                    i32::from_ne_bytes(bytes.try_into().expect("expected four-byte Int32"))
+                };
+                let actual = [
+                    read("Constructed"),
+                    read("Finalized"),
+                    read("Phase"),
+                    read("ObservedPhase"),
+                ];
+                assert_finalizer_state(actual);
+            },
+        );
+        assert_eq!(
+            result.exit_code, 0,
+            "fixture setup failed: {:?}",
+            result.stderr
+        );
+        assert_eq!(result.stderr, None, "fixture setup failed");
     }
 
     pub fn run(&self, dll_path: &Path) -> u8 {
@@ -195,7 +250,7 @@ impl TestHarness {
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
     ) -> ExecutionResult {
-        self.run_with_shared_internal(resolution, shared, |_| {})
+        self.run_with_shared_internal(resolution, shared, |_, _, _| {}, |_| {})
     }
 
     #[cfg(feature = "multithreading")]
@@ -208,26 +263,33 @@ impl TestHarness {
     ) where
         F: FnOnce(ExecutionResult),
     {
-        self.run_with_shared_internal(resolution, shared, |result| {
-            on_result(result);
-            let (lock, condvar) = &**release_gate;
-            let mut released = lock.lock().expect("release gate lock poisoned");
-            while !*released {
-                released = condvar
-                    .wait(released)
-                    .expect("release gate wait lock poisoned");
-            }
-        });
+        self.run_with_shared_internal(
+            resolution,
+            shared,
+            |_, _, _| {},
+            |result| {
+                on_result(result);
+                let (lock, condvar) = &**release_gate;
+                let mut released = lock.lock().expect("release gate lock poisoned");
+                while !*released {
+                    released = condvar
+                        .wait(released)
+                        .expect("release gate wait lock poisoned");
+                }
+            },
+        );
     }
 
-    fn run_with_shared_internal<F>(
+    fn run_with_shared_internal<F, O>(
         &self,
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
+        observe: O,
         on_complete: F,
     ) -> ExecutionResult
     where
         F: FnOnce(ExecutionResult),
+        O: FnOnce(&state::SharedGlobalState, TypeDescription, &ExecutionResult),
     {
         let mut executor = vm::Executor::new(shared.clone());
         let entry_method = match resolution.entry_point {
@@ -244,7 +306,7 @@ impl TestHarness {
             .unwrap();
 
         let method = MethodDescription::new(
-            td,
+            td.clone(),
             vm::GenericLookup::default(),
             resolution,
             MethodMemberIndex::Method(method_index),
@@ -280,6 +342,10 @@ impl TestHarness {
                 }
             }
         };
+
+        // Observe scalars before the executor or its arena is torn down. This callback
+        // must never block: the executor is still registered with the GC coordinator.
+        observe(&shared, td, &result);
 
         // In multithreading mode, extract the arena BEFORE dropping the executor.
         // Other threads may still be executing and accessing shared static references
@@ -493,4 +559,20 @@ fn fixtures_base_is_not_crate_local() {
         fixtures_base,
         manifest_dir
     );
+}
+
+// Kept separate so negative controls exercise precisely the fixture oracle.
+fn assert_finalizer_state(actual: [i32; 4]) {
+    assert_eq!(
+        actual,
+        [1, 1, 42, 42],
+        "constructed, finalized, phase, observed phase"
+    );
+}
+
+#[test]
+fn finalizer_lifecycle_oracle_rejects_bad_states() {
+    for bad in [[1, 0, 42, 0], [1, 2, 42, 42], [1, 1, 42, 0], [0, 1, 42, 42]] {
+        assert!(std::panic::catch_unwind(|| assert_finalizer_state(bad)).is_err());
+    }
 }
