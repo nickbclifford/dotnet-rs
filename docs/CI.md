@@ -201,7 +201,7 @@ for selected work, not instructions to launch every lane after every step.
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-batches` / `miri-pointer-controls` (33 filtered VM controls: 8 batch jobs on selected push/PR runs, 66 singleton jobs in full sweeps and as the attribution re-run after a batch failure), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-cross-arena` (independent recreations; configuration x 4 groups = 8 jobs), `miri-pointer-batches` / `miri-pointer-controls` (33 filtered VM controls: 8 batch jobs on selected push/PR runs, 66 singleton jobs in full sweeps and as the attribution re-run after a batch failure), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
@@ -256,6 +256,7 @@ Jobs:
 11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-batches` and `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); `miri-pointer-batches` (configuration x 4 batches) runs on selected push/PR runs, `miri-pointer-controls` (configuration x 33 singleton shards) runs in full sweeps and as the attribution re-run after a batch failure; this is not a full or strict VM Miri suite
+13a. `miri-cross-arena`: pinned-nightly, blocking independent recreations; matrix of configuration x group (`library`, `vm-teardown`, `vm-collection`, `vm-stress`) = 8 jobs, one `dotnet-vm` Miri process per VM job (see [Job layout and budgets](#job-layout-and-budgets))
 14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 15. `select-deep`: no `needs`, 5-minute timeout; runs `scripts/ci_select.py` over the changed paths (PR `base...head`, push `before..head`, `--full` for schedule and dispatch with `full` true) and publishes the lane booleans, the fuzz matrix and a reason per lane; its first step writes full-sweep fallback outputs so a failed checkout or selector selects everything. See [Implementing the hierarchy](#implementing-the-hierarchy) item 3.
 16. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
@@ -308,9 +309,10 @@ Miri suite, strict-provenance evidence, or a soundness proof.
 The independent recreations (not recovered originals) run under pinned
 `nightly-2026-05-27` and `-Zmiri-tree-borrows -Zmiri-disable-isolation
 -Zmiri-ignore-leaks`, with separate no-features and multithreading jobs. Each
-runtime singleton has a 900-second diagnostics deadline and requires exactly
-one passed, zero failed and zero ignored. The workflow is the exact selector
-manifest; diagnostics are summarized and uploaded even on failure.
+runtime singleton requires exactly one passed, zero failed and zero ignored
+(per-invocation deadlines are in [Job layout and budgets](#job-layout-and-budgets)).
+The workflow is the exact selector manifest; diagnostics are summarized and
+uploaded even on failure.
 
 Both configurations run the value publication model and origin ABA recreation,
 a bounded Executor teardown, a collection and a reduced teardown stress. MT
@@ -357,12 +359,66 @@ mean `dotnet-value`, `dotnet-utils`, and `dotnet-vm` respectively.
 | multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_checked_counter_control` |
 | multithreading, strict-core | V | `pointer::tests::m1e_recreation_transport_strict_core` |
 
-The job has a 45-minute outer budget, reserves three minutes for diagnostics, and
-uses 600 seconds for sysroot setup and 900 seconds per compile, absence check,
-and singleton. The strict-core invocation appends `-Zmiri-strict-provenance`;
-all results are uploaded in the configuration-specific diagnostics artifact.
-The 22 permissive and one strict invocations passed locally in step 7.1; hosted
-execution and branch protection are not established by those local runs.
+The strict-core invocation appends `-Zmiri-strict-provenance`. The 22 permissive
+and one strict invocations passed locally in step 7.1; hosted execution and
+branch protection are not established by those local runs.
+
+#### Job layout and budgets
+
+The job id stays `miri-cross-arena` (so `select-deep` gating, `needs`, `if` and
+`deep-safety` are unchanged), but its matrix is an explicit `include` list of
+configuration x group: **8 jobs**, named `Miri cross-arena (<configuration>, <group>)`.
+The set of executed (configuration, selector) pairs is identical to the previous
+single-job-per-configuration layout; only the grouping changed.
+
+| Group | Contents (per configuration) | Compiles | Job timeout | Per-invocation timeout |
+|---|---|---|---|---|
+| `library` | All `V` and `U` rows of the table above for that configuration (no-features: codec-id-control, codec-boundaries-control, publication-model, origin-aba, plus the utils compile check and the two registry/transport absence checks; multithreading: codec-id, codec-boundaries, publication-model, origin-aba, transport-structural, transport-runtime, the six registry recreations, and the isolated strict-provenance transport core with its own `MIRIFLAGS`) | `dotnet-value` (+ `dotnet-utils` in multithreading) | 30 min | 900 s |
+| `vm-teardown` | One `VM` row: `teardown` (multithreading) or `teardown-control` (no-features) | `dotnet-vm` | 45 min | 1800 s |
+| `vm-collection` | One `VM` row: `collection` (multithreading) or `collection-control` (no-features) | `dotnet-vm` | 45 min | 1800 s |
+| `vm-stress` | `teardown-stress` (both configurations) | `dotnet-vm` | 45 min | 1800 s |
+
+Every group keeps `MIRIFLAGS`, the `--require 'test result: ok. 1 passed; 0 failed; 0 ignored;'`
+guard, the `--exact --test-threads=1` invocation shape, the ci_diagnostics case ids,
+600 s sysroot setup and 900 s per compile or absence check. `CI_DIAG_DEADLINE` is the
+group's job timeout minus 180 s (`matrix.job_timeout`). Each job uploads
+`ci-diagnostics-miri-cross-arena-<configuration>-<group>-attempt-N`. The rust-cache
+key is `miri-cross-arena-nightly-2026-05-27-<configuration>-<group>`: it is keyed per
+group because library and VM jobs build different crate sets, and three VM jobs
+sharing one key would race to save identical cache entries (at the cost of three
+redundant `dotnet-vm` caches per configuration).
+
+**Why the split (measured, hosted).** Run 41495133436 (ff3ee98a) hit the 45-minute job
+deadline during `teardown-stress` in the multithreading job
+(`ci-diagnostics: execute/teardown-stress: budget-exhaustion (exit=124)`); every check
+that had run passed. The three `dotnet-vm` recreations ran serially in one job, each in
+its own Miri process:
+
+| Recreation | Run 41484662885 (passed) | Run 41495133436 |
+|---|---|---|
+| teardown | 610 s | 745 s |
+| collection | 596 s | 870 s |
+| teardown-stress | 563 s | killed by the deadline |
+
+Runner speed varied 25-45% between the runs. The cost is mostly fixed: every `dotnet-vm`
+Miri process re-parses the embedded support library (a pointer control measured about
+233 s locally under Miri regardless of probe content; hosted is about 2-5x slower). The
+`library` group's whole execute phase measured about 5 minutes hosted (dominated by
+`transport-structural`, about 4 minutes; the other singletons take 1-3 s each once
+compiled), so 30 minutes gives headroom for a cold cache and a slower runner.
+
+**Measured budget adjustment.** The VM per-invocation timeout was raised from 900 s to
+1800 s. The 870 s hosted collection sample was within 4% of the old cap and runner
+variance of 25-45% would have exceeded it; one VM process per job (about 10-15 minutes
+hosted) fits in the unchanged 45-minute job budget with wide margin. This is a
+justified, bounded change in the sense of
+[CONTRIBUTING](../CONTRIBUTING.md#engineering-decisions-and-plan-authority): sized from
+the samples above, applied only to the VM groups, with the library group's 900 s kept.
+
+**Follow-up (not implemented).** The per-process support-library parse appears to
+dominate VM Miri tests in general, but has not been measured for these recreations.
+Reducing it (for example by sharing one parse across several recreations, as
+`miri-pointer-batches` does) is separate work and would let the VM groups be merged again.
 
 ### Blocking `miri-pointer-controls` lane
 

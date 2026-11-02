@@ -598,18 +598,38 @@ jobs:
           retention-days: 14
 
   # Independent recreations (not recovered originals); each invocation is guarded.
+  #
+  # Matrix: configuration x group, as an explicit include list (8 jobs). The three dotnet-vm
+  # recreations used to run serially in one job, each in its own Miri process that re-parses the
+  # embedded support library (hosted samples: 563-870s each), which exhausted the 45-minute job
+  # budget. Each VM recreation now has its own job; the cheap dotnet-value/dotnet-utils singletons
+  # share a short `library` job. Together the groups execute exactly the pre-split (configuration,
+  # selector) set.
   miri-cross-arena:
-    name: Miri cross-arena (${{ matrix.configuration }})
+    name: Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }})
     needs: [fast-core, select-deep]
     # No status function, so GitHub ANDs success(): fast-core and select-deep must both
     # succeed. `!= 'false'` makes a missing selection output run the lane, not skip it.
     if: needs.select-deep.outputs.cross_arena != 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.job_timeout }}
     strategy:
       fail-fast: false
       matrix:
-        configuration: [no-features, multithreading]
+        include:
+          # library: ~5 min of Miri execution plus compile on hosted runners; 30 min leaves
+          # headroom for a cold cache and a 2-3x slower runner.
+          - { configuration: no-features,    group: library,       job_timeout: 30, invocation_timeout: 900 }
+          - { configuration: multithreading, group: library,       job_timeout: 30, invocation_timeout: 900 }
+          # VM groups: one dotnet-vm Miri process each. The per-invocation timeout is 1800s
+          # (was 900s): hosted samples reached 870s for collection and runner speed varies
+          # 25-45% between runs, so 900s left no margin. See docs/CI.md.
+          - { configuration: no-features,    group: vm-teardown,   job_timeout: 45, invocation_timeout: 1800 }
+          - { configuration: multithreading, group: vm-teardown,   job_timeout: 45, invocation_timeout: 1800 }
+          - { configuration: no-features,    group: vm-collection, job_timeout: 45, invocation_timeout: 1800 }
+          - { configuration: multithreading, group: vm-collection, job_timeout: 45, invocation_timeout: 1800 }
+          - { configuration: no-features,    group: vm-stress,     job_timeout: 45, invocation_timeout: 1800 }
+          - { configuration: multithreading, group: vm-stress,     job_timeout: 45, invocation_timeout: 1800 }
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
       CI_DIAG_TOOLCHAIN: nightly-2026-05-27
@@ -618,7 +638,7 @@ jobs:
       - name: Start diagnostics budget
         run: |
           echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
-          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 45 * 60 - 180 ))" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + ${{ matrix.job_timeout }} * 60 - 180 ))" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -629,7 +649,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2.8.2
         id: rust-cache
         with:
-          key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}
+          # Keyed per group: the library and VM groups build different crate sets, and three
+          # VM jobs sharing one key would race to save identical entries.
+          key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.group }}
       - name: Record cache identity
         run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
       - uses: actions/setup-dotnet@v4
@@ -645,16 +667,18 @@ jobs:
         run: |
           features=(--no-default-features)
           if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
-          for crate in dotnet-value dotnet-vm; do
+          if [ '${{ matrix.group }}' = library ]; then
+            crates=(dotnet-value)
+            if [ '${{ matrix.configuration }}' = multithreading ]; then crates+=(dotnet-utils); fi
+          else
+            crates=(dotnet-vm)
+          fi
+          for crate in "${crates[@]}"; do
             python3 scripts/ci_diagnostics.py run --phase compile --case "$crate" --features '${{ matrix.configuration }}' --timeout 900 -- \
               cargo +nightly-2026-05-27 miri test -p "$crate" --lib "${features[@]}" --no-run
           done
-          if [ '${{ matrix.configuration }}' = multithreading ]; then
-            python3 scripts/ci_diagnostics.py run --phase compile --case dotnet-utils --features multithreading --timeout 900 -- \
-              cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib "${features[@]}" --no-run
-          fi
       - name: Verify no-features registry absence
-        if: ${{ matrix.configuration == 'no-features' }}
+        if: ${{ matrix.configuration == 'no-features' && matrix.group == 'library' }}
         run: |
           python3 scripts/ci_diagnostics.py run --phase compile --case utils-no-features --features no-features --timeout 900 -- cargo check -p dotnet-utils --no-default-features
           for selector in m1e_recreation_transport m1g_recreation_registry_; do
@@ -667,33 +691,53 @@ jobs:
           if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
           singleton() {
             local case_id="$1" crate="$2" selector="$3"
-            python3 scripts/ci_diagnostics.py run --phase execute --case "$case_id" --features '${{ matrix.configuration }}' --timeout 900 \
+            python3 scripts/ci_diagnostics.py run --phase execute --case "$case_id" --features '${{ matrix.configuration }}' --timeout ${{ matrix.invocation_timeout }} \
               --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
               cargo +nightly-2026-05-27 miri test -p "$crate" --lib "${features[@]}" "$selector" -- --exact --test-threads=1
           }
-          if [ '${{ matrix.configuration }}' = multithreading ]; then
-            singleton codec-id dotnet-value object_tests::tests::recreation_codec_id40000
-            singleton codec-boundaries dotnet-value object_tests::tests::recreation_codec_registered_boundaries
-            singleton teardown dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease
-            singleton collection dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation
-          else
-            singleton codec-id-control dotnet-value object_tests::tests::recreation_codec_local_invalid_control
-            singleton codec-boundaries-control dotnet-value object::tests::recreation_codec_short_storage
-            singleton teardown-control dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control
-            singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection
-          fi
-          singleton publication-model dotnet-value object_tests::tests::recreation_publication_pending_survival
-          singleton origin-aba dotnet-value pointer::tests::m1g_recreation_origin_aba
-          singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress
-          if [ '${{ matrix.configuration }}' = multithreading ]; then
-            singleton transport-structural dotnet-utils gc::cross_arena::tests::m1e_recreation_transport
-            singleton transport-runtime dotnet-utils gc::cross_arena::tests::m1e_recreation_transport_permissive_control
-            for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
-              singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::m1g_recreation_registry_$name"
-            done
-          fi
+          case '${{ matrix.group }}' in
+            library)
+              if [ '${{ matrix.configuration }}' = multithreading ]; then
+                singleton codec-id dotnet-value object_tests::tests::recreation_codec_id40000
+                singleton codec-boundaries dotnet-value object_tests::tests::recreation_codec_registered_boundaries
+              else
+                singleton codec-id-control dotnet-value object_tests::tests::recreation_codec_local_invalid_control
+                singleton codec-boundaries-control dotnet-value object::tests::recreation_codec_short_storage
+              fi
+              singleton publication-model dotnet-value object_tests::tests::recreation_publication_pending_survival
+              singleton origin-aba dotnet-value pointer::tests::m1g_recreation_origin_aba
+              if [ '${{ matrix.configuration }}' = multithreading ]; then
+                singleton transport-structural dotnet-utils gc::cross_arena::tests::m1e_recreation_transport
+                singleton transport-runtime dotnet-utils gc::cross_arena::tests::m1e_recreation_transport_permissive_control
+                for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
+                  singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::m1g_recreation_registry_$name"
+                done
+              fi
+              ;;
+            vm-teardown)
+              if [ '${{ matrix.configuration }}' = multithreading ]; then
+                singleton teardown dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease
+              else
+                singleton teardown-control dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control
+              fi
+              ;;
+            vm-collection)
+              if [ '${{ matrix.configuration }}' = multithreading ]; then
+                singleton collection dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation
+              else
+                singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection
+              fi
+              ;;
+            vm-stress)
+              singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress
+              ;;
+            *)
+              echo "::error::unknown cross-arena group '${{ matrix.group }}'"
+              exit 1
+              ;;
+          esac
       - name: Isolated strict-provenance transport core
-        if: ${{ matrix.configuration == 'multithreading' }}
+        if: ${{ matrix.configuration == 'multithreading' && matrix.group == 'library' }}
         env:
           MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance"
         run: |
@@ -704,13 +748,13 @@ jobs:
         if: always()
         run: |
           if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
-            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri cross-arena (${{ matrix.configuration }})' >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }})' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-miri-cross-arena-${{ matrix.configuration }}-attempt-${{ github.run_attempt }}
+          name: ci-diagnostics-miri-cross-arena-${{ matrix.configuration }}-${{ matrix.group }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-diagnostics
           if-no-files-found: warn
           retention-days: 14
