@@ -31,10 +31,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - crate: dotnet-value
-            configuration: default-features
-            cargo-args: ''
-            test-args: '--test-threads=1'
           - crate: dotnet-utils
             configuration: no-features
             cargo-args: '--no-default-features'

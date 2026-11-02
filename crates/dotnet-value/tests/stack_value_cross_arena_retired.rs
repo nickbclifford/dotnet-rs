@@ -9,7 +9,13 @@
 //! variant name only, never unrelated equality or exposure code, and `PointerOrigin::
 //! CrossArenaObjectRef` (the identity-carrying ordinary origin) is allowed. Live-path ABA
 //! rejection is covered by the origin/serialized-ABA tests in `pointer/tests.rs`.
-//! It is source evidence, not VM execution, and runs in both feature configurations.
+//! It is source evidence, not VM execution, and runs natively in both feature configurations.
+//! It is excluded from Miri (see the crate-level `cfg` below).
+
+// Pure source-policy scan (no unsafe, no VM execution): it runs natively in both feature
+// configurations, gives no Miri signal, and is far too slow when the workspace file walk is
+// interpreted. cfg-excluded rather than `#[ignore]`d so no ignored test is reported.
+#![cfg(not(miri))]
 
 use std::{
     fs,

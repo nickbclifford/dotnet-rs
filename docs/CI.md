@@ -58,7 +58,7 @@ administratively required merge check. No branch setting has been changed.
 
 Make the next CI change concrete and bounded:
 
-1. Keep `stack_value_cross_arena_retired` as a native source-policy regression and exclude its
+1. **Implemented; hosted effect unverified.** Keep `stack_value_cross_arena_retired` as a native source-policy regression and exclude its
    workspace text scan from Miri. Preserve value runtime and layout coverage. Remove the
    duplicate default value-Miri execution from the advisory workflow.
 2. Let fast jobs complete before starting large fleets. Moving workflow names alone is not
@@ -162,7 +162,7 @@ Jobs:
 7. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
 8. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
 9. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
-10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the five `atomic_tests::` tests; the no-features steps are not a full-crate Miri suite
+10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading) (the source-policy scan test is cfg-excluded under Miri), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the five `atomic_tests::` tests; the no-features steps are not a full-crate Miri suite
 11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
@@ -170,7 +170,11 @@ Jobs:
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
 features, which include `multithreading`; the `m1a_`, `m1b_`, enabled `m1d_` and `atomic_tests::` library regressions are part of
-that suite, including multithreading-only cross-arena tests. Four further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
+that suite, including multithreading-only cross-arena tests. The one integration test, the
+`stack_value_cross_arena_retired` source-policy scan of workspace `.rs` files, is `cfg(not(miri))`
+and so not run (or listed as ignored) under Miri; it runs natively in the `test` job's no-features and
+`multithreading` legs. Locally on 2026-11-02 the scan alone took 807s under Miri on main, while the whole remaining
+`dotnet-value` Miri suite took about 30s including compilation; relief of the hosted 15-minute budget is unverified. Four further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
 and check the logs for exactly three, eight, eleven and five passing tests respectively, with zero ignored:
 
 ```bash
@@ -573,9 +577,9 @@ advisory duration-based campaigns.
 
 ## `miri.yml` — Non-Blocking UB Checks
 
-`miri.yml` remains an advisory matrix. Its `dotnet-value` entry provides additional scheduled coverage; the required `dotnet-value` Miri gate is the separate `miri-value` job in `ci.yml`.
+`miri.yml` remains an advisory matrix. Its `miri` job no longer has a `dotnet-value` entry: that default-feature run duplicated the `miri-value` job in `ci.yml`, which is the only `dotnet-value` Miri gate.
 
-The retained advisory value/default and utils/no-features legs run the full respective suites.
+The retained advisory `miri` job has a single `dotnet-utils` no-features leg, which runs the full suite.
 The singleton matrix has 38 `dotnet-assemblies` default-feature selections (A01–A38) and the
 same eight `dotnet-vm` selections (V01–V08) in each of no-features and multithreading: 54 jobs.
 Its Miri discovery guards verify the original assembly suite and VM `jmp_tests`, `tail_calls`,
