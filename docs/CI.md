@@ -4,10 +4,10 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Test hierarchy and migration
 
-**Agreed policy, 2026-11-02; workflow implementation pending.** Shorten the time to a useful
+**Agreed policy, 2026-11-02; steps 1-2 of the workflow implementation are in YAML (hosted effect unverified), steps 3-5 pending.** Shorten the time to a useful
 answer while preserving checks for meaningful runtime regressions. The workflow inventory
-below describes current YAML, not the desired trigger policy. No scheduling, selection,
-cache or timeout change is claimed by this documentation revision.
+below describes current YAML. Step 2 changed only when work runs; test selection, path
+filtering, caches, timeouts and matrices are unchanged.
 
 | Layer | When | Signal and completion |
 |---|---|---|
@@ -61,10 +61,20 @@ Make the next CI change concrete and bounded:
 1. **Implemented; hosted effect unverified.** Keep `stack_value_cross_arena_retired` as a native source-policy regression and exclude its
    workspace text scan from Miri. Preserve value runtime and layout coverage. Remove the
    duplicate default value-Miri execution from the advisory workflow.
-2. Let fast jobs complete before starting large fleets. Moving workflow names alone is not
+2. **Implemented; hosted effect unverified.** Let fast jobs complete before starting large fleets. Moving workflow names alone is not
    capacity isolation: remove ordinary push/PR launches of the full advisory Miri/Fuzz/Valgrind
    fleets, retain their scheduled/manual paths, and gate selected deep work after fast feedback.
    Native tests must not sit behind 66 pointer singleton jobs in the runner queue.
+   Implementation: `miri.yml`, `fuzz.yml` and `valgrind.yml` now trigger only on `schedule` and
+   `workflow_dispatch` (Valgrind gained dispatch). In `ci.yml`, the `fast-core` aggregate needs
+   the twelve fast-layer jobs; `miri-cross-arena`, `miri-pointer-controls` and
+   `fuzz-corpus-replay` need `fast-core`, so they start only after fast feedback succeeds and
+   are skipped if it fails; the `deep-safety` aggregate reports on the deep layer. Neither
+   aggregate is configured as a required check; that remains a later reviewed decision.
+   Consequences: PRs no longer receive the advisory Miri, fuzz-campaign or Valgrind runs (they
+   run nightly and on manual dispatch), and the full green wall time can be longer than before
+   because deep work now starts after `fast-core`. That is the intended tradeoff: the fast
+   answer comes first. The 30-60 minute feedback improvement remains an estimate, not a measurement.
 3. Keep cheap raw-block/frame/owner tests in the ordinary core. Select expensive VM controls
    and corpus replay for affected code; retain the complete passing catalogs in full sweeps.
    The retired native refactor's slot/bridge tests are unmerged evidence. If a redesigned path
@@ -79,8 +89,8 @@ Make the next CI change concrete and bounded:
    times separately. If hosted evidence is unavailable, leave latency targets unverified.
 
 Stop when that behavior is reviewable, regression coverage is accounted for, and job selection
-and result reporting agree. Workflow changes belong in a later implementation task; this
-revision changes documentation only. No runtime repair, new test platform or automatic timeout
+and result reporting agree. Workflow changes land in bounded steps (1-2 are implemented as noted above; steps 3-5 are
+not). No runtime repair, new test platform or automatic timeout
 increase is part of this CI slice. Do not trigger/retry hosted workflows without authorization.
 
 ### Costs, retained signal and risks
@@ -115,17 +125,17 @@ retain coverage. Missing setup/count evidence, cancellations and advisory failur
 
 ## Current workflow reference
 
-Until migration lands, triggers and matrix sizes below still apply. Commands are references
+The triggers and matrix sizes below describe current YAML. Commands are references
 for selected work, not instructions to launch every lane after every step.
 
 ## Workflow Table
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | Source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
-| `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | Fuzzing coverage                     |
-| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | push/PR to `main` + daily cron + manual dispatch | UB and memory-safety checks          |
-| `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | push/PR to `main` + daily cron | Leak and uninitialized-memory checks |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core`); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Fuzzing coverage                     |
+| `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
+| `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
 
 ## Branch dispatch and targeted repeats
 
@@ -136,6 +146,7 @@ commands. Current dispatch selects whole workflows, not individual jobs:
 gh workflow run ci.yml --ref "$CI_REF"
 gh workflow run miri.yml --ref "$CI_REF"
 gh workflow run fuzz.yml --ref "$CI_REF"
+gh workflow run valgrind.yml --ref "$CI_REF"
 ```
 
 Alternatively observe the PR-triggered run for the exact commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
@@ -148,6 +159,13 @@ Advisory success alone does not prove that all tests completed; inspect job and 
 ## `ci.yml` — Blocking Correctness Gate
 
 `ci.yml` runs the main test suite across a matrix of feature combinations to ensure that validation logic does not regress. See [Validation Features](VALIDATION_FEATURES.md) for a detailed breakdown of what each feature validates.
+
+Jobs are listed below. Two aggregate jobs follow the list: `fast-core` and `deep-safety`.
+The fast layer is `doc-lint`, `format`, `loom`, `provenance-lints`, `matrix-definitions`,
+`clippy`, `build-script-regression`, `build-fixtures`, `test`, `miri-value`,
+`miri-frame-blocks` and `miri-owner-retention`. The deep layer (`miri-cross-arena`,
+`miri-pointer-controls`, `fuzz-corpus-replay`) has `needs: [fast-core]`, so it starts only
+after fast feedback succeeds and is skipped when it fails.
 
 Jobs:
 
@@ -167,6 +185,8 @@ Jobs:
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
 14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
+15. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
+16. `deep-safety`: aggregate over `fast-core`, `miri-cross-arena`, `miri-pointer-controls` and `fuzz-corpus-replay`; `if: always()`, same all-must-succeed rule. If `fast-core` did not succeed it fails with a "not executed" message, which is distinct from the failure of an attempted deep job. Not a required check.
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
 features, which include `multithreading`; the `m1a_`, `m1b_`, enabled `m1d_` and `atomic_tests::` library regressions are part of
@@ -577,7 +597,7 @@ advisory duration-based campaigns.
 
 ## `miri.yml` — Non-Blocking UB Checks
 
-`miri.yml` remains an advisory matrix. Its `miri` job no longer has a `dotnet-value` entry: that default-feature run duplicated the `miri-value` job in `ci.yml`, which is the only `dotnet-value` Miri gate.
+`miri.yml` remains an advisory matrix. It runs only on its daily 02:00 UTC schedule and by manual dispatch; ordinary push/PR no longer launches it. Its `miri` job no longer has a `dotnet-value` entry: that default-feature run duplicated the `miri-value` job in `ci.yml`, which is the only `dotnet-value` Miri gate.
 
 The retained advisory `miri` job has a single `dotnet-utils` no-features leg, which runs the full suite.
 The singleton matrix has 38 `dotnet-assemblies` default-feature selections (A01–A38) and the
@@ -756,6 +776,8 @@ Cargo executable: `python3 scripts/tests/test_pointer_provenance.py`; deliberate
 cases confirm the control guard rejects catalog mismatches.
 
 ## `valgrind.yml` — Non-Blocking Leak/Uninit Checks
+
+This workflow runs only on its daily 04:00 UTC schedule and by manual dispatch; ordinary push/PR no longer launches it.
 
 The workflow builds `dotnet-cli` integration tests across two legs — first `--no-default-features`,
 then `--no-default-features --features multithreading` — and runs a curated subset of integration

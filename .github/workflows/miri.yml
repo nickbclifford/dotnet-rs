@@ -6,10 +6,6 @@ concurrency:
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   schedule:
     - cron: '0 2 * * *' # Daily at 02:00 UTC (offset from fuzz midnight cron)
 

@@ -126,8 +126,10 @@ local `macro_rules!` only if the surviving behavior becomes genuinely uniform.
 
 Follow the [test hierarchy](docs/CI.md#test-hierarchy-and-migration): fast core checks for every
 PR, selected deep checks before accepting affected changes, full sweeps on a schedule and for
-broad architectural changes, and investigations for named uncertainties. Current YAML and
-scripts still run the older broad layout; the hierarchy's implementation is pending.
+broad architectural changes, and investigations for named uncertainties. Advisory Miri, fuzz-campaign and Valgrind
+workflows no longer run on push/PR (nightly and manual dispatch only), and `ci.yml` starts its
+deep Miri and corpus-replay jobs only after the `fast-core` aggregate succeeds. Test selection
+is still pending.
 
 During iteration use focused native tests/lints and relevant unsafe/lifecycle controls. At the
 completion of a coherent code outcome, run the current integration command once:

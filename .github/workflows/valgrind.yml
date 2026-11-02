@@ -5,10 +5,7 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
   schedule:
     - cron: '0 4 * * *' # Daily at 04:00 UTC (offset from Miri 02:00 and fuzz midnight cron)
 

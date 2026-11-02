@@ -515,6 +515,7 @@ jobs:
   # Independent recreations (not recovered originals); each invocation is guarded.
   miri-cross-arena:
     name: Miri cross-arena (${{ matrix.configuration }})
+    needs: [fast-core]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -628,6 +629,7 @@ jobs:
 
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
+    needs: [fast-core]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -705,6 +707,7 @@ jobs:
 
   fuzz-corpus-replay:
     name: Fuzz ${{ matrix.target }} Corpus
+    needs: [fast-core]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -813,3 +816,62 @@ jobs:
           path: ${{ runner.temp }}/ci-diagnostics
           if-no-files-found: warn
           retention-days: 14
+
+  # Fast-feedback aggregate. Fails unless every fast-layer job succeeded; failed,
+  # cancelled and skipped all count as failure. Not configured as a required check.
+  fast-core:
+    name: Fast core
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - doc-lint
+      - format
+      - loom
+      - provenance-lints
+      - matrix-definitions
+      - clippy
+      - build-script-regression
+      - build-fixtures
+      - test
+      - miri-value
+      - miri-frame-blocks
+      - miri-owner-retention
+    steps:
+      - name: Require every needed job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS_JSON")
+          if [ -n "$bad" ]; then
+            echo "::error::fast-core failed; jobs not successful:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "All fast-core jobs succeeded."
+
+  # Deep-layer aggregate. Distinguishes "not executed because fast-core did not
+  # succeed" from an attempted deep check that failed. Not a required check yet.
+  deep-safety:
+    name: Deep safety
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [fast-core, miri-cross-arena, miri-pointer-controls, fuzz-corpus-replay]
+    steps:
+      - name: Require every needed job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          fast=$(jq -r '.["fast-core"].result' <<<"$NEEDS_JSON")
+          if [ "$fast" != "success" ]; then
+            echo "::error::deep-safety NOT EXECUTED: fast-core result was '$fast', so deep jobs were skipped; this is not a deep-check failure."
+            exit 1
+          fi
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS_JSON")
+          if [ -n "$bad" ]; then
+            echo "::error::deep-safety failed; attempted deep jobs not successful:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "All deep-safety jobs succeeded."
