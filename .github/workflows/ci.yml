@@ -512,6 +512,120 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # Independent recreations (not recovered originals); each invocation is guarded.
+  miri-cross-arena:
+    name: Miri cross-arena (${{ matrix.configuration }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [no-features, multithreading]
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
+      CI_DIAG_FEATURES: ${{ matrix.configuration }}
+    steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 45 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - uses: Swatinem/rust-cache@v2.8.2
+        id: rust-cache
+        with:
+          key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 600 -- cargo +nightly-2026-05-27 miri setup
+      - name: Compile singleton crates
+        run: |
+          features=(--no-default-features)
+          if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
+          for crate in dotnet-value dotnet-vm; do
+            python3 scripts/ci_diagnostics.py run --phase compile --case "$crate" --features '${{ matrix.configuration }}' --timeout 900 -- \
+              cargo +nightly-2026-05-27 miri test -p "$crate" --lib "${features[@]}" --no-run
+          done
+          if [ '${{ matrix.configuration }}' = multithreading ]; then
+            python3 scripts/ci_diagnostics.py run --phase compile --case dotnet-utils --features multithreading --timeout 900 -- \
+              cargo +nightly-2026-05-27 miri test -p dotnet-utils --lib "${features[@]}" --no-run
+          fi
+      - name: Verify no-features registry absence
+        if: ${{ matrix.configuration == 'no-features' }}
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase compile --case utils-no-features --features no-features --timeout 900 -- cargo check -p dotnet-utils --no-default-features
+          for selector in m1e_recreation_transport m1g_recreation_registry_; do
+            python3 scripts/ci_diagnostics.py run --phase compile --case "absent-$selector" --features no-features --timeout 900 \
+              --require '0 tests, 0 benchmarks' -- cargo test -p dotnet-utils --lib --no-default-features "$selector" -- --list
+          done
+      - name: Execute guarded singleton recreations
+        run: |
+          features=(--no-default-features)
+          if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
+          singleton() {
+            local case_id="$1" crate="$2" selector="$3"
+            python3 scripts/ci_diagnostics.py run --phase execute --case "$case_id" --features '${{ matrix.configuration }}' --timeout 900 \
+              --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
+              cargo +nightly-2026-05-27 miri test -p "$crate" --lib "${features[@]}" "$selector" -- --exact --test-threads=1
+          }
+          if [ '${{ matrix.configuration }}' = multithreading ]; then
+            singleton codec-id dotnet-value object_tests::tests::recreation_codec_id40000
+            singleton codec-boundaries dotnet-value object_tests::tests::recreation_codec_registered_boundaries
+            singleton teardown dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease
+            singleton collection dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation
+          else
+            singleton codec-id-control dotnet-value object_tests::tests::recreation_codec_local_invalid_control
+            singleton codec-boundaries-control dotnet-value object::tests::recreation_codec_short_storage
+            singleton teardown-control dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control
+            singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection
+          fi
+          singleton publication-model dotnet-value object_tests::tests::recreation_publication_pending_survival
+          singleton origin-aba dotnet-value pointer::tests::m1g_recreation_origin_aba
+          singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress
+          if [ '${{ matrix.configuration }}' = multithreading ]; then
+            singleton transport-structural dotnet-utils gc::cross_arena::tests::m1e_recreation_transport
+            singleton transport-runtime dotnet-utils gc::cross_arena::tests::m1e_recreation_transport_permissive_control
+            for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
+              singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::m1g_recreation_registry_$name"
+            done
+          fi
+      - name: Isolated strict-provenance transport core
+        if: ${{ matrix.configuration == 'multithreading' }}
+        env:
+          MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance"
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase execute --case transport-strict-core --features multithreading --timeout 900 \
+            --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::m1e_recreation_transport_strict_core -- --exact --test-threads=1
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri cross-arena (${{ matrix.configuration }})' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-cross-arena-${{ matrix.configuration }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
