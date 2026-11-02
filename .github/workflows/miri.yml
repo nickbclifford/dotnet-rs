@@ -9,6 +9,10 @@ on:
   schedule:
     - cron: '0 2 * * *' # Daily at 02:00 UTC (offset from fuzz midnight cron)
 
+# Read-only job tokens on both hosted and local runners.
+permissions:
+  contents: read
+
 jobs:
   # Each phase runs through scripts/ci_diagnostics.py with durable logs/status metadata.
   # CI_DIAG_DEADLINE is set at the first step to timeout-minutes minus 3 minutes (keep in sync)
@@ -117,7 +121,7 @@ jobs:
   advisory-shards:
     name: Miri (${{ matrix.crate }}, ${{ matrix.configuration }}, ${{ matrix.shard }})
     needs: advisory-matrix
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && vars.SELF_HOSTED_MIRI == 'on') && fromJSON('["self-hosted","linux","x64","miri"]') || 'ubuntu-latest' }}
     # Initial cold budget: 5m setup + 5m compile + 45m execution, 25% headroom,
     # rounded to 70m; execute cap 50m. Hosted samples and limits are in docs/CI.md.
     timeout-minutes: 70
@@ -136,23 +140,30 @@ jobs:
           echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 70 * 60 - 180 ))" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
+      - name: Verify image pins match this checkout
+        if: runner.environment != 'github-hosted'
+        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
       - name: Setup Rust (nightly + miri)
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - name: Rust Cache
+        if: runner.environment == 'github-hosted'
         id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           shared-key: miri-advisory-v2-nightly-2026-05-27-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }}
       - name: Record cache identity
-        run: echo "CI_DIAG_CACHE=miri-advisory-v2-nightly-2026-05-27-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }},rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+        run: echo "CI_DIAG_CACHE=miri-advisory-v2-nightly-2026-05-27-${{ matrix.crate }}-${{ matrix.configuration }}-${{ matrix.shard }},rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
       - name: Setup .NET SDK (10.0.x)
+        if: runner.environment == 'github-hosted'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - name: Install dependencies
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev

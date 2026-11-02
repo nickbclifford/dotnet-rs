@@ -1,0 +1,4 @@
+# Custom label of the optional self-hosted Miri runners (docs/CI.md "Self-hosted runners").
+self-hosted-runner:
+  labels:
+    - miri

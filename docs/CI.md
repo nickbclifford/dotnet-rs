@@ -206,6 +206,32 @@ for selected work, not instructions to launch every lane after every step.
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
 
+## Self-hosted runners (optional, off by default)
+
+The deep Miri jobs (`ci.yml` `miri-pointer-batches`, `miri-pointer-controls`, `miri-cross-arena`
+and `miri.yml` `advisory-shards`) can run on ephemeral self-hosted runners on the
+maintainer's workstation. Routing is `runs-on` driven by the repository variable
+`SELF_HOSTED_MIRI`: self-hosted labels `[self-hosted, linux, x64, miri]` are used only when
+the repository is `nickbclifford/dotnet-rs`, the ref is `main`/`master`, the event is
+`push`/`schedule`/`workflow_dispatch`, and `vars.SELF_HOSTED_MIRI == 'on'`. Otherwise the
+unmodified workflow selects `ubuntu-latest`. This routing expression is scheduling only:
+a PR can edit YAML and request the labels directly. The runner's admission gate independently
+rejects PR jobs before starting the worker, and admits only push, schedule and dispatch jobs
+on main from allowlisted workflows (optionally also requiring a commit signed by the
+maintainer's pinned OpenPGP key; off by default). Feature-branch dispatch is denied, including
+the manual probe. Workflow tokens default to contents read only. Routing rollout is pending;
+static/offline checks do not claim that a live hardened runner has passed.
+
+On self-hosted runners the toolchain, cache, `apt-get` and `setup-dotnet` steps are skipped
+(`runner.environment == 'github-hosted'` guards them) because the image bakes the pinned
+toolchains; a `dotnet-rs-check-pins` step fails the job if the image pins (stable, Miri nightly,
+cargo-fuzz, .NET) differ from this checkout. Budgets (`timeout-minutes`, `CI_DIAG_DEADLINE`,
+per-invocation timeouts) stay sized for hosted runners. `CI_DIAG_CACHE` records
+`runner-env=` and `runner=`; **self-hosted timings are separate evidence and must not be
+mixed with the hosted samples in this document**. `.github/workflows/self-hosted-probe.yml` is a
+manual-dispatch probe (one pointer batch, wall time and cgroup memory peak). Host, image and
+operating procedure live in the separate `dotnet-rs-runner` repository.
+
 ## Branch dispatch and targeted repeats
 
 When a hosted run is authorized, assign its actual branch to CI_REF before using these

@@ -25,6 +25,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Read-only job tokens on both hosted and local runners.
+permissions:
+  contents: read
+
 jobs:
   # Chooses which deep lanes run (see scripts/ci_select.py and docs/CI.md). Fail-safe:
   # the fallback step is first and its full-sweep outputs are used whenever the
@@ -385,10 +389,11 @@ jobs:
         timeout-minutes: 5
         env:
           DOTNET_TEST_TIMEOUT_SECS: "60"
+          CI_TEST_FEATURES: ${{ matrix.features }}
         run: |
-          FEATURES_ARGS="--no-default-features"
-          if [ -n "${{ matrix.features }}" ]; then
-            FEATURES_ARGS="$FEATURES_ARGS --features ${{ matrix.features }}"
+          FEATURES_ARGS=(--no-default-features)
+          if [ -n "$CI_TEST_FEATURES" ]; then
+            FEATURES_ARGS+=(--features "$CI_TEST_FEATURES")
           fi
           FAIL=0
           for test in \
@@ -396,7 +401,7 @@ jobs:
             "integration_tests_impl::fixtures::test_gc_coordinator" \
             "integration_tests_impl::fixtures::test_multiple_arenas" \
             "integration_tests_impl::fixtures::test_stw_stress"; do
-            cargo test $FEATURES_ARGS -p dotnet-cli --test integration_tests "$test" \
+            cargo test "${FEATURES_ARGS[@]}" -p dotnet-cli --test integration_tests "$test" \
               -- --test-threads=1 --nocapture || FAIL=1
           done
           exit $FAIL
@@ -611,7 +616,7 @@ jobs:
     # No status function, so GitHub ANDs success(): fast-core and select-deep must both
     # succeed. `!= 'false'` makes a missing selection output run the lane, not skip it.
     if: needs.select-deep.outputs.cross_arena != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && vars.SELF_HOSTED_MIRI == 'on') && fromJSON('["self-hosted","linux","x64","miri"]') || 'ubuntu-latest' }}
     timeout-minutes: ${{ matrix.job_timeout }}
     strategy:
       fail-fast: false
@@ -641,23 +646,31 @@ jobs:
           echo "CI_DIAG_DEADLINE=$(( $(date +%s) + ${{ matrix.job_timeout }} * 60 - 180 ))" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
+      - name: Verify image pins match this checkout
+        if: runner.environment != 'github-hosted'
+        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.environment == 'github-hosted'
       - uses: dtolnay/rust-toolchain@master
+        if: runner.environment == 'github-hosted'
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - uses: Swatinem/rust-cache@v2.8.2
+        if: runner.environment == 'github-hosted'
         id: rust-cache
         with:
           # Keyed per group: the library and VM groups build different crate sets, and three
           # VM jobs sharing one key would race to save identical entries.
           key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.group }}
       - name: Record cache identity
-        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
       - uses: actions/setup-dotnet@v4
+        if: runner.environment == 'github-hosted'
         with:
           dotnet-version: '10.0.x'
       - name: Install dependencies
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev
@@ -773,7 +786,7 @@ jobs:
     name: Miri pointer batches (${{ matrix.configuration }}, batch ${{ matrix.batch }})
     needs: [fast-core, select-deep]
     if: needs.select-deep.outputs.pointer_controls != 'false' && needs.select-deep.outputs.pointer_mode == 'batched'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && vars.SELF_HOSTED_MIRI == 'on') && fromJSON('["self-hosted","linux","x64","miri"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
@@ -791,27 +804,36 @@ jobs:
           echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 60 * 60 - 180 ))" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
+      - name: Verify image pins match this checkout
+        if: runner.environment != 'github-hosted'
+        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
       - name: Setup Rust
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@stable
       - name: Setup nightly and Miri
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - name: Setup cargo-nextest
+        if: runner.environment == 'github-hosted'
         uses: taiki-e/install-action@nextest
       - name: Rust Cache
+        if: runner.environment == 'github-hosted'
         id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           key: miri-pointer-batch-v1-nightly-2026-05-27-${{ matrix.configuration }}
       - name: Record cache identity
-        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
       - name: Setup .NET SDK
+        if: runner.environment == 'github-hosted'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - name: Install dependencies
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev
@@ -865,7 +887,7 @@ jobs:
       && needs.select-deep.outputs.pointer_controls != 'false'
       && (needs.select-deep.outputs.pointer_mode != 'batched'
           || needs.miri-pointer-batches.result == 'failure') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && vars.SELF_HOSTED_MIRI == 'on') && fromJSON('["self-hosted","linux","x64","miri"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
@@ -883,27 +905,36 @@ jobs:
           echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 45 * 60 - 180 ))" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ci-diagnostics"
       - uses: actions/checkout@v4
+      - name: Verify image pins match this checkout
+        if: runner.environment != 'github-hosted'
+        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
       - name: Setup Rust
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@stable
       - name: Setup nightly and Miri
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-27
           components: miri
       - name: Setup cargo-nextest
+        if: runner.environment == 'github-hosted'
         uses: taiki-e/install-action@nextest
       - name: Rust Cache
+        if: runner.environment == 'github-hosted'
         id: rust-cache
         uses: Swatinem/rust-cache@v2.8.2
         with:
           key: miri-pointer-v2-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.shard }}
       - name: Record cache identity
-        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }}" >> "$GITHUB_ENV"
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
       - name: Setup .NET SDK
+        if: runner.environment == 'github-hosted'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - name: Install dependencies
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev
