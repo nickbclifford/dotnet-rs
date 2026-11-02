@@ -11,7 +11,7 @@ use gc_arena::Mutation;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
-use crate::{ArenaId, pointer::cross_arena::cross_arena_ptr_from_ptr};
+use crate::pointer::{CrossArenaOrigin, cross_arena::cross_arena_ptr_from_ptr};
 
 const STACK_TAG: usize = 1;
 const STACK_SLOT_MASK: usize = 0x3FFF_FFFF;
@@ -161,10 +161,9 @@ fn write_serialized_managed_ptr_words(dest: &mut [u8], words: SerializedManagedP
 
 #[cfg(feature = "multithreading")]
 fn cross_arena_storage_base_with_lease(ptr: crate::object::ObjectPtr) -> *mut u8 {
-    // This private helper is called only by `cross_arena_ptr_from_ptr` callbacks,
-    // whose contract holds the target arena lease for the callback duration.
-    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — That callback-scoped lease keeps `ptr`'s object storage live while
-    // its base address is read.
+    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the caller holds the
+    // exact arena lease and independently guarantees a live, rooted object. The
+    // lease prevents arena teardown but does not keep the object from collection.
     unsafe { ptr.as_heap_storage(|storage| storage.raw_data_ptr()) }
 }
 
@@ -209,9 +208,15 @@ impl<'gc> ManagedPtr<'gc> {
     /// - `Unmanaged`: word 0 is zero and word 1 is the absolute address. The
     ///   address is the value because this origin has no recoverable handle.
     /// - `CrossArenaObjectRef`: word 0 is the provenance-carrying lock pointer
-    ///   tagged with low bits `5`; word 1 is
-    ///   `offset | (arena_id << 32)`. Its lock-pointer reconstruction is
-    ///   confined to the scoped helper established before this redesign.
+    ///   tagged with low bits `5`; word 1 is `offset | (token << 32)`, where
+    ///   `token` is the origin's non-reused, nonzero `RegistrationToken` copied
+    ///   from its original registration (never a reusable `ArenaId` and never
+    ///   issued at encode time). Decoding resolves the token to a lease for that
+    ///   exact registration and uses the pointer already carried in word 0; a
+    ///   token whose registration was removed is rejected with
+    ///   `PointerDeserializationError::UnresolvedCrossArenaToken` before any
+    ///   pointer is formed. These are process-local bytes, not a persisted or
+    ///   foreign format: P/Invoke rejects by-value aggregates with ref fields.
     /// - `Transient`: word 0 carries its tag and offset and word 1 is the byte
     ///   offset, but it remains unserializable: metadata and resolved reads return
     ///   `PointerDeserializationError::UnknownSubtag`.
@@ -322,6 +327,12 @@ impl<'gc> ManagedPtr<'gc> {
     /// # Safety
     ///
     /// The `source` slice must contain valid bytes representing a `ManagedPtr`.
+    /// If a CrossArena registration token resolves, the bytes must have been
+    /// written for that registration and the original object allocation must
+    /// be live and rooted. A token whose registration was removed (including
+    /// after unregister/re-register of the same `ArenaId`) is rejected before
+    /// use, because tokens are never reused; a lease alone does not root the
+    /// object.
     pub unsafe fn read_metadata_unchecked(
         source: &[u8],
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
@@ -365,18 +376,31 @@ impl<'gc> ManagedPtr<'gc> {
             5 => {
                 #[cfg(feature = "multithreading")]
                 {
-                    let owner_id_val = (word1 >> 32) as u32;
-                    // Sign-extend `ArenaId::INVALID` and other negative IDs.
-                    let owner_id = ArenaId::new(owner_id_val as i32 as i64 as u64);
+                    let raw_token = (word1 >> 32) as u32;
+                    let token = dotnet_utils::gc::RegistrationToken::from_raw(raw_token).ok_or(
+                        PointerDeserializationError::UnresolvedCrossArenaToken(raw_token),
+                    )?;
                     // SAFETY: F1.GcHandleRooted — Valid CrossArena serialization contains a live lock
-                    // address in the encoded arena. The helper holds that arena's
-                    // lease while it reconstructs the origin handle; the callback
-                    // deliberately does not access object storage.
-                    let ptr = unsafe { cross_arena_ptr_from_ptr(word0, owner_id, |ptr| ptr) }
-                        .ok_or(PointerDeserializationError::UnknownTag(5))?;
+                    // address owned by the registration its token names. The helper resolves the
+                    // token and holds that exact registration's lease while it reconstructs the
+                    // origin handle; the callback deliberately does not access object storage.
+                    #[expect(
+                        clippy::multiple_unsafe_ops_per_block,
+                        reason = "reconstructing the pointer and association share the decoder's original-registration contract"
+                    )]
+                    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the decoder caller guarantees the original registration and object remain live.
+                    let origin = unsafe {
+                        cross_arena_ptr_from_ptr(word0, token, |ptr, lease| {
+                            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `lease` is the exact original registration named by the serialized token, and the caller guarantees its allocation remains live.
+                            CrossArenaOrigin::new(ptr, lease)
+                        })
+                    }
+                    .ok_or(
+                        PointerDeserializationError::UnresolvedCrossArenaToken(raw_token),
+                    )?;
                     Ok(ManagedPtrInfo {
                         address: None,
-                        origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
+                        origin: PointerOrigin::CrossArenaObjectRef(origin),
                         offset: ByteOffset::new(word1 & 0xFFFF_FFFF),
                     })
                 }
@@ -506,21 +530,13 @@ impl<'gc> ManagedPtr<'gc> {
                 NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, owner_id) => {
-                // SAFETY: F6.NoEscapeAcrossArena — Metadata decoding read this pointer from a complete
-                // ManagedPtr buffer and validated its tag and checksum.
-                let word0: *mut u8 = unsafe { _source.as_ptr().cast::<*mut u8>().read_unaligned() };
-                // SAFETY: F1.ArenaGenerationMatch — Metadata decoding validated this
-                // CrossArena representation. The helper's lease protects only the
-                // origin-to-base traversal in its callback; the returned address
-                // retains neither that lease nor a root/guard. Later dereference
-                // requires fresh cross-arena coordination and its own access checks.
-                let base = unsafe {
-                    cross_arena_ptr_from_ptr(word0, *owner_id, |ptr| {
-                        cross_arena_storage_base_with_lease(ptr)
-                    })
-                }
-                .ok_or(PointerDeserializationError::UnknownTag(5))?;
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
+                    .ok_or(PointerDeserializationError::UnknownTag(5))?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the decoder caller
+                // guarantees the original allocation is live and this exact lease covers the read.
+                let ptr = unsafe { origin.object_ptr() };
+                let base = cross_arena_storage_base_with_lease(ptr);
                 NonNull::new(base.wrapping_add(offset))
             }
             PointerOrigin::Transient(_) => unreachable!("Transient cannot be decoded"),
@@ -679,17 +695,19 @@ impl<'gc> ManagedPtr<'gc> {
                 (w0, w1)
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let w0 = ptr
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                let w0 = origin
                     .as_ptr()
                     .cast::<u8>()
                     .cast_mut()
                     .map_addr(|addr| addr | 5);
-                // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
-                // This avoids dereferencing the pointer during deserialization/GC.
+                // Store the origin's non-reused registration token in the high 32 bits of
+                // word1 and the 32-bit offset in the low bits. The token is copied from the
+                // origin's original registration, never issued here, so stale origins encode
+                // a token that cannot resolve. Decoding needs no pointer dereference.
                 let offset_u32 = byte_offset.as_usize() & 0xFFFFFFFF;
-                let tid_u32 = (tid.as_u64() & 0xFFFFFFFF) as usize;
-                let w1 = offset_u32 | (tid_u32 << 32);
+                let token = origin.token().as_u32() as usize;
+                let w1 = offset_u32 | (token << 32);
                 (w0, w1)
             }
             PointerOrigin::Transient(_) => {

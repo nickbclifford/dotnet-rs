@@ -196,14 +196,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.write_to_heap(
                         self.gc,
-                        HeapWriteTarget(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        HeapWriteTarget(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         value,
                         layout,
@@ -287,14 +287,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.read_unaligned(self.gc, None, offset, layout, type_desc) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         layout,
                         type_desc,
@@ -349,14 +349,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_bytes(self.gc, None, offset, data) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.write_bytes(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         data,
                     )
@@ -404,13 +404,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.read_bytes(None, offset, dest) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.read_bytes(
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         dest,
                     )
@@ -439,13 +439,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let mut memory = RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner supplies the guarded storage.
                 unsafe {
                     memory.object_atomic(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         op,
                     )
@@ -638,14 +638,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         expected,
                         new,
@@ -721,14 +721,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.exchange_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         value,
                         size,
@@ -802,14 +802,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.exchange_add_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         value,
                         size,
@@ -875,13 +875,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.load_atomic(None, offset, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.load_atomic(
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         size,
                         ordering,
@@ -954,14 +954,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.store_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            PointerOrigin::CrossArenaObjectRef(origin) => {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The enclosing raw-memory operation's documented preconditions and preceding bounds/origin checks establish this access.
                 unsafe {
                     memory.store_atomic(
                         self.gc,
-                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, origin)),
                         offset,
                         value,
                         size,
@@ -1033,9 +1033,11 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     .expect("resolve_address: null unmanaged pointer (offset=0)")
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease covers this access and the origin's caller keeps the allocation rooted.
+                let ptr = unsafe { origin.object_ptr() };
                 ptr.as_heap_storage(|storage| {
                     storage
                         .observe_address(offset.as_usize())

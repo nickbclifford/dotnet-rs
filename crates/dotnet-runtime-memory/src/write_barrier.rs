@@ -11,20 +11,27 @@ use std::sync::LazyLock;
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::GcLifetime;
 #[cfg(feature = "multithreading")]
-use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
+use dotnet_value::pointer::{CrossArenaOrigin, PointerOrigin};
 
 #[derive(Copy, Clone)]
 pub enum MemoryOwner<'gc> {
     Local(ObjectRef<'gc>),
     #[cfg(feature = "multithreading")]
-    CrossArena(ObjectPtr, ArenaId, GcLifetime<'gc>),
+    CrossArena(CrossArenaOrigin, GcLifetime<'gc>),
 }
 
 #[derive(Copy, Clone)]
 pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
 
+/// A deferred write-barrier entry. Without multithreading no cross-arena reference can exist,
+/// so the buffer's entry type is uninhabited and the buffer stays permanently empty.
+#[cfg(feature = "multithreading")]
+pub type WbEntry = dotnet_utils::gc::CrossArenaRef;
+#[cfg(not(feature = "multithreading"))]
+pub type WbEntry = std::convert::Infallible;
+
 thread_local! {
-    pub(crate) static WB_LOCAL_BUF: RefCell<Vec<(ArenaId, usize)>> = RefCell::new(Vec::with_capacity(128));
+    pub(crate) static WB_LOCAL_BUF: RefCell<Vec<WbEntry>> = RefCell::new(Vec::with_capacity(128));
 }
 
 #[cfg(feature = "multithreading")]
@@ -40,19 +47,19 @@ static WRITE_BARRIER_FLUSH_THRESHOLD: LazyLock<usize> = LazyLock::new(|| {
 });
 
 #[cfg(feature = "multithreading")]
-fn flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
-    for (tid, ptr) in buffer.drain(..) {
-        dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+fn flush_write_barrier_entries(buffer: &mut Vec<WbEntry>) {
+    for reference in buffer.drain(..) {
+        dotnet_utils::gc::record_cross_arena_ref(reference);
     }
 }
 
 #[cfg(not(feature = "multithreading"))]
-fn flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
+fn flush_write_barrier_entries(buffer: &mut Vec<WbEntry>) {
     buffer.clear();
 }
 
 #[cfg(feature = "multithreading")]
-pub(crate) fn maybe_flush_write_barrier_entries(buffer: &mut Vec<(ArenaId, usize)>) {
+pub(crate) fn maybe_flush_write_barrier_entries(buffer: &mut Vec<WbEntry>) {
     if buffer.len() >= *WRITE_BARRIER_FLUSH_THRESHOLD {
         flush_write_barrier_entries(buffer);
     }
@@ -85,7 +92,7 @@ impl Drop for WriteBarrierPanicFlushGuard {
 #[cfg(feature = "multithreading")]
 pub struct WriteBarrierRecorder<'a, 'gc> {
     pub(crate) arena_id: ArenaId,
-    pub(crate) buffer: &'a mut Vec<(ArenaId, usize)>,
+    pub(crate) buffer: &'a mut Vec<WbEntry>,
     _gc: PhantomData<&'gc ()>,
 }
 
@@ -96,7 +103,7 @@ pub struct WriteBarrierRecorder<'a, 'gc> {
 
 #[cfg(feature = "multithreading")]
 impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
-    pub fn new(arena_id: ArenaId, buffer: &'a mut Vec<(ArenaId, usize)>) -> Self {
+    pub fn new(arena_id: ArenaId, buffer: &'a mut Vec<WbEntry>) -> Self {
         Self {
             arena_id,
             buffer,
@@ -117,9 +124,21 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
             // moves nor mutates the object.
             let ref_tid = unsafe { (*ptr).owner_id() };
             if ref_tid != self.arena_id {
-                self.buffer
-                    .push((ref_tid, gc_arena::Gc::as_ptr(h).expose_provenance()));
-                maybe_flush_write_barrier_entries(self.buffer);
+                // SAFETY: F1.GcHandleRooted; F11.ObjectPointerThreadSafe — `h` is a live handle to
+                // an object of `ref_tid`'s registration; erased inert, no exposed provenance.
+                let opaque = unsafe {
+                    dotnet_utils::gc::OpaqueObjectPtr::from_raw(gc_arena::Gc::as_ptr(h).cast())
+                };
+                // Capture the owner's identity now, under a short lease, so the flush can reject
+                // an arena that is unregistered and re-registered before harvest.
+                if let Some(lease) = dotnet_utils::gc::try_acquire_lease(ref_tid) {
+                    // SAFETY: F1.ArenaGenerationMatch — the lease pins `ref_tid`'s current registration, which owns `h`.
+                    let reference =
+                        unsafe { dotnet_utils::gc::CrossArenaRef::new(lease.identity(), opaque) };
+                    drop(lease);
+                    self.buffer.push(reference);
+                    maybe_flush_write_barrier_entries(self.buffer);
+                }
             }
         }
     }
@@ -130,8 +149,10 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
         }
 
         match target.origin() {
-            PointerOrigin::CrossArenaObjectRef(p, ref_tid) if *ref_tid != self.arena_id => {
-                self.buffer.push((*ref_tid, p.as_ptr().expose_provenance()));
+            PointerOrigin::CrossArenaObjectRef(origin)
+                if origin.identity().arena_id != self.arena_id =>
+            {
+                self.buffer.push(origin.cross_arena_ref());
                 maybe_flush_write_barrier_entries(self.buffer);
             }
             PointerOrigin::Heap(r) => {
@@ -144,7 +165,7 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 
 #[cfg(not(feature = "multithreading"))]
 impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
-    pub fn new(_arena_id: ArenaId, _buffer: &'a mut Vec<(ArenaId, usize)>) -> Self {
+    pub fn new(_arena_id: ArenaId, _buffer: &'a mut Vec<WbEntry>) -> Self {
         Self {
             _marker: PhantomData,
         }
@@ -153,8 +174,8 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 
 impl<'gc> MemoryOwner<'gc> {
     #[cfg(feature = "multithreading")]
-    pub fn cross_arena(gc: GCHandle<'gc>, ptr: ObjectPtr, tid: ArenaId) -> Self {
-        Self::CrossArena(ptr, tid, gc.lifetime())
+    pub fn cross_arena(gc: GCHandle<'gc>, origin: CrossArenaOrigin) -> Self {
+        Self::CrossArena(origin, gc.lifetime())
     }
 
     pub fn owner_id(&self) -> ArenaId {
@@ -172,7 +193,7 @@ impl<'gc> MemoryOwner<'gc> {
                 .unwrap_or(ArenaId::INVALID)
             }
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(_, tid, _) => *tid,
+            Self::CrossArena(origin, _) => origin.identity().arena_id,
         }
     }
 
@@ -181,9 +202,11 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => Ok(r.with_data(f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, tid, _) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+            Self::CrossArena(origin, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                let p = unsafe { origin.object_ptr() };
                 Ok(p.with_data(f))
             }
         }
@@ -198,9 +221,11 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => Ok(r.with_data_mut(gc, f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, tid, _) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+            Self::CrossArena(origin, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                let p = unsafe { origin.object_ptr() };
                 Ok(p.with_data_mut(gc, f))
             }
         }
@@ -214,9 +239,11 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => Ok(r.as_heap_storage(f)),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, tid, _) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+            Self::CrossArena(origin, _) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                let p = unsafe { origin.object_ptr() };
                 Ok(p.as_heap_storage(f))
             }
         }
@@ -228,7 +255,10 @@ mod tests {
     use super::*;
     use dotnet_types::TypeDescription;
     use dotnet_utils::{ByteOffset, gc::ThreadSafeLock};
-    use dotnet_value::{CLRString, object::ObjectInner};
+    use dotnet_value::{
+        CLRString,
+        object::{ObjectInner, ObjectPtr},
+    };
 
     #[test]
     fn invalid_recorder_skips_cross_arena_managed_ptrs() {
@@ -241,13 +271,20 @@ mod tests {
         // SAFETY: F10.RawAllocationOwnership — `raw` came from `Box::into_raw`, is non-null, and remains allocated until the
         // managed pointer and recorder have been dropped below.
         let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("boxed object pointer is non-null");
-        let managed = ManagedPtr::new_cross_arena(
-            None,
-            TypeDescription::NULL,
-            ptr,
+        dotnet_utils::gc::register_arena(
             target_id,
-            ByteOffset::ZERO,
+            dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false)),
         );
+        // SAFETY: F1.ArenaGenerationMatch; F10.RawAllocationOwnership — the test owns this live box and original registration.
+        let managed = unsafe {
+            ManagedPtr::new_cross_arena(
+                None,
+                TypeDescription::NULL,
+                ptr,
+                &dotnet_utils::gc::try_acquire_lease(target_id).unwrap(),
+                ByteOffset::ZERO,
+            )
+        };
         let mut buffer = Vec::new();
 
         {
@@ -260,6 +297,7 @@ mod tests {
             "an unowned recorder must skip every cross-arena reference kind"
         );
         drop(managed);
+        dotnet_utils::gc::unregister_arena(target_id);
         // SAFETY: F10.RawAllocationOwnership — `raw` was produced by `Box::into_raw` above, no aliases are used after this
         // point, and reconstructing the box releases the allocation exactly once.
         unsafe {

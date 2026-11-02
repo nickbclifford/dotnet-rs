@@ -247,12 +247,14 @@ pub enum PointerDeserializationError {
     UnresolvedStackSlot(usize),
     #[error("no live static-storage base is available for serialized static pointer")]
     UnresolvedStaticStorage,
+    #[error("serialized cross-arena registration token {0} is not live")]
+    UnresolvedCrossArenaToken(u32),
 }
 
 #[cfg(feature = "fuzzing")]
 impl Arbitrary<'_> for PointerDeserializationError {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.arbitrary::<usize>()? % 8;
+        let tag = u.arbitrary::<usize>()? % 9;
         match tag {
             0 => Ok(PointerDeserializationError::BufferTooSmall {
                 expected: u.arbitrary()?,
@@ -266,7 +268,10 @@ impl Arbitrary<'_> for PointerDeserializationError {
             6 => Ok(PointerDeserializationError::UnresolvedStackSlot(
                 u.arbitrary()?,
             )),
-            _ => Ok(PointerDeserializationError::UnresolvedStaticStorage),
+            7 => Ok(PointerDeserializationError::UnresolvedStaticStorage),
+            _ => Ok(PointerDeserializationError::UnresolvedCrossArenaToken(
+                u.arbitrary()?,
+            )),
         }
     }
 }

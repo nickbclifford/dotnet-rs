@@ -214,13 +214,16 @@ fuzz_target!(|input: RoundtripInput| {
                     NonNull::new(data.as_ptr().wrapping_add(offset).cast_mut())
                         .expect("object data pointers are non-null")
                 });
-                ManagedPtr::new_cross_arena(
-                    Some(address),
-                    dotnet_types::TypeDescription::NULL,
-                    cross_arena_object,
-                    cross_arena_id,
-                    ByteOffset::new(offset),
-                )
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the fuzz fixture keeps the original object and registration live.
+                unsafe {
+                    ManagedPtr::new_cross_arena(
+                        Some(address),
+                        dotnet_types::TypeDescription::NULL,
+                        cross_arena_object,
+                        &dotnet_utils::gc::try_acquire_lease(cross_arena_id).unwrap(),
+                        ByteOffset::new(offset),
+                    )
+                }
             }
         };
         let info = ptr.clone().into_info();
@@ -245,7 +248,7 @@ fuzz_target!(|input: RoundtripInput| {
             PointerOrigin::Heap(_) | PointerOrigin::Unmanaged => 0,
             PointerOrigin::Stack(_) => 1,
             PointerOrigin::Static(_) | PointerOrigin::Transient(_) => 7,
-            PointerOrigin::CrossArenaObjectRef(_, _) => 5,
+            PointerOrigin::CrossArenaObjectRef(_) => 5,
         };
         assert_eq!(word0 & 7, expected_tag, "Serialized origin tag mismatch");
 

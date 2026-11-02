@@ -28,9 +28,9 @@ const STACK_VALUE_SIZE_MATRIX: [(bool, usize); 2] = [
 const MANAGED_PTR_SIZE_MATRIX: [((bool, bool), usize); 4] = [
     // ((has_validation_tag, multithreading), expected_size)
     ((false, false), 56),
-    ((false, true), 64),
+    ((false, true), 80),
     ((true, false), 64),
-    ((true, true), 72),
+    ((true, true), 88),
 ];
 
 #[cfg(target_pointer_width = "64")]
@@ -44,7 +44,7 @@ const OBJECT_INNER_OVERHEAD_MATRIX: [(bool, usize); 2] = [
 const POINTER_ORIGIN_SIZE_MATRIX: [(bool, usize); 2] = [
     // (multithreading, expected_size)
     (false, 16),
-    (true, 24),
+    (true, 40),
 ];
 
 #[cfg(target_pointer_width = "64")]

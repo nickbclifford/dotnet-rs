@@ -139,6 +139,56 @@ fn managed_thread_lifecycle() {
     assert!(stdout.trim().is_empty(), "unexpected stdout: {stdout:?}");
 }
 
+/// Runs a byref-like P/Invoke fixture and requires the specific pre-marshal
+/// rejection, not an arbitrary VM error with the same exit code.
+#[cfg(not(feature = "fuzzing"))]
+fn assert_byref_like_pinvoke_rejected(fixture: &str, what: &str) {
+    let harness = TestHarness::get();
+    let dll_path = harness.ensure_dll(Path::new(fixture));
+    let resolution = harness
+        .loader
+        .load_resolution_from_file(&dll_path)
+        .expect("byref-like P/Invoke fixture must load");
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the no-MT integration test keeps shared state on its sole executor"
+    )]
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+    let result = harness.run_with_shared(resolution, shared);
+    assert_eq!(
+        result.exit_code, 255,
+        "byref-like P/Invoke {what} was not rejected: {:?}",
+        result.stderr
+    );
+    let stderr = result.stderr.unwrap_or_default();
+    assert!(
+        stderr.contains(&format!("P/Invoke {what} is a byref-like value type")),
+        "unexpected rejection diagnostic: {stderr}"
+    );
+}
+
+/// Independent recreation (not recovered originals): a byref-like aggregate
+/// passed by value is rejected before marshaling, in every configuration.
+#[test]
+#[cfg(not(feature = "fuzzing"))]
+fn pinvoke_byreflike_argument_recreation_rejected() {
+    assert_byref_like_pinvoke_rejected(
+        "tests/fixtures/pinvoke/pinvoke_byreflike_argument_recreation_255.cs",
+        "argument 0",
+    );
+}
+
+/// Independent recreation (not recovered originals): a byref-like aggregate
+/// return type is rejected before native code runs, in every configuration.
+#[test]
+#[cfg(not(feature = "fuzzing"))]
+fn pinvoke_byreflike_return_recreation_rejected() {
+    assert_byref_like_pinvoke_rejected(
+        "tests/fixtures/pinvoke/pinvoke_byreflike_return_recreation_255.cs",
+        "return type",
+    );
+}
+
 #[test]
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
 fn pinvoke_last_error_isolation() {

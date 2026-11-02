@@ -13,9 +13,8 @@ use dotnet_tracer::Tracer;
 use dotnet_utils::{
     ArenaId,
     gc::{
-        STW_TRACING_GENERATION_SENTINEL, has_active_thread_safe_write_guard, register_arena,
-        set_currently_tracing_with_stw, take_found_cross_arena_refs_with_generation,
-        try_acquire_lease,
+        has_active_thread_safe_write_guard, register_arena, set_currently_tracing,
+        take_found_cross_arena_refs, try_acquire_lease_for_identity,
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, OrderedMutex,
@@ -169,8 +168,18 @@ impl Drop for DeadlockReporter {
 }
 
 /// Global counter for allocating managed thread IDs across all thread managers.
+/// IDs are monotonic and never recycled. The compact ObjectRef codec limits this process
+/// to 65,535 managed thread arenas over its lifetime; 0 is reserved for VM allocation.
 /// This prevents ArenaId collisions when parallel tests each create their own ThreadManager.
 static NEXT_GLOBAL_THREAD_ID: AtomicU64 = AtomicU64::new(1); // Thread ID 0 is reserved
+
+fn allocate_managed_thread_id(counter: &AtomicU64) -> u64 {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            (1..=u64::from(u16::MAX)).contains(&next).then(|| next + 1)
+        })
+        .expect("managed thread ID exhaustion: compact ObjectRef supports IDs 1..=65535")
+}
 
 /// Information about a managed .NET thread.
 #[derive(Debug)]
@@ -270,7 +279,7 @@ impl super::ThreadManagerBackend for ThreadManager {
     /// Returns the managed thread ID assigned to this thread.
     fn register_thread(&self) -> ArenaId {
         let native_id = thread::current().id();
-        let managed_id_u64 = NEXT_GLOBAL_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+        let managed_id_u64 = allocate_managed_thread_id(&NEXT_GLOBAL_THREAD_ID);
         let managed_id = ArenaId::new(managed_id_u64);
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
@@ -676,30 +685,19 @@ impl<State: ResumeOnPanicState> Drop for ResumeOnPanic<'_, State> {
 }
 
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
-    for (target_id, ptr_usize, recorded_gen) in take_found_cross_arena_refs_with_generation() {
-        if let Some(lease) = try_acquire_lease(target_id) {
-            let generation_matches = recorded_gen == STW_TRACING_GENERATION_SENTINEL
-                || lease.generation() == recorded_gen;
-            if generation_matches {
-                // SAFETY: F6.NoEscapeAcrossArena — The pointer was recorded from a live cross-arena reference.
-                // We hold a lease for `target_id`, so teardown cannot complete while
-                // reconstructing `ObjectPtr`.
-                let ptr =
-                    unsafe { ObjectPtr::from_raw(std::ptr::with_exposed_provenance(ptr_usize)) }
-                        .expect("ptr_usize was recorded from a live, non-null object reference");
-                coordinator.record_cross_arena_ref(target_id, ptr);
-            } else {
-                warn!(
-                    "Ignoring found cross-arena reference to re-registered arena {:?} (gen mismatch: expected {}, got {})",
-                    target_id,
-                    recorded_gen,
-                    lease.generation()
-                );
-            }
+    for reference in take_found_cross_arena_refs() {
+        let identity = reference.identity();
+        // Exact-registration lease: a replacement registration of the same ID is rejected
+        // here, before the pointer is used. There is no wildcard generation under STW.
+        if let Some(_lease) = try_acquire_lease_for_identity(identity) {
+            // F8.LockOrderRespected: the registry read is already released; no
+            // lease drain is performed while taking the coordinator refs lock.
+            // This lease prevents teardown through enqueue, not collection/rooting.
+            coordinator.record_cross_arena_ref(reference);
         } else {
             warn!(
-                "Ignoring found cross-arena reference to exited arena {:?}",
-                target_id
+                "Ignoring found cross-arena reference to unavailable arena registration {:?} (generation {})",
+                identity.arena_id, identity.generation
             );
         }
     }
@@ -714,11 +712,12 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        set_currently_tracing_with_stw(Some(thread_id), true);
+                        set_currently_tracing(Some(thread_id));
 
                         #[cfg(feature = "bench-instrumentation")]
                         let clear_cross_arena_roots_start = Instant::now();
-                        arena.mutate(|_, c| {
+                        // Root-set edit: use the root barrier consistently (F-XARENA-202).
+                        arena.mutate_root(|_, c| {
                             c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
                         });
                         #[cfg(feature = "bench-instrumentation")]
@@ -737,7 +736,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             finish_marking_start.elapsed(),
                         );
 
-                        set_currently_tracing_with_stw(None, false);
+                        set_currently_tracing(None);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let harvest_cross_arena_refs_start = Instant::now();
@@ -755,21 +754,33 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        set_currently_tracing_with_stw(Some(thread_id), true);
+                        set_currently_tracing(Some(thread_id));
 
                         #[cfg(feature = "bench-instrumentation")]
                         let install_roots_start = Instant::now();
-                        arena.mutate(|_, c| {
-                            let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
-                            for ptr in ptrs {
-                                // SAFETY: F1.StwParked — `ptrs` originates from coordinator-owned object
-                                // pointers captured during marking. They are only consumed
-                                // during the same collection cycle while arenas are stopped.
-                                let ptr = unsafe { ObjectPtr::from_raw(ptr.as_ptr() as *const _) }
-                                    .expect(
-                                        "ptrs are coordinator-owned, non-null object addresses",
-                                    );
-                                roots.insert(ptr);
+                        // `cross_arena_roots` is a manually traced root; publishing after
+                        // marking began must go through the root barrier or the second
+                        // `finish_marking` may not retrace it (F-XARENA-202).
+                        arena.mutate_root(|_, c| {
+                            for reference in ptrs {
+                                let identity = reference.identity();
+                                if identity.arena_id != thread_id || c.stack.arena_identity != Some(identity) {
+                                    warn!("Ignoring cross-arena mark command for registration {:?} in arena {:?} (registration {:?})", identity, thread_id, c.stack.arena_identity);
+                                    continue;
+                                }
+                                let Some(_lease) = try_acquire_lease_for_identity(identity) else {
+                                    warn!("Ignoring cross-arena mark command for unavailable arena registration {:?} (generation {})", identity.arena_id, identity.generation);
+                                    continue;
+                                };
+                                // SAFETY: F1.ArenaGenerationMatch, F6.NoEscapeAcrossArena —
+                                // identity is checked against this owning arena and an exact
+                                // live lease before conversion. The retained pointer was
+                                // captured from this registration; STW excludes sweep during
+                                // fixed-point marking, and this owner executes the command in
+                                // its own arena. The lease itself is not a GC root; the root is
+                                // published through `mutate_root` (the root barrier).
+                                let ptr = unsafe { ObjectPtr::from_opaque(reference.ptr()) };
+                                c.stack.local.heap.cross_arena_roots.borrow_mut().insert(ptr);
                             }
                         });
                         #[cfg(feature = "bench-instrumentation")]
@@ -788,7 +799,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             finish_marking_start.elapsed(),
                         );
 
-                        set_currently_tracing_with_stw(None, false);
+                        set_currently_tracing(None);
 
                         #[cfg(feature = "bench-instrumentation")]
                         let harvest_cross_arena_refs_start = Instant::now();
@@ -834,6 +845,97 @@ mod tests {
     use super::*;
     use crate::threading::ThreadManagerOps;
     use std::{sync::mpsc, thread, time::Duration};
+
+    /// Independent recreation (not recovered originals): harvest preserves a
+    /// live identity and discards a queued stale generation before conversion.
+    #[test]
+    fn m1e_recreation_harvest_rejects_stale_registration() {
+        use dotnet_utils::gc::{
+            CrossArenaRef, OpaqueObjectPtr, ThreadSafeLock, record_cross_arena_ref,
+            try_acquire_lease, unregister_arena,
+        };
+        use dotnet_value::{
+            object::{HeapStorage, ObjectInner},
+            string::CLRString,
+        };
+        use gc_arena::{Arena, Gc, Rootable};
+
+        let id = ArenaId::new(8_001_043);
+        let flag = Arc::new(AtomicBool::new(false));
+        register_arena(id, Arc::clone(&flag));
+        let identity = try_acquire_lease(id).unwrap().identity();
+        let arena = Arena::<Rootable![()]>::new(|_| ());
+        let ptr = arena.mutate(|gc, _| {
+            let obj = Gc::new(
+                gc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("harvest")),
+                    id,
+                )),
+            );
+            // SAFETY: F11.ObjectPointerThreadSafe — pointer comes directly from
+            // the live GC object of the required concrete lock/pointee type.
+            unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(obj).cast()) }
+        });
+        // SAFETY: F1.ArenaGenerationMatch — this allocation was made under
+        // the captured registration; it remains allocated during both checks.
+        let reference = unsafe { CrossArenaRef::new(identity, ptr) };
+        let coordinator = GCCoordinator::new(Arc::clone(&flag));
+        let session = coordinator.begin_collection().unwrap();
+
+        set_currently_tracing(Some(ArenaId::new(8_001_044)));
+        assert!(record_cross_arena_ref(reference));
+        assert!(record_cross_arena_ref(reference));
+        set_currently_tracing(None);
+        record_found_cross_arena_refs(&coordinator);
+        let mut found = coordinator.take_recorded_refs_for_test();
+        assert_eq!(
+            found.remove(&id).unwrap(),
+            std::collections::HashSet::from([reference])
+        );
+        assert!(found.is_empty());
+        session.finish();
+
+        set_currently_tracing(Some(ArenaId::new(8_001_044)));
+        assert!(record_cross_arena_ref(reference));
+        set_currently_tracing(None);
+        unregister_arena(id);
+        register_arena(id, Arc::clone(&flag));
+        assert_ne!(try_acquire_lease(id).unwrap().identity(), identity);
+        let session = coordinator.begin_collection().unwrap();
+        record_found_cross_arena_refs(&coordinator);
+        assert!(coordinator.take_recorded_refs_for_test().is_empty());
+
+        session.finish();
+        unregister_arena(id);
+        drop(arena);
+    }
+
+    /// Independent recreation (not recovered originals): compact managed-ID exhaustion.
+    #[test]
+    fn recreation_managed_id_exhaustion() {
+        let first = AtomicU64::new(1);
+        assert_eq!(allocate_managed_thread_id(&first), 1);
+        assert_eq!(allocate_managed_thread_id(&first), 2);
+        let counter = AtomicU64::new(65535);
+        assert_eq!(allocate_managed_thread_id(&counter), 65535);
+        for _ in 0..2 {
+            let exhausted = std::panic::catch_unwind(|| allocate_managed_thread_id(&counter));
+            let message = exhausted.expect_err("managed ID 65536 was issued");
+            assert!(
+                message
+                    .downcast_ref::<String>()
+                    .unwrap()
+                    .contains("managed thread ID exhaustion")
+            );
+            assert_eq!(counter.load(Ordering::Relaxed), 65536);
+        }
+        for invalid in [0, u64::MAX] {
+            let counter = AtomicU64::new(invalid);
+            assert!(std::panic::catch_unwind(|| allocate_managed_thread_id(&counter)).is_err());
+            assert_eq!(counter.load(Ordering::Relaxed), invalid);
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // Helpers — `ResumeOnPanic` is defined at module level (above) and is

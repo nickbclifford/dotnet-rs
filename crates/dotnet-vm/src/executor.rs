@@ -38,6 +38,9 @@ pub struct Executor {
     shared: Arc<SharedGlobalState>,
     /// Thread ID for this executor
     thread_id: ArenaId,
+    /// Owner-held registration; moved into `ArenaGuard` by `extract_arena`.
+    #[cfg(feature = "multithreading")]
+    registration: std::cell::RefCell<Option<dotnet_utils::gc::ArenaRegistration>>,
     #[cfg(not(feature = "multithreading"))]
     arena: Box<GCArena>,
     #[cfg(feature = "fuzzing")]
@@ -181,6 +184,14 @@ impl Executor {
     }
 
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
+        // One live Executor per OS thread: installing a second Box would destroy
+        // the first arena while its registration may still have leases. Fail
+        // closed before any side effect.
+        #[cfg(feature = "multithreading")]
+        assert!(
+            THREAD_ARENA.with(|cell| cell.borrow().is_none()),
+            "Executor::new: this thread already owns a live Executor arena; drop it (or extract_arena) first"
+        );
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
             let local = ArenaLocalState::new();
@@ -188,6 +199,17 @@ impl Executor {
         }));
 
         let thread_id = shared.thread_manager.register_thread();
+
+        // The newly issued managed ID is never reused by Executor; no other
+        // owner can unregister it before this arena is published. Record its
+        // original registration rather than looking up a generation at GC time.
+        #[cfg(feature = "multithreading")]
+        let arena_identity = dotnet_utils::gc::try_acquire_lease(thread_id)
+            .expect("new Executor arena registration must be live")
+            .identity();
+        #[cfg(feature = "multithreading")]
+        let registration = dotnet_utils::gc::registration_for_identity(arena_identity)
+            .expect("new Executor arena registration must be live");
 
         // Register with GC coordinator
         #[cfg(feature = "multithreading")]
@@ -201,6 +223,7 @@ impl Executor {
             c.stack.thread_id.set(thread_id);
             #[cfg(feature = "multithreading")]
             {
+                c.stack.arena_identity = Some(arena_identity);
                 let stack_arena = ArenaHandle::new(thread_id);
                 shared
                     .gc_coordinator
@@ -217,6 +240,8 @@ impl Executor {
         Self {
             shared,
             thread_id,
+            #[cfg(feature = "multithreading")]
+            registration: std::cell::RefCell::new(Some(registration)),
             #[cfg(not(feature = "multithreading"))]
             arena,
             #[cfg(feature = "fuzzing")]
@@ -712,29 +737,64 @@ impl Executor {
     #[cfg(feature = "multithreading")]
     pub fn extract_arena(&self) -> Option<ArenaGuard> {
         let arena_id = self.thread_id;
-        THREAD_ARENA.with(|cell| {
-            cell.borrow_mut()
-                .take()
-                .map(|arena| ArenaGuard { arena, arena_id })
+        let arena = THREAD_ARENA.with(|cell| cell.borrow_mut().take())?;
+        Some(ArenaGuard {
+            arena: Some(arena),
+            registration: self.registration.borrow_mut().take(),
+            arena_id,
         })
     }
 }
 
 #[cfg(feature = "multithreading")]
 pub struct ArenaGuard {
-    #[allow(dead_code)]
-    arena: Box<GCArena>,
+    arena: Option<Box<GCArena>>,
+    registration: Option<dotnet_utils::gc::ArenaRegistration>,
     arena_id: ArenaId,
+}
+
+/// On the ordinary path, unregister and drain leases before freeing the arena.
+/// If this thread holds a lease, leak instead of waiting or freeing leased memory.
+/// Panic safety during drain or logging, and TLS ownership, remain open in plan 03.
+#[cfg(feature = "multithreading")]
+fn teardown_arena(
+    arena: Box<GCArena>,
+    registration: Option<dotnet_utils::gc::ArenaRegistration>,
+    arena_id: ArenaId,
+) {
+    use dotnet_utils::gc::TeardownOutcome;
+    let outcome = match registration {
+        Some(registration) => registration.unregister_and_drain(),
+        None => {
+            // No owner handle (should not happen): ID-only fallback.
+            if dotnet_utils::gc::current_thread_holds_lease(arena_id) {
+                TeardownOutcome::SelfHeldLease
+            } else {
+                dotnet_utils::gc::cross_arena::unregister_arena(arena_id);
+                TeardownOutcome::Drained
+            }
+        }
+    };
+    match outcome {
+        TeardownOutcome::Drained => drop(arena),
+        TeardownOutcome::SelfHeldLease => {
+            // Writing to stderr cannot unwind, unlike a tracing subscriber.
+            eprintln!(
+                "dotnet-vm: arena {arena_id:?} torn down while this thread holds a lease; leaking arena memory"
+            );
+            std::mem::forget(arena);
+        }
+    }
 }
 
 #[cfg(feature = "multithreading")]
 impl Drop for ArenaGuard {
     fn drop(&mut self) {
-        // Unregister the arena from the cross-arena tracking system.
-        // This MUST happen when the arena memory is about to be destroyed,
-        // not when the Executor drops, because other threads may still
-        // need to access objects created in this arena.
-        dotnet_utils::gc::cross_arena::unregister_arena(self.arena_id);
+        // The arena must stay allocated until the registry has been drained:
+        // other threads may hold leases and dereference objects in it.
+        if let Some(arena) = self.arena.take() {
+            teardown_arena(arena, self.registration.take(), self.arena_id);
+        }
     }
 }
 
@@ -766,24 +826,24 @@ impl Drop for Executor {
             // to this arena before we finish dropping.
             //
             // Note: In some test scenarios, the arena may have been extracted via
-            // extract_arena() to defer its destruction. In that case, this is a no-op
-            // and ArenaGuard will handle unregistration when it drops.
-            let arena_dropped = THREAD_ARENA.with(|cell| {
-                let mut guard = cell.borrow_mut();
-                let had_arena = guard.is_some();
-                *guard = None;
-                had_arena
-            });
-
-            // Unregister the arena from the cross-arena tracking system ONLY if we
-            // actually dropped it here (i.e., it wasn't extracted). This ensures the
-            // arena remains valid for cross-arena references until the memory is freed.
-            if arena_dropped {
-                dotnet_utils::gc::cross_arena::unregister_arena(self.thread_id);
+            // extract_arena() to defer its destruction. In that case this is a no-op
+            // and ArenaGuard (which owns the registration) tears down when it drops.
+            // Take the Box out of the TLS cell first (releasing the borrow), then
+            // retain it through unregister + lease drain before freeing.
+            if let Some(arena) = THREAD_ARENA.with(|cell| cell.borrow_mut().take()) {
+                teardown_arena(arena, self.registration.get_mut().take(), self.thread_id);
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "executor_teardown_recreation_tests.rs"]
+mod executor_teardown_recreation_tests;
+
+#[cfg(test)]
+#[path = "executor_collection_recreation_tests.rs"]
+mod executor_collection_recreation_tests;
 
 #[cfg(test)]
 mod tests {

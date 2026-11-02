@@ -26,7 +26,7 @@ pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
     match m.origin() {
         PointerOrigin::Heap(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
         #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(_, _) => {
+        PointerOrigin::CrossArenaObjectRef(_) => {
             m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
         }
         _ => {

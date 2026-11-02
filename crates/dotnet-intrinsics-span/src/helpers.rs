@@ -174,9 +174,11 @@ pub(crate) fn heap_payload_len(
     Ok(match pointer.origin() {
         PointerOrigin::Heap(owner) => owner.0.map(|handle| handle.borrow().storage.payload_len()),
         #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-            let _lease = dotnet_utils::gc::try_acquire_lease(*tid)
+        PointerOrigin::CrossArenaObjectRef(origin) => {
+            let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                 .ok_or(MemoryAccessError::CrossArenaViolation)?;
+            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact owner lease is held and the origin's root contract applies to this access.
+            let ptr = unsafe { origin.object_ptr() };
             Some(ptr.as_heap_storage(|storage| storage.payload_len()))
         }
         _ => None,

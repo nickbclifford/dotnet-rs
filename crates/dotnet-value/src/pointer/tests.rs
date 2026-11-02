@@ -671,13 +671,16 @@ fn cross_arena_heap_read_uses_exact_payload_range() {
         let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
         let base = owner.pointer().expect("heap payload base");
         let (object_ptr, arena_id) = owner.as_ptr_info().expect("cross-arena pointer info");
-        let ptr = ManagedPtr::new_cross_arena(
-            Some(base),
-            TypeDescription::NULL,
-            object_ptr,
-            arena_id,
-            ByteOffset::new(0),
-        );
+        // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the live owner belongs to this registration.
+        let ptr = unsafe {
+            ManagedPtr::new_cross_arena(
+                Some(base),
+                TypeDescription::NULL,
+                object_ptr,
+                &dotnet_utils::gc::try_acquire_lease(arena_id).unwrap(),
+                ByteOffset::new(0),
+            )
+        };
 
         // SAFETY: F1.GcHandleRooted — `owner` retains the one-byte payload while the
         // cross-arena read validates its range under the object and field read guards.
@@ -748,13 +751,16 @@ fn heap_address_observation_wraps_without_granting_read_access() {
                 {
                     let (object_ptr, arena_id) = owner.as_ptr_info().unwrap();
                     check(
-                        ManagedPtr::new_cross_arena(
-                            None,
-                            TypeDescription::NULL,
-                            object_ptr,
-                            arena_id,
-                            ByteOffset::new(offset),
-                        ),
+                        // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the owner and registration are live.
+                        unsafe {
+                            ManagedPtr::new_cross_arena(
+                                None,
+                                TypeDescription::NULL,
+                                object_ptr,
+                                &dotnet_utils::gc::try_acquire_lease(arena_id).unwrap(),
+                                ByteOffset::new(offset),
+                            )
+                        },
                         offset,
                     );
                 }
@@ -1081,23 +1087,29 @@ fn test_managed_ptr_serialization_roundtrip() {
             let arena_id = ptr.owner_id();
             let cross_offset = 12;
             let cross_ptr = NonNull::new(ptr_raw.wrapping_add(cross_offset).cast_mut());
-            let ptr_cross = ManagedPtr::new_cross_arena(
-                cross_ptr,
-                TypeDescription::NULL,
-                ptr,
-                arena_id,
-                ByteOffset::new(cross_offset),
-            );
+            let lease = dotnet_utils::gc::try_acquire_lease(arena_id).unwrap();
+            let (identity, token) = (lease.identity(), lease.token());
+            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — obj and its registration are live.
+            let ptr_cross = unsafe {
+                ManagedPtr::new_cross_arena(
+                    cross_ptr,
+                    TypeDescription::NULL,
+                    ptr,
+                    &lease,
+                    ByteOffset::new(cross_offset),
+                )
+            };
+            drop(lease);
 
             ptr_cross.write(&mut buf);
             // SAFETY: F1.GcHandleRooted — CrossArena decoding obtains its base while holding the encoded arena lease.
             let info =
                 unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
             assert_eq!(info.address, cross_ptr);
-            if let PointerOrigin::CrossArenaObjectRef(recovered_ptr, recovered_arena) = info.origin
-            {
-                assert_eq!(recovered_ptr, ptr);
-                assert_eq!(recovered_arena, arena_id);
+            if let PointerOrigin::CrossArenaObjectRef(recovered) = info.origin {
+                assert_eq!(recovered.as_ptr(), ptr.as_ptr());
+                assert_eq!(recovered.identity(), identity);
+                assert_eq!(recovered.token(), token);
             } else {
                 panic!("Expected CrossArenaObjectRef, got {:?}", info.origin);
             }
@@ -2187,16 +2199,16 @@ mod m1d_cross_arena {
     /// A registered arena owning a one-byte vector (`0xA5`), plus the pieces of a
     /// cross-arena pointer to it. Dropping the fields in declaration order is not
     /// relied upon; tests tear down explicitly.
-    struct CrossArenaFixture {
+    pub(super) struct CrossArenaFixture {
         arena: Arena<TestRoot>,
         handle_owner: ArenaHandle,
-        arena_id: ArenaId,
-        object_ptr: ObjectPtr,
+        pub(super) arena_id: ArenaId,
+        pub(super) object_ptr: ObjectPtr,
         base: NonNull<u8>,
     }
 
     impl CrossArenaFixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let arena_id = next_test_arena_id();
             register_arena(arena_id, Arc::new(AtomicBool::new(false)));
             MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
@@ -2241,18 +2253,21 @@ mod m1d_cross_arena {
             }
         }
 
-        fn managed_ptr<'gc>(&self) -> ManagedPtr<'gc> {
-            ManagedPtr::new_cross_arena(
-                Some(self.base),
-                TypeDescription::NULL,
-                self.object_ptr,
-                self.arena_id,
-                ByteOffset::new(0),
-            )
+        pub(super) fn managed_ptr<'gc>(&self) -> ManagedPtr<'gc> {
+            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the fixture keeps its original arena and object live.
+            unsafe {
+                ManagedPtr::new_cross_arena(
+                    Some(self.base),
+                    TypeDescription::NULL,
+                    self.object_ptr,
+                    &try_acquire_lease(self.arena_id).unwrap(),
+                    ByteOffset::new(0),
+                )
+            }
         }
 
         /// Drop the arena (freeing the object) and then its handle.
-        fn drop_arena(self) {
+        pub(super) fn drop_arena(self) {
             drop(self.arena);
             drop(self.handle_owner);
             MANAGED_THREAD_ID.with(|id| id.set(None));
@@ -2409,4 +2424,274 @@ mod m1d_cross_arena {
         teardown.join().expect("teardown thread");
         fixture.drop_arena();
     }
+}
+
+// ---------------------------------------------------------------------------
+// M1g/M1e recreations (F-CODEC-202): independent recreation (not recovered originals).
+// ---------------------------------------------------------------------------
+
+/// Independent recreation (not recovered originals) of the ordinary-origin and serialized
+/// registry ABA: the owner arena is unregistered and the same `ArenaId` is registered again
+/// (a new generation). The old arena's memory is deliberately kept alive so the pre-repair
+/// acceptance is observable through assertions instead of a dangling read.
+#[cfg(feature = "multithreading")]
+mod m1g_recreation_origin_aba_support {
+    use super::m1d_cross_arena::CrossArenaFixture;
+    use super::*;
+    use dotnet_utils::{
+        gc::{register_arena, try_acquire_lease, unregister_arena},
+        sync::AtomicBool,
+    };
+
+    /// `(in_memory_rejected, serialized_rejected)` after unregister/re-register of the owner ID.
+    pub(super) fn stale_origin_outcome(check_serialized: bool) -> (bool, Option<bool>) {
+        let fixture = CrossArenaFixture::new();
+        let id = fixture.arena_id;
+        let ptr = fixture.managed_ptr();
+        let mut bytes = ManagedPtr::serialization_buffer();
+        ptr.write(&mut bytes);
+        let old_generation = try_acquire_lease(id).expect("registered").generation();
+
+        unregister_arena(id);
+        register_arena(id, Arc::new(AtomicBool::new(false)));
+        let new_generation = try_acquire_lease(id).expect("re-registered").generation();
+        assert_ne!(
+            old_generation, new_generation,
+            "registry control: re-registration must change the generation"
+        );
+
+        let retained =
+            crate::StackValue::ManagedPtr(crate::stack_value::StackManagedPtr::new(ptr.clone()));
+        let in_memory_rejected = RetainedPtr::try_from_stack_value(retained).is_err()
+            && ptr.observe_address().is_none()
+            // SAFETY: F1.GcHandleRooted — the fixture keeps the old arena (and its one-byte
+            // payload) allocated; the only question is whether the stale origin is accepted.
+            && unsafe { ptr.try_with_data(1, |data| data[0]) }.is_none();
+        // Stale serialized bytes carry the old registration's token, which never
+        // resolves again, so decoding rejects them before forming a pointer.
+        let serialized_rejected = check_serialized.then(|| {
+            // SAFETY: F10.RawMemoryAccessValid — complete buffer written by `write`; the stale
+            // token is rejected before any pointer is formed, and the original allocation
+            // remains live regardless.
+            unsafe { ManagedPtr::read_metadata_unchecked(&bytes) }.is_err()
+        });
+
+        unregister_arena(id);
+        fixture.drop_arena();
+        (in_memory_rejected, serialized_rejected)
+    }
+
+    /// Passing control: before re-registration the same bytes decode and a plain
+    /// unregistration is rejected, so the pending test's failure is specific to ABA.
+    pub(super) fn registry_control() {
+        let fixture = CrossArenaFixture::new();
+        let id = fixture.arena_id;
+        let ptr = fixture.managed_ptr();
+        let mut bytes = ManagedPtr::serialization_buffer();
+        ptr.write(&mut bytes);
+        assert!(ptr.observe_address().is_some());
+        // SAFETY: F10.RawMemoryAccessValid — `bytes` is a complete buffer written by `write`.
+        assert!(unsafe { ManagedPtr::read_metadata_unchecked(&bytes) }.is_ok());
+        unregister_arena(id);
+        assert!(ptr.observe_address().is_none());
+        // SAFETY: F10.RawMemoryAccessValid — as above; an absent owner is rejected before access.
+        assert!(unsafe { ManagedPtr::read_metadata_unchecked(&bytes) }.is_err());
+        fixture.drop_arena();
+    }
+}
+
+/// Independent recreation (not recovered originals): both the in-memory origin and its
+/// serialized bytes are rejected after the owner ID is unregistered and re-registered.
+#[cfg(feature = "multithreading")]
+#[test]
+fn m1g_recreation_origin_aba() {
+    let (in_memory_rejected, serialized_rejected) =
+        m1g_recreation_origin_aba_support::stale_origin_outcome(true);
+    assert!(
+        in_memory_rejected && serialized_rejected == Some(true),
+        "stale origin accepted after owner unregister/re-register: \
+         in_memory_rejected={in_memory_rejected}, serialized_rejected={serialized_rejected:?}"
+    );
+}
+
+/// Independent recreation (not recovered originals): the in-memory half of the ABA check
+/// alone, without decoding serialized bytes (covered by `m1g_recreation_origin_aba`).
+#[cfg(feature = "multithreading")]
+#[test]
+fn m1g_recreation_in_memory_origin_aba() {
+    let (in_memory_rejected, serialized_rejected) =
+        m1g_recreation_origin_aba_support::stale_origin_outcome(false);
+    assert!(in_memory_rejected, "stale ordinary origin was accepted");
+    assert_eq!(serialized_rejected, None, "serialized check not requested");
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn m1g_recreation_origin_aba_registry_control() {
+    m1g_recreation_origin_aba_support::registry_control();
+}
+
+/// Independent recreation (not recovered originals): CrossArena word 1 must carry the
+/// non-reused registration token, not the reusable arena ID. A spare registration is
+/// consumed if needed so the fixture's ID and token differ and the assertion is specific.
+#[cfg(feature = "multithreading")]
+#[test]
+fn m1g_recreation_token_wire_identity() {
+    use dotnet_utils::gc::try_acquire_lease;
+    use m1d_cross_arena::CrossArenaFixture;
+
+    let fixture = CrossArenaFixture::new();
+    let mut token = try_acquire_lease(fixture.arena_id)
+        .unwrap()
+        .token()
+        .as_u32();
+    if u64::from(token) == fixture.arena_id.as_u64() {
+        // Re-registering the same ID issues a fresh token without changing the ID.
+        dotnet_utils::gc::unregister_arena(fixture.arena_id);
+        dotnet_utils::gc::register_arena(
+            fixture.arena_id,
+            Arc::new(dotnet_utils::sync::AtomicBool::new(false)),
+        );
+        token = try_acquire_lease(fixture.arena_id)
+            .unwrap()
+            .token()
+            .as_u32();
+    }
+    assert_ne!(
+        u64::from(token),
+        fixture.arena_id.as_u64(),
+        "fixture precondition"
+    );
+
+    let ptr = fixture.managed_ptr();
+    let mut bytes = ManagedPtr::serialization_buffer();
+    ptr.write(&mut bytes);
+    let word = |i: usize| {
+        usize::from_ne_bytes(
+            bytes[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]
+                .try_into()
+                .unwrap(),
+        )
+    };
+    let (word0, word1, word2) = (word(0), word(1), word(2));
+    assert_eq!(word0 & 7, 5, "CrossArena tag");
+    assert_eq!(
+        word0 & !7,
+        fixture.object_ptr.as_ptr().addr(),
+        "word 0 pointer"
+    );
+    assert_eq!(word1 & 0xFFFF_FFFF, 0, "word 1 offset");
+    assert_eq!(word2, word0 ^ word1, "checksum");
+    let wire_identity = (word1 >> 32) as u32;
+
+    dotnet_utils::gc::unregister_arena(fixture.arena_id);
+    fixture.drop_arena();
+    assert_eq!(
+        wire_identity, token,
+        "wire identity must be the registration token"
+    );
+}
+
+/// No-features counterpart: CrossArena tag 5 is rejected and a local pointer still round trips.
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn m1g_recreation_origin_aba() {
+    let word0: usize = 0x1000 | 5;
+    let word1: usize = (40_000usize << 32) | 8;
+    let mut bytes = ManagedPtr::serialization_buffer();
+    let ptr_size = ObjectRef::SIZE;
+    bytes[..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+    bytes[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+    bytes[ptr_size * 2..].copy_from_slice(&(word0 ^ word1).to_ne_bytes());
+    // SAFETY: F10.RawMemoryAccessValid — complete buffer with a valid checksum; tag 5 is rejected
+    // before any pointer is formed.
+    let err = unsafe { ManagedPtr::read_metadata_unchecked(&bytes) }.err();
+    assert!(matches!(
+        err,
+        Some(dotnet_types::error::PointerDeserializationError::UnknownTag(5))
+    ));
+
+    with_test_gc_context(|gc_handle| {
+        let vector = Vector::new(
+            ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
+            ArrayLayoutManager {
+                element_layout: Arc::new(LayoutManager::Scalar(Scalar::UInt8)),
+                length: 1,
+            },
+            vec![0xA5],
+            vec![1],
+        );
+        let owner = ObjectRef::new(gc_handle, HeapStorage::Vec(Box::new(vector)));
+        let local = ManagedPtr::new(
+            owner.pointer(),
+            TypeDescription::NULL,
+            Some(owner),
+            false,
+            Some(ByteOffset::new(0)),
+        );
+        // SAFETY: F1.GcHandleRooted — `local` retains the live one-byte owner.
+        assert_eq!(unsafe { local.with_data(1, |bytes| bytes[0]) }, 0xA5);
+    });
+}
+
+#[cfg(feature = "multithreading")]
+mod m1e_recreation_transport_support {
+    use super::m1d_cross_arena::CrossArenaFixture;
+    use super::*;
+    use crate::test_helpers::next_test_arena_id;
+    use dotnet_utils::gc::{
+        register_arena, set_currently_tracing, take_found_cross_arena_refs, unregister_arena,
+    };
+    use dotnet_utils::sync::AtomicBool;
+
+    /// Replays the production GC transport: tracing a CrossArena origin records a pointer in the
+    /// found buffer, and harvest reconstructs it exactly as `record_found_cross_arena_refs`
+    /// (`ObjectPtr::from_opaque` under an exact-identity lease) before a lease-protected read.
+    /// This replays that sequence; it does not execute the VM coordinator.
+    pub(super) fn transport_round_trip() {
+        let fixture = CrossArenaFixture::new();
+        let owner_id = fixture.arena_id;
+        let tracer_id = next_test_arena_id();
+        register_arena(tracer_id, Arc::new(AtomicBool::new(false)));
+        let object_ptr = fixture.object_ptr;
+        let mut arena = Arena::<Rootable![PointerOrigin<'_>]>::new(|_| {
+            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the fixture keeps this original object alive.
+            PointerOrigin::CrossArenaObjectRef(unsafe {
+                CrossArenaOrigin::new(
+                    object_ptr,
+                    &dotnet_utils::gc::try_acquire_lease(owner_id).unwrap(),
+                )
+            })
+        });
+        set_currently_tracing(Some(tracer_id));
+        arena.finish_cycle();
+        arena.finish_cycle();
+        set_currently_tracing(None);
+        let found = take_found_cross_arena_refs();
+        unregister_arena(tracer_id);
+        let reference = *found.first().expect("trace recorded a cross-arena ref");
+        assert_eq!(reference.identity().arena_id, owner_id);
+        let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(reference.identity())
+            .expect("the owner's exact registration is still live");
+        // SAFETY: F6.NoEscapeAcrossArena — replays the harvest conversion; the exact owner
+        // registration is leased and the pointer is the original allocation pointer.
+        let rebuilt = unsafe { crate::object::ObjectPtr::from_opaque(reference.ptr()) };
+        assert_eq!(rebuilt.as_heap_storage(|s| s.payload_len()), 1);
+        drop(arena);
+        fixture.drop_arena();
+    }
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn m1e_recreation_transport_permissive_control() {
+    m1e_recreation_transport_support::transport_round_trip();
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+/// Same replay as the permissive control. Verified to pass under pinned Miri with
+/// `-Zmiri-strict-provenance` after the 4.1/4.2 transport migration, so it runs everywhere.
+fn m1e_recreation_transport_strict_core() {
+    m1e_recreation_transport_support::transport_round_trip();
 }

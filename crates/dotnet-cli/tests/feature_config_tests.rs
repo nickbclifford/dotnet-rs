@@ -96,19 +96,6 @@ fn test_multithreading_arena_handle() {
         .unregister_arena(dotnet_utils::ArenaId::new(1));
 }
 
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multithreading_cross_arena_value() {
-    use dotnet_value::StackValue;
-
-    // The constructor's function type verifies the variant and its payload types without
-    // fabricating an ObjectPtr that lacks a valid, program-lifetime pointee.
-    let _constructor: fn(
-        dotnet_value::object::ObjectPtr,
-        dotnet_utils::ArenaId,
-    ) -> StackValue<'static> = StackValue::CrossArenaObjectRef;
-}
-
 // ============================================================================
 // Binary Size Tests (informational)
 // ============================================================================

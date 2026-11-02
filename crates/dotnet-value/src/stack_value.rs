@@ -1,8 +1,3 @@
-#[cfg(feature = "multithreading")]
-use crate::object::ObjectPtr;
-#[cfg(feature = "multithreading")]
-use dotnet_utils::{ArenaId, gc::record_cross_arena_ref};
-
 use crate::{
     cts_cli_conversion::CtsToCli,
     object::{HeapStorage, Object, ObjectRef},
@@ -156,16 +151,12 @@ pub enum StackValue<'gc> {
     TypedRef(TypedReferenceSlot<'gc>),
     /// The distinct zero-initialized state of a `typedref` local.
     UninitializedTypedRef,
-    /// Reference to an object in another thread's arena.
-    /// (ObjectPtr, OwningThreadID)
-    #[cfg(feature = "multithreading")]
-    CrossArenaObjectRef(ObjectPtr, ArenaId),
 }
 
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let variant = u.int_in_range(0..=10)?;
+        let variant = u.int_in_range(0..=9)?;
         match variant {
             0 => Ok(StackValue::Int32(u.arbitrary()?)),
             1 => Ok(StackValue::Int64(u.arbitrary()?)),
@@ -180,13 +171,6 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
                 Arc::new(u.arbitrary()?),
             ))),
             9 => Ok(StackValue::UninitializedTypedRef),
-            #[cfg(feature = "multithreading")]
-            10 => Ok(StackValue::CrossArenaObjectRef(
-                u.arbitrary()?,
-                u.arbitrary()?,
-            )),
-            #[cfg(not(feature = "multithreading"))]
-            10 => Ok(StackValue::Int32(u.arbitrary()?)),
             _ => unreachable!(),
         }
     }
@@ -203,10 +187,6 @@ unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
             Self::TypedRef(slot) => slot.trace(cc),
             Self::ValueType(v) => {
                 v.trace(cc);
-            }
-            #[cfg(feature = "multithreading")]
-            Self::CrossArenaObjectRef(ptr, tid) => {
-                record_cross_arena_ref(*tid, ptr.as_ptr().expose_provenance());
             }
             _ => {}
         }
@@ -226,8 +206,6 @@ pub fn stack_value_kind(v: &StackValue<'_>) -> &'static str {
         StackValue::ValueType(_) => "ValueType",
         StackValue::TypedRef(_) => "TypedRef",
         StackValue::UninitializedTypedRef => "UninitializedTypedRef",
-        #[cfg(feature = "multithreading")]
-        StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
     }
 }
 
@@ -569,8 +547,6 @@ impl<'gc> StackValue<'gc> {
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
                 NonNull::new(ptr).expect("slice::as_ptr is never null, even for empty slices")
             }
-            #[cfg(feature = "multithreading")]
-            Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),
         }
     }
 
@@ -609,7 +585,7 @@ impl<'gc> StackValue<'gc> {
                 .observe_address()
                 .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, _) => pointer
+            PointerOrigin::CrossArenaObjectRef(_) => pointer
                 .observe_address()
                 .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
             _ => {

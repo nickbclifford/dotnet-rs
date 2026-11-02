@@ -25,9 +25,10 @@ use crate::{
     threading::execute_gc_command_for_current_thread,
 };
 #[cfg(feature = "multithreading")]
-use dotnet_utils::sync::{Arc, AtomicBool};
-#[cfg(feature = "multithreading")]
-use dotnet_value::object::ObjectPtr;
+use dotnet_utils::{
+    gc::CrossArenaRef,
+    sync::{Arc, AtomicBool},
+};
 #[cfg(feature = "multithreading")]
 use std::{
     cell::RefCell,
@@ -65,8 +66,10 @@ pub struct GCCoordinator {
     /// Sticky flag set by allocation pressure to accelerate `should_collect`.
     needs_any_collection: Arc<AtomicBool>,
     /// Cross-arena references found during marking
-    cross_arena_refs:
-        OrderedMutex<levels::CrossArenaRefs, HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
+    cross_arena_refs: OrderedMutex<
+        levels::CrossArenaRefs,
+        HashMap<dotnet_utils::ArenaId, HashSet<CrossArenaRef>>,
+    >,
 }
 
 #[cfg(all(feature = "multithreading", debug_assertions))]
@@ -358,18 +361,23 @@ impl GCCoordinator {
     }
 
     /// Record a cross-arena reference found during marking.
-    pub(crate) fn record_cross_arena_ref(
-        &self,
-        target_thread_id: dotnet_utils::ArenaId,
-        ptr: ObjectPtr,
-    ) {
+    pub(crate) fn record_cross_arena_ref(&self, reference: CrossArenaRef) {
         let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
         assert!(
             stw_in_progress,
             "record_cross_arena_ref: requires active collection, got stw_in_progress={stw_in_progress}",
         );
         let mut refs = self.cross_arena_refs.lock();
-        refs.entry(target_thread_id).or_default().insert(ptr);
+        refs.entry(reference.identity().arena_id)
+            .or_default()
+            .insert(reference);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_recorded_refs_for_test(
+        &self,
+    ) -> HashMap<dotnet_utils::ArenaId, HashSet<CrossArenaRef>> {
+        std::mem::take(&mut *self.cross_arena_refs.lock())
     }
 }
 
@@ -527,6 +535,13 @@ impl CollectionSession<'_> {
 
         // Fixed-point iteration for cross-arena resurrection.
         // Keep iterating until no new cross-arena references are found
+        // Root-barrier retracing can rediscover references already dispatched in
+        // earlier rounds. During STW, marking only advances and installed owner
+        // roots remain until the next MarkAll; sweeping waits for this fixed point.
+        // Remember the full retained pointer and registration identity for this
+        // collection only. This set is neither a root nor a substitute for the
+        // owner and live-lease checks at command installation.
+        let mut dispatched = HashSet::new();
         #[cfg(feature = "bench-instrumentation")]
         let mut fixed_point_iterations = 0u64;
         loop {
@@ -535,6 +550,13 @@ impl CollectionSession<'_> {
                     .coordinator
                     .cross_arena_refs
                     .lock_after(self.collection_lock_level());
+                // Each round needs only genuinely new references. In particular,
+                // repeatedly publishing an existing root would dirty the arena
+                // root again and could rediscover the same edge indefinitely.
+                refs.retain(|_, ptrs| {
+                    ptrs.retain(|reference| dispatched.insert(*reference));
+                    !ptrs.is_empty()
+                });
                 if refs.is_empty() {
                     // No cross-arena references found, we're done
                     break;
@@ -557,10 +579,13 @@ impl CollectionSession<'_> {
             // For each target arena, send MarkObjects command with the objects to resurrect
             let mut initiator_mark_objs = None;
             for (target_thread_id, ptrs) in cross_refs {
-                let mut ptrs_for_mark = MarkObjectPointers::with_capacity(ptrs.len());
-                for ptr in ptrs {
-                    ptrs_for_mark.insert(OpaqueObjectPtr::from_raw(ptr.as_ptr() as *const ()));
-                }
+                // The key is derived from each reference at harvest, never from
+                // the pointer. Keep the exact identity and retained pointer intact.
+                assert!(
+                    ptrs.iter()
+                        .all(|r| r.identity().arena_id == target_thread_id)
+                );
+                let ptrs_for_mark: MarkObjectPointers = ptrs.into_iter().collect();
                 if target_thread_id == initiating_thread_id {
                     // Save for direct execution by initiating thread
                     initiator_mark_objs = Some(ptrs_for_mark);
@@ -804,6 +829,116 @@ mod tests {
     use super::*;
     use crate::sync::{Arc, AtomicBool, Ordering};
     use crate::threading::{ThreadManager, ThreadManagerOps};
+
+    /// Independent recreation (not recovered originals): exercise the actual
+    /// fixed-point dispatcher and command slot with a simulated worker that
+    /// rediscovers an old edge alongside a new one. This is command-transport
+    /// evidence, not a real multi-arena collection/root test.
+    #[test]
+    fn m1e_recreation_fixed_point_command_retains_identity() {
+        use dotnet_utils::gc::{
+            OpaqueObjectPtr, ThreadSafeLock, register_arena, try_acquire_lease, unregister_arena,
+        };
+        use dotnet_value::{
+            object::{HeapStorage, ObjectInner},
+            string::CLRString,
+        };
+        use gc_arena::{Arena, Gc, Rootable};
+        use std::{
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let initiator = dotnet_utils::ArenaId::new(8_001_045);
+        let worker = dotnet_utils::ArenaId::new(8_001_046);
+        let flag = Arc::new(AtomicBool::new(false));
+        register_arena(worker, Arc::clone(&flag));
+        let identity = try_acquire_lease(worker).unwrap().identity();
+        let arena = Arena::<Rootable![()]>::new(|_| ());
+        let ptr = arena.mutate(|gc, _| {
+            let object = Gc::new(
+                gc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("fixed point")),
+                    worker,
+                )),
+            );
+            // SAFETY: F11.ObjectPointerThreadSafe — this is a direct pointer
+            // to the still-live GC allocation with the required concrete pointee.
+            unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
+        });
+        // SAFETY: F1.ArenaGenerationMatch — the allocation was created for
+        // this original registration and stays live until the worker joins.
+        let reference = unsafe { CrossArenaRef::new(identity, ptr) };
+        let second_ptr = arena.mutate(|gc, _| {
+            let object = Gc::new(
+                gc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(CLRString::from("new edge")),
+                    worker,
+                )),
+            );
+            // SAFETY: F11.ObjectPointerThreadSafe — a live allocation of the
+            // required concrete type, kept in this uncollected arena.
+            unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(object).cast()) }
+        });
+        // SAFETY: F1.ArenaGenerationMatch — the same live registration owns this allocation.
+        let second = unsafe { CrossArenaRef::new(identity, second_ptr) };
+        let coordinator = Arc::new(GCCoordinator::new(Arc::clone(&flag)));
+        coordinator.register_arena(ArenaHandle::new(initiator));
+        let worker_handle = ArenaHandle::new(worker);
+        coordinator.register_arena(worker_handle.clone());
+        let worker_coordinator = Arc::clone(&coordinator);
+        let (tx, rx) = mpsc::channel();
+        let worker_thread = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut finished = false;
+            let mut rounds = 0;
+            while !finished {
+                assert!(Instant::now() < deadline, "worker command deadline");
+                let command = worker_handle.current_command().lock().clone();
+                if let Some(command) = command {
+                    match command {
+                        GCCommand::Mark(MarkPhaseCommand::All) => {
+                            worker_coordinator.record_cross_arena_ref(reference);
+                        }
+                        GCCommand::Mark(MarkPhaseCommand::Objects(objects)) => {
+                            tx.send(objects.into_iter().collect::<HashSet<_>>())
+                                .unwrap();
+                            // Model a root retrace rediscovering the first edge,
+                            // plus a new edge that still requires a later round.
+                            if rounds == 0 {
+                                worker_coordinator.record_cross_arena_ref(reference);
+                                worker_coordinator.record_cross_arena_ref(second);
+                            } else if rounds == 1 {
+                                worker_coordinator.record_cross_arena_ref(reference);
+                            }
+                            rounds += 1;
+                        }
+                        GCCommand::Sweep(SweepPhaseCommand::Sweep) => finished = true,
+                        GCCommand::Sweep(SweepPhaseCommand::Finalize) => {}
+                    }
+                    worker_coordinator.command_finished(worker);
+                } else {
+                    thread::yield_now();
+                }
+            }
+        });
+        let session = coordinator.begin_collection().unwrap();
+        session.collect_all_arenas(initiator);
+        session.finish();
+        worker_thread.join().unwrap();
+        let received: Vec<_> = rx.try_iter().collect();
+        coordinator.unregister_arena(initiator);
+        coordinator.unregister_arena(worker);
+        unregister_arena(worker);
+        assert_eq!(
+            received,
+            vec![HashSet::from([reference]), HashSet::from([second])]
+        );
+        drop(arena);
+    }
 
     #[test]
     fn test_coordinator_registration() {

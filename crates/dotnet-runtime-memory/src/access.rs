@@ -1084,8 +1084,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             PointerOrigin::Heap(r) => {
                 self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
             }
-            PointerOrigin::CrossArenaObjectRef(p, target_tid) if *target_tid != owner_tid => {
-                recorder.buffer.push((*target_tid, p.as_ptr().addr()));
+            PointerOrigin::CrossArenaObjectRef(origin)
+                if origin.identity().arena_id != owner_tid =>
+            {
+                recorder.buffer.push(origin.cross_arena_ref());
                 maybe_flush_write_barrier_entries(recorder.buffer);
             }
             _ => {}
@@ -1604,8 +1606,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WB_LOCAL_BUF, WriteBarrierPanicFlushGuard, check_bounds, field_layout_contains_heap_refs,
-        load_atomic_with_unaligned_fallback, store_atomic_with_unaligned_fallback,
+        check_bounds, field_layout_contains_heap_refs, load_atomic_with_unaligned_fallback,
+        store_atomic_with_unaligned_fallback,
     };
     use dotnet_types::error::{CompareExchangeError, MemoryAccessError};
     use dotnet_utils::ArenaId;
@@ -1980,19 +1982,51 @@ mod tests {
         );
     }
 
+    /// An entry for an unregistered arena identity; flushing it is validated away, never
+    /// dereferenced. The pointer is a real object allocation (from a leaked, never-collected
+    /// arena) so `OpaqueObjectPtr::from_raw`'s contract holds truthfully.
+    #[cfg(feature = "multithreading")]
+    fn dummy_wb_entry() -> crate::write_barrier::WbEntry {
+        use dotnet_value::object::{HeapStorage, ObjectInner};
+        let arena = Box::leak(Box::new(gc_arena::Arena::<gc_arena::Rootable![()]>::new(
+            |_| (),
+        )));
+        let ptr = arena.mutate(|gc, _| {
+            let object = gc_arena::Gc::new(
+                gc,
+                dotnet_utils::gc::ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(dotnet_value::CLRString::from("wb-dummy")),
+                    ArenaId::new(0),
+                )),
+            );
+            // SAFETY: F11.ObjectPointerThreadSafe — direct `Gc::as_ptr` of the concrete
+            // object type; the leaked arena keeps it live and nothing dereferences it.
+            unsafe {
+                dotnet_utils::gc::OpaqueObjectPtr::from_raw(gc_arena::Gc::as_ptr(object).cast())
+            }
+        });
+        let identity = dotnet_utils::gc::ArenaIdentity {
+            arena_id: ArenaId::new(0),
+            generation: 0,
+        };
+        // SAFETY: F1.ArenaGenerationMatch — the identity names no live registration, so flushing validates it away.
+        unsafe { dotnet_utils::gc::CrossArenaRef::new(identity, ptr) }
+    }
+
     /// Verify that `WriteBarrierPanicFlushGuard::drop` drains `WB_LOCAL_BUF` even
     /// when the surrounding code panics mid-write.
     ///
     /// We manually seed the TLS buffer, then force a panic inside
     /// `catch_unwind` while the guard is live.  After unwinding the buffer
     /// must be empty — confirming that `Drop` ran and drained it.
+    #[cfg(feature = "multithreading")]
     #[test]
     fn write_barrier_panic_flush_guard_drains_on_panic() {
         use std::panic::{self, AssertUnwindSafe};
 
         // Seed the TLS buffer with a dummy entry so there is something to drain.
         WB_LOCAL_BUF.with(|buf| {
-            buf.borrow_mut().push((ArenaId::new(0), 0xDEAD_BEEF));
+            buf.borrow_mut().push(dummy_wb_entry());
         });
 
         // Introduce a guard, then panic.  The guard's Drop must drain the buffer
@@ -2013,12 +2047,13 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "multithreading")]
     #[test]
     fn write_barrier_panic_flush_guard_does_not_flush_on_normal_drop() {
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             b.clear();
-            b.push((ArenaId::new(0), 0xDEAD_BEEF));
+            b.push(dummy_wb_entry());
         });
 
         {
@@ -2031,6 +2066,8 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "multithreading")]
+    use crate::write_barrier::{WB_LOCAL_BUF, WriteBarrierPanicFlushGuard};
     #[cfg(feature = "multithreading")]
     use dotnet_utils::gc::{
         ArenaHandle, GCHandle, ThreadSafeLock, register_arena, unregister_arena,
@@ -2050,10 +2087,9 @@ mod tests {
     #[cfg(feature = "multithreading")]
     fn cross_arena_with_short_lifetime<'short>(
         gc: GCHandle<'short>,
-        ptr: ObjectPtr,
-        tid: ArenaId,
+        origin: dotnet_value::pointer::CrossArenaOrigin,
     ) -> bool {
-        let owner = super::MemoryOwner::cross_arena(gc, ptr, tid);
+        let owner = super::MemoryOwner::cross_arena(gc, origin);
         owner
             .as_heap_storage(storage_is_string)
             .expect("registered arena")
@@ -2081,6 +2117,13 @@ mod tests {
         // without registration it would panic with "Dangling cross-arena
         // reference".
         register_arena(arena_id, Arc::new(AtomicBool::new(false)));
+        // SAFETY: F1.ArenaGenerationMatch; F10.RawAllocationOwnership — the box is live for this original registration.
+        let origin = unsafe {
+            dotnet_value::pointer::CrossArenaOrigin::new(
+                ptr,
+                &dotnet_utils::gc::try_acquire_lease(arena_id).unwrap(),
+            )
+        };
 
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
@@ -2095,7 +2138,7 @@ mod tests {
                 #[cfg(feature = "memory-validation")]
                 arena_id,
             );
-            cross_arena_with_short_lifetime(gc, ptr, arena_id)
+            cross_arena_with_short_lifetime(gc, origin)
         }));
         unregister_arena(arena_id);
 
@@ -2116,7 +2159,7 @@ mod tests {
                 #[cfg(feature = "memory-validation")]
                 arena_id,
             );
-            let owner = super::MemoryOwner::cross_arena(gc, ptr, arena_id);
+            let owner = super::MemoryOwner::cross_arena(gc, origin);
             assert!(matches!(
                 owner.as_heap_storage(|_| ()),
                 Err(MemoryAccessError::CrossArenaViolation)
@@ -2167,6 +2210,63 @@ mod tests {
         // and is uniquely owned here after both mutations.
         unsafe {
             drop(Box::from_raw(arena_handle));
+        }
+    }
+    /// Independent recreation (not recovered originals): stale MemoryOwner access
+    /// is rejected after an ID is re-registered, before the callback runs.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn m1g_recreation_memory_owner_aba() {
+        let id = ArenaId::new(190_433);
+        register_arena(id, Arc::new(AtomicBool::new(false)));
+        let raw = Box::into_raw(Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(CLRString::from("live old allocation")),
+            id,
+        ))));
+        // SAFETY: F10.RawAllocationOwnership — the box remains live until after both registrations.
+        let ptr = unsafe { ObjectPtr::from_raw(raw) }.unwrap();
+        // SAFETY: F1.ArenaGenerationMatch; F10.RawAllocationOwnership — the live test box belongs to this original registration.
+        let origin = unsafe {
+            dotnet_value::pointer::CrossArenaOrigin::new(
+                ptr,
+                &dotnet_utils::gc::try_acquire_lease(id).unwrap(),
+            )
+        };
+        unregister_arena(id);
+        register_arena(id, Arc::new(AtomicBool::new(false)));
+        let arena = Arena::<Rootable![()]>::new(|_| ());
+        let handle = Box::into_raw(Box::new(ArenaHandle::new(id)));
+        arena.mutate(|mc, _| {
+            // SAFETY: F6.NoEscapeAcrossArena — this handle remains live through the scoped mutation.
+            let arena_inner = unsafe { (&*handle).as_inner() };
+            let gc = GCHandle::new(
+                mc,
+                arena_inner,
+                #[cfg(feature = "memory-validation")]
+                id,
+            );
+            let owner = super::MemoryOwner::cross_arena(gc, origin);
+            assert!(matches!(
+                owner.with_data(|_| panic!("stale read callback")),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+            assert!(matches!(
+                owner.with_data_mut(gc, |_| panic!("stale write callback")),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+            assert!(matches!(
+                owner.as_heap_storage(|_| panic!("stale storage callback")),
+                Err(MemoryAccessError::CrossArenaViolation)
+            ));
+        });
+        unregister_arena(id);
+        // SAFETY: F10.RawAllocationOwnership — the object box is uniquely owned and no accesses remain.
+        unsafe {
+            drop(Box::from_raw(raw));
+        }
+        // SAFETY: F10.RawAllocationOwnership — the handle box is uniquely owned and the mutation has ended.
+        unsafe {
+            drop(Box::from_raw(handle));
         }
     }
 }

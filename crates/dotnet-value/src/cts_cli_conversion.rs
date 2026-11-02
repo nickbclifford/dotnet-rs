@@ -20,7 +20,7 @@ fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> Result<*const u8, TypeResolu
             observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
         }
         #[cfg(feature = "multithreading")]
-        PointerOrigin::CrossArenaObjectRef(_, _) => {
+        PointerOrigin::CrossArenaObjectRef(_) => {
             observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
         }
         _ => {

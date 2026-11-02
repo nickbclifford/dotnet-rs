@@ -15,6 +15,240 @@ mod tests {
     use dotnetdll::prelude::BaseType;
     use hashbrown::HashMap;
 
+    // Independent recreation (not recovered originals): compact ObjectRef codec regressions.
+    #[cfg(feature = "multithreading")]
+    struct RecreationRegistration(crate::ArenaId);
+
+    #[cfg(feature = "multithreading")]
+    impl RecreationRegistration {
+        fn new(id: u64) -> Self {
+            let id = crate::ArenaId::new(id);
+            dotnet_utils::gc::register_arena(
+                id,
+                dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false)),
+            );
+            Self(id)
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    impl Drop for RecreationRegistration {
+        fn drop(&mut self) {
+            dotnet_utils::gc::unregister_arena(self.0);
+        }
+    }
+
+    fn recreation_object<'gc>(mc: &gc_arena::Mutation<'gc>, id: crate::ArenaId) -> ObjectRef<'gc> {
+        let inner = crate::object::ObjectInner::new(
+            HeapStorage::Str(crate::string::CLRString::from("codec recreation")),
+            id,
+        );
+        ObjectRef(Some(gc_arena::Gc::new(
+            mc,
+            dotnet_utils::gc::ThreadSafeLock::new(inner),
+        )))
+    }
+
+    fn recreation_check_payload(obj: ObjectRef<'_>) {
+        let handle = obj.0.expect("live object decoded as null");
+        let inner = handle.borrow();
+        let HeapStorage::Str(value) = &inner.storage else {
+            panic!("wrong payload")
+        };
+        assert_eq!(value.as_string(), "codec recreation");
+    }
+
+    /// Independent recreation (not recovered originals): registered owner 40000.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn recreation_codec_id40000() {
+        let _registration = RecreationRegistration::new(40000);
+        let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
+        arena.mutate(|mc, _| {
+            let obj = recreation_object(mc, crate::ArenaId::new(40000));
+            let ptr = obj.to_storage_ptr();
+            assert_eq!(ptr.addr() & 7, 5);
+            // SAFETY: F1.GcHandleRooted — The live allocation and its registered arena remain
+            // in this mutation; the pointer comes directly from that allocation's codec.
+            recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+        });
+    }
+
+    /// Independent recreation (not recovered originals): registered compact owner boundaries.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn recreation_codec_registered_boundaries() {
+        let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
+        for id in [0, 1, 32767, 32768, 40000, 65535] {
+            let _registration = RecreationRegistration::new(id);
+            arena.mutate(|mc, _| {
+                let obj = recreation_object(mc, crate::ArenaId::new(id));
+                let ptr = obj.to_storage_ptr();
+                assert_eq!((ptr.addr() >> 48) as u16, id as u16);
+                // SAFETY: F1.GcHandleRooted — The allocation is live and its matching owner
+                // remains registered throughout this mutation; ptr is its own encoded pointer.
+                recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+            });
+        }
+    }
+
+    /// Independent recreation (not recovered originals): unrepresentable owners must fail loudly.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn recreation_codec_reject_large_owners() {
+        let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
+        let mut accepted = Vec::new();
+        for id in [65536, u64::MAX - 1] {
+            let _registration = RecreationRegistration::new(id);
+            arena.mutate(|mc, _| {
+                let obj = recreation_object(mc, crate::ArenaId::new(id));
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    obj.to_storage_ptr()
+                })) {
+                    Ok(_) => accepted.push(id),
+                    Err(error) => {
+                        let message = error
+                            .downcast_ref::<String>()
+                            .expect("host invariant panic message");
+                        assert!(message.contains(
+                            "ObjectRef codec host invariant violation: UnrepresentableOwner"
+                        ));
+                        assert!(message.contains(&id.to_string()));
+                    }
+                }
+            });
+        }
+        assert!(
+            accepted.is_empty(),
+            "unrepresentable owners accepted: {accepted:?}"
+        );
+    }
+
+    /// Independent recreation (not recovered originals): absent owner is a host invariant failure.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn recreation_codec_unavailable_owner() {
+        let id = crate::ArenaId::new(43210);
+        let registration = RecreationRegistration::new(id.as_u64());
+        let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
+        arena.mutate(|mc, _| {
+            let obj = recreation_object(mc, id);
+            let ptr = obj.to_storage_ptr();
+            drop(registration);
+            let encode =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| obj.to_storage_ptr()));
+            // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — The allocation remains live
+            // in this mutation. The absent owner must be diagnosed before any pointer read.
+            let decode = std::panic::catch_unwind(|| unsafe { ObjectRef::from_storage_ptr(ptr) });
+            for error in [
+                encode.expect_err("encode accepted absent owner"),
+                decode.expect_err("decode accepted absent owner"),
+            ] {
+                let message = error
+                    .downcast_ref::<String>()
+                    .expect("host invariant panic message");
+                assert!(
+                    message.contains("ObjectRef codec host invariant violation: OwnerUnavailable")
+                );
+                assert!(message.contains("43210"));
+            }
+        });
+    }
+
+    /// Independent recreation (not recovered originals): INVALID stays local and untagged.
+    #[test]
+    fn recreation_codec_local_invalid_control() {
+        let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
+        arena.mutate(|mc, _| {
+            let obj = recreation_object(mc, crate::ArenaId::INVALID);
+            let ptr = obj.to_storage_ptr();
+            assert_eq!(ptr.addr() & 7, 0);
+            // SAFETY: F1.GcHandleRooted — The untagged pointer was obtained from the live
+            // allocation in this mutation and the arena is retained until the callback returns.
+            recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+        });
+    }
+
+    // Independent recreation (not recovered originals): a gc-arena publication model,
+    // not the VM MarkObjects path. The raw slot models its manually traced root set.
+    struct RecreationPublicationRoot(std::cell::Cell<Option<*const RecreationWitness>>);
+
+    #[derive(gc_arena::Collect)]
+    #[collect(require_static)]
+    struct RecreationWitness(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for RecreationWitness {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — The slot is populated only
+    // with this arena's still-live allocation before sweeping. A missed publication is
+    // cleared immediately after the first sweep, before any further root tracing; the
+    // temporary rebranded handle never leaves trace. No collected pointer is accessed.
+    unsafe impl<'gc> gc_arena::Collect<'gc> for RecreationPublicationRoot {
+        fn trace<T: gc_arena::collect::Trace<'gc>>(&self, cc: &mut T) {
+            if let Some(ptr) = self.0.get() {
+                // SAFETY: F1.GcHandleRooted — While this slot can be traced, the
+                // allocation belongs to this arena and has not been swept.
+                unsafe { gc_arena::Gc::from_ptr(ptr) }.trace(cc);
+            }
+        }
+    }
+
+    fn recreation_publication_drops(barrier: bool) -> usize {
+        use std::sync::atomic::Ordering;
+        let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut arena =
+            gc_arena::Arena::<gc_arena::Rootable![RecreationPublicationRoot]>::new(|_| {
+                RecreationPublicationRoot(std::cell::Cell::new(None))
+            });
+        // Allocate before marking, with no hidden root and no intervening collection.
+        let ptr = arena.mutate(|mc, _| {
+            gc_arena::Gc::as_ptr(gc_arena::Gc::new(mc, RecreationWitness(drops.clone())))
+        });
+        assert!(arena.finish_marking().is_some());
+        if barrier {
+            arena.mutate_root(|_, root| root.0.set(Some(ptr)));
+        } else {
+            arena.mutate(|_, root| root.0.set(Some(ptr)));
+        }
+        assert!(arena.finish_marking().is_some());
+        arena.finish_cycle();
+        let observed = drops.load(Ordering::SeqCst);
+        // In the old path the slot may now be dangling; remove it without reading it
+        // or tracing the root again. The barrier control instead checks another cycle.
+        if barrier && observed == 0 {
+            arena.finish_cycle();
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+        }
+        arena.mutate_root(|_, root| root.0.set(None));
+        observed
+    }
+
+    /// Independent recreation (not recovered originals): old publication loses the witness.
+    #[test]
+    fn recreation_publication_old_path_diagnostic() {
+        assert_eq!(recreation_publication_drops(false), 1);
+    }
+
+    /// Independent recreation (not recovered originals): a root barrier preserves the witness.
+    #[test]
+    fn recreation_publication_root_barrier_control() {
+        assert_eq!(recreation_publication_drops(true), 0);
+    }
+
+    /// Independent recreation (not recovered originals): publication through the root barrier survives.
+    #[test]
+    fn recreation_publication_pending_survival() {
+        assert_eq!(
+            recreation_publication_drops(true),
+            0,
+            "published witness was collected"
+        );
+    }
+
     fn field_storage() -> (FieldStorage, *const u8) {
         let mut payload = Vec::with_capacity(32);
         payload.extend_from_slice(&[0x11, 0x22, 0x33]);

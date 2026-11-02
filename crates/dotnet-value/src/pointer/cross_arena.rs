@@ -1,11 +1,14 @@
 #[cfg(feature = "multithreading")]
 use crate::{
-    ArenaId, ByteOffset, ValidationTag,
+    ByteOffset, ValidationTag,
     object::{ObjectInner, ObjectPtr},
-    pointer::{MANAGED_PTR_MAGIC, ManagedPtr, PointerOrigin},
+    pointer::{CrossArenaOrigin, MANAGED_PTR_MAGIC, ManagedPtr, PointerOrigin},
 };
 #[cfg(feature = "multithreading")]
-use dotnet_utils::gc::{ThreadSafeLock, try_acquire_lease};
+use dotnet_utils::gc::{
+    ArenaLease, RegistrationToken, ThreadSafeLock, try_acquire_lease_for_identity,
+    try_acquire_lease_for_token,
+};
 #[cfg(feature = "multithreading")]
 use std::ptr::NonNull;
 
@@ -46,24 +49,27 @@ impl ObjectPtr {
 
 /// Reconstruct a serialized cross-arena lock pointer while its arena is pinned.
 ///
-/// The callback is deliberately scoped to the arena lease. Any dereference of
-/// the reconstructed [`ObjectPtr`] must happen in `f`; a returned raw pointer
-/// needs its own cross-arena coordination before it can be dereferenced.
+/// `token` is resolved to a lease for its exact original registration; a token
+/// whose registration was removed never resolves (tokens are not reused), so
+/// stale bytes are rejected before any pointer is formed. The callback is
+/// deliberately scoped to that lease. Any dereference of the reconstructed
+/// [`ObjectPtr`] must happen in `f`; a returned raw pointer needs its own
+/// cross-arena coordination before it can be dereferenced.
 ///
 /// # Safety
 ///
-/// `lock_ptr` must carry provenance for a live, correctly aligned
-/// `ThreadSafeLock<ObjectInner>` owned by `owner_id`, as previously serialized
-/// by the CrossArena representation. This helper acquires the `owner_id` arena
-/// lease before reconstructing the pointer and holds it for `f`, so that arena
-/// cannot be unregistered while `f` dereferences the pointer.
+/// If `token` resolves, `lock_ptr` must carry provenance for a live, correctly
+/// aligned `ThreadSafeLock<ObjectInner>` owned by that registration, as
+/// previously serialized together with `token`. The caller must independently
+/// keep the object rooted. This helper acquires a lease for `f`, preventing
+/// arena teardown from completing, but the lease itself is not a root.
 #[cfg(feature = "multithreading")]
 pub(crate) unsafe fn cross_arena_ptr_from_ptr<T>(
     lock_ptr: *mut u8,
-    owner_id: ArenaId,
-    f: impl FnOnce(ObjectPtr) -> T,
+    token: RegistrationToken,
+    f: impl FnOnce(ObjectPtr, &ArenaLease) -> T,
 ) -> Option<T> {
-    let _lease = try_acquire_lease(owner_id)?;
+    let lease = try_acquire_lease_for_token(token)?;
     if lock_ptr.is_null() {
         return None;
     }
@@ -73,11 +79,12 @@ pub(crate) unsafe fn cross_arena_ptr_from_ptr<T>(
         .map_addr(|addr| addr & !7)
         .cast::<ThreadSafeLock<ObjectInner<'static>>>();
 
-    // SAFETY: F4.WidthAligned — The caller guarantees that `lock_ptr` names a live, aligned
-    // cross-arena lock owned by `owner_id`; `_lease` keeps that arena live for
-    // the callback's duration.
+    // SAFETY: F4.WidthAligned; F1.ArenaGenerationMatch — the token resolved to its
+    // original registration, and the caller guarantees the lock serialized with that
+    // token is live and aligned; `lease` prevents arena teardown during the callback,
+    // while rooting is the caller's obligation.
     let ptr = unsafe { ObjectPtr::from_raw(lock_ptr) }?;
-    Some(f(ptr))
+    Some(f(ptr, &lease))
 }
 
 #[cfg(feature = "multithreading")]
@@ -91,25 +98,33 @@ impl<'gc> ManagedPtr<'gc> {
             _ => return Ok(None),
         };
         match pointer.origin() {
-            PointerOrigin::CrossArenaObjectRef(_, tid) => {
-                try_acquire_lease(*tid).map(Some).ok_or_else(|| {
-                    dotnet_types::error::ExecutionError::InternalError(
-                        "cross-arena owner is unavailable".into(),
-                    )
-                })
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                try_acquire_lease_for_identity(origin.identity())
+                    .map(Some)
+                    .ok_or_else(|| {
+                        dotnet_types::error::ExecutionError::InternalError(
+                            "cross-arena owner is unavailable".into(),
+                        )
+                    })
             }
             _ => Ok(None),
         }
     }
 
-    pub fn new_cross_arena(
+    /// # Safety
+    /// The object must be live and rooted and belong to the exact original
+    /// registration pinned by `lease`. Its liveness and access discipline must
+    /// hold during each subsequent use.
+    pub unsafe fn new_cross_arena(
         value: Option<NonNull<u8>>,
         inner_type: dotnet_types::TypeDescription,
         ptr: ObjectPtr,
-        tid: ArenaId,
+        lease: &ArenaLease,
         offset: ByteOffset,
     ) -> Self {
-        let origin = PointerOrigin::CrossArenaObjectRef(ptr, tid);
+        // SAFETY: F1.ArenaGenerationMatch — the caller supplies the original registration's lease and live object.
+        let origin =
+            PointerOrigin::CrossArenaObjectRef(unsafe { CrossArenaOrigin::new(ptr, lease) });
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,

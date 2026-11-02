@@ -216,13 +216,16 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
             ),
             (
                 "cross_arena",
-                ManagedPtr::new_cross_arena(
-                    Some(cross_ptr),
-                    TypeDescription::NULL,
-                    cross_object,
-                    cross_arena_id,
-                    cross_offset,
-                ),
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the benchmark keeps the original object and registration live.
+                unsafe {
+                    ManagedPtr::new_cross_arena(
+                        Some(cross_ptr),
+                        TypeDescription::NULL,
+                        cross_object,
+                        &dotnet_utils::gc::try_acquire_lease(cross_arena_id).unwrap(),
+                        cross_offset,
+                    )
+                },
             ),
             (
                 "transient",

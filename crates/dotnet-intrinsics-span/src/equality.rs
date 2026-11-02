@@ -519,13 +519,16 @@ mod tests {
         ))));
         // SAFETY: F10.RawAllocationOwnership — raw is the live boxed lock until teardown below.
         let object = unsafe { ObjectPtr::from_raw(raw) }.unwrap();
-        let ptr = ManagedPtr::new_cross_arena(
-            None,
-            TypeDescription::NULL,
-            object,
-            id,
-            ByteOffset::new(0),
-        );
+        // SAFETY: F1.ArenaGenerationMatch; F10.RawAllocationOwnership — the live box belongs to this original registration.
+        let ptr = unsafe {
+            ManagedPtr::new_cross_arena(
+                None,
+                TypeDescription::NULL,
+                object,
+                &dotnet_utils::gc::try_acquire_lease(id).unwrap(),
+                ByteOffset::new(0),
+            )
+        };
         unregister_arena(id);
         // SAFETY: F10.RawAllocationOwnership — raw is uniquely owned after unregistration.
         unsafe {

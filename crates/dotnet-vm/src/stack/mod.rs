@@ -117,6 +117,9 @@ pub struct CallStack<'gc> {
     pub(crate) heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache<'gc>,
     pub thread_id: Cell<dotnet_utils::ArenaId>,
     #[cfg(feature = "multithreading")]
+    /// Original registry identity of this arena, set at Executor construction.
+    pub(crate) arena_identity: Option<dotnet_utils::gc::ArenaIdentity>,
+    #[cfg(feature = "multithreading")]
     pub arena: dotnet_utils::gc::ArenaHandle,
 }
 
@@ -213,6 +216,8 @@ impl<'gc> CallStack<'gc> {
             local,
             heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache::default(),
             thread_id: Cell::new(dotnet_utils::ArenaId::INVALID),
+            #[cfg(feature = "multithreading")]
+            arena_identity: None,
             #[cfg(feature = "multithreading")]
             arena: dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId::INVALID),
         }

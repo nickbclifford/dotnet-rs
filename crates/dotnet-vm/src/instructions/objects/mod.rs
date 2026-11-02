@@ -303,19 +303,10 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     if matches!(&*layout, LayoutManager::Scalar(Scalar::ObjectRef))
         && offset == dotnet_utils::ByteOffset::new(0)
         && let PointerOrigin::Stack(idx) = origin.clone()
+        && let StackValue::ObjectRef(slot_ref) = ctx.get_slot_ref(idx).clone()
     {
-        match ctx.get_slot_ref(idx).clone() {
-            StackValue::ObjectRef(slot_ref) => {
-                ctx.push(StackValue::ObjectRef(slot_ref));
-                return StepResult::Continue;
-            }
-            #[cfg(feature = "multithreading")]
-            StackValue::CrossArenaObjectRef(ptr, tid) => {
-                ctx.push(StackValue::CrossArenaObjectRef(ptr, tid));
-                return StepResult::Continue;
-            }
-            _ => {}
-        }
+        ctx.push(StackValue::ObjectRef(slot_ref));
+        return StepResult::Continue;
     }
 
     let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];

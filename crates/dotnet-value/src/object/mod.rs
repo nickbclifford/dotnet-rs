@@ -22,7 +22,7 @@ use std::{
 use arbitrary::Arbitrary;
 
 #[cfg(feature = "multithreading")]
-use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref, try_acquire_lease};
+use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_object, try_acquire_lease};
 
 #[cfg(all(feature = "multithreading", feature = "memory-validation"))]
 use dotnet_utils::gc::{is_stw_in_progress, is_valid_cross_arena_ref};
@@ -45,6 +45,42 @@ pub fn register_object_ptr(ptr: usize) {
 #[cfg(feature = "fuzzing")]
 pub fn is_valid_object_ptr(ptr: usize) -> bool {
     OBJECT_REGISTRY.contains(&ptr)
+}
+
+// The compact Tag-5 codec reserves the top 16 address bits and requires a 64-bit pointer.
+#[cfg(all(feature = "multithreading", not(target_pointer_width = "64")))]
+compile_error!("the multithreaded ObjectRef compact codec requires 64-bit pointers");
+
+#[derive(Debug, PartialEq, Eq)]
+enum ObjectCodecError {
+    ShortStorage {
+        actual: usize,
+    },
+    #[cfg(feature = "multithreading")]
+    InvalidAddress(usize),
+    #[cfg(feature = "multithreading")]
+    UnrepresentableOwner(ArenaId),
+    #[cfg(feature = "multithreading")]
+    OwnerUnavailable(ArenaId),
+}
+
+#[cfg(feature = "multithreading")]
+fn check_compact_address(addr: usize) -> Result<(), ObjectCodecError> {
+    if addr == 0 || addr & 7 != 0 || addr >= (1usize << 48) {
+        return Err(ObjectCodecError::InvalidAddress(addr));
+    }
+    Ok(())
+}
+
+fn check_object_storage(len: usize) -> Result<(), ObjectCodecError> {
+    if len < ObjectRef::SIZE {
+        return Err(ObjectCodecError::ShortStorage { actual: len });
+    }
+    Ok(())
+}
+
+fn codec_invariant(error: ObjectCodecError) -> ! {
+    panic!("ObjectRef codec host invariant violation: {error:?}")
 }
 
 pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
@@ -199,13 +235,42 @@ impl ObjectPtr {
 
     /// # Safety
     ///
-    /// The pointer must be valid for the program lifetime and properly aligned.
+    /// A non-null pointer must identify a properly aligned, live object allocation
+    /// with usable provenance for every protected use. The `'static` parameter
+    /// erases the arena brand; it does not extend the allocation's lifetime.
+    /// Callers must establish the correct arena, rooting and access discipline
+    /// for the use/trace interval, including before any pointee read.
     pub unsafe fn from_raw(ptr: *const ThreadSafeLock<ObjectInner<'static>>) -> Option<Self> {
         NonNull::new(ptr as *mut _).map(ObjectPtr)
     }
 
     pub fn as_ptr(&self) -> *const ThreadSafeLock<ObjectInner<'static>> {
         self.0.as_ptr()
+    }
+
+    /// Erase this pointer for cross-arena transport without exposing its provenance.
+    ///
+    /// The result is inert: it grants no access, liveness or rooting.
+    #[cfg(feature = "multithreading")]
+    pub fn to_opaque(self) -> dotnet_utils::gc::OpaqueObjectPtr {
+        // SAFETY: F11.ObjectPointerThreadSafe — `self` is a non-null pointer to the
+        // runtime's `ThreadSafeLock<ObjectInner>`, the only pointee `OpaqueObjectPtr` admits.
+        unsafe { dotnet_utils::gc::OpaqueObjectPtr::from_raw(self.0.as_ptr().cast()) }
+    }
+
+    /// Recover an object pointer from inert transport, preserving the same pointer value.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must have been erased from an `ObjectPtr`/`Gc::as_ptr` object allocation.
+    /// This performs no access; the caller must separately validate the owner's exact
+    /// registration identity, rooting and synchronization before any pointee use.
+    #[cfg(feature = "multithreading")]
+    pub unsafe fn from_opaque(ptr: dotnet_utils::gc::OpaqueObjectPtr) -> Self {
+        ObjectPtr(
+            NonNull::new(ptr.as_ptr().cast_mut().cast())
+                .expect("OpaqueObjectPtr is constructed from a non-null pointer"),
+        )
     }
 
     #[expect(
@@ -298,10 +363,14 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id() };
                     if owner_id != tracing_id {
-                        let ptr = Gc::as_ptr(h).expose_provenance();
-                        if !record_cross_arena_ref(owner_id, ptr) {
-                            return;
-                        }
+                        // SAFETY: F1.StwParked; F11.ObjectPointerThreadSafe — `h` is a live handle
+                        // to an object owned by `owner_id`'s registration, which STW keeps alive;
+                        // the pointer is erased inert with no exposed provenance.
+                        let ptr = unsafe {
+                            dotnet_utils::gc::OpaqueObjectPtr::from_raw(Gc::as_ptr(h).cast())
+                        };
+                        // SAFETY: F1.ArenaGenerationMatch — as above; the identity is captured under a lease just now.
+                        unsafe { record_cross_arena_object(owner_id, ptr) };
                         return;
                     }
                 }
@@ -434,14 +503,21 @@ impl<'gc> ObjectRef<'gc> {
     /// - `source` must contain at least [`ObjectRef::SIZE`] bytes containing an initialized
     ///   `*mut u8` storage pointer previously produced by [`ObjectRef::to_storage_ptr`], a null
     ///   pointer, or a pointer with an odd non-object tag. The bytes may be unaligned.
-    /// - The caller must ensure the returned `ObjectRef` does not outlive the
-    ///   arena generation it belongs to.
+    /// - The stored pointer must satisfy the live-allocation, provenance and lifetime
+    ///   requirements of [`ObjectRef::from_storage_ptr`]. An arena lease alone does not root it.
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        // SAFETY: F10.RawMemoryAccessValid — `read_unchecked` requires an initialized pointer value and permits unaligned
-        // storage access.
+        // SAFETY: F10.RawMemoryAccessValid — The caller supplies initialized pointer storage; the checked
+        // helper validates its length before reading.
+        unsafe { Self::try_read_unchecked(source) }.unwrap_or_else(|error| codec_invariant(error))
+    }
+
+    unsafe fn try_read_unchecked(source: &[u8]) -> Result<Self, ObjectCodecError> {
+        check_object_storage(source.len())?;
+        // SAFETY: F10.RawMemoryAccessValid — Length was checked and the caller guarantees an
+        // initialized pointer value; read_unaligned permits arbitrary byte alignment.
         let ptr = unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() };
-        // SAFETY: F1.GcHandleRooted — The method's documented requirements are those of `from_storage_ptr`.
-        unsafe { Self::from_storage_ptr(ptr) }
+        // SAFETY: F1.GcHandleRooted — The caller supplies the live allocation contract for decoding.
+        unsafe { Self::try_from_storage_ptr(ptr) }
     }
 
     /// Returns the pointer representation used to store this reference.
@@ -449,39 +525,39 @@ impl<'gc> ObjectRef<'gc> {
     /// In multithreaded builds, live managed references carry Tag 5 and their owner arena ID in
     /// the pointer's address bits. The pointer's provenance is retained while those bits are
     /// changed, so callers can store the result in pointer-typed atomics or byte storage.
+    /// This compact format requires 64-bit pointers, registered owner IDs 0..=65535 and
+    /// nonzero 8-byte-aligned addresses below 2^48. INVALID remains untagged. An unavailable
+    /// owner or unrepresentable managed object triggers a host invariant panic, not a guest null.
+    pub fn to_storage_ptr(&self) -> *mut u8 {
+        self.try_to_storage_ptr()
+            .unwrap_or_else(|error| codec_invariant(error))
+    }
+
     #[allow(
         clippy::multiple_unsafe_ops_per_block,
         reason = "the immutable owner ID read traverses the live lock and its interior"
     )]
-    pub fn to_storage_ptr(&self) -> *mut u8 {
+    fn try_to_storage_ptr(&self) -> Result<*mut u8, ObjectCodecError> {
         let Some(handle) = self.0 else {
-            return std::ptr::null_mut();
+            return Ok(std::ptr::null_mut());
         };
         let ptr = Gc::as_ptr(handle).cast_mut().cast::<u8>();
 
         #[cfg(feature = "multithreading")]
         {
-            // SAFETY: F1.GcHandleRooted — `handle` keeps the lock allocation alive. `owner_id` is immutable after
-            // construction, so this raw read cannot race with a write to that field.
+            // SAFETY: F1.GcHandleRooted; F11.ObjectPointerThreadSafe — The caller holds a live
+            // handle, and owner_id is immutable after initialization, so this read cannot race.
             let owner_id = unsafe { (*(*Gc::as_ptr(handle)).as_ptr()).owner_id() };
             if owner_id != ArenaId::INVALID {
-                // Preserve the existing serialization behavior if the owning arena has exited.
-                if let Some(_lease) = try_acquire_lease(owner_id) {
-                    let addr = ptr.addr();
-                    debug_assert_eq!(
-                        addr & 0xFFFF000000000000,
-                        0,
-                        "Pointer upper bits should be clear"
-                    );
-                    debug_assert_eq!(addr & 7, 0, "Pointer low bits should be clear");
-                    return ptr.map_addr(|a| {
-                        (a & 0x0000FFFFFFFFFFF8) | 5 | ((owner_id.as_u64() as usize) << 48)
-                    });
-                }
-                return std::ptr::null_mut();
+                let owner = u16::try_from(owner_id.as_u64())
+                    .map_err(|_| ObjectCodecError::UnrepresentableOwner(owner_id))?;
+                check_compact_address(ptr.addr())?;
+                let _lease = try_acquire_lease(owner_id)
+                    .ok_or(ObjectCodecError::OwnerUnavailable(owner_id))?;
+                return Ok(ptr.map_addr(|a| a | 5 | (usize::from(owner) << 48)));
             }
         }
-        ptr
+        Ok(ptr)
     }
 
     /// Reconstructs an ObjectRef from its pointer representation in storage.
@@ -495,29 +571,42 @@ impl<'gc> ObjectRef<'gc> {
     ///   must remain live for the returned lifetime `'gc`.
     /// - For Tag 5, if its owner arena can be leased, the pointer must retain provenance from the
     ///   original live object allocation, its owner ID must describe that allocation, and the
-    ///   owner arena must remain valid for the returned reference's lifetime. The acquired arena
-    ///   lease protects the allocation during decoding. If the owner arena is no longer
-    ///   registered, this method returns `None` without dereferencing the pointer.
+    ///   owner arena must remain valid for the returned reference's lifetime. The lease prevents
+    ///   arena teardown during decoding but does not root the object. An unavailable owner is a
+    ///   host invariant violation, reported before any pointee read.
     /// - The pointer's tag bits must use the storage format: zero for local references, Tag 5 for
     ///   cross-arena references, or an odd non-object tag. Other odd tags are ignored without
     ///   dereferencing the pointer.
+    pub unsafe fn from_storage_ptr(ptr: *mut u8) -> Self {
+        // SAFETY: F1.GcHandleRooted — The caller supplies the documented live allocation contract.
+        unsafe { Self::try_from_storage_ptr(ptr) }.unwrap_or_else(|error| codec_invariant(error))
+    }
+
     #[expect(
         clippy::multiple_unsafe_ops_per_block,
         reason = "the validation reads the live lock and its interior as one operation"
     )]
-    pub unsafe fn from_storage_ptr(ptr: *mut u8) -> Self {
+    unsafe fn try_from_storage_ptr(ptr: *mut u8) -> Result<Self, ObjectCodecError> {
         let addr = ptr.addr();
 
         #[cfg(feature = "multithreading")]
         if addr & 7 == 5 {
             let owner_id_u16 = (addr >> 48) as u16;
-            let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
+            let owner_id = ArenaId::new(u64::from(owner_id_u16));
             // `map_addr` clears metadata without dropping the provenance carried by `ptr`.
             let real_ptr = ptr.map_addr(|a| a & 0x0000FFFFFFFFFFF8);
-            let Some(_lease) = try_acquire_lease(owner_id) else {
-                return ObjectRef(None);
+            check_compact_address(real_ptr.addr())?;
+            let _lease =
+                try_acquire_lease(owner_id).ok_or(ObjectCodecError::OwnerUnavailable(owner_id))?;
+            // SAFETY: F1.ArenaGenerationMatch — `_lease` pins `owner_id`'s current registration,
+            // which is what the tag-5 decode contract treats as the pointer's owner; `real_ptr`
+            // keeps its original provenance and is erased without exposure.
+            unsafe {
+                record_cross_arena_object(
+                    owner_id,
+                    dotnet_utils::gc::OpaqueObjectPtr::from_raw(real_ptr.cast::<()>()),
+                )
             };
-            record_cross_arena_ref(owner_id, real_ptr.expose_provenance());
             let lock_ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
 
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -537,11 +626,11 @@ impl<'gc> ObjectRef<'gc> {
                 unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
             }
             // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation for `'gc`.
-            return ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) }));
+            return Ok(ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) })));
         }
 
         if addr & 1 != 0 || ptr.is_null() {
-            return ObjectRef(None);
+            return Ok(ObjectRef(None));
         }
 
         let lock_ptr = ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
@@ -556,7 +645,7 @@ impl<'gc> ObjectRef<'gc> {
             unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
         }
         // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation with lifetime `'gc`.
-        ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) }))
+        Ok(ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) })))
     }
 
     /// Reads an ObjectRef from a byte slice and brands it with the GC lifetime.
@@ -571,7 +660,7 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn write(&self, dest: &mut [u8]) {
-        assert!(dest.len() >= Self::SIZE, "ObjectRef storage is too short");
+        check_object_storage(dest.len()).unwrap_or_else(|error| codec_invariant(error));
         let ptr = self.to_storage_ptr();
         // SAFETY: F10.RawMemoryAccessValid — `write_unaligned` supports byte storage with arbitrary alignment. The caller
         // provides at least ObjectRef::SIZE writable bytes and is responsible for synchronization.
@@ -966,6 +1055,39 @@ mod tests {
         }
     }
 
+    /// Independent recreation (not recovered originals): validate addresses without pointers.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn recreation_codec_address_limits() {
+        for addr in [8, (1usize << 48) - 8] {
+            assert_eq!(check_compact_address(addr), Ok(()));
+        }
+        for addr in [0, 1, 9, 1usize << 48, usize::MAX - 7] {
+            assert_eq!(
+                check_compact_address(addr),
+                Err(ObjectCodecError::InvalidAddress(addr))
+            );
+        }
+    }
+
+    /// Independent recreation (not recovered originals): short slices fail before memory access.
+    #[test]
+    fn recreation_codec_short_storage() {
+        for len in 0..ObjectRef::SIZE {
+            assert_eq!(
+                check_object_storage(len),
+                Err(ObjectCodecError::ShortStorage { actual: len })
+            );
+            // SAFETY: F10.RawMemoryAccessValid — The checked helper rejects the short slice
+            // before attempting to read a pointer, so no initialized pointer is required.
+            let result = unsafe { ObjectRef::try_read_unchecked(&[0; ObjectRef::SIZE][..len]) };
+            assert!(
+                matches!(result, Err(ObjectCodecError::ShortStorage { actual }) if actual == len)
+            );
+        }
+        assert_eq!(check_object_storage(ObjectRef::SIZE), Ok(()));
+    }
+
     #[cfg(feature = "multithreading")]
     #[test]
     fn test_read_unchecked_cross_arena_invalid() {
@@ -991,14 +1113,50 @@ mod tests {
                 .write_unaligned(tagged_ptr)
         };
 
-        // SAFETY: F6.NoEscapeAcrossArena — The arena encoded in this Tag 5 pointer is not registered, so decoding returns
-        // `None` before dereferencing it.
-        let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
+        // SAFETY: F6.NoEscapeAcrossArena — The absent owner is rejected before the synthetic
+        // pointer is dereferenced; the stored pointer itself is initialized.
+        let result = unsafe { ObjectRef::try_read_unchecked(&source) };
+        assert!(matches!(result, Err(ObjectCodecError::OwnerUnavailable(id)) if id == arena_id));
+    }
 
-        assert!(
-            obj_ref.0.is_none(),
-            "Should return None for unregistered arena"
-        );
+    /// Independent recreation (not recovered originals): a real GC allocation
+    /// passes through the inert cross-arena wrapper without exposing its pointer.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn m1e_recreation_opaque_gc_transport() {
+        use dotnet_utils::gc::{CrossArenaRef, OpaqueObjectPtr, try_acquire_lease};
+        use gc_arena::{Arena, Rootable};
+        let arena = Arena::<Rootable![EmptyTestRoot]>::new(|_| EmptyTestRoot);
+        arena.mutate(|mc, _| {
+            let id = ArenaId::new(10_103);
+            register_arena(id, Arc::new(AtomicBool::new(false)));
+            let allocation = Gc::new(
+                mc,
+                ThreadSafeLock::new(ObjectInner::new(
+                    HeapStorage::Str(crate::string::CLRString::from("transport")),
+                    id,
+                )),
+            );
+            let lease = try_acquire_lease(id).expect("registered owner");
+            // SAFETY: F11.ObjectPointerThreadSafe — This pointer comes directly
+            // from Gc::as_ptr for the required ThreadSafeLock<ObjectInner> type.
+            let ptr = unsafe { OpaqueObjectPtr::from_raw(Gc::as_ptr(allocation).cast()) };
+            // SAFETY: F1.ArenaGenerationMatch — The lease identifies the owner
+            // registered just above, which allocated this object in this arena.
+            let reference = unsafe { CrossArenaRef::new(lease.identity(), ptr) };
+            drop(lease);
+            let returned = std::thread::spawn(move || reference).join().unwrap();
+            let lease = dotnet_utils::gc::try_acquire_lease_for_identity(returned.identity())
+                .expect("same owner registration");
+            // SAFETY: F1.GcHandleRooted — No collection can run during this
+            // mutation; the live allocation belongs to this arena and the exact
+            // owner lease is held. The worker never accesses the pointer.
+            let object = unsafe { ObjectPtr::from_raw(returned.ptr().as_ptr().cast()) }.unwrap();
+            assert_eq!(object.owner_id(), id);
+            assert_eq!(object.as_ptr(), Gc::as_ptr(allocation).cast());
+            drop(lease);
+            unregister_arena(id);
+        });
     }
 
     #[cfg(feature = "multithreading")]

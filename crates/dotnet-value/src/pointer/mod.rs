@@ -585,8 +585,10 @@ impl<'gc> ManagedPtr<'gc> {
                 }
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)?;
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin retains the caller's rooting contract for this scoped access.
+                let ptr = unsafe { origin.object_ptr() };
                 if allow_short {
                     ptr.with_data_up_to(offset, size, f)
                 } else {
@@ -614,7 +616,7 @@ impl<'gc> ManagedPtr<'gc> {
         match &self.origin {
             PointerOrigin::Heap(_) => self.try_with_heap_data(size, false, f),
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, _) => self.try_with_heap_data(size, false, f),
+            PointerOrigin::CrossArenaObjectRef(_) => self.try_with_heap_data(size, false, f),
             _ => {
                 // SAFETY: F10.RawMemoryAccessValid — Non-heap origins deliberately retain the
                 // pre-existing `with_data` behavior and its caller-provided validity contract.
@@ -646,7 +648,7 @@ impl<'gc> ManagedPtr<'gc> {
                     })
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, _) => self
+            PointerOrigin::CrossArenaObjectRef(_) => self
                 .try_with_heap_data(max_size, true, f)
                 .unwrap_or_else(|| {
                     panic!(
@@ -685,7 +687,7 @@ impl<'gc> ManagedPtr<'gc> {
                     )
                 }),
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, _) => self
+            PointerOrigin::CrossArenaObjectRef(_) => self
                 .try_with_heap_data(size, false, f)
                 .unwrap_or_else(|| {
                     panic!(
@@ -935,8 +937,10 @@ impl<'gc> ManagedPtr<'gc> {
                 handle.borrow().storage.observe_payload_base()
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-                let _lease = dotnet_utils::gc::try_acquire_lease(*tid)?;
+            PointerOrigin::CrossArenaObjectRef(origin) => {
+                let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())?;
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin retains the caller's rooting contract for this scoped access.
+                let ptr = unsafe { origin.object_ptr() };
                 ptr.as_heap_storage(|storage| storage.observe_payload_base())
             }
             _ => return self._value,
@@ -965,7 +969,7 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
         match &self.origin {
             PointerOrigin::Heap(_) => self.observe_address(),
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(_, _) => self.observe_address(),
+            PointerOrigin::CrossArenaObjectRef(_) => self.observe_address(),
             // Cached-address fallback for non-heap origins; Stack/Static migration
             // is M3. A Transient address alone does not retain its shared owner.
             _ => self._value,

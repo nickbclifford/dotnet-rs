@@ -576,6 +576,84 @@ fn reject_typed_reference_pinvoke_return() -> StepResult {
     )
 }
 
+/// Whether a by-value P/Invoke parameter or return type is a value type whose
+/// layout contains a ref field (a byref-like aggregate such as `Span<T>`).
+///
+/// VM storage gives every ref field the three-word managed-pointer encoding,
+/// while `layout_to_ffi` declares it as one native pointer. Passing such
+/// storage to libffi hands native code encoded words 0/1 (word 1 is a byte
+/// offset or, for cross-arena origins, the arena identity word), and native
+/// return bytes would be decoded as a managed pointer. ECMA-335 §II.15.5.4
+/// does not require managed pointers to be marshaled, so these signatures are
+/// rejected in every configuration instead. Top-level `ref` parameters
+/// (`ParameterType::Ref`) are unaffected: they marshal as one pinned or
+/// copied native pointer.
+fn is_byref_like_native_aggregate(
+    p_type: &ParameterType<MethodType>,
+    ctx: &dyn PInvokeContext<'_>,
+) -> Result<bool, TypeResolutionError> {
+    let ParameterType::Value(t) = p_type else {
+        return Ok(false);
+    };
+    let concrete = ctx.make_concrete(t)?;
+    Ok(match concrete.get() {
+        BaseType::Type {
+            value_kind: Some(ValueKind::ValueType),
+            source,
+        } => crate::marshal::type_to_layout(concrete.resolution(), source, ctx).has_ref_fields,
+        _ => false,
+    })
+}
+
+fn reject_byref_like_native_aggregate(what: &str) -> StepResult {
+    StepResult::Error(
+        ExecutionError::NotImplemented(
+            format!(
+                "P/Invoke {what} is a byref-like value type containing managed pointer fields; \
+                 marshaling ref fields across the native ABI is unsupported"
+            )
+            .into(),
+        )
+        .into(),
+    )
+}
+
+/// Reject byref-like aggregates in the signature before any argument is
+/// marshaled, pinned or copied, and before native code runs.
+fn preflight_byref_like_native_aggregates(
+    method: &MethodDescription,
+    ctx: &dyn PInvokeContext<'_>,
+) -> Result<(), StepResult> {
+    let signature = method.signature();
+    for (i, Parameter(_, p_type)) in signature.parameters.iter().enumerate() {
+        if is_byref_like_native_aggregate(p_type, ctx).map_err(|e| StepResult::Error(e.into()))? {
+            return Err(reject_byref_like_native_aggregate(&format!("argument {i}")));
+        }
+    }
+    if let Some(ret) = &signature.return_type.1
+        && is_byref_like_native_aggregate(ret, ctx).map_err(|e| StepResult::Error(e.into()))?
+    {
+        return Err(reject_byref_like_native_aggregate("return type"));
+    }
+    Ok(())
+}
+
+// Reject unguarded native escape before marshalling pins any earlier arguments.
+// TEMPORARY fail-closed restriction handed off to plan 01 M2 ("M2 handoff"): keep it until
+// native-call rooting, guard lifetime and callback/safepoint behavior are designed and tested.
+#[cfg(feature = "multithreading")]
+fn rejects_cross_arena_native_escape(value: &StackValue<'_>, is_ref: bool) -> bool {
+    match value {
+        StackValue::TypedRef(slot) => {
+            matches!(slot.value().origin(), PointerOrigin::CrossArenaObjectRef(_))
+        }
+        StackValue::ManagedPtr(ptr) => {
+            !is_ref && matches!(ptr.origin(), PointerOrigin::CrossArenaObjectRef(_))
+        }
+        _ => false,
+    }
+}
+
 fn external_call_impl<'gc>(
     ctx: &mut dyn PInvokeContext<'gc>,
     method: MethodDescription,
@@ -592,10 +670,12 @@ fn external_call_impl<'gc>(
         return reject_typed_reference_pinvoke_return();
     }
 
+    if let Err(e) = preflight_byref_like_native_aggregates(&method, ctx) {
+        return e;
+    }
+
     let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
     let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
-    #[cfg(feature = "multithreading")]
-    let mut cross_arena_guards = Vec::new();
 
     let arg_count = method.signature().parameters.len();
     // The former `peek_multiple(arg_count)` validated the complete range here,
@@ -605,6 +685,19 @@ fn external_call_impl<'gc>(
         ctx.top_of_stack().as_usize() >= arg_count,
         "Evaluation stack underflow"
     );
+
+    #[cfg(feature = "multithreading")]
+    for (i, Parameter(_, p_type)) in method.signature().parameters.iter().enumerate() {
+        let value = ctx.peek_stack_at(arg_count - 1 - i);
+        if rejects_cross_arena_native_escape(&value, matches!(p_type, ParameterType::Ref(_))) {
+            return StepResult::Error(
+                ExecutionError::InvalidCil(
+                    "cross-arena native pointer escape is unsupported".into(),
+                )
+                .into(),
+            );
+        }
+    }
 
     let res = method.resolution();
     let module = if !res.is_null() {
@@ -832,20 +925,15 @@ fn external_call_impl<'gc>(
                         );
                     }
                     #[cfg(feature = "multithreading")]
-                    PointerOrigin::CrossArenaObjectRef(ptr, _) => {
-                        // SAFETY: F10.BorrowedStorageStable — `ptr` is an owned cross-arena lock handle retained by the slot.
-                        let lock = unsafe { &*ptr.as_ptr() };
-                        let guard = lock.borrow();
-                        // SAFETY: F10.BorrowedStorageStable — The retained `guard` keeps the object storage live and immobile through the native call.
-                        // Observation uses the retained allocation base; the resulting address itself
-                        // retains no arena lease or guard and grants no access right. This guard is
-                        // retained separately in `cross_arena_guards`.
-                        let value = guard
-                            .storage
-                            .observe_address(p.byte_offset().as_usize())
-                            .map_or(std::ptr::null_mut(), NonNull::as_ptr);
-                        cross_arena_guards.push(guard);
-                        value
+                    PointerOrigin::CrossArenaObjectRef(_) => {
+                        // Cross-arena native-call lifetime and callbacks require M2. A
+                        // scoped lease cannot protect a pointer throughout arbitrary FFI.
+                        return StepResult::Error(
+                            ExecutionError::InvalidCil(
+                                "cross-arena typedrefs cannot escape to native code".into(),
+                            )
+                            .into(),
+                        );
                     }
                     _ => {
                         // SAFETY: F10.RawMemoryAccessValid — This keeps the legacy non-heap
@@ -921,6 +1009,15 @@ fn external_call_impl<'gc>(
                         Err(e) => return e,
                     };
                 } else {
+                    #[cfg(feature = "multithreading")]
+                    if matches!(p.origin(), PointerOrigin::CrossArenaObjectRef(_)) {
+                        return StepResult::Error(
+                            ExecutionError::InvalidCil(
+                                "cross-arena pointers cannot escape to native code".into(),
+                            )
+                            .into(),
+                        );
+                    }
                     if let Some(owner) = p.owner() {
                         ctx.pin_object(owner);
                         pinned_objects.push(owner);
@@ -934,9 +1031,9 @@ fn external_call_impl<'gc>(
                         // SAFETY: F10.RawMemoryAccessValid — The explicit Heap-owner branch
                         // observes the retained allocation base; that address itself is not a
                         // root/guard or access right. Its pin/guard is retained separately in
-                        // `local_guards`. Other origin variants keep their legacy forwarding
-                        // path here, including CrossArena. Transient clones share their owner;
-                        // CrossArena P/Invoke lease/guard handling remains M2, Stack/Static M3.
+                        // `local_guards`. Other accepted origin variants retain their legacy
+                        // forwarding path. CrossArena escape is rejected above; Transient
+                        // clones share their owner and Stack/Static remain M3.
                         unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
@@ -964,7 +1061,7 @@ fn external_call_impl<'gc>(
                     // and its guard remains in `local_guards`; the raw address itself does
                     // not provide that lifetime or an access right. Other origins retain the
                     // legacy caller-provided native-call validity contract. Transient clones
-                    // share their owner; CrossArena P/Invoke guards remain M2, Stack/Static M3.
+                    // share their owner; CrossArena escape is rejected, Stack/Static remain M3.
                     if let Err(e) = unsafe {
                         push_ptr_arg(
                             &mut temp_buffers,
@@ -985,24 +1082,6 @@ fn external_call_impl<'gc>(
                     )
                     .into(),
                 );
-            }
-            #[cfg(feature = "multithreading")]
-            StackValue::CrossArenaObjectRef(ptr, _) => {
-                // SAFETY: F10.BorrowedStorageStable — `ptr` is an owned non-null handle to the cross-arena lock cell created
-                // by the VM; taking a shared reference here does not outlive the handle.
-                let lock = unsafe { &*ptr.as_ptr() };
-                let guard = lock.borrow();
-                // SAFETY: F10.BorrowedStorageStable — The borrow guard keeps the object storage alive and immobile while this
-                // pointer is used by libffi.
-                let p = unsafe { guard.storage.raw_data_ptr() };
-                cross_arena_guards.push(guard);
-                // SAFETY: F10.BorrowedStorageStable — `cross_arena_guards` retains the borrow that keeps this object storage
-                // alive and immobile through the FFI call.
-                if let Err(e) = unsafe {
-                    push_ptr_arg(&mut temp_buffers, &mut arg_buffer_map, &mut arg_ptrs, i, p)
-                } {
-                    return e;
-                }
             }
         }
     }
@@ -1042,6 +1121,57 @@ use crate::call_types::apply_write_backs_with;
 mod tests {
     use super::*;
     use dotnet_types::error::MemoryAccessError;
+
+    /// Independent recreation (not recovered originals): native escape is
+    /// rejected before marshalling; ref arguments use the existing copy path.
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn m1g_recreation_native_escape_preflight() {
+        use dotnet_utils::{
+            ArenaId,
+            gc::{ThreadSafeLock, register_arena, try_acquire_lease, unregister_arena},
+            sync::{Arc, AtomicBool},
+        };
+        use dotnet_value::{
+            CLRString, HeapStorage, ObjectPtr, StackManagedPtr, TypedReferenceSlot,
+            object::ObjectInner,
+        };
+        let id = ArenaId::new(190_434);
+        register_arena(id, Arc::new(AtomicBool::new(false)));
+        let raw = Box::into_raw(Box::new(ThreadSafeLock::new(ObjectInner::new(
+            HeapStorage::Str(CLRString::from("x")),
+            id,
+        ))));
+        // SAFETY: F10.RawAllocationOwnership — the box stays live until test cleanup.
+        let ptr = unsafe { ObjectPtr::from_raw(raw) }.unwrap();
+        // SAFETY: F1.ArenaGenerationMatch; F10.RawAllocationOwnership — the live allocation belongs to the original registration.
+        let managed = unsafe {
+            ManagedPtr::new_cross_arena(
+                None,
+                dotnet_types::TypeDescription::NULL,
+                ptr,
+                &try_acquire_lease(id).unwrap(),
+                ByteOffset::ZERO,
+            )
+        };
+        let value = StackValue::ManagedPtr(StackManagedPtr::new(managed.clone()));
+        let typed = StackValue::TypedRef(TypedReferenceSlot::new(
+            StackManagedPtr::new(managed),
+            Arc::new(dotnet_types::TypeDescription::NULL),
+        ));
+        assert!(rejects_cross_arena_native_escape(&value, false));
+        assert!(!rejects_cross_arena_native_escape(&value, true));
+        assert!(rejects_cross_arena_native_escape(&typed, true));
+        assert!(!rejects_cross_arena_native_escape(
+            &StackValue::Int32(0),
+            false
+        ));
+        unregister_arena(id);
+        // SAFETY: F10.RawAllocationOwnership — no later accesses, uniquely owned box.
+        unsafe {
+            drop(Box::from_raw(raw));
+        }
+    }
 
     #[test]
     fn by_ref_write_back_propagates_managed_write_failures() {

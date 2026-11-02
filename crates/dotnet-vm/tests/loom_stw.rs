@@ -598,15 +598,19 @@ fn unregister_and_teardown(
 ) {
     // Production removes the entry under the `VALID_ARENAS` write lock, so no
     // new read-side acquisition can pass the lease increment after this.
-    let state = registry.state.write().take();
+    let state = {
+        let mut guard = registry.state.write();
+        let state = guard.take();
+        if let Some(state) = &state {
+            state.is_alive.store(false, Ordering::Release);
+        }
+        state
+    };
     let Some(state) = state else {
         return;
     };
 
-    // Production publishes teardown before waiting for outstanding leases.
-    // A held lease may consequently observe `is_alive == false` while its
-    // backing memory remains protected by the drain.
-    state.is_alive.store(false, Ordering::Release);
+    // The registry lock is released before the lease drain.
     teardown_published
         .send(state.generation)
         .expect("lease holder must observe teardown publication");

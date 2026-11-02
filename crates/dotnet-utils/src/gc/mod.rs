@@ -3,7 +3,7 @@ use gc_arena::{Collect, Mutation};
 use std::{marker::PhantomData, ops::Deref};
 
 #[cfg(feature = "multithreading")]
-use std::collections::HashSet;
+use std::{collections::HashSet, ptr::NonNull};
 
 #[cfg(feature = "multithreading")]
 pub mod arena;
@@ -19,11 +19,13 @@ pub use thread_safe_lock::{ThreadSafeLock, ThreadSafeReadGuard, ThreadSafeWriteG
 pub use arena::{ALLOCATION_THRESHOLD, ArenaHandle, ArenaHandleInner};
 #[cfg(feature = "multithreading")]
 pub use cross_arena::{
-    ArenaLease, ArenaState, STW_TRACING_GENERATION_SENTINEL, clear_tracing_state,
-    current_thread_holds_lease, get_currently_tracing, is_stw_in_progress,
-    is_valid_cross_arena_ref, record_cross_arena_ref, register_arena, reset_arena_registry,
-    set_currently_tracing, set_currently_tracing_with_stw, set_stw_in_progress,
-    take_found_cross_arena_refs_with_generation, try_acquire_lease, unregister_arena,
+    ArenaIdentity, ArenaLease, ArenaRegistration, ArenaRegistrationError, ArenaState,
+    RegistrationToken, TeardownOutcome, clear_tracing_state, current_thread_holds_lease,
+    get_currently_tracing, is_stw_in_progress, is_valid_cross_arena_ref, record_cross_arena_object,
+    record_cross_arena_ref, register_arena, registration_for_identity, reset_arena_registry,
+    set_currently_tracing, set_stw_in_progress, take_found_cross_arena_refs, try_acquire_lease,
+    try_acquire_lease_for_identity, try_acquire_lease_for_token, try_register_arena,
+    unregister_arena, unregister_arena_identity,
 };
 
 /// A handle to the GC mutation context.
@@ -164,24 +166,92 @@ impl From<i32> for GCHandleType {
     }
 }
 
+/// Inert, type-erased object pointer; this is neither an owner nor a GC root.
+/// Address equality and hashing do not establish liveness or arena identity.
 #[cfg(feature = "multithreading")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OpaqueObjectPtr(usize);
+pub struct OpaqueObjectPtr(NonNull<()>);
 
 #[cfg(feature = "multithreading")]
 impl OpaqueObjectPtr {
-    pub fn from_raw(ptr: *const ()) -> Self {
-        Self(ptr.expose_provenance())
+    /// Erase an object allocation pointer without exposing its provenance.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be non-null and identify a `Gc::as_ptr` allocation of the
+    /// runtime's `ThreadSafeLock<ObjectInner>` with usable allocation provenance.
+    /// No access is authorized by this wrapper: callers must separately
+    /// establish liveness, rooting, owner identity and synchronization before use.
+    pub unsafe fn from_raw(ptr: *const ()) -> Self {
+        Self(NonNull::new(ptr.cast_mut()).expect("object pointer must not be null"))
     }
 
+    /// Returns an inert raw pointer; dereferencing it requires its own proof.
     pub fn as_ptr(self) -> *const () {
-        std::ptr::with_exposed_provenance(self.0)
+        self.0.as_ptr()
+    }
+
+    /// Test-only: an address-only value that points at nothing.
+    ///
+    /// This deliberately does **not** satisfy [`Self::from_raw`]'s contract (it is not a
+    /// `Gc::as_ptr` allocation), so it is confined to this crate's tests and must only be
+    /// used for registry/buffer bookkeeping that compares or hashes the address. It must
+    /// never be converted back to an object pointer, dereferenced, or sent to marking.
+    #[cfg(test)]
+    pub(crate) fn address_only_for_tests(addr: usize) -> Self {
+        Self(NonNull::new(std::ptr::without_provenance_mut(addr)).expect("non-zero test address"))
+    }
+}
+
+// SAFETY: F11.ObjectPointerThreadSafe — Construction is restricted to pointers
+// to the runtime's ThreadSafeLock<ObjectInner>, whose Send + Sync bounds are
+// asserted in dotnet-value. The erased pointer is inert and exposes no safe
+// dereference; transport does not grant liveness, rooting or access permission.
+#[cfg(feature = "multithreading")]
+unsafe impl Send for OpaqueObjectPtr {}
+
+// SAFETY: F11.ObjectPointerThreadSafe — The same concrete pointee and inert-only
+// construction contract applies to sharing; all actual access needs independent
+// synchronization and liveness proofs.
+#[cfg(feature = "multithreading")]
+unsafe impl Sync for OpaqueObjectPtr {}
+
+/// Inert, generation-qualified object metadata. It does not root the object or
+/// hold a lease; a fresh exact-identity lease and a GC liveness protocol are
+/// required before any access. Never refresh an old pointer's identity by ID.
+#[cfg(feature = "multithreading")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CrossArenaRef {
+    identity: ArenaIdentity,
+    ptr: OpaqueObjectPtr,
+}
+
+#[cfg(feature = "multithreading")]
+impl CrossArenaRef {
+    /// Pair a pointer with its original arena registration.
+    ///
+    /// # Safety
+    ///
+    /// `identity` must be captured while a live lease protects the pointer's
+    /// original owner registration, or be the identity already captured for that
+    /// same origin. A lease on a later registration of the same ID is insufficient;
+    /// never refresh a stale pointer's identity from that registration.
+    pub unsafe fn new(identity: ArenaIdentity, ptr: OpaqueObjectPtr) -> Self {
+        Self { identity, ptr }
+    }
+
+    pub fn identity(self) -> ArenaIdentity {
+        self.identity
+    }
+
+    pub fn ptr(self) -> OpaqueObjectPtr {
+        self.ptr
     }
 }
 
 #[cfg(feature = "multithreading")]
 #[derive(Debug, Clone, Default)]
-pub struct MarkObjectPointers(HashSet<OpaqueObjectPtr>);
+pub struct MarkObjectPointers(HashSet<CrossArenaRef>);
 
 #[cfg(feature = "multithreading")]
 impl MarkObjectPointers {
@@ -193,22 +263,22 @@ impl MarkObjectPointers {
         Self(HashSet::with_capacity(capacity))
     }
 
-    pub fn insert(&mut self, ptr: OpaqueObjectPtr) -> bool {
-        self.0.insert(ptr)
+    pub fn insert(&mut self, reference: CrossArenaRef) -> bool {
+        self.0.insert(reference)
     }
 }
 
 #[cfg(feature = "multithreading")]
-impl FromIterator<OpaqueObjectPtr> for MarkObjectPointers {
-    fn from_iter<T: IntoIterator<Item = OpaqueObjectPtr>>(iter: T) -> Self {
+impl FromIterator<CrossArenaRef> for MarkObjectPointers {
+    fn from_iter<T: IntoIterator<Item = CrossArenaRef>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
 #[cfg(feature = "multithreading")]
 impl IntoIterator for MarkObjectPointers {
-    type Item = OpaqueObjectPtr;
-    type IntoIter = std::collections::hash_set::IntoIter<OpaqueObjectPtr>;
+    type Item = CrossArenaRef;
+    type IntoIter = std::collections::hash_set::IntoIter<CrossArenaRef>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -241,4 +311,81 @@ pub enum SweepPhaseCommand {
 pub enum GCCommand {
     Mark(MarkPhaseCommand),
     Sweep(SweepPhaseCommand),
+}
+
+#[cfg(all(test, feature = "multithreading"))]
+mod opaque_transport_recreation_tests {
+    use super::{
+        ArenaIdentity, CrossArenaRef, MarkObjectPointers, MarkPhaseCommand, OpaqueObjectPtr,
+    };
+    use crate::ArenaId;
+    use static_assertions::assert_impl_all;
+    use std::{collections::HashSet, ptr::NonNull};
+
+    assert_impl_all!(OpaqueObjectPtr: Send, Sync, Copy);
+    assert_impl_all!(CrossArenaRef: Send, Sync, Copy);
+
+    /// Independent recreation (not recovered originals): isolate the command
+    /// wrapper with a Box stand-in, not a GC object or a whole-VM test. No raw
+    /// address is exposed; only inert metadata crosses the worker thread.
+    #[test]
+    fn m1e_recreation_opaque_transport() {
+        let source = include_str!("mod.rs");
+        let wrapper = source
+            .split("pub struct OpaqueObjectPtr")
+            .nth(1)
+            .unwrap()
+            .split("pub struct MarkObjectPointers")
+            .next()
+            .unwrap();
+        assert!(
+            wrapper.contains("NonNull<()>")
+                && !wrapper.contains("expose_provenance")
+                && !wrapper.contains("with_exposed_provenance"),
+            "opaque command wrapper discards pointer provenance"
+        );
+
+        let raw = Box::into_raw(Box::new(0xA5u8));
+        // This private test fixture bypasses the object-only constructor. The
+        // stand-in is never interpreted as a GC object and remains live until
+        // its original owner reclaims it after the worker has joined.
+        let ptr = OpaqueObjectPtr(NonNull::new(raw.cast()).unwrap());
+        let identity = ArenaIdentity {
+            arena_id: ArenaId::new(123),
+            generation: 7,
+        };
+        let reference = CrossArenaRef { identity, ptr };
+        let different_generation = CrossArenaRef {
+            identity: ArenaIdentity {
+                generation: 8,
+                ..identity
+            },
+            ptr,
+        };
+        let mut set = HashSet::new();
+        assert!(set.insert(reference));
+        assert!(!set.insert(reference));
+        assert!(set.insert(different_generation));
+        let mut pointers = MarkObjectPointers::new();
+        assert!(pointers.insert(reference));
+        assert!(pointers.insert(different_generation));
+        assert!(!pointers.insert(reference));
+        let command = MarkPhaseCommand::Objects(pointers);
+        let (returned, command) = std::thread::spawn(move || (reference, command))
+            .join()
+            .unwrap();
+        assert_eq!(returned.identity(), identity);
+        let MarkPhaseCommand::Objects(pointers) = command else {
+            panic!("expected object command");
+        };
+        let transported: HashSet<_> = pointers.into_iter().collect();
+        assert_eq!(transported, HashSet::from([returned, different_generation]));
+        // SAFETY: F10.RawAllocationOwnership — The Box remains allocated and
+        // unaliased; the worker only moved inert metadata and has joined.
+        unsafe { returned.ptr().as_ptr().cast_mut().cast::<u8>().write(0x5A) };
+        // SAFETY: F10.RawAllocationOwnership — `raw` is the unique pointer
+        // returned by Box::into_raw, and it is reclaimed exactly once.
+        let value = unsafe { Box::from_raw(raw) };
+        assert_eq!(*value, 0x5A);
+    }
 }
