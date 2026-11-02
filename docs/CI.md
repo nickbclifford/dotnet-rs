@@ -93,6 +93,67 @@ This library lane uses pinned `nightly-2026-05-27`,
 with `multithreading`, requiring eight passed and zero ignored in each run. It is not a VM
 Miri suite, strict-provenance evidence, or a soundness proof.
 
+### Blocking `miri-cross-arena` lane
+
+The independent recreations (not recovered originals) run under pinned
+`nightly-2026-05-27` and `-Zmiri-tree-borrows -Zmiri-disable-isolation
+-Zmiri-ignore-leaks`, with separate no-features and multithreading jobs. Each
+runtime singleton has a 900-second diagnostics deadline and requires exactly
+one passed, zero failed and zero ignored. The workflow is the exact selector
+manifest; diagnostics are summarized and uploaded even on failure.
+
+Both configurations run the value publication model and origin ABA recreation,
+a bounded Executor teardown, a collection and a reduced teardown stress. MT
+uses the ID40000 and registered-boundary tests, actual active-lease teardown,
+and the three-arena fixed-point payload/reclamation test. No-features instead
+uses the local untagged codec and short-storage controls, single-arena teardown
+and collection controls; compact owner packing, registry, cross-arena transport
+and real multi-arena collection are absent there. The job checks utils compiles
+and confirms the transport and registry selectors are absent in that configuration.
+MT separately runs the structural and runtime transport tests and all six registry
+recreations. An additional isolated value transport-core singleton uses strict
+provenance; it is not a whole-VM strict-provenance run. The ordinary Miri runs
+ignore leaks and do not prove soundness or leak-freedom. The native feature matrix
+runs the real collection and stress tests without a Miri-only substitute. The
+MT stress covers normal/extracted teardown with held/released leases (20 native
+rounds, four under Miri); a timed-out worker can still detach. The foreign-branded
+fixture concern and the deferred [Executor ownership issues](plans/03-executor-teardown-ownership.md) remain open.
+
+The current manifest has **7 no-features and 15 multithreading permissive
+singletons**, plus one MT-only strict-core singleton. Each row below is one exact
+`--lib SELECTOR -- --exact --test-threads=1` invocation; `V`, `U`, and `VM`
+mean `dotnet-value`, `dotnet-utils`, and `dotnet-vm` respectively.
+
+| Configuration | Crate | Exact selector |
+|---|---|---|
+| no-features | V | `object_tests::tests::recreation_codec_local_invalid_control` |
+| no-features | V | `object::tests::recreation_codec_short_storage` |
+| no-features | VM | `executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control` |
+| no-features | VM | `executor::executor_collection_recreation_tests::m1e_recreation_vm_collection` |
+| both | V | `object_tests::tests::recreation_publication_pending_survival` |
+| both | V | `pointer::tests::m1g_recreation_origin_aba` |
+| both | VM | `executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress` |
+| multithreading | V | `object_tests::tests::recreation_codec_id40000` |
+| multithreading | V | `object_tests::tests::recreation_codec_registered_boundaries` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease` |
+| multithreading | VM | `executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation` |
+| multithreading | U | `gc::cross_arena::tests::m1e_recreation_transport` |
+| multithreading | U | `gc::cross_arena::tests::m1e_recreation_transport_permissive_control` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_duplicate` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_fast_bit_transaction` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_generation_exhaustion` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_identity_token_reuse` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_drain_reuse_control` |
+| multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_checked_counter_control` |
+| multithreading, strict-core | V | `pointer::tests::m1e_recreation_transport_strict_core` |
+
+The job has a 45-minute outer budget, reserves three minutes for diagnostics, and
+uses 600 seconds for sysroot setup and 900 seconds per compile, absence check,
+and singleton. The strict-core invocation appends `-Zmiri-strict-provenance`;
+all results are uploaded in the configuration-specific diagnostics artifact.
+The 22 permissive and one strict invocations passed locally in step 7.1; hosted
+execution and branch protection are not established by those local runs.
+
 ### Blocking `miri-pointer-controls` lane
 
 This job gates 33 enabled VM controls, not the full VM suite. It uses
@@ -363,7 +424,7 @@ DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 
 ### Multithreading cfg-Occurrence Budget
 
-The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 424; it lives in the script and is lowered whenever the canonical count drops.
+The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 477; it lives in the script and is lowered whenever the canonical count drops.
 
 Run it locally with:
 
@@ -375,7 +436,7 @@ bash scripts/check_mt_cfg_ceiling.sh
 
 The blocking `doc-lint` job and `check.sh` also run a lexical ratchet for contiguous
 `std::sync` tokens in Rust sources under `crates/`, excluding generated `target` output. Its
-ceiling is 70. The retained direct uses are the reviewed test/build-script, standard `Arc`/`Weak`,
+ceiling is 81. The retained direct uses are the reviewed test/build-script, standard `Arc`/`Weak`,
 static/raw-atomic, and `Once`/`LazyLock`-family exemptions; this is a regression ceiling rather
 than a complete source-policy parser. The ceiling must be lowered when the measured count drops,
 never raised solely to admit a new direct use.

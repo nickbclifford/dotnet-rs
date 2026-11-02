@@ -122,7 +122,10 @@ synchronous operation. Address observation alone retains no access guard or root
 do not replace range, provenance, rooting or synchronization requirements, and leases must end
 before safepoint parking. Stack-home relocation, final codecs/layout and the shared-memory protocol
 remain future work. See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access)
-for the scoped M1d results and boundaries.
+for the scoped M1d results and boundaries. Cross-arena origins retain registration identity;
+GC transport retains the pointer and publishes owner roots through a root barrier. Neither
+identity nor a lease roots the object, and compact `ObjectRef` decoding retains its unsafe
+live-original-allocation obligation. Final M1e/M1g acceptance remains open.
 
 ### Frame-local `localloc` storage
 

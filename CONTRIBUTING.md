@@ -117,6 +117,9 @@ MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
 ```
 
+The separate blocking cross-arena singleton lane and its exact feature-specific selectors are
+documented in [`docs/CI.md`](docs/CI.md); its isolated strict-core test is not whole-VM strict signoff.
+
 ### `dotnet-vm` unsafe-gate advisory signoff
 
 For `dotnet-vm` changes that add or modify `unsafe`, the accepted local advisory invocations

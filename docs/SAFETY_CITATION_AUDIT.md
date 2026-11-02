@@ -2,6 +2,9 @@
 
 **Status:** completed 2026-08-31. This preserves the pre-edit mapping for every uncited package-owned `// SAFETY:` comment identified at the start of this phase: 223 production `src/` sites and seven bench/test sites. Each row was assigned from the comment’s local prose and the immediately justified unsafe operation, rather than from crate membership.
 
+This is a historical pre-edit snapshot, not a current contract or current source map. See the
+[Invariant Registry](INVARIANT_REGISTRY.md) and [cross-arena contract](GC_AND_MEMORY_SAFETY.md#cross-arena-reference-tracking) for current predicates and limitations.
+
 **Disposition vocabulary:** an existing predicate is named directly; **new predicate needed** is limited to the ISA precondition; **Plan 06 trust candidate** is limited to external P/Invoke ABI/library trust; **premise repair required** must be repaired before a citation is added.  The proposed F11 candidates are deliberately not represented by F10 raw-memory predicates.
 
 | Site | Local SAFETY claim (verbatim) | Pre-edit mapping |

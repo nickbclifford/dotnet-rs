@@ -150,9 +150,10 @@ keeps a lease across the synchronous block operation, but must be dropped before
 parks at a safepoint. The ordinary P/Invoke cross-arena path is still an M2 boundary.
 
 A lease is not a payload lock, GC root, range check, or shared-memory ordering protocol. M4 must
-still define synchronization for overlapping raw, locked, atomic and static accesses; M1g must
-address arena-ID reuse because ordinary pointer origins carry no recorded generation. The scoped
-M1d teardown tests do not establish those broader properties; see [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access).
+still define synchronization for overlapping raw, locked, atomic and static accesses. Ordinary
+cross-arena origins retain their registration identity and token, and exact-identity leases reject
+ID reuse; this does not establish object rooting or the broader shared-memory properties. The scoped
+M1d teardown tests do not establish those properties; see [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access).
 
 ## Monitor Synchronization (`sync/`)
 
@@ -314,12 +315,9 @@ During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObject
 ### Cross-Arena References (`record_found_cross_arena_refs`)
 In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
 
-Cross-arena discovery uses lease-guarded generation stamps:
+Cross-arena discovery transports `CrossArenaRef`: the retained raw pointer and exact registration identity, not a reconstructed numeric address. Producers capture identity under a lease or carry the existing origin identity; harvest reacquires an exact lease. The owner checks its original identity and a live exact lease before installation, and publishes roots via `mutate_root`. A lease prevents teardown, not object collection.
 
-- Recording path acquires `ArenaLease` with `try_acquire_lease(target_id)`.
-- The discovered pointer is recorded as `(target_id, ptr, generation)`.
-- Harvest path reacquires a lease and compares generations before dereference.
-- `unregister_arena` waits for outstanding leases, so in-flight dereferences cannot race arena teardown.
+On the tested ordinary paths, Executor and extracted `ArenaGuard` retain their arena through owner-registration removal and lease drain before freeing it. Draining happens without a registry/coordinator lock or TLS `RefCell` borrow. A same-thread held lease would deadlock drain, so the ordinary path leaks the arena; leases must not be held across safepoint parking. The normal teardown ordering was confirmed before repair, and stress covers held/released leases. The extracted-Executor TLS collision and panic safety remain open in [plan 03](plans/03-executor-teardown-ownership.md); these paths do not establish a universal teardown guarantee.
 
 ### Thread-Local Storage Patterns
 - `THREAD_ARENA`: A thread-local `RefCell<Option<GCArena>>` storing the thread's local GC heap. Used to execute GC commands without lock contention.

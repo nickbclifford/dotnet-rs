@@ -64,7 +64,7 @@ Independent pre-repair recreations (not recovered pass-1 tests) showed native Tr
 
 A controlled multithreading cross-arena teardown produced a pre-repair Miri use-after-free; post-repair Miri tests passed for rejection after unregister and an in-flight closure protected by a lease. `RetainedPtr` holds a cross-arena lease for synchronous block operations. The byte Fill fast path was repaired after a controlled reproduction of its observation-to-access gap, but end-to-end reachability remains unconfirmed. A one-byte direct-static p36 access after forced collection passed in both configurations, refuting that particular allocation-lifetime hypothesis, not proving the nested resolver or synchronization safe. p12 instead hit a four-byte alignment `debug_assert` in both configurations: not Miri UB and not a teardown proof. p35 passed post-repair in both configurations; its pre-repair exception type-resolution failure was not a Miri UB report, and its snapshot read does not prove stack-home write-through.
 
-The current catalog has **39 entries: 33 blocking controls and 6 diagnostic-only probes** in 17 shards. All 33 controls passed in both configurations in the final pinned-Miri sweep; p35 joins p34 in shard 16 and p36 is in shard 17. Library M1d selectors and cross-arena tests also passed in their applicable configurations. See the [M1d inventory](INVENTORY.md#m1d-baseline-and-outcomes) for commands, counts, times and evidence limits. These are filtered permissive Tree Borrows results, not strict-provenance evidence or a soundness proof.
+The catalog has **39 entries: 33 blocking controls and 6 diagnostic-only probes**. All 33 controls passed in both configurations in the historical paired-shard pinned-Miri sweep, where p35 joined p34 in shard 16 and p36 was in shard 17. The current lane uses 33 singleton shards per configuration; see the [CI manifest](../CI.md#blocking-miri-pointer-controls-lane). Library M1d selectors and cross-arena tests also passed in their applicable configurations. See the [M1d inventory](INVENTORY.md#m1d-baseline-and-outcomes) for commands, counts, times and evidence limits. These are filtered permissive Tree Borrows results, not strict-provenance evidence or a soundness proof.
 
 ## Repaired heap paths and remaining boundaries
 
@@ -73,7 +73,7 @@ M1a repaired heap `ManagedPtr::with_data` to validate checked ranges against act
 Remaining obligations, not fixed by the scoped M1d work, include:
 
 - **M3:** p09 stack-home relocation, Stack/Static observation and stack fallback, final pointer codecs and struct layout, and static `GuestBlock` alignment (p12); p36 addresses only the tested static allocation lifetime.
-- **M1e/M1g:** GC transport, root publication and arena-ID/generation identity. A lease does not itself establish a GC root, range, synchronization or an origin's generation.
+- **M1e/M1g:** Retained GC transport, root publication and generation-qualified identity are implemented, but acceptance remains open. In particular, [plan 03](../plans/03-executor-teardown-ownership.md) owns the extracted-Executor collision and panic-safety/ownership gaps. A lease does not itself establish a GC root, range or synchronization.
 - **M4:** a shared-memory/atomic protocol, including overlapping and static/raw accesses.
 - **M2:** P/Invoke pin/guard lifetime, cross-arena access, ABI and return/copy semantics.
 - **M1f/M5:** block-operation count width, complete ranges, barriers/rooting and `cpblk`/`initblk`/`Memmove` yield/resumption; negative-index exception behavior also remains open.

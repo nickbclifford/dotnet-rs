@@ -29,7 +29,8 @@ Hard gates carried from the design (see its "Remaining risks and hard gates"):
 
 1. **Foreign-arena lifetime / root publication.** MT native registrations stay disabled until plan 01
    M1e/M1g supply root publication and arena identity; no fabricated cross-arena brand or long-held
-   `ArenaLease`.
+   `ArenaLease`. Plan 01 describes the [bounded identity and publication contract](01-pointer-provenance.md);
+   its M1e/M1g acceptance and the native-specific tests below remain gates, not permission to enable MT registrations.
 2. **Real SEH integration.** Two-pass search, filters, finally ordering, `HandlerUnwinds` and suspended
    frame restoration need VM conformance tests (stage 2.5) before native work runs in those contexts.
 3. **Cost and eligibility.** Non-suspending intrinsics gain zero poll/region/allocation work; the batched

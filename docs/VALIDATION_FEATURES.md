@@ -58,6 +58,11 @@ If you are working on the type system or generics.
 cargo test -p dotnet-cli --features generic-constraint-validation
 ```
 
+Compact cross-arena `ObjectRef` owner/address limits, unsigned ID decoding and checked VM ID
+exhaustion are enforced in release, independent of `memory-validation`. Exact identity checks
+are not a substitute for rooting or the unsafe live-original-allocation contract; magic/arena
+validation diagnostics cannot safely validate a stale pointer. See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#cross-arena-reference-tracking).
+
 ## CI Leg Mapping
 
 The CI pipeline (`.github/workflows/ci.yml`) does not hardcode named legs. Instead, a single
@@ -88,9 +93,10 @@ explicit workflow lanes and are not represented by `SHARED_FEATURE_MATRIX`.
 | `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` test suite with default features (multithreading), plus no-default-features selectors `pointer::tests::m1a_` (3 tests), `pointer::tests::m1b_` (8 tests), and `pointer::tests::m1d_` (11 tests) | Blocking full value-crate Miri coverage in the default configuration. The no-features selectors cover exactly the three M1a, eight M1b and eleven M1d library regressions, not the full crate; none is a VM gate; multithreading-only cross-arena tests are covered by the full default-feature suite. |
 | `miri-frame-blocks` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `raw_block::` in `dotnet-utils` and `frame_alloc::` in `dotnet-vm-data`, each in no-features and multithreading configurations; 15-minute timeout | Blocking library tests: each raw-block run requires 7 passed and each frame-allocation run 8 passed, all with 0 ignored; the latter includes frame suspension/restoration. This is not VM Miri coverage, does not establish strict provenance, and is not a soundness proof. |
 | `miri-owner-retention` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `dotnet-vm-data` `stack::tests::m1d_` in no-features and multithreading; 15-minute timeout | Each library selector requires 8 passed and 0 ignored; not a VM Miri suite, strict-provenance evidence, or a soundness proof. |
-| `miri-pointer-controls` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `--no-default-features` with and without `--features multithreading`; seventeen guarded shards per configuration | Thirty-three enabled exact VM controls: shard 1 p00/p02; 2 p03/p05; 3 p07/p11; 4 p10/p20; 5 p13/p14; 6 p16/p_null; 7 p06/p08; 8 p17/p18; 9 p21/p22; 10 p23/p24; 11 p25/p26; 12 p27/p28; 13 p04/p29; 14 p30/p31; 15 p32/p33; 16 p34/p35; 17 p36. Six diagnostic-only probes are not executed by CI. This is a filtered permissive Tree Borrows lane, not a full VM Miri suite, strict-provenance validation, or proof of runtime soundness. |
+| `miri-pointer-controls` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; permissive Tree Borrows, disable-isolation and ignore-leaks; no-features and multithreading; 33 singleton shards per configuration | Each shard requires one passing VM control and zero ignored. Six diagnostic-only probes are not executed by CI. This is not a full VM Miri suite, strict-provenance validation, leak-freedom or a soundness proof; see [CI](CI.md) for the catalog. |
+| `miri-cross-arena` in `ci.yml` | Yes | Pinned nightly and permissive flags as above; 7 no-features and 15 MT exact singleton invocations, plus one MT isolated strict-core singleton; 45-minute jobs, 900-second per-test deadlines | Each requires 1 passed/0 failed/0 ignored. Utils registry/transport selectors are cfg-absent without MT. Includes library models and real VM collection/teardown recreations; the foreign-brand fixture concern remains unresolved. See the [exact manifest and limitations](CI.md). |
 | `miri` matrix in `miri.yml` | No (`continue-on-error`) | Pinned `nightly-2026-05-27`; VM entries use `jmp_tests tail_calls fault_tests` substring filters in no-features and multithreading configurations | Existing advisory VM unsafe-gate runs remain unchanged; their bounded filters do not establish whole-VM coverage. Other crate entries are also advisory. |
-| Strict-provenance Miri | No job | None | No current CI job uses `-Zmiri-strict-provenance`; do not infer strict coverage from the four blocking Miri jobs. |
+| Strict-provenance Miri | Scoped blocking singleton | MT isolated transport core in `miri-cross-arena` | This isolated test is not strict-provenance validation of the VM or other paths. |
 
 The following tests are conditionally ignored under `memory-validation` because their deliberate
 managed-pointer offsets trigger its debug bounds trap:
