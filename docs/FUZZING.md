@@ -20,7 +20,7 @@ The advisory Fuzz workflow builds cargo-fuzz 0.13.1 with Rust 1.95.0 and `--lock
 Follow the [test hierarchy](CI.md#test-hierarchy-and-migration). Replay affected tracked corpora
 before accepting relevant changes; shared infrastructure selects broadly and full sweeps retain
 all assigned corpora. Duration-based fuzzing runs on a schedule or to investigate a named issue.
-The advisory Fuzz workflow runs only on its daily schedule and manual dispatch, not on push/PR; selection of corpus replay by changed path is pending, and `fuzz-corpus-replay` in `ci.yml` waits for `fast-core`. Preserve execution/count
+The advisory Fuzz workflow runs only on its daily schedule and manual dispatch, not on push/PR; `fuzz-corpus-replay` in `ci.yml` waits for `fast-core` and runs only the targets `select-deep` chooses from the changed paths (value-closure changes select all four; VM-only changes select `fuzz_executor`; the nightly and manual full sweeps run all four). Preserve execution/count
 guards and promote triaged crashes to useful regressions. Advisory green does not close a crash.
 
 ## Prerequisites

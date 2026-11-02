@@ -128,8 +128,10 @@ Follow the [test hierarchy](docs/CI.md#test-hierarchy-and-migration): fast core 
 PR, selected deep checks before accepting affected changes, full sweeps on a schedule and for
 broad architectural changes, and investigations for named uncertainties. Advisory Miri, fuzz-campaign and Valgrind
 workflows no longer run on push/PR (nightly and manual dispatch only), and `ci.yml` starts its
-deep Miri and corpus-replay jobs only after the `fast-core` aggregate succeeds. Test selection
-is still pending.
+deep Miri and corpus-replay jobs only after the `fast-core` aggregate succeeds, and only for
+lanes `scripts/ci_select.py` selects from the changed paths (unrecognized paths select everything;
+a nightly `schedule` run and `workflow_dispatch` with `full` run every lane). Most runtime changes
+still run all pointer shards; amortizing their discovery and build is a later step.
 
 During iteration use focused native tests/lints and relevant unsafe/lifecycle controls. At the
 completion of a coherent code outcome, run the current integration command once:
@@ -168,7 +170,7 @@ MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
 ```
 
-The separate blocking cross-arena singleton lane and its exact feature-specific selectors are
+The separate blocking cross-arena singleton lane (selected by changed paths, like the other deep lanes) and its exact feature-specific selectors are
 documented in [`docs/CI.md`](docs/CI.md); its isolated strict-core test is not whole-VM strict signoff.
 
 ### VM unsafe checks
@@ -203,7 +205,7 @@ This does not imply strict-provenance coverage or a soundness proof.
 
 Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchains. Build
 cargo-fuzz 0.13.1 with stable Rust 1.95.0 and `--locked`; target compilation and execution use
-`nightly-2026-05-27`. Current CI runs all four replays as pipeline-failing gates. Under the
+`nightly-2026-05-27`. Current CI runs the selected replays (all four on the nightly and manual full sweeps) as pipeline-failing gates. Under the
 agreed hierarchy, select affected corpora before acceptance and keep all four in full sweeps.
 Changes to shared pointer/executor infrastructure select broadly. These direct commands are
 references; use the guarded runner for acceptance:

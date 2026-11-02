@@ -1,11 +1,21 @@
 name: CI
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Keyed by event too so a nightly or manual full sweep on main is not cancelled
+  # by (and does not cancel) the selected run a push to main starts.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 on:
   workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run every deep lane (true), or select by paths changed since origin/main (false)'
+        type: boolean
+        default: true
+  schedule:
+    # Nightly full sweep; offset from fuzz 00:00, Miri 02:00 and Valgrind 04:00 UTC.
+    - cron: '0 6 * * *'
   push:
     branches: [ main, master ]
   pull_request:
@@ -16,6 +26,75 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Chooses which deep lanes run (see scripts/ci_select.py and docs/CI.md). Fail-safe:
+  # the fallback step is first and its full-sweep outputs are used whenever the
+  # checkout or selector step does not produce its own, so a selector failure can
+  # only select MORE, never fewer, deep checks.
+  select-deep:
+    name: Select deep checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.select.outputs.mode || steps.fallback.outputs.mode }}
+      cross_arena: ${{ steps.select.outputs.cross_arena || steps.fallback.outputs.cross_arena }}
+      pointer_controls: ${{ steps.select.outputs.pointer_controls || steps.fallback.outputs.pointer_controls }}
+      fuzz_any: ${{ steps.select.outputs.fuzz_any || steps.fallback.outputs.fuzz_any }}
+      fuzz_matrix: ${{ steps.select.outputs.fuzz_matrix || steps.fallback.outputs.fuzz_matrix }}
+      reason_cross_arena: ${{ steps.select.outputs.reason_cross_arena || steps.fallback.outputs.reason_cross_arena }}
+      reason_pointer_controls: ${{ steps.select.outputs.reason_pointer_controls || steps.fallback.outputs.reason_pointer_controls }}
+      reason_fuzz: ${{ steps.select.outputs.reason_fuzz || steps.fallback.outputs.reason_fuzz }}
+    steps:
+      # Keep this fuzz_matrix literal equal to `scripts/ci_select.py --full`
+      # (test_ci_select.py enforces it).
+      - id: fallback
+        run: |
+          reason='full sweep: selector did not run or failed; defaulting to every deep lane'
+          {
+            echo 'mode=full'
+            echo 'cross_arena=true'
+            echo 'pointer_controls=true'
+            echo 'fuzz_any=true'
+            echo 'fuzz_matrix={"include":[{"target":"fuzz_managed_ptr_roundtrip","working-directory":"crates/dotnet-value","corpus":"fuzz/corpus/fuzz_managed_ptr_roundtrip","fuzz-workspace":"crates/dotnet-value/fuzz"},{"target":"fuzz_managed_ptr_offset","working-directory":"crates/dotnet-value","corpus":"fuzz/corpus/fuzz_managed_ptr_offset","fuzz-workspace":"crates/dotnet-value/fuzz"},{"target":"fuzz_raw_memory_access","working-directory":"crates/dotnet-value","corpus":"fuzz/corpus/fuzz_raw_memory_access","fuzz-workspace":"crates/dotnet-value/fuzz"},{"target":"fuzz_executor","working-directory":"crates/dotnet-vm/fuzz","corpus":"corpus/fuzz_executor","fuzz-workspace":"crates/dotnet-vm/fuzz"}]}'
+            echo "reason_cross_arena=$reason"
+            echo "reason_pointer_controls=$reason"
+            echo "reason_fuzz=$reason"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          fetch-depth: 0
+      - id: select
+        continue-on-error: true
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          DISPATCH_FULL: ${{ inputs.full }}
+        run: |
+          case "$EVENT" in
+            pull_request)
+              # Merge-base diff: what the PR introduces, not what landed on the base since.
+              python3 scripts/ci_select.py --base "$PR_BASE" --head "$PR_HEAD" --range pr ;;
+            push)
+              # Direct diff from the previous branch tip to the new one: every change the push brought in.
+              python3 scripts/ci_select.py --base "$PUSH_BEFORE" --head "$PUSH_AFTER" --range push ;;
+            workflow_dispatch)
+              if [ "$DISPATCH_FULL" = false ]; then
+                python3 scripts/ci_select.py --base origin/main --head HEAD --range pr
+              else
+                python3 scripts/ci_select.py --full
+              fi ;;
+            *)
+              python3 scripts/ci_select.py --full ;;
+          esac
+      - name: Report selector fallback
+        if: ${{ steps.select.outcome != 'success' }}
+        run: |
+          echo "::warning::deep check selection failed; running every deep lane"
+          echo "### Deep check selection: FALLBACK to full sweep (selector did not run or failed)" >> "$GITHUB_STEP_SUMMARY"
+
   doc-lint:
     name: Documentation and Source Policy Checks
     runs-on: ubuntu-latest
@@ -29,6 +108,8 @@ jobs:
         run: cargo run --quiet -p xtask -- verify-slots
       - name: Test pointer diagnostic guards
         run: bash -n scripts/pointer_provenance.sh && python3 scripts/tests/test_pointer_provenance.py
+      - name: Test deep-check selector
+        run: python3 scripts/tests/test_ci_select.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links
@@ -515,7 +596,10 @@ jobs:
   # Independent recreations (not recovered originals); each invocation is guarded.
   miri-cross-arena:
     name: Miri cross-arena (${{ matrix.configuration }})
-    needs: [fast-core]
+    needs: [fast-core, select-deep]
+    # No status function, so GitHub ANDs success(): fast-core and select-deep must both
+    # succeed. `!= 'false'` makes a missing selection output run the lane, not skip it.
+    if: needs.select-deep.outputs.cross_arena != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -629,7 +713,8 @@ jobs:
 
   miri-pointer-controls:
     name: Miri pointer controls (${{ matrix.configuration }}, shard ${{ matrix.shard }})
-    needs: [fast-core]
+    needs: [fast-core, select-deep]
+    if: needs.select-deep.outputs.pointer_controls != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -707,7 +792,9 @@ jobs:
 
   fuzz-corpus-replay:
     name: Fuzz ${{ matrix.target }} Corpus
-    needs: [fast-core]
+    needs: [fast-core, select-deep]
+    # An empty matrix is an Actions error, so fuzz_any must gate the job.
+    if: needs.select-deep.outputs.fuzz_any != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -718,24 +805,8 @@ jobs:
       CI_DIAG_TOOLCHAIN: nightly-2026-05-27
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - target: fuzz_managed_ptr_roundtrip
-            working-directory: crates/dotnet-value
-            corpus: fuzz/corpus/fuzz_managed_ptr_roundtrip
-            fuzz-workspace: crates/dotnet-value/fuzz
-          - target: fuzz_managed_ptr_offset
-            working-directory: crates/dotnet-value
-            corpus: fuzz/corpus/fuzz_managed_ptr_offset
-            fuzz-workspace: crates/dotnet-value/fuzz
-          - target: fuzz_raw_memory_access
-            working-directory: crates/dotnet-value
-            corpus: fuzz/corpus/fuzz_raw_memory_access
-            fuzz-workspace: crates/dotnet-value/fuzz
-          - target: fuzz_executor
-            working-directory: crates/dotnet-vm/fuzz
-            corpus: corpus/fuzz_executor
-            fuzz-workspace: crates/dotnet-vm/fuzz
+      # Entries chosen by scripts/ci_select.py; its FUZZ_ENTRIES hold the full list.
+      matrix: ${{ fromJSON(needs.select-deep.outputs.fuzz_matrix) }}
     steps:
       - name: Start diagnostics budget
         run: |
@@ -851,15 +922,18 @@ jobs:
           echo "All fast-core jobs succeeded."
 
   # Deep-layer aggregate. Distinguishes "not executed because fast-core did not
-  # succeed" from an attempted deep check that failed. Not a required check yet.
+  # succeed" from an attempted deep check that failed, and reads select-deep so a
+  # lane that was not selected may be skipped while a selected lane must succeed.
+  # Anything other than an explicit 'false' selection output counts as selected.
+  # Not a required check yet.
   deep-safety:
     name: Deep safety
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [fast-core, miri-cross-arena, miri-pointer-controls, fuzz-corpus-replay]
+    needs: [fast-core, select-deep, miri-cross-arena, miri-pointer-controls, fuzz-corpus-replay]
     steps:
-      - name: Require every needed job to succeed
+      - name: Require every selected deep job to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
@@ -868,10 +942,39 @@ jobs:
             echo "::error::deep-safety NOT EXECUTED: fast-core result was '$fast', so deep jobs were skipped; this is not a deep-check failure."
             exit 1
           fi
-          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS_JSON")
-          if [ -n "$bad" ]; then
-            echo "::error::deep-safety failed; attempted deep jobs not successful:"
-            echo "$bad"
+          selector=$(jq -r '.["select-deep"].result' <<<"$NEEDS_JSON")
+          if [ "$selector" != "success" ]; then
+            echo "::error::deep-safety failed: select-deep result was '$selector', so the required deep lanes are unknown."
             exit 1
           fi
-          echo "All deep-safety jobs succeeded."
+          mode=$(jq -r '.["select-deep"].outputs.mode' <<<"$NEEDS_JSON")
+          echo "Deep check selection mode: $mode"
+          failed=0
+          check_lane() {
+            local lane="$1" job="$2" selected="$3" reason="$4" result
+            result=$(jq -r --arg job "$job" '.[$job].result' <<<"$NEEDS_JSON")
+            if [ "$selected" != "false" ]; then
+              if [ "$result" = "success" ]; then
+                echo "$lane: success (selected: $reason)"
+              else
+                echo "::error::$lane: selected ($reason) but job result was '$result'"
+                failed=1
+              fi
+            elif [ "$result" = "skipped" ]; then
+              echo "$lane: not required ($reason)"
+            elif [ "$result" = "success" ]; then
+              echo "$lane: not selected but ran and succeeded ($reason)"
+            else
+              echo "::error::$lane: not selected ($reason) but job result was '$result'"
+              failed=1
+            fi
+          }
+          sel() { jq -r --arg k "$1" '.["select-deep"].outputs[$k]' <<<"$NEEDS_JSON"; }
+          check_lane "Miri cross-arena" miri-cross-arena "$(sel cross_arena)" "$(sel reason_cross_arena)"
+          check_lane "Miri pointer controls" miri-pointer-controls "$(sel pointer_controls)" "$(sel reason_pointer_controls)"
+          check_lane "Fuzz corpus replay" fuzz-corpus-replay "$(sel fuzz_any)" "$(sel reason_fuzz)"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::deep-safety failed; see the lane errors above."
+            exit 1
+          fi
+          echo "All required deep-safety jobs succeeded."

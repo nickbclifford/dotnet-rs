@@ -4,10 +4,11 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Test hierarchy and migration
 
-**Agreed policy, 2026-11-02; steps 1-2 of the workflow implementation are in YAML (hosted effect unverified), steps 3-5 pending.** Shorten the time to a useful
+**Agreed policy, 2026-11-02; steps 1-3 of the workflow implementation are in YAML (hosted effect unverified), steps 4-5 pending.** Shorten the time to a useful
 answer while preserving checks for meaningful runtime regressions. The workflow inventory
-below describes current YAML. Step 2 changed only when work runs; test selection, path
-filtering, caches, timeouts and matrices are unchanged.
+below describes current YAML. Step 2 changed only when work runs; step 3 adds path-based
+selection of the deep lanes and a nightly full sweep. Test selection inside a lane, caches,
+timeouts and shard layout are unchanged.
 
 | Layer | When | Signal and completion |
 |---|---|---|
@@ -75,10 +76,55 @@ Make the next CI change concrete and bounded:
    run nightly and on manual dispatch), and the full green wall time can be longer than before
    because deep work now starts after `fast-core`. That is the intended tradeoff: the fast
    answer comes first. The 30-60 minute feedback improvement remains an estimate, not a measurement.
-3. Keep cheap raw-block/frame/owner tests in the ordinary core. Select expensive VM controls
+3. **Implemented; hosted effect unverified.** Keep cheap raw-block/frame/owner tests in the ordinary core. Select expensive VM controls
    and corpus replay for affected code; retain the complete passing catalogs in full sweeps.
    The retired native refactor's slot/bridge tests are unmerged evidence. If a redesigned path
    adopts them, give them a coherent selection rather than appending them to pointer shard 1.
+
+   Implementation note. A new `select-deep` job (no `needs`, runs in parallel with the fast
+   jobs) runs `scripts/ci_select.py` and publishes `cross_arena`, `pointer_controls`,
+   `fuzz_any`, `fuzz_matrix`, `mode` and a per-lane reason (also written to the job summary).
+   `miri-cross-arena` and `miri-pointer-controls` run only when selected;
+   `fuzz-corpus-replay` takes its matrix entries from `fuzz_matrix` and is skipped when none are
+   selected. Each still `needs: [fast-core, select-deep]`; the job-level `if` has no status
+   function, so GitHub ANDs `success()` and a failed `fast-core` still skips them. A lane is
+   skipped only on an explicit `false`; a missing output runs it. `deep-safety` reads the same
+   outputs: a lane that was not selected may be `skipped`, a selected lane must be `success`.
+   Full sweeps: a nightly `schedule` run (06:00 UTC, offset from fuzz 00:00, Miri 02:00 and
+   Valgrind 04:00) and `workflow_dispatch` with the boolean input `full` (default true; false
+   selects by the paths changed since `origin/main`, which is a full sweep when run on `main`
+   itself because that diff is empty). Pushes and PRs are selected. The concurrency group now
+   includes the event name so a nightly sweep on `main` is not cancelled by a push to `main`.
+
+   Diff basis: pull requests use `git diff base...head` (merge-base form: what the PR introduces,
+   ignoring commits that reached the base after the fork); pushes use `git diff before..head`
+   (direct form: everything the push moved the branch by). Checkout uses `fetch-depth: 0`.
+
+   Path families (first match per path; the union over all changed paths decides):
+
+   | Changed path | Selected |
+   |---|---|
+   | `docs/**`, `experiments/**`, `*.md`, `LICENSE*` (unless a Rust file under `crates/` or `xtask/` names that `.md` in a string literal, e.g. `include_str!`; it is then classified like the including file) | nothing |
+   | Crates in the value closure (`dotnet-value`, `dotnet-types`, `dotnet-utils`, `dotnet-metrics`) or `crates/dotnet-value/fuzz/**` | everything |
+   | Other crates in the `dotnet-vm` closure (`dotnet-vm`, `dotnet-assemblies` including its `.cs` support sources, `dotnet-build-tools`, `dotnet-macros*`, `dotnet-runtime-*`, `dotnet-intrinsics-*`, `dotnet-simd`, `dotnet-vm-data`, `dotnet-vm-ops`, `dotnet-exceptions`, `dotnet-pinvoke`, `dotnet-tracer`) or `crates/dotnet-vm/fuzz/**` | `miri-cross-arena`, `miri-pointer-controls`, `fuzz_executor` |
+   | `crates/dotnet-cli/**`, `crates/dotnet-benchmarks/**` | no deep lane (native tests stay in `fast-core`) |
+   | `Cargo.toml`, `Cargo.lock`, `rust-toolchain*`, `clippy.toml`, `rustfmt.toml`, `.cargo/**`, `.config/**`, `xtask/**`, `build.rs` | everything |
+   | `.github/workflows/ci.yml`, `.github/actions/**`, other unlisted workflow files, and the scripts the deep lanes run (`scripts/ci_diagnostics.py`, `pointer_provenance.sh`, `replay_fuzz_corpus.py`, `tests/test_replay_fuzz_corpus.py`, `ci_select.py`) | everything |
+   | `fuzz.yml`, `miri.yml`, `valgrind.yml`, other `.github/**` and `scripts/**`, `valgrind.supp`, `check.sh`, `bench.fish` | nothing |
+   | Anything else, including a new crate directory | everything, with the reason naming the path |
+
+   The value closure is a subset of the VM closure, so the first crate row implies the second.
+   The closures were computed from `[dependencies]`, `[dev-dependencies]` and
+   `[build-dependencies]` in the `Cargo.toml` files; the selector holds them as a table and
+   `scripts/tests/test_ci_select.py` (run in `doc-lint`) recomputes them and fails on drift.
+   Fail-safe: a zero or unfetchable base, a git error, an empty diff or any selector exception
+   selects everything with the reason stated, and `select-deep` publishes full-sweep outputs
+   if the checkout or selector step fails to produce its own.
+
+   Honest payoff: over the last 100 non-merge commits on `main` (each against its parent) the
+   selector would have run both Miri lanes for 67 (52 of them also all four fuzz targets, 15
+   only `fuzz_executor`) and skipped all deep work for 33. Any runtime change still runs all 66
+   pointer shards; reducing that cost is step 4 (amortized discovery and build), not selection.
 4. Amortize discovery/build/setup by crate, toolchain and feature configuration. Discover the
    complete catalog once per configuration, preserving independent manifest/ignore guards.
    Batch cheap checks and share compatible caches; retain individual execution diagnostics
@@ -89,7 +135,7 @@ Make the next CI change concrete and bounded:
    times separately. If hosted evidence is unavailable, leave latency targets unverified.
 
 Stop when that behavior is reviewable, regression coverage is accounted for, and job selection
-and result reporting agree. Workflow changes land in bounded steps (1-2 are implemented as noted above; steps 3-5 are
+and result reporting agree. Workflow changes land in bounded steps (1-3 are implemented as noted above; steps 4-5 are
 not). No runtime repair, new test platform or automatic timeout
 increase is part of this CI slice. Do not trigger/retry hosted workflows without authorization.
 
@@ -132,7 +178,7 @@ for selected work, not instructions to launch every lane after every step.
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master` + manual dispatch | `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core`); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
@@ -160,12 +206,13 @@ Advisory success alone does not prove that all tests completed; inspect job and 
 
 `ci.yml` runs the main test suite across a matrix of feature combinations to ensure that validation logic does not regress. See [Validation Features](VALIDATION_FEATURES.md) for a detailed breakdown of what each feature validates.
 
-Jobs are listed below. Two aggregate jobs follow the list: `fast-core` and `deep-safety`.
+Jobs are listed below. `select-deep` chooses the deep lanes; two aggregate jobs follow the list: `fast-core` and `deep-safety`.
 The fast layer is `doc-lint`, `format`, `loom`, `provenance-lints`, `matrix-definitions`,
 `clippy`, `build-script-regression`, `build-fixtures`, `test`, `miri-value`,
 `miri-frame-blocks` and `miri-owner-retention`. The deep layer (`miri-cross-arena`,
-`miri-pointer-controls`, `fuzz-corpus-replay`) has `needs: [fast-core]`, so it starts only
-after fast feedback succeeds and is skipped when it fails.
+`miri-pointer-controls`, `fuzz-corpus-replay`) has `needs: [fast-core, select-deep]`, so it starts only
+after fast feedback succeeds and is skipped when it fails, and runs only when `select-deep`
+selected it (always, on the nightly schedule and on dispatch with `full` true).
 
 Jobs:
 
@@ -185,8 +232,9 @@ Jobs:
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
 14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
-15. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
-16. `deep-safety`: aggregate over `fast-core`, `miri-cross-arena`, `miri-pointer-controls` and `fuzz-corpus-replay`; `if: always()`, same all-must-succeed rule. If `fast-core` did not succeed it fails with a "not executed" message, which is distinct from the failure of an attempted deep job. Not a required check.
+15. `select-deep`: no `needs`, 5-minute timeout; runs `scripts/ci_select.py` over the changed paths (PR `base...head`, push `before..head`, `--full` for schedule and dispatch with `full` true) and publishes the lane booleans, the fuzz matrix and a reason per lane; its first step writes full-sweep fallback outputs so a failed checkout or selector selects everything. See [Implementing the hierarchy](#implementing-the-hierarchy) item 3.
+16. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
+17. `deep-safety`: aggregate over `fast-core`, `select-deep`, `miri-cross-arena`, `miri-pointer-controls` and `fuzz-corpus-replay`; `if: always()`. If `fast-core` did not succeed it fails with a "not executed" message, which is distinct from the failure of an attempted deep job; if `select-deep` did not succeed it fails because the required lanes are unknown. Per lane: a lane that was not selected (output `false`) and is `skipped` prints "not required (reason)"; a selected lane (any output other than `false`) must be `success`, and skipped, failed or cancelled all fail. Not a required check.
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
 features, which include `multithreading`; the `m1a_`, `m1b_`, enabled `m1d_` and `atomic_tests::` library regressions are part of
