@@ -2701,3 +2701,87 @@ fn p34_localloc_blocks_released_on_executor_teardown() {
     );
     assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
 }
+
+// ---- Batched execution of the reviewed controls ------------------------------------------------
+// CI runs the controls under Miri either as one process per control (nightly full sweep, and the
+// attribution re-run after a failed batch) or as a few batches that call the same control
+// functions sequentially on one thread. `get_mock_loader` is thread-local, so each batch parses
+// the embedded support library once instead of once per control. Membership is authored in
+// scripts/pointer_provenance.sh (`expected_controls`, third column) and checked against the
+// invocations below by `pointer_provenance.sh verify-batches`; edit both together.
+// The module is named `batches` so batch tests are not under the `pointer_provenance_tests::p`
+// namespace that the control discovery guard enumerates. Batches only call enabled controls,
+// never the ignored diagnostic probes.
+mod batches {
+    /// Defines one batch test. Each control runs in order on the calling thread; a panic in a
+    /// control fails the whole batch, and the `start`/`ok` lines let the runner name the control
+    /// that was in flight. Attributes on an entry apply to that control's run (p13 is skipped
+    /// under `memory-validation` for the same reason it is ignored there).
+    macro_rules! control_batch {
+        ($batch:ident: [$($(#[$attr:meta])* $control:ident),+ $(,)?]) => {
+            #[test]
+            fn $batch() {
+                $(
+                    $(#[$attr])*
+                    {
+                        println!(
+                            "batch-control start pointer_provenance_tests::{}",
+                            stringify!($control)
+                        );
+                        super::$control();
+                        println!(
+                            "batch-control ok pointer_provenance_tests::{}",
+                            stringify!($control)
+                        );
+                    }
+                )+
+            }
+        };
+    }
+
+    control_batch!(batch_1: [
+        p00_smoke,
+        p07_localloc_one_past_end,
+        #[cfg(not(feature = "memory-validation"))]
+        p13_ldelema_managed_add_far_out_of_bounds_then_conv_u,
+        p06_localloc_minus_one_then_plus_one,
+        p21_localloc_signed_extreme_offsets_roundtrip,
+        p25_convi_and_stind_i_pointer_roundtrip_deref,
+        p04_double_localloc_write_first,
+        p32_localloc_blocks_released_on_tail_call_replacement,
+        p36_static_address_survives_forced_collection,
+    ]);
+
+    control_batch!(batch_2: [
+        p02_ldloca_stind_i4_control,
+        p11_ldelema_stind_heap_array_control,
+        p14_initblk_heap_array_via_managed_ptr,
+        p08_localloc_overshoot,
+        p22_localloc_wrap_to_zero_roundtrip,
+        p26_native_int_boundary_store_load_roundtrip,
+        p29_localloc_blocks_survive_growth_and_are_16_byte_aligned,
+        p33_localloc_blocks_released_on_exception_unwind,
+    ]);
+
+    control_batch!(batch_3: [
+        p03_ldloca_convu_ldind_i4,
+        p10_ldelema_convu_stind_heap_array,
+        p16_cpblk_heap_arrays_via_managed_ptr,
+        p17_localloc_ptr_ceq_self,
+        p23_localloc_pointer_loop_unsigned_branch_compare,
+        p27_stind_i_fresh_pointer_through_local_slot_dereferences,
+        p30_localloc_block_survives_nested_callee_localloc,
+        p34_localloc_blocks_released_on_executor_teardown,
+    ]);
+
+    control_batch!(batch_4: [
+        p05_single_localloc_roundtrip,
+        p20_heap_convu_then_typed_write_then_raw_store,
+        p_null_through_pointer_local_address,
+        p18_localloc_ptr_clt,
+        p24_unsafe_byte_offset_direction_and_deref,
+        p28_stind_i_fresh_pointer_through_heap_memory_dereferences,
+        p31_localloc_blocks_released_on_return_and_pooling,
+        p35_ldflda_on_stack_value_type_then_ldind,
+    ]);
+}

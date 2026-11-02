@@ -4,11 +4,11 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Test hierarchy and migration
 
-**Agreed policy, 2026-11-02; steps 1-3 of the workflow implementation are in YAML (hosted effect unverified), steps 4-5 pending.** Shorten the time to a useful
+**Agreed policy, 2026-11-02; steps 1-3 of the workflow implementation are in YAML (hosted effect unverified), step 4 is partially implemented (pointer-control batching only; hosted effect unverified), step 5 pending.** Shorten the time to a useful
 answer while preserving checks for meaningful runtime regressions. The workflow inventory
 below describes current YAML. Step 2 changed only when work runs; step 3 adds path-based
-selection of the deep lanes and a nightly full sweep. Test selection inside a lane, caches,
-timeouts and shard layout are unchanged.
+selection of the deep lanes and a nightly full sweep; step 4 (partial) runs the selected pointer
+controls as four batches per configuration on push/PR. Full sweeps still run the 66 singleton shards.
 
 | Layer | When | Signal and completion |
 |---|---|---|
@@ -68,7 +68,7 @@ Make the next CI change concrete and bounded:
    Native tests must not sit behind 66 pointer singleton jobs in the runner queue.
    Implementation: `miri.yml`, `fuzz.yml` and `valgrind.yml` now trigger only on `schedule` and
    `workflow_dispatch` (Valgrind gained dispatch). In `ci.yml`, the `fast-core` aggregate needs
-   the twelve fast-layer jobs; `miri-cross-arena`, `miri-pointer-controls` and
+   the twelve fast-layer jobs; `miri-cross-arena`, `miri-pointer-controls` (and, since step 4, `miri-pointer-batches`) and
    `fuzz-corpus-replay` need `fast-core`, so they start only after fast feedback succeeds and
    are skipped if it fails; the `deep-safety` aggregate reports on the deep layer. Neither
    aggregate is configured as a required check; that remains a later reviewed decision.
@@ -84,7 +84,8 @@ Make the next CI change concrete and bounded:
    Implementation note. A new `select-deep` job (no `needs`, runs in parallel with the fast
    jobs) runs `scripts/ci_select.py` and publishes `cross_arena`, `pointer_controls`,
    `fuzz_any`, `fuzz_matrix`, `mode` and a per-lane reason (also written to the job summary).
-   `miri-cross-arena` and `miri-pointer-controls` run only when selected;
+   `miri-cross-arena`, `miri-pointer-batches` and `miri-pointer-controls` run only when selected
+   (step 4 adds the `pointer_mode` output, `batched` or `singleton`, that picks between the last two);
    `fuzz-corpus-replay` takes its matrix entries from `fuzz_matrix` and is skipped when none are
    selected. Each still `needs: [fast-core, select-deep]`; the job-level `if` has no status
    function, so GitHub ANDs `success()` and a failed `fast-core` still skips them. A lane is
@@ -123,19 +124,41 @@ Make the next CI change concrete and bounded:
 
    Honest payoff: over the last 100 non-merge commits on `main` (each against its parent) the
    selector would have run both Miri lanes for 67 (52 of them also all four fuzz targets, 15
-   only `fuzz_executor`) and skipped all deep work for 33. Any runtime change still runs all 66
-   pointer shards; reducing that cost is step 4 (amortized discovery and build), not selection.
-4. Amortize discovery/build/setup by crate, toolchain and feature configuration. Discover the
+   only `fuzz_executor`) and skipped all deep work for 33. A selected push/PR pointer lane now
+   runs 8 batch jobs instead of 66 singleton shards (step 4, below); selection itself is unchanged.
+4. **Partially implemented; hosted effect unverified.** Amortize discovery/build/setup by crate, toolchain and feature configuration. Discover the
    complete catalog once per configuration, preserving independent manifest/ignore guards.
    Batch cheap checks and share compatible caches; retain individual execution diagnostics
    for expensive or failure-sensitive tests. Grouping jobs does not remove per-test VM work.
+
+   Done: the pointer controls are batched (see the
+   [`miri-pointer-controls` section](#blocking-miri-pointer-controls-lane)). Pushes and PRs run
+   4 batch jobs per configuration (8 jobs; the 33 controls run sequentially on one thread per batch,
+   so the support library is parsed once per batch); on a batch failure the 66 singleton jobs re-run
+   for attribution; the nightly/manual full sweep and the selector fallback stay singleton.
+   Not done: the broader per-crate discovery/build amortization across lanes, and batching of any
+   other lane. Advisory VM/assembly Miri shards (`miri.yml`) and the cross-arena VM recreations
+   likely pay the same per-process parse of the embedded support library; that is a follow-up
+   candidate and is unmeasured.
+
+   Local evidence for the batching (single developer machine, not hosted; no hosted measurement
+   exists): under Miri (no-features, permissive Tree Borrows flags) `pointer_provenance_tests::p00_smoke`
+   (6 IL instructions) took 233 s wall time while a trivial `dotnet-vm` unit test
+   (`cache::tests::hit_promotes_entry`) took 3 s; `RAYON_NUM_THREADS=1` made no difference (232 s).
+   Natively every one of the 33 controls costs 74-80M user instructions (`perf stat -e instructions:u`;
+   p00 alone 74M). Callgrind on p00 attributes about 94% to `AssemblyLoader::new_bare` ->
+   `add_support_library` -> `dotnetdll` `Resolution::parse` of the embedded support DLL (partly
+   on rayon workers, which is not the cause); the probe itself is under 10%. Cause:
+   `get_mock_loader()` in `pointer_provenance_tests.rs` is a `thread_local!`, libtest runs each
+   test on a fresh thread and each shard is its own Miri process, so every singleton control re-parses
+   the support library. A batch calls its controls sequentially on one thread and shares the parse.
 5. Verify representative selection cases, shared-dependency fallback, missing/ignored tests,
    failures and cancellation with the existing guard harnesses and bounded local checks.
    Measure the next available hosted candidate's fast, selected-deep and all-advisory elapsed
    times separately. If hosted evidence is unavailable, leave latency targets unverified.
 
 Stop when that behavior is reviewable, regression coverage is accounted for, and job selection
-and result reporting agree. Workflow changes land in bounded steps (1-3 are implemented as noted above; steps 4-5 are
+and result reporting agree. Workflow changes land in bounded steps (1-3 are implemented as noted above; step 4 is partial; step 5 is
 not). No runtime repair, new test platform or automatic timeout
 increase is part of this CI slice. Do not trigger/retry hosted workflows without authorization.
 
@@ -178,7 +201,7 @@ for selected work, not instructions to launch every lane after every step.
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-controls` (33 filtered VM controls), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-pointer-batches` / `miri-pointer-controls` (33 filtered VM controls: 8 batch jobs on selected push/PR runs, 66 singleton jobs in full sweeps and as the attribution re-run after a batch failure), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
@@ -210,13 +233,15 @@ Jobs are listed below. `select-deep` chooses the deep lanes; two aggregate jobs 
 The fast layer is `doc-lint`, `format`, `loom`, `provenance-lints`, `matrix-definitions`,
 `clippy`, `build-script-regression`, `build-fixtures`, `test`, `miri-value`,
 `miri-frame-blocks` and `miri-owner-retention`. The deep layer (`miri-cross-arena`,
-`miri-pointer-controls`, `fuzz-corpus-replay`) has `needs: [fast-core, select-deep]`, so it starts only
+`miri-pointer-batches`, `miri-pointer-controls`, `fuzz-corpus-replay`) has `needs: [fast-core, select-deep]`
+(`miri-pointer-controls` also needs `miri-pointer-batches`), so it starts only
 after fast feedback succeeds and is skipped when it fails, and runs only when `select-deep`
-selected it (always, on the nightly schedule and on dispatch with `full` true).
+selected it (always, on the nightly schedule and on dispatch with `full` true). The pointer lane runs
+either as batches or as singletons; see the lane section below.
 
 Jobs:
 
-1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh` and the direct-`std::sync` ceiling with `scripts/check_std_sync_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
+1. `doc-lint` (Documentation and Source Policy Checks): enforces the multithreading cfg-occurrence budget with `scripts/check_mt_cfg_ceiling.sh` and the direct-`std::sync` ceiling with `scripts/check_std_sync_ceiling.sh`; runs `cargo run --quiet -p xtask -- verify-slots` to audit real support-slot consumers; runs `bash scripts/pointer_provenance.sh verify-batches` (static, Cargo-free drift guard between the pointer-control batch table and the Rust batch tests); runs `scripts/check_doc_drift.sh` (doc-to-code and plan-queue-status drift detector); and runs a broken intra-doc-link check (`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features`, with `DOTNET_SKIP_BUILD=1`)
 2. `format`: `cargo fmt --all -- --check`
 3. `provenance-lints`: pinned-nightly (`nightly-2026-05-27`), blocking `scripts/check_provenance_lints.sh`, which denies `fuzzy_provenance_casts` and `lossy_provenance_casts` in every first-party crate (workspace with no, default and all features, plus both fuzz crates) by injecting `-Zcrate-attr=feature(strict_provenance_lints)`. This is a source-level gate on `as` casts between pointers and integers, not strict-provenance Miri evidence; see [Strict-provenance deferral](#strict-provenance-deferral)
 4. `loom`: stable, blocking exhaustive Loom model of the STW protocol. It runs exactly `RUSTFLAGS="--cfg loom" cargo nextest run -p dotnet-vm --test loom_stw --no-default-features`; `RUSTFLAGS` selects the rustc cfg (rather than a nonexistent nextest `--cfg` option). The shared model builder is fixed at three total threads (the collector/model thread and two spawned mutators) and leaves preemption, permutation, and duration exploration uncapped.
@@ -230,11 +255,11 @@ Jobs:
 10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading) (the source-policy scan test is cfg-excluded under Miri), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the four no-features `atomic_tests::` tests (the concurrent load/store test is multithreading-only and runs in the full default-feature suite); the no-features steps are not a full-crate Miri suite
 11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
-13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
+13. `miri-pointer-batches` and `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); `miri-pointer-batches` (configuration x 4 batches) runs on selected push/PR runs, `miri-pointer-controls` (configuration x 33 singleton shards) runs in full sweeps and as the attribution re-run after a batch failure; this is not a full or strict VM Miri suite
 14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 15. `select-deep`: no `needs`, 5-minute timeout; runs `scripts/ci_select.py` over the changed paths (PR `base...head`, push `before..head`, `--full` for schedule and dispatch with `full` true) and publishes the lane booleans, the fuzz matrix and a reason per lane; its first step writes full-sweep fallback outputs so a failed checkout or selector selects everything. See [Implementing the hierarchy](#implementing-the-hierarchy) item 3.
 16. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
-17. `deep-safety`: aggregate over `fast-core`, `select-deep`, `miri-cross-arena`, `miri-pointer-controls` and `fuzz-corpus-replay`; `if: always()`. If `fast-core` did not succeed it fails with a "not executed" message, which is distinct from the failure of an attempted deep job; if `select-deep` did not succeed it fails because the required lanes are unknown. Per lane: a lane that was not selected (output `false`) and is `skipped` prints "not required (reason)"; a selected lane (any output other than `false`) must be `success`, and skipped, failed or cancelled all fail. Not a required check.
+17. `deep-safety`: aggregate over `fast-core`, `select-deep`, `miri-cross-arena`, `miri-pointer-batches`, `miri-pointer-controls` and `fuzz-corpus-replay`; `if: always()`. If `fast-core` did not succeed it fails with a "not executed" message, which is distinct from the failure of an attempted deep job; if `select-deep` did not succeed it fails because the required lanes are unknown. Per lane: a lane that was not selected (output `false`) and is `skipped` prints "not required (reason)"; a selected lane (any output other than `false`) must be `success`, and skipped, failed or cancelled all fail. The pointer lane has its own rule: with `pointer_mode` `batched`, `miri-pointer-batches` must be `success` (and the singleton re-run `skipped`, which is expected); if any batch failed the lane fails regardless of the singleton results, which are printed as attribution (a singleton failure means a control fails alone; all singletons passing means the failure only reproduces in batch, an interaction or a flake), and a best-effort step lists the failing batch and singleton jobs and maps shard numbers to control names from the run's job list. With any other `pointer_mode` (singleton, including a missing output) `miri-pointer-controls` must be `success` and the batches `skipped`. Not a required check.
 
 The blocking `miri-value` job runs the full `dotnet-value` test suite with the crate's default
 features, which include `multithreading`; the `m1a_`, `m1b_`, enabled `m1d_` and `atomic_tests::` library regressions are part of
@@ -341,10 +366,79 @@ execution and branch protection are not established by those local runs.
 
 ### Blocking `miri-pointer-controls` lane
 
-This job gates 33 enabled VM controls, not the full VM suite. It uses
-`nightly-2026-05-27`, `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`,
-and two configurations (`no-features`, `multithreading`) with 33 singleton shards each.
-The exact manifest from `scripts/pointer_provenance.sh` is:
+This lane gates 33 enabled VM controls, not the full VM suite. It uses
+`nightly-2026-05-27`, `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`
+and two configurations (`no-features`, `multithreading`). It runs in one of two modes,
+published by `select-deep` as `pointer_mode` (only when the lane itself is selected):
+
+| `pointer_mode` | When | Jobs | Result |
+|---|---|---|---|
+| `batched` | selected push/PR runs (`mode=selected`) | `miri-pointer-batches`: configuration x 4 batches = 8 jobs, each one Miri process running 8-9 controls sequentially on one thread | the batches decide the lane |
+| `singleton` | every full sweep (nightly schedule, manual dispatch with `full` true, selector fallback; `mode=full`) | `miri-pointer-controls`: configuration x 33 shards = 66 jobs, one Miri process per control | the singleton jobs decide the lane |
+
+Attribution: if any batch job fails, `miri-pointer-controls` (all 66 singleton jobs) re-runs so the
+failure can be attributed. It runs only when `miri-pointer-batches` has result `failure`
+(or in `singleton` mode), never merely because the batches were skipped, and still requires
+`fast-core` and `select-deep` to have succeeded; its job-level `if` uses `!cancelled()` with
+explicit `needs.<job>.result` tests because a status function drops the implicit `success()`.
+`deep-safety` fails the lane for any batch failure regardless of the singleton results: a batch
+failure is real signal, possibly an interaction between controls. The singleton results
+are reported as attribution (which controls fail alone, or "all singletons passed: the failure only
+reproduces in batch (interaction or flake)"). The batches' success skips the re-run, which is expected.
+The fallback of `select-deep` is `mode=full`, so a selector failure runs singletons, never batches.
+
+Batches are test-only code: `pointer_provenance_tests::batches::batch_N` in
+`crates/dotnet-vm/src/pointer_provenance_tests.rs` call the existing control functions in order and
+print `batch-control start <name>` and `batch-control ok <name>` lines. Every control remains an
+individually runnable `#[test]`. The batch tests live in a `batches` submodule, outside the
+`pointer_provenance_tests::p` namespace that the control discovery guard enumerates, so that guard
+is unchanged; they also run in ordinary `cargo test`/nextest (cheap natively, and a check that the
+controls compose sequentially on one thread). Under `memory-validation` the batch skips p13, as p13 is
+ignored there. Membership is authored once, in the third column of `expected_controls` in
+`scripts/pointer_provenance.sh`; `bash scripts/pointer_provenance.sh verify-batches` (static, run in
+`doc-lint`, and by the `batch` command) fails if the Rust batch lists differ from it in membership or
+order, repeat a control, contain a diagnostic probe, or define extra batches. Batches, grouped round-robin over
+the singleton shard order so the heavier lifecycle controls (p29-p34) are spread out:
+
+| Batch | Controls (in execution order) |
+|---|---|
+| Batch 1 | `p00_smoke`, `p07_localloc_one_past_end`, `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`, `p06_localloc_minus_one_then_plus_one`, `p21_localloc_signed_extreme_offsets_roundtrip`, `p25_convi_and_stind_i_pointer_roundtrip_deref`, `p04_double_localloc_write_first`, `p32_localloc_blocks_released_on_tail_call_replacement`, `p36_static_address_survives_forced_collection` |
+| Batch 2 | `p02_ldloca_stind_i4_control`, `p11_ldelema_stind_heap_array_control`, `p14_initblk_heap_array_via_managed_ptr`, `p08_localloc_overshoot`, `p22_localloc_wrap_to_zero_roundtrip`, `p26_native_int_boundary_store_load_roundtrip`, `p29_localloc_blocks_survive_growth_and_are_16_byte_aligned`, `p33_localloc_blocks_released_on_exception_unwind` |
+| Batch 3 | `p03_ldloca_convu_ldind_i4`, `p10_ldelema_convu_stind_heap_array`, `p16_cpblk_heap_arrays_via_managed_ptr`, `p17_localloc_ptr_ceq_self`, `p23_localloc_pointer_loop_unsigned_branch_compare`, `p27_stind_i_fresh_pointer_through_local_slot_dereferences`, `p30_localloc_block_survives_nested_callee_localloc`, `p34_localloc_blocks_released_on_executor_teardown` |
+| Batch 4 | `p05_single_localloc_roundtrip`, `p20_heap_convu_then_typed_write_then_raw_store`, `p_null_through_pointer_local_address`, `p18_localloc_ptr_clt`, `p24_unsafe_byte_offset_direction_and_deref`, `p28_stind_i_fresh_pointer_through_heap_memory_dereferences`, `p31_localloc_blocks_released_on_return_and_pooling`, `p35_ldflda_on_stack_value_type_then_ldind` |
+
+`bash scripts/pointer_provenance.sh batch --configuration <configuration> --batch <1..4>` runs one
+batch with the same Miri flags and exact filtering as `controls`, plus `--nocapture` so progress is
+visible if the process is killed. It requires libtest's `1 passed; 0 failed; 0 ignored` for the batch
+test and exactly the expected `batch-control ok` lines in order; zero matches, an unexpected ignore, a
+timeout, a panic, UB or a missing/extra/reordered line fail, and the failure names the control in
+flight (or the last completed one). The CI step wraps it in `scripts/ci_diagnostics.py`.
+
+Local timings (2026-11-02, one developer machine, pinned nightly, permissive Tree Borrows flags, four
+Miri processes running concurrently, warm build cache; local evidence only, no hosted measurement). All
+eight batches passed with no inter-control failure. Execution wall time of the Miri test process:
+
+| Batch | no-features | multithreading |
+|---|---|---|
+| 1 (9 controls) | 543 s | 466 s |
+| 2 (8 controls) | 551 s | 475 s |
+| 3 (8 controls) | 539 s | 473 s |
+| 4 (8 controls) | 555 s | 478 s |
+
+For comparison, one singleton (`p00_smoke`, no-features) took 233 s locally, so a batch costs roughly
+one parse (about 233 s) plus about 35-40 s per additional control, instead of about 33 separate
+processes that each pay the parse. A batch deliberately injected to fail in a scratch copy (p11 in
+batch 2, not committed) stopped after p02 with exit code 1 and named p11 as the control in flight.
+
+Budgets: hosted runners were roughly 1.3-4.5x slower than local for p00, so a batch is expected to
+take about 600-2500 s there. The batch jobs therefore use `timeout-minutes: 60`, a diagnostics deadline of the
+job timeout minus 180 s (`CI_DIAG_DEADLINE`, the existing pattern scaled from 45 minutes), and a 3000 s execute
+step (and `pointer_provenance.sh batch` process) timeout, about 20% above the 4.5x worst case. Sysroot (600 s),
+native discovery (1200 s) and compile (1200 s) steps keep the singleton job's budgets. The
+singleton jobs keep their 45-minute timeout and 2700 s step. These are caps sized from local
+measurement, not hosted measurements; a hosted run may show that they should move.
+
+The exact singleton manifest from `scripts/pointer_provenance.sh` is:
 
 | Shard | Exact test |
 |---|---|
@@ -382,10 +476,13 @@ The exact manifest from `scripts/pointer_provenance.sh` is:
 | 32 | `pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind` |
 | 33 | `pointer_provenance_tests::p36_static_address_survives_forced_collection` |
 
-Each leg runs `bash scripts/pointer_provenance.sh verify-controls --configuration <configuration>`
-then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1..33>`.
+Each singleton leg runs `bash scripts/pointer_provenance.sh verify-controls --configuration <configuration>`
+then `bash scripts/pointer_provenance.sh controls --configuration <configuration> --shard <1..33>`;
+each batch leg runs the same `verify-controls` and then the `batch` command. Because a batch
+calls control functions directly, `verify-controls` is what catches an `#[ignore]`d control.
 Discovery and partition guards require 33 non-ignored controls; each shard requires one pass and zero
-ignored. The cache key is `miri-pointer-v2-nightly-2026-05-27-<configuration>-<shard>`.
+ignored. The singleton cache key is `miri-pointer-v2-nightly-2026-05-27-<configuration>-<shard>`; the batch
+cache key is `miri-pointer-batch-v1-nightly-2026-05-27-<configuration>`.
 The lane does not enable `memory-validation`: p13 and the separate
 `conv_u8_after_far_oob_managed_add_does_not_panic` regression are conditionally ignored with
 that feature because their deliberate 4096-byte managed offsets trigger its debug bounds trap.
@@ -793,8 +890,8 @@ library counts, and the nonfatal rustdoc private-link warning.
 `scripts/pointer_provenance.sh list` shows the explicit 39-entry catalog, classifications, native
 diagnostic permissions and control shards. The 33 controls run as ordinary tests without
 `memory-validation`; p13 is ignored with that feature. The M1c controls include p04 and p29–p34;
-six probes remain ignored and diagnostic-only. The blocking `miri-pointer-controls` job and its
-two-configuration, 33-singleton-shard mapping are documented above. Its permissive Tree Borrows results
+six probes remain ignored and diagnostic-only. The blocking pointer lane (batched on selected push/PR runs, 33 singleton shards per configuration in
+full sweeps and for attribution) and its mappings are documented above. Its permissive Tree Borrows results
 are not a full VM Miri suite, strict-provenance evidence, or a runtime-soundness claim.
 
 The only entrypoint for executing ignored pointer probes is the explicit diagnostic command:
@@ -818,8 +915,9 @@ Known-UB probes must not be run natively or outside the diagnostic entrypoint.
 `verify-controls --configuration no-features` and its `multithreading` variant check exact native
 discovery and nextest metadata confirming all 33 controls are enabled; neither command runs a probe.
 `controls --configuration no-features --shard 1` runs the guarded p00 singleton under Miri without
-ignored-test flags and checks each exact run count. The table above lists all 33 shards; either
-configuration can be `multithreading`. Add `--dry-run` to preview discovery and shard commands without invoking Cargo. Safe tooling self-tests use a fake
+ignored-test flags and checks each exact run count; `batch --configuration no-features --batch 1`
+does the same for one batch (and `verify-batches` needs no configuration or Cargo). The tables above list all
+33 shards and the 4 batches; either configuration can be `multithreading`. Add `--dry-run` to preview discovery and shard commands without invoking Cargo. Safe tooling self-tests use a fake
 Cargo executable: `python3 scripts/tests/test_pointer_provenance.py`; deliberate stale/misspelled-name
 cases confirm the control guard rejects catalog mismatches.
 

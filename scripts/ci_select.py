@@ -21,9 +21,15 @@ Inputs (exactly one):
                          merged-in changes.
 
 Outputs go to $GITHUB_OUTPUT (or stdout when unset) and a per-lane summary to
-$GITHUB_STEP_SUMMARY: mode, cross_arena, pointer_controls, fuzz_any,
-fuzz_matrix (JSON, the include entries ci.yml used to hold statically),
+$GITHUB_STEP_SUMMARY: mode, cross_arena, pointer_controls, pointer_mode,
+fuzz_any, fuzz_matrix (JSON, the include entries ci.yml used to hold statically),
 reason_cross_arena, reason_pointer_controls, reason_fuzz.
+
+pointer_mode chooses how the selected pointer-control lane runs: "singleton" in
+every full sweep (the 33 controls as one Miri process each, per configuration) and
+"batched" for a selected push/PR run (a few batches per configuration, with the
+singleton jobs re-run only to attribute a batch failure). Whenever mode is "full",
+including every fail-safe fallback, pointer_mode is "singleton".
 """
 
 import argparse
@@ -298,6 +304,7 @@ def build_outputs(mode, tokens, why):
         "mode": mode,
         "cross_arena": "true" if CROSS_ARENA in tokens else "false",
         "pointer_controls": "true" if POINTER in tokens else "false",
+        "pointer_mode": "singleton" if mode == "full" else "batched",
         "fuzz_any": "true" if include else "false",
         "fuzz_matrix": json.dumps({"include": include}, separators=(",", ":")),
         "reason_cross_arena": reason(lane_tokens["cross_arena"]),
@@ -365,7 +372,7 @@ def summary_markdown(out):
     lines = ["### Deep check selection (%s)" % out["mode"], "", "| Lane | Run | Reason |", "|---|---|---|"]
     for lane, key, rkey in (
         ("Miri cross-arena", "cross_arena", "reason_cross_arena"),
-        ("Miri pointer controls", "pointer_controls", "reason_pointer_controls"),
+        ("Miri pointer controls (%s)" % out["pointer_mode"], "pointer_controls", "reason_pointer_controls"),
         ("Fuzz corpus replay", "fuzz_any", "reason_fuzz"),
     ):
         reason = out[rkey].replace("|", "\\|")

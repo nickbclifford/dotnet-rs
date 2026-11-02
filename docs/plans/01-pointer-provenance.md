@@ -75,7 +75,8 @@ paths migrate rather than postponing necessary correctness until a separate mile
 ### M0 — Make failures and controls executable
 
 The catalog has 39 VM entries: 33 enabled controls and six diagnostic-only probes. Current YAML
-runs controls in 33 singleton shards per configuration; [CI.md](../CI.md) describes the existing
+runs controls as 4 batches per configuration on selected push/PR runs and as 33 singleton shards per
+configuration in full sweeps and after a batch failure; [CI.md](../CI.md) describes the existing
 selection and the planned hierarchy. Preserve native regression coverage, discovery guards,
 known-failure isolation and full scheduled sweeps when changing job placement.
 

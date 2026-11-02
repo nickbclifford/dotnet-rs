@@ -61,6 +61,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(lanes(out), expected, out)
         self.assertEqual(out["mode"], mode)
         self.assertEqual(out["fuzz_any"], "true" if expected[2] else "false")
+        self.assertEqual(out["pointer_mode"], "batched")
         return out
 
     def test_docs_only(self):
@@ -154,6 +155,7 @@ class FailSafeTests(unittest.TestCase):
         self.assertEqual(out["mode"], "full")
         self.assertEqual(lanes(out), EVERYTHING)
         self.assertEqual(out["fuzz_any"], "true")
+        self.assertEqual(out["pointer_mode"], "singleton")
         if needle:
             self.assertIn(needle, out["reason_cross_arena"])
 
@@ -222,8 +224,9 @@ class OutputTests(unittest.TestCase):
             subprocess.run([sys.executable, str(SCRIPT), "--full"], check=True, env=env, capture_output=True)
             parsed = dict(line.split("=", 1) for line in out_file.read_text().splitlines())
             self.assertEqual(parsed["mode"], "full")
-            self.assertEqual(set(parsed), {"mode", "cross_arena", "pointer_controls", "fuzz_any", "fuzz_matrix",
-                                           "reason_cross_arena", "reason_pointer_controls", "reason_fuzz"})
+            self.assertEqual(parsed["pointer_mode"], "singleton")
+            self.assertEqual(set(parsed), {"mode", "cross_arena", "pointer_controls", "pointer_mode",
+                                           "fuzz_any", "fuzz_matrix", "reason_cross_arena", "reason_pointer_controls", "reason_fuzz"})
             self.assertIn("Deep check selection (full)", sum_file.read_text())
 
     def test_ci_yml_fallback_matches_full_selection(self):
@@ -233,6 +236,25 @@ class OutputTests(unittest.TestCase):
         self.assertIsNotNone(match, "select-deep fallback fuzz_matrix literal not found in ci.yml")
         self.assertEqual(json.loads(match.group(1)), {"include": ORIGINAL_FUZZ_INCLUDE})
         self.assertEqual(match.group(1), run_cli(["--full"])["fuzz_matrix"])
+
+    def test_ci_yml_fallback_pointer_mode_is_singleton(self):
+        """The fallback must stay a full sweep: singleton pointer controls, never batched."""
+        text = (REPO / ".github/workflows/ci.yml").read_text()
+        fallback = re.search(r"- id: fallback\n.*?(?=\n      - uses:)", text, re.S).group(0)
+        self.assertIn("echo 'pointer_mode=singleton'", fallback)
+        self.assertNotIn("batched", fallback)
+        self.assertIn("pointer_mode: ${{ steps.select.outputs.pointer_mode || steps.fallback.outputs.pointer_mode }}", text)
+        self.assertEqual(run_cli(["--full"])["pointer_mode"], "singleton")
+
+    def test_pointer_mode_by_selection(self):
+        # mode=selected (even when every lane is selected) batches; only mode=full is singleton.
+        for paths in (["crates/dotnet-vm/src/lib.rs"], ["docs/CI.md"], ["crates/dotnet-value/src/lib.rs"],
+                      ["totally/unknown/path"]):
+            out = run_paths(paths)
+            self.assertEqual((out["mode"], out["pointer_mode"]), ("selected", "batched"), paths)
+        # Empty diff, git failure and --full are full sweeps and therefore singleton.
+        self.assertEqual(run_paths([])["pointer_mode"], "singleton")
+        self.assertEqual(run_cli(["--full"])["pointer_mode"], "singleton")
 
 
 # --- Closure drift check -------------------------------------------------
