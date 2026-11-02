@@ -9,7 +9,10 @@ set -euo pipefail
 # shrank (e.g. stack_value -8). Further growth needs a new review.
 # 477 -> 478 (approved 2026-11-01): the single ignored pending-repair
 # recreation for plan 03 (extracted-Executor TLS ownership).
-CEILING=478
+# 478 -> 479 (2026-11-02): one module-level gate making the concurrent atomic
+# load/store test multithreading-only; the no-features VM is single-threaded by
+# contract and its atomics lower to plain accesses, so the test raced under Miri.
+CEILING=479
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 COUNT="$(

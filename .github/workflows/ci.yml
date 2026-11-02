@@ -367,7 +367,7 @@ jobs:
       - name: Miri atomic access regressions (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-atomic-no-features --features no-features --timeout 900 \
-            --require 'test result: ok. 5 passed; 0 failed; 0 ignored;' -- \
+            --require 'test result: ok. 4 passed; 0 failed; 0 ignored;' -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features atomic_tests:: -- --test-threads=1
       # Non-ignored multithreading-only cross-arena regressions run in the full default-feature step above.
       - name: Miri owner-retention regressions (no features)

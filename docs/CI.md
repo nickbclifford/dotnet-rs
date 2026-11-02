@@ -180,7 +180,7 @@ Jobs:
 7. `build-script-regression`: targeted probes for build-script skip/env/rerun invalidation behavior
 8. `build-fixtures`: uses `xtask` to resolve fixture output path and compute the fixture cache key from the same input set used by `dotnet-cli/build.rs` (`.cs` fixtures, fixture `.csproj` files, and shared MSBuild/NuGet config candidates)
 9. `test`: feature matrix resolved from `xtask` (`cargo run --quiet -p xtask -- matrix test-features --format json`); its `multithreading` leg also runs the hang-probe integration-test step
-10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading) (the source-policy scan test is cfg-excluded under Miri), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the five `atomic_tests::` tests; the no-features steps are not a full-crate Miri suite
+10. `miri-value`: pinned-nightly, blocking full `dotnet-value` Miri suite with default features (multithreading) (the source-policy scan test is cfg-excluded under Miri), plus exact no-features runs of the three `m1a_`, eight `m1b_` and eleven `m1d_` library regressions and the four no-features `atomic_tests::` tests (the concurrent load/store test is multithreading-only and runs in the full default-feature suite); the no-features steps are not a full-crate Miri suite
 11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); this is not a full or strict VM Miri suite
@@ -195,7 +195,7 @@ that suite, including multithreading-only cross-arena tests. The one integration
 and so not run (or listed as ignored) under Miri; it runs natively in the `test` job's no-features and
 `multithreading` legs. Locally on 2026-11-02 the scan alone took 807s under Miri on main, while the whole remaining
 `dotnet-value` Miri suite took about 30s including compilation; relief of the hosted 15-minute budget is unverified. Four further steps run the following selectors with the same job-level pinned `MIRIFLAGS`
-and check the logs for exactly three, eight, eleven and five passing tests respectively, with zero ignored:
+and check the logs for exactly three, eight, eleven and four passing tests respectively, with zero ignored:
 
 ```bash
 cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features \

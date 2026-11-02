@@ -2,7 +2,6 @@
 mod tests {
     use crate::{LoadType, StackValue, StoreType};
     use dotnet_utils::sync::Ordering as AtomicOrdering;
-    use std::cell::UnsafeCell;
     #[repr(align(8))]
     struct Aligned8([u8; 8]);
     /// Runs `f` against a fresh, 8-byte-aligned slot that is only ever accessed through the
@@ -86,61 +85,6 @@ mod tests {
         });
     }
     #[test]
-    fn test_concurrent_atomic_load_store() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::thread;
-        // Bounded so the test stays fast under Miri; the reader runs until the writer finishes.
-        const WRITES: i64 = if cfg!(miri) { 200 } else { 100_000 };
-        let data = Arc::new(ThreadSafeBox(UnsafeCell::new([0u8; 8])));
-        let stop = Arc::new(AtomicBool::new(false));
-        let data_clone = data.clone();
-        let stop_clone = stop.clone();
-        let writer = thread::spawn(move || {
-            // Derived from the `UnsafeCell`, so the shared buffer is writable through `ptr`.
-            let ptr = data_clone.0.get().cast::<u8>();
-            for i in 0..WRITES {
-                // SAFETY: F4.WidthAligned — `ptr` addresses the live, 8-byte-aligned shared
-                // buffer, and every concurrent access to it is atomic.
-                unsafe {
-                    StackValue::Int64(i).store_atomic(
-                        ptr,
-                        StoreType::Int64,
-                        AtomicOrdering::Release,
-                    );
-                }
-            }
-            stop_clone.store(true, Ordering::Release);
-        });
-        let data_clone2 = data.clone();
-        let reader = thread::spawn(move || {
-            let ptr = data_clone2.0.get().cast::<u8>().cast_const();
-            let mut last = 0;
-            loop {
-                let done = stop.load(Ordering::Acquire);
-                // SAFETY: F4.WidthAligned — as for the writer; this access is an atomic load.
-                let val = unsafe {
-                    StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire)
-                };
-                let StackValue::Int64(v) = val else {
-                    panic!("Expected Int64");
-                };
-                // A single writer stores increasing values, so observations never go backwards.
-                assert!(
-                    v >= last && v < WRITES,
-                    "torn or out-of-order read: {v} after {last}"
-                );
-                last = v;
-                if done {
-                    assert_eq!(v, WRITES - 1);
-                    break;
-                }
-            }
-        });
-        writer.join().unwrap();
-        reader.join().unwrap();
-    }
-    #[test]
     #[expect(
         clippy::multiple_unsafe_ops_per_block,
         reason = "the test intentionally exercises object atomic load/store sequencing over an initialized pointer slot"
@@ -222,9 +166,75 @@ mod tests {
         }
     }
 
-    #[repr(align(8))]
-    struct ThreadSafeBox(UnsafeCell<[u8; 8]>);
-    // SAFETY: F4.WidthAligned — threads share the cell only through aligned, width-matched atomic
-    // loads and stores, so concurrent access never races non-atomically.
-    unsafe impl Sync for ThreadSafeBox {}
+    // Multithreading only: without that feature the VM is single-threaded by contract and
+    // `AtomicRepr` deliberately lowers to plain unaligned accesses, so spawning concurrent
+    // threads would violate that precondition (Miri correctly reports a data race).
+    #[cfg(feature = "multithreading")]
+    mod concurrent {
+        use crate::{LoadType, StackValue, StoreType};
+        use dotnet_utils::sync::Ordering as AtomicOrdering;
+        use std::cell::UnsafeCell;
+
+        #[test]
+        fn test_concurrent_atomic_load_store() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::thread;
+            // Bounded so the test stays fast under Miri; the reader runs until the writer finishes.
+            const WRITES: i64 = if cfg!(miri) { 200 } else { 100_000 };
+            let data = Arc::new(ThreadSafeBox(UnsafeCell::new([0u8; 8])));
+            let stop = Arc::new(AtomicBool::new(false));
+            let data_clone = data.clone();
+            let stop_clone = stop.clone();
+            let writer = thread::spawn(move || {
+                // Derived from the `UnsafeCell`, so the shared buffer is writable through `ptr`.
+                let ptr = data_clone.0.get().cast::<u8>();
+                for i in 0..WRITES {
+                    // SAFETY: F4.WidthAligned — `ptr` addresses the live, 8-byte-aligned shared
+                    // buffer, and every concurrent access to it is atomic.
+                    unsafe {
+                        StackValue::Int64(i).store_atomic(
+                            ptr,
+                            StoreType::Int64,
+                            AtomicOrdering::Release,
+                        );
+                    }
+                }
+                stop_clone.store(true, Ordering::Release);
+            });
+            let data_clone2 = data.clone();
+            let reader = thread::spawn(move || {
+                let ptr = data_clone2.0.get().cast::<u8>().cast_const();
+                let mut last = 0;
+                loop {
+                    let done = stop.load(Ordering::Acquire);
+                    // SAFETY: F4.WidthAligned — as for the writer; this access is an atomic load.
+                    let val = unsafe {
+                        StackValue::load_atomic(ptr, LoadType::Int64, AtomicOrdering::Acquire)
+                    };
+                    let StackValue::Int64(v) = val else {
+                        panic!("Expected Int64");
+                    };
+                    // A single writer stores increasing values, so observations never go backwards.
+                    assert!(
+                        v >= last && v < WRITES,
+                        "torn or out-of-order read: {v} after {last}"
+                    );
+                    last = v;
+                    if done {
+                        assert_eq!(v, WRITES - 1);
+                        break;
+                    }
+                }
+            });
+            writer.join().unwrap();
+            reader.join().unwrap();
+        }
+
+        #[repr(align(8))]
+        struct ThreadSafeBox(UnsafeCell<[u8; 8]>);
+        // SAFETY: F4.WidthAligned — threads share the cell only through aligned, width-matched atomic
+        // loads and stores, so concurrent access never races non-atomically.
+        unsafe impl Sync for ThreadSafeBox {}
+    }
 }
