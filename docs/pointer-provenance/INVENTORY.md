@@ -4,6 +4,11 @@
 
 Evidence vocabulary: **VM-M** real VM under Miri; **LIB-M** library Miri; **N** native reproduction; **MODEL** standalone model, not an end-to-end VM result; **R/A** source review/audit, requiring confirmation. A historical report below is not a fresh run or proof that the current baseline had the same outcome. Recorded outcomes include the M1a baseline and final tests, the M1b kickoff baseline and Phase 6 controls, the M1c baseline and outcomes, and the M1d baseline and outcomes below. Probe rows explicitly marked unknown remain unverified. Sources can support a diagnosis without proving an execution result.
 
+Current sequencing and completion are owned by [plan 01](../plans/01-pointer-provenance.md),
+with validation under [CI policy](../CI.md#test-hierarchy-and-migration). Tables below retain
+historical evidence rather than prescribing a full campaign per step. Recover missing artifacts
+only when needed to resolve a current uncertainty; use clearly labelled new regressions otherwise.
+
 ## Source provenance
 
 At Phase 0 the four volatile scratch files were verified against these SHA-256 values before vendoring; paths and line numbers describe the original inputs, not durable links. The adaptations are summarized below. Current module SHA-256 at inventory creation: `0cf183a37c63b59236effd4f828d3f80c45ef14cce5b8395e8d929d6ee0d46e3`; this is a snapshot hash, not the hash of any whole original file.
@@ -382,13 +387,19 @@ Whole-VM strict Miri, dependency repairs, supplemental Stacked Borrows and unrel
 
 ## Outstanding cross-cutting follow-ups
 
-- Recover the missing pass-1 library sources, review archives/transcripts and patch/lab/FFI sources from backup if available. The independently recreated M1a library tests are integrated and passing, but do not identify the original pass-1 tests. Recover E1–E13 and `gc_model::e11*` as separately labeled models. The current pre-runtime p20 baseline was run in steps 1.1/1.2; this does not recover p20's patched historical source/run. Never infer results from that patched tree.
-- M1–M6: broader pointer/runtime/storage/GC/ABI/concurrency work still requires its own regressions and milestone exits. The scoped M1a heap repairs are recorded above; R01's stack/static and neighboring obligations remain open.
+- Missing pass-1/2/3 archives, original library/model/FFI sources and patches remain evidence
+  limits. Recover from backup only for a specific current uncertainty; E1–E13 and `gc_model::e11*`
+  can instead be re-established as labelled models. Independent M1a/p20 evidence does not identify
+  the originals. Recovery is not a prerequisite for unrelated runtime completion.
+- Remaining runtime outcomes: plan 03 ownership; stable homes/common access with affected
+  copy/barrier paths; and the supported native-call boundary. Retain their regressions and
+  explicit safety limits; use outcome completion rather than additional milestone counts.
 - ~~M0/M6: locate and repair the two historically ignored atomic tests~~: done 2026-10-31; TB UB was test backing aliasing, the SB ICE is a separate Miri mixed-size store-buffer bug.
 - ~~M0: inventory and migrate the provenance-lint hits~~: done 2026-10-31; a fresh audit found 59, all migrated, deny gate `provenance-lints` blocking with no exceptions.
 - M0: recover excluded addressing/field performance probes where needed. Native benchmark comparisons were captured/reviewed for this package; the repeated no-features regressions remain unresolved and are performance evidence only.
 - The finished-tree M1b Criterion comparison was not measured on an idle host; see the [M1b PERF report](../BENCHMARK_WORKFLOW.md#m1b-pointer-semantics-comparison-2026-10-29).
-- M0/M6: recover or re-establish strict-core evidence and selectors after dependency diagnosis; broaden unrelated VM Miri only in a separate scoped follow-up. Whole-VM strict is not a target of this slice. Observe hosted CI cold/cache timings before adjusting the provisional timeout.
+- M0/M6: recover or re-establish strict-core evidence and selectors after dependency diagnosis; broaden unrelated VM Miri only in a separate scoped follow-up. Whole-VM strict is not a target of this slice. Hosted samples now exist in CI.md; further timing work must answer a specific selection or
+  budget question. Do not treat timeout caps as measured runtime.
 
 - M3: p09 stack-home relocation and write-through, final pointer codecs/struct layout, legacy Stack/Static access and static `GuestBlock` alignment remain open.
 - M1e/M1g: transport, publication, tested teardown paths and bounded identity repairs are implemented; acceptance remains open, including the deferred [plan 03](../plans/03-executor-teardown-ownership.md) ownership and panic-safety findings.

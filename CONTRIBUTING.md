@@ -11,6 +11,42 @@ Before running local builds or tests, install:
   automatically when commands are run from the repository.
 - **.NET SDK** (required for fixture compilation and build-script paths that invoke dotnet/MSBuild)
 
+## Engineering decisions and plan authority
+
+The current user task and accepted decisions define the outcome and scope. The
+[project queue](docs/plans/README.md) sets priorities; a numbered plan owns its runtime contract;
+[CI policy](docs/CI.md#test-hierarchy-and-migration) owns verification selection. Reviews,
+checklists, historical proposals and memory are fallible supporting records. Check claims
+against the code and distinguish implemented behavior from a proposed change.
+
+Agents may resolve routine engineering details, correct stale prose, reorder or combine
+interdependent steps, and include supporting edits needed for a complete behavior. Explain
+consequential adaptations in the review. A changed file list, module location, benchmark command
+or checklist boundary does not by itself require maintainer approval.
+
+Ask when a choice materially changes supported behavior, public compatibility or agreed scope,
+weakens a safety requirement, or accepts an unresolved safety tradeoff. Present a concrete
+recommendation and its consequences. Reuse prior decisions; do not ask again because a handoff
+or historical document repeats the old question. An approval cannot prove an unsafe invariant.
+If one part needs a decision, continue independent authorized work instead of blocking the whole
+outcome. A prerequisite should describe a real missing contract or defect, not a deviation from prose.
+
+Read the current plan and relevant decision/evidence entries. Do not require every session to
+reread an append-only history. Keep the current contract concise and link to historical evidence.
+New findings receive an explicit disposition: fix within the outcome, record a separate defect,
+refute, or ask about a material change. Do not automatically expand the plan for every finding.
+Do not mark a larger safety claim complete because a scoped step or workflow is green.
+Generated research/step prompts must follow these rules too. Correct a generated prompt that
+reintroduces superseded approval or repetition requirements during setup; this is routine
+instruction maintenance, not another maintainer decision. The sibling orchestrator's generator
+has not been changed by this documentation revision.
+
+Lexical cfg/sync ceilings remain enforced by the existing scripts. Prefer module boundaries and
+repository synchronization types. Necessary bounded growth can be justified, measured and
+updated in the same reviewed implementation change without a separate permission request.
+Do not obfuscate tokens or remove unrelated code to fit a count. The semantic synchronization
+and unsafe contracts remain unchanged.
+
 ## Unsafe code policy
 
 Unsafe code must make the invariant that justifies it reviewable at the point
@@ -88,17 +124,28 @@ local `macro_rules!` only if the surviving behavior becomes genuinely uniform.
 
 ## Run the project checks
 
-For the standard local validation pass used by contributors, run:
+Follow the [test hierarchy](docs/CI.md#test-hierarchy-and-migration): fast core checks for every
+PR, selected deep checks before accepting affected changes, full sweeps on a schedule and for
+broad architectural changes, and investigations for named uncertainties. Current YAML and
+scripts still run the older broad layout; the hierarchy's implementation is pending.
+
+During iteration use focused native tests/lints and relevant unsafe/lifecycle controls. At the
+completion of a coherent code outcome, run the current integration command once:
 
 ```bash
-bash check.sh
+./check.sh --fast
 ```
 
-`check.sh` includes the ratcheted multithreading cfg-occurrence budget. When changing feature gates, run its focused check directly as well:
+It builds/verifies fixtures and runs Clippy/nextest in no-features, multithreading and
+multithreading,validation-all configurations, plus source ceilings. `./check.sh --full` uses the
+full xtask matrix and extra guards. Use full affected suites before accepting shared storage,
+access or dispatch changes. Carry unchanged evidence forward with source bindings; rerun when
+new edits/findings invalidate it. Do not repeat a full pass for every small step or docs edit.
 
-```bash
-bash scripts/check_mt_cfg_ceiling.sh
-```
+Select isolated SIMD/fuzzing/validation features when affected. If dependency impact is unclear,
+select broader coverage and explain it. A zero-match filter, unexpected ignore, timeout or failed
+setup is not a passed check. Report native, Miri, Loom, ABI and performance evidence separately.
+Nextest does not run doctests; run relevant compile-fail/doctests separately.
 
 ## Build test fixtures
 
@@ -110,7 +157,9 @@ cargo run -p xtask -- fixtures build
 
 ## Miri policy
 
-The pinned-nightly `dotnet-value` suite is a blocking CI gate. Run it locally when changing its unsafe or atomic-memory code:
+Current CI runs a pinned-nightly `dotnet-value` gate. Use affected library tests during
+iteration and the relevant complete library selection when integrating unsafe/atomic changes.
+This existing broad command is a reference, not a requirement for unrelated edits:
 
 ```bash
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
@@ -120,10 +169,13 @@ cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
 The separate blocking cross-arena singleton lane and its exact feature-specific selectors are
 documented in [`docs/CI.md`](docs/CI.md); its isolated strict-core test is not whole-VM strict signoff.
 
-### `dotnet-vm` unsafe-gate advisory signoff
+### VM unsafe checks
 
-For `dotnet-vm` changes that add or modify `unsafe`, the accepted local advisory invocations
-cover both the no-feature and `multithreading` configurations:
+Changes to unsafe or its callers require tests that exercise the changed invariant, including
+applicable feature modes. Add focused regressions with the repair, use bounded real bridge tests,
+and inspect discovery/counts. Run the existing broader advisory selection below when the changed
+interpreter/exception path warrants it, or for a full sweep. It is not an automatic per-file or
+per-step tax and does not substitute for a regression of the new unsafe boundary:
 
 ```bash
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
@@ -132,12 +184,14 @@ MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
 cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests
 ```
 
-Why this is the project-standard invocation right now:
+Limits of these existing invocations:
 - `-Zmiri-strict-provenance` currently fails before VM execution due dependency-level integer-to-pointer casts reached during assembly parsing (`bitvec`/`dotnetdll`, plus rayon worker-thread paths via `crossbeam-epoch`).
 - `-Zmiri-disable-isolation` is needed for host filesystem syscalls used by the test harness.
 - `-Zmiri-ignore-leaks` is needed for non-joined background worker threads that are not VM-unsafe regressions.
 
-Until upstream dependency behavior changes, strict-provenance is treated as infeasible for `dotnet-vm` unsafe-gate signoff.
+These historical dependency blockers limit the whole-VM strict claim. Investigate exact current
+blockers when a change needs that evidence; do not require dependency research to close an
+independent runtime repair. Strict-core results must identify their isolated selection.
 The nightly used for Miri and fuzz targets is pinned separately because `rust-toolchain.toml`
 selects stable by default. Hosted advisory VM selections completed as guarded singleton shards
 in both configurations; see [`docs/CI.md`](docs/CI.md) for the tested SHA, timings and limits.
@@ -147,7 +201,10 @@ This does not imply strict-provenance coverage or a soundness proof.
 
 Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchains. Build
 cargo-fuzz 0.13.1 with stable Rust 1.95.0 and `--locked`; target compilation and execution use
-`nightly-2026-05-27`. All four replays are blocking CI gates:
+`nightly-2026-05-27`. Current CI runs all four replays as pipeline-failing gates. Under the
+agreed hierarchy, select affected corpora before acceptance and keep all four in full sweeps.
+Changes to shared pointer/executor infrastructure select broadly. These direct commands are
+references; use the guarded runner for acceptance:
 
 ```bash
 cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked
@@ -166,7 +223,8 @@ makes replay usable on sandboxed runners; exploratory duration-based fuzzing rem
 
 ## Documentation drift check
 
-If your change touches docs, run the doc drift gate and rustdoc link check:
+Documentation-only changes need the drift/queue checks and a link check; they do not need a
+runtime build/test matrix, Miri or benchmarks. Rustdoc is the existing intra-doc-link check:
 
 ```bash
 bash scripts/check_doc_drift.sh

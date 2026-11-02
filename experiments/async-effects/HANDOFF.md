@@ -3,6 +3,10 @@
 > **Historical (design phase complete 2026-10-30).** This is the brief the design was produced
 > from. The outcome is [DESIGN.md](DESIGN.md); the implementation plan is
 > [docs/plans/02-native-continuations.md](../../docs/plans/02-native-continuations.md).
+> This original brief is retained as evidence, not an active assignment or approval policy.
+> The prior implementation is unmerged and parked for redesign. Current work follows
+> [the CI hierarchy](../../docs/CI.md#test-hierarchy-and-migration). Its instructions to finish
+> the whole design/catalogue must not be replayed by an implementation handoff.
 
 You are picking up a design investigation in **dotnet-rs**, a Rust implementation of the
 ECMA-335 Virtual Execution System (a .NET CIL interpreter). It is built on the `gc-arena`

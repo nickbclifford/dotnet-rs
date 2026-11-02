@@ -1,6 +1,10 @@
 # async/await as VM effects — design investigation (2026-10-30)
 
-The current recommendation and its gates are in [DESIGN.md](DESIGN.md). Open
+The mechanism and experiment evidence are in [DESIGN.md](DESIGN.md). Current implementation
+scope and later integration decisions are in [plan 02](../../docs/plans/02-native-continuations.md):
+the prior implementation is unmerged and parked for redesign. Select checks through
+[CI policy](../../docs/CI.md#test-hierarchy-and-migration). The historical toy and gallery below
+are comparison evidence, not an API freeze or another implementation queue. Open
 [gallery/index.html](gallery/index.html) for the side-by-side syntax comparison; see
 [gallery/README.md](gallery/README.md) for the candid review and mock limitations.
 

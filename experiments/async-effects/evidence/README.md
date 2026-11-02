@@ -1,6 +1,11 @@
 # Final evidence and limits
 
-Run from `experiments/async-effects`:
+These are historical experiment results. Current implementation scope is in
+[plan 02](../../../docs/plans/02-native-continuations.md), and verification selection follows
+[CI policy](../../../docs/CI.md#test-hierarchy-and-migration). Re-run an experiment only when it
+answers a current uncertainty; this full runner is not required for each implementation step.
+
+To reproduce the experiment, run from `experiments/async-effects`:
 
 ```bash
 python3 evidence/verify.py

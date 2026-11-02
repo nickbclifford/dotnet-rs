@@ -15,6 +15,14 @@ Additionally, the `fuzzing.rs` module in `dotnet-vm` contains Miri-compatible un
 
 The advisory Fuzz workflow builds cargo-fuzz 0.13.1 with Rust 1.95.0 and `--locked`, then runs targets and crash minimization with `nightly-2026-05-27` (rather than floating nightly). Its green status does not establish that advisory targets passed or that checked-in corpora were replayed.
 
+## Validation selection
+
+Follow the [test hierarchy](CI.md#test-hierarchy-and-migration). Replay affected tracked corpora
+before accepting relevant changes; shared infrastructure selects broadly and full sweeps retain
+all assigned corpora. Duration-based fuzzing runs on a schedule or to investigate a named issue.
+The existing workflows still launch more broadly; migration is pending. Preserve execution/count
+guards and promote triaged crashes to useful regressions. Advisory green does not close a crash.
+
 ## Prerequisites
 
 ```bash
@@ -50,7 +58,8 @@ dotnet-vm/fuzzing
 
 The fuzz crate Cargo.toml files (`crates/dotnet-vm/fuzz/Cargo.toml`, `crates/dotnet-value/fuzz/Cargo.toml`) depend on the respective library crates with `features = ["fuzzing"]` enabled.
 
-> **Note:** The standard `check.sh` matrix is resolved from `xtask` (`matrix test-features`) and currently includes a `fuzzing` feature leg. Running the dedicated fuzz targets still requires the nightly `cargo-fuzz` workflow described below.
+> **Note:** `check.sh --full` resolves its matrix from `xtask` (`matrix test-features`) and includes a
+`fuzzing` feature leg; the default/fast three-configuration pass does not. Running the dedicated fuzz targets still requires the nightly `cargo-fuzz` workflow described below.
 
 ## Fuzz Targets
 

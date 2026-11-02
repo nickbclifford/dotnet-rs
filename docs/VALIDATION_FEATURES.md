@@ -35,7 +35,8 @@ invariant in debug builds and retains the atomic layer's lock-guarded fallback a
 Depending on what you are debugging, use the following feature flags with `cargo test`.
 
 ### Full Validation Suite
-Run all tests with every validation feature enabled to catch any hidden issues.
+Exercise enabled validation paths with this command. It does not cover every feature-disabled
+branch or establish race freedom; select isolated configurations according to the change.
 ```bash
 cargo test -p dotnet-cli --features validation-all
 ```
@@ -65,6 +66,11 @@ validation diagnostics cannot safely validate a stale pointer. See [GC and Memor
 
 ## CI Leg Mapping
 
+This is the current full-matrix implementation, not the desired PR trigger policy. The
+[test hierarchy](CI.md#test-hierarchy-and-migration) keeps three core configurations on the fast
+path, selects isolated features for affected code, and retains the full matrix for sweeps and
+broad changes. Its workflow migration is pending.
+
 The CI pipeline (`.github/workflows/ci.yml`) does not hardcode named legs. Instead, a single
 `Test Suite` job (and a parallel `Clippy Check` job) runs over a dynamic matrix resolved at
 runtime from `cargo run -p xtask -- matrix test-features --format json`. The matrix is the
@@ -85,10 +91,15 @@ with `cargo test --no-default-features [--features <combo>]`):
 
 ## Miri CI Lane Mapping
 
+The table records current workflow selections. Placement will change under the agreed hierarchy;
+none of the rows establishes required branch protection. The retired branch's native ops/data/bridge
+selections are not implemented on main. Future selections must document actual tests and counts
+in [CI.md](CI.md).
+
 The feature matrix above describes the dynamic stable test/clippy jobs; Miri jobs are separate,
 explicit workflow lanes and are not represented by `SHARED_FEATURE_MATRIX`.
 
-| CI job | Blocking? | Configuration / selection | Meaning and limits |
+| Current CI job | Pipeline-failing? | Configuration / selection | Meaning and limits |
 |---|---|---|---|
 | `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` test suite with default features (multithreading), plus no-default-features selectors `pointer::tests::m1a_` (3 tests), `pointer::tests::m1b_` (8 tests), and `pointer::tests::m1d_` (11 tests) | Blocking full value-crate Miri coverage in the default configuration. The no-features selectors cover exactly the three M1a, eight M1b and eleven M1d library regressions, not the full crate; none is a VM gate; multithreading-only cross-arena tests are covered by the full default-feature suite. |
 | `miri-frame-blocks` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `raw_block::` in `dotnet-utils` and `frame_alloc::` in `dotnet-vm-data`, each in no-features and multithreading configurations; 15-minute timeout | Blocking library tests: each raw-block run requires 7 passed and each frame-allocation run 8 passed, all with 0 ignored; the latter includes frame suspension/restoration. This is not VM Miri coverage, does not establish strict provenance, and is not a soundness proof. |
@@ -107,8 +118,8 @@ managed-pointer offsets trigger its debug bounds trap:
 
 They run in the pinned Miri configurations without that feature.
 
-The pointer-control job uses a provisional 45-minute timeout per matrix leg. Hosted cold-build/cache
-timings have not been measured. Ignored pointer probes may only be executed through the explicit
+The pointer-control job uses a 45-minute timeout per matrix leg. Measured hosted phase/cache
+samples and their limits are in [CI.md](CI.md#hosted-evidence-and-budgets); caps are not runtimes. Ignored pointer probes may only be executed through the explicit
 diagnostic entrypoint in `scripts/pointer_provenance.sh`; native diagnostics are limited to catalog
 entry p19.
 

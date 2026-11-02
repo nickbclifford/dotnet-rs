@@ -1,10 +1,19 @@
 # Pointer / provenance review evidence and current status
 
-The pointer/provenance plan remains **In progress — scoped M1a heap-access containment, M1b pointer semantics, M1c stable frame-local `localloc` storage, and M1d owner/guard work complete; partial M0 (VM probe harness and controls)**. These scoped implementations and evidence do not complete M0, the broader M1 exits, or M3. See the [unified plan](../plans/01-pointer-provenance.md) and the [durable evidence inventory](INVENTORY.md) for the baseline table, probe catalog, R-row task status, and detailed results.
+Current priorities, remaining outcomes and stopping conditions are owned by the
+[pointer plan](../plans/01-pointer-provenance.md) and [project queue](../plans/README.md).
+M1a–M1d scoped repairs are retained; M1e/M1g implementation has advanced but acceptance remains
+open, including Executor ownership and the collection fixture's foreign-brand concern.
+
+This page and [INVENTORY.md](INVENTORY.md) preserve measured outcomes and limits. Historical
+milestone/shard counts describe their snapshots. Current YAML remains broad; the agreed
+[test hierarchy](../CI.md#test-hierarchy-and-migration) changes placement and selection only when
+implemented. Retain useful regressions; missing historical artifacts do not block a fresh,
+labelled repair. Neither a scoped pass nor an approval establishes a wider safety claim.
 
 ## M1a outcomes
 
-The pre-repair Miri baseline covered p10, p13, p14, p16 and p20 in no-features and multithreading. All ten separate runs were classified **miri-ub** (exit 1): Miri reported a dangling, out-of-allocation `&[u8]` at `crates/dotnet-value/src/pointer/mod.rs:505:37`; the caller was `conversions.rs:101:21` for p10/p13/p20 and `stack_value.rs:574:30` for p14/p16. No-features wall times were 268/233/236/241/245 seconds, respectively; multithreading times were 243/277/258/259/244 seconds. The source commits were `775886fc7554f9d5b58014f2b3db30c2e17d1982` (no-features) and `9524740e01953416a5d68eeee377eb18c9f51851` (multithreading; intervening changes were tracking-only). The full per-probe table is in [INVENTORY.md](INVENTORY.md#pre-repair-baseline-steps-112).
+The pre-repair Miri baseline covered p10, p13, p14, p16 and p20 in no-features and multithreading. All ten separate runs were classified **miri-ub** (exit 1): Miri reported a dangling, out-of-allocation `&[u8]` at `crates/dotnet-value/src/pointer/mod.rs:505:37`; the caller was `conversions.rs:101:21` for p10/p13/p20 and `stack_value.rs:574:30` for p14/p16. No-features wall times were 268/233/236/241/245 seconds, respectively; multithreading times were 243/277/258/259/244 seconds. The source commits were `775886fc7554f9d5b58014f2b3db30c2e17d1982` (no-features) and `9524740e01953416a5d68eeee377eb18c9f51851` (multithreading; intervening changes were tracking-only). The full per-probe table is in [INVENTORY.md](INVENTORY.md#pre-repair-baseline-steps-1112).
 
 After the heap repairs, all five probes passed their individual diagnostics in both configurations under pinned permissive Tree Borrows. They were promoted as blocking controls without changing their VM probe bodies, IL or assertions (p10=7, p13=1, p14/p16=`0x01010101`, p20=7). The p13 test retains a `memory-validation`-conditional ignore because the deliberate 4096-byte managed offset is rejected by that debug trap; the Miri control lane does not enable memory-validation. The separate far-OOB `conv.u8` regression is conditionally ignored under the same feature for the same trap; it passed pinned Miri in both configurations without that feature.
 

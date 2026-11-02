@@ -12,15 +12,35 @@ Poll native futures inside the executor's existing mutation, first inline at spa
 a traced per-thread native stack and a separate DynamicRootSet for each activation.
 Async expresses VM effects, not an OS async runtime or a .NET Task implementation.
 
-This is the selected API for the implementation plan, not a pending syntax choice. The
+This was the selected API for the original experiment. The
 [comparison](gallery/region-api/README.md) retains four compiled variants and the reasons
-for choosing RAII. The old direct-callback methods are experimental comparison/internal
-primitives, not additional production entry points.
+for choosing RAII. The parked redesign may revisit the mechanism without an approval ceremony;
+none of the alternatives is automatically a production entry point.
 
 The API and single-arena mechanism are executable. Foreign-arena liveness and real two-pass
 SEH integration remain explicit implementation gates. MT keeps legacy intrinsic paths until
 its root-publication/owner-lifetime gate passes. Selecting this syntax does not claim those
 semantic integrations are complete, or waive the existing byref eligibility limits.
+
+## Current project scope: parked for redesign
+
+The investigation and measurements below are historical experiment evidence. The original
+implementation effort reached an unmerged branch; main does not contain its native runtime
+path or benchmark changes. The maintainer is retiring that refactor. [Plan 02](../../docs/plans/02-native-continuations.md)
+owns the redesign boundary, while [the queue](../../docs/plans/README.md) prioritizes CI feedback
+and Executor ownership. There is no requirement to finish the old checklist before proceeding.
+
+The selected RAII syntax, private poll slot and staged effect catalogue are design candidates
+with tested model evidence, not a frozen API or automatic migration roadmap. Preserve the
+underlying ownership/rooting/confinement requirements; assess which mechanism earns its cost
+for one useful runtime behavior. Later findings about registration, actual ST collection,
+acknowledgment, finalizer timing and indirect-call eligibility are summarized in plan 02.
+
+Use [CONTRIBUTING](../../CONTRIBUTING.md#engineering-decisions-and-plan-authority) for routine
+adaptation and [CI policy](../../docs/CI.md#test-hierarchy-and-migration) for verification. Supporting
+edits and corrections to a historical sketch need no separate approval. Changes to supported
+behavior, public compatibility, scope or unresolved safety tradeoffs still require a decision.
+Do not run the full experiment or broad advisory fleets after each implementation step.
 
 ## Reading and evidence map
 
@@ -905,9 +925,10 @@ The local-root-cell tracing requirement and foreign-liveness gate remain under 0
    candidates settle syntax/inference, not every real helper's forwarding implementation.
 
 No unverified universal soundness or speed claim is part of this recommendation. The design
-is ready for the bounded vertical spike below; a wholesale migration is not authorized by
-the prototype evidence. The gates are required implementation tests, not reasons to keep
-re-deciding the public API.
+was the basis for the retired vertical spike; prototype evidence does not authorize a wholesale
+migration or require restarting that implementation. The affected safety/behavior contracts require relevant tests under the current CI hierarchy;
+future-stage gates apply when that stage is selected, not as Substring prerequisites. Choose any redesigned API for a demonstrated runtime need; do not expand scope merely to
+complete the experimental catalogue.
 
 ## Staged implementation plan (D12)
 

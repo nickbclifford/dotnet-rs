@@ -45,7 +45,10 @@ For a subsystem-level overview, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.m
 
 ## CI
 
-CI workflows live in [`.github/workflows/`](.github/workflows).
+CI workflows live in [`.github/workflows/`](.github/workflows). The agreed
+[test hierarchy](docs/CI.md#test-hierarchy-and-migration) gives fast checks capacity first,
+selects deeper validation for affected code, and keeps full scheduled sweeps. Workflow migration
+is pending; see [the project focus](docs/plans/README.md) for the next bounded work.
 Documentation changes are validated by [`scripts/check_doc_drift.sh`](scripts/check_doc_drift.sh) and a `cargo doc` intra-doc-link pass with `DOTNET_SKIP_BUILD=1`. The same blocking job enforces the ratcheted multithreading cfg-occurrence budget through [`scripts/check_mt_cfg_ceiling.sh`](scripts/check_mt_cfg_ceiling.sh).
 
 ## Design documentation

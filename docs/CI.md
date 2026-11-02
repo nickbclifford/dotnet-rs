@@ -2,9 +2,121 @@
 
 This document describes the CI workflows for `dotnet-rs`, why they are split, and how to run equivalent checks locally.
 
-## Design Principle
+## Test hierarchy and migration
 
-Deterministic correctness checks are blocking, including the bounded exhaustive Loom STW model, the `dotnet-value` Miri leg, the `dotnet-utils`/`dotnet-vm-data` frame-block Miri tests, the `dotnet-vm-data` owner-retention lane, the filtered VM pointer-control Miri lane, and corpus replay for the four assigned fuzz targets. The pointer lane runs only 33 guarded controls, not the VM Miri suite. The Loom model is deliberately small (one collector plus two mutators) but has no preemption, permutation, or duration cutoff, so a passing job represents exhaustive exploration at that three-thread bound. Duration-based exploratory fuzzing, the advisory Miri matrix, and Valgrind are informative and non-blocking.
+**Agreed policy, 2026-11-02; workflow implementation pending.** Shorten the time to a useful
+answer while preserving checks for meaningful runtime regressions. The workflow inventory
+below describes current YAML, not the desired trigger policy. No scheduling, selection,
+cache or timeout change is claimed by this documentation revision.
+
+| Layer | When | Signal and completion |
+|---|---|---|
+| Fast core | Every PR; give these jobs runner capacity first | Format/source policy, core build/lint/native behavior, cheap library safety checks and the small Loom STW model |
+| Targeted deep checks | Before accepting changes to the relevant unsafe, ownership, GC, threading, interpreter or interop paths | Affected library/VM Miri, confinement tests, corpus replay, ordering/lifecycle controls and feature-specific behavior |
+| Full sweeps | Scheduled and manually available; before accepting broad storage/access/dispatch changes | Full feature matrix and passing pointer/assembly/VM diagnostic selections catch interactions outside a narrow selection |
+| Investigation | A named failure or uncertainty | Guarded failing reproducer, extended fuzzing, Valgrind, profiling or supplemental model/toolchain experiments |
+
+The target for ordinary fast feedback is **10–15 minutes**; relevant deep checks target
+**20–35 minutes**. These are goals, not measured achievements or permission to cut a necessary
+check off at that time. Full diagnostics may take an hour or longer outside ordinary PR
+feedback. Report fast-check completion separately from deep and advisory completion.
+
+### Selection and merge policy
+
+Start with the existing fast configurations: no-default-features, multithreading, and
+multithreading,validation-all. Keep the full ten-way xtask matrix for sweeps; select isolated
+SIMD, fuzzing, metadata or generic-validation configurations when affected. Combined validation
+does not replace tests of feature-disabled or isolated branches. Build fixtures once and share
+them; preserve their source-hash checks. Compilation, native execution, Miri, Loom, native ABI
+fixtures and leak diagnostics establish different things.
+
+| Changed behavior | Additional pre-acceptance selection |
+|---|---|
+| Pointer arithmetic, codecs, raw blocks, stack/frame homes | Affected value/data/owner Miri, native semantic regressions and pointer controls; relevant pointer/raw-memory corpora |
+| GC roots, arena registry/ownership or executor lifecycle | Relevant cross-arena/teardown/root controls in both applicable modes, VM Miri, STW model and executor replay where affected |
+| Native continuations or intrinsic registration | Ops confinement/slot/root Miri, real ST bridge/progress/cancellation and ST/MT legacy table tests; fuzz-budget controls for terminal cleanup |
+| Shared access, atomics, broad storage or dispatch | Full affected pointer/value/VM suites and feature configurations, ordering/overlap models and threaded tests; native FFI evidence if aliases can escape |
+| Native ABI, marshalling or pinning | Native fixture calls for the affected ABIs and lifetimes; Miri of Rust-only primitives does not replace libffi evidence |
+| Assembly/type loading, metadata, generics or SIMD | Relevant fixtures, isolated feature legs and the unsafe dependency paths actually exercised |
+| Documentation/source-policy only | Drift/queue/link checks and native policy regressions; no VM execution campaign |
+
+Implement selection as reviewed path/dependency families with explicit selected checks and
+reasons. A change to a shared helper selects its consumers; a change to selection/workflows
+selects tests of the selection and guard logic. Unknown or ambiguous runtime impact selects
+broader coverage. An unrecognized path must not silently skip safety checks. Zero matching or
+unexpectedly ignored tests fail selected lanes. Clearly distinguish a deliberately not-required
+lane from an attempted check that failed to execute. Full sweeps supplement targeted acceptance;
+unsafe changes must not rely solely on a later scheduled run.
+
+Use a fast-result aggregate and a separate selected-safety result. Each must fail on missing,
+failed or cancelled required work. Review their coverage before configuring branch protection.
+Read-only inspection on 2026-11-02 returned “Branch not protected” for main and no applicable
+branch rules. “Blocking” in the current inventory means pipeline-failing, not proof of an
+administratively required merge check. No branch setting has been changed.
+
+### Implementing the hierarchy
+
+Make the next CI change concrete and bounded:
+
+1. Keep `stack_value_cross_arena_retired` as a native source-policy regression and exclude its
+   workspace text scan from Miri. Preserve value runtime and layout coverage. Remove the
+   duplicate default value-Miri execution from the advisory workflow.
+2. Let fast jobs complete before starting large fleets. Moving workflow names alone is not
+   capacity isolation: remove ordinary push/PR launches of the full advisory Miri/Fuzz/Valgrind
+   fleets, retain their scheduled/manual paths, and gate selected deep work after fast feedback.
+   Native tests must not sit behind 66 pointer singleton jobs in the runner queue.
+3. Keep cheap raw-block/frame/owner tests in the ordinary core. Select expensive VM controls
+   and corpus replay for affected code; retain the complete passing catalogs in full sweeps.
+   The retired native refactor's slot/bridge tests are unmerged evidence. If a redesigned path
+   adopts them, give them a coherent selection rather than appending them to pointer shard 1.
+4. Amortize discovery/build/setup by crate, toolchain and feature configuration. Discover the
+   complete catalog once per configuration, preserving independent manifest/ignore guards.
+   Batch cheap checks and share compatible caches; retain individual execution diagnostics
+   for expensive or failure-sensitive tests. Grouping jobs does not remove per-test VM work.
+5. Verify representative selection cases, shared-dependency fallback, missing/ignored tests,
+   failures and cancellation with the existing guard harnesses and bounded local checks.
+   Measure the next available hosted candidate's fast, selected-deep and all-advisory elapsed
+   times separately. If hosted evidence is unavailable, leave latency targets unverified.
+
+Stop when that behavior is reviewable, regression coverage is accounted for, and job selection
+and result reporting agree. Workflow changes belong in a later implementation task; this
+revision changes documentation only. No runtime repair, new test platform or automatic timeout
+increase is part of this CI slice. Do not trigger/retry hosted workflows without authorization.
+
+### Costs, retained signal and risks
+
+The October 31 accepted [CI run](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237422062)
+took 68m03s and its [advisory Miri run](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237423847)
+took 83m03s. Their 99 and 57 jobs are that SHA's counts, not the current branch's job count.
+Native test jobs started after 56–64 minutes although fixture/matrix dependencies finished in
+about a minute; individual pointer jobs took about 7–20 minutes. CI plus Miri peaked at 20
+simultaneous running jobs. Runner contention is supported; account concurrency settings were
+not independently established. The November 2 [push CI](https://github.com/nickbclifford/dotnet-rs/actions/runs/41367145909)
+took 87m39s; value-Miri exhausted its budget in the source scan after its library tests passed.
+
+The accepted CI/Miri jobs occupied about 1,411 runner-minutes, including 876 pointer and 473
+advisory Miri runner-minutes. These sums are resource use, not workflow wall time or billing.
+Queueing, setup, compilation and interpretation must be measured separately. Cache hits cannot
+remove interpreter execution cost. The existing 45/70-minute limits are caps, not runtimes.
+A 30–60-minute reduction in ordinary feedback delay is an estimate from removing queue pressure,
+not a benchmark of an implemented hierarchy. See the [acceptance record](ci-evidence/2026-10-31-acceptance.md)
+for phase measurements and their sampling limits.
+
+Retain the small exhaustive three-thread Loom model for a distinct concurrency signal, guarded
+corpus replay for deterministic regressions, and relevant Miri for unsafe boundaries. Keep
+Valgrind for native leak/uninitialized-memory evidence that leak-ignored Miri cannot provide.
+Pure source scans run natively. Consolidate cheap metadata/string selectors after reviewing
+whether their unsafe dependencies add a distinct Miri signal. Longer fuzzing remains exploratory;
+triage saved crashes and promote useful regressions instead of counting a green advisory job.
+
+The principal risk is delayed discovery of interactions outside a selected family. Broad shared
+changes therefore require full affected suites before acceptance, and full scheduled sweeps
+retain coverage. Missing setup/count evidence, cancellations and advisory failures remain visible.
+
+## Current workflow reference
+
+Until migration lands, triggers and matrix sizes below still apply. Commands are references
+for selected work, not instructions to launch every lane after every step.
 
 ## Workflow Table
 
@@ -17,16 +129,17 @@ Deterministic correctness checks are blocking, including the bounded exhaustive 
 
 ## Branch dispatch and targeted repeats
 
-After pushing the candidate to `supervised/unblock-ci`, dispatch whole workflows:
+When a hosted run is authorized, assign its actual branch to CI_REF before using these
+commands. Current dispatch selects whole workflows, not individual jobs:
 
 ```bash
-gh workflow run ci.yml --ref supervised/unblock-ci
-gh workflow run miri.yml --ref supervised/unblock-ci
-gh workflow run fuzz.yml --ref supervised/unblock-ci
+gh workflow run ci.yml --ref "$CI_REF"
+gh workflow run miri.yml --ref "$CI_REF"
+gh workflow run fuzz.yml --ref "$CI_REF"
 ```
 
 Alternatively observe the PR-triggered run for the exact commit. Use `gh run view RUN --json headSha,jobs,url` to verify the SHA and job results,
-`gh run watch RUN --exit-status` to monitor, and `gh run view RUN --job JOB --log` for
+`gh run watch RUN --exit-status --interval 60` to monitor, and `gh run view RUN --job JOB --log` for
 execution evidence. A targeted `gh run rerun RUN --job JOB` repeats a job on that
 run's original SHA, not a newer commit. Dispatch selects a workflow, not individual jobs.
 Avoid another push while useful evidence is running: concurrency can cancel older runs.
@@ -231,6 +344,11 @@ Feature forwarding in `dotnet-vm` is intentionally limited to crates that actual
 
 ## Local Equivalent
 
+During iteration run focused checks for the changed behavior. `./check.sh --fast` is the current
+three-configuration integration pass; run it once for a coherent implementation outcome, not
+for every checklist item. `--full` runs the full feature matrix and additional guards for broad
+changes/sweeps. Neither script yet implements automatic change selection.
+
 ### Build/Fixture Environment Contract
 
 These env vars define the build-script behavior for analysis-only and fixture workflows:
@@ -424,9 +542,12 @@ DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 
 ### Multithreading cfg-Occurrence Budget
 
-The blocking `doc-lint` job and `check.sh` both run a ratcheted source-policy check that prevents new `feature = "multithreading"` forks from silently accumulating. The current ceiling is 477; it lives in the script and is lowered whenever the canonical count drops.
-
-Run it locally with:
+Current `doc-lint` and `check.sh` enforce the numeric ceiling in
+`scripts/check_mt_cfg_ceiling.sh`. Prefer module boundaries and existing abstractions.
+Necessary bounded growth is an ordinary engineering review decision: explain the semantic
+boundary and measured delta in the same change, without separate approval for each location.
+Do not obscure syntax or delete unrelated code to fit a count; lower the ceiling when the
+canonical count falls. The retired native branch's allowances are not changes to main.
 
 ```bash
 bash scripts/check_mt_cfg_ceiling.sh
@@ -434,20 +555,15 @@ bash scripts/check_mt_cfg_ceiling.sh
 
 ### Direct `std::sync` Ceiling
 
-The blocking `doc-lint` job and `check.sh` also run a lexical ratchet for contiguous
-`std::sync` tokens in Rust sources under `crates/`, excluding generated `target` output. Its
-ceiling is 81. The retained direct uses are the reviewed test/build-script, standard `Arc`/`Weak`,
-static/raw-atomic, and `Once`/`LazyLock`-family exemptions; this is a regression ceiling rather
-than a complete source-policy parser. The ceiling must be lowered when the measured count drops,
-never raised solely to admit a new direct use.
-
-Run it locally with:
+Current `doc-lint` and `check.sh` also run `scripts/check_std_sync_ceiling.sh`. This is a lexical
+regression check, not proof of synchronization safety. Prefer repository wrappers; justify and
+measure necessary bounded changes in the same reviewed implementation. The semantic access,
+ordering and unsafe contracts remain mandatory. No repeated maintainer approval is required
+solely for a token count. The scripts remain unchanged by this pivot.
 
 ```bash
 bash scripts/check_std_sync_ceiling.sh
 ```
-
-The blocking `miri-value` and fuzz-corpus replay jobs above are also available as local commands in their respective sections below. The latter replays committed corpora only; exploratory fuzzing remains advisory in `fuzz.yml`.
 
 ## Fuzz corpus replay — Blocking Regression Checks
 

@@ -1,7 +1,9 @@
 # Assurance background
 
-Why the assurance plans in [`docs/plans/`](plans/README.md) look the way they
-do. This
+**Historical study, not an active plan.** The retired assurance queue mentioned below is
+separate from today's [runtime plan queue](plans/README.md). Plan numbers in this study refer
+to that retired queue; they do not create current prerequisites. The current work prioritizes
+useful runtime behavior, selected validation and explicit stopping conditions. This note
 is the distilled output of a feasibility study on machine-checking the project's
 `// SAFETY:` comments with a Lean 4-backed proof DSL, run 2026-08-01 → 2026-08-03
 and terminated. The full 44-page study and its five implemented Rust crates are
@@ -24,7 +26,7 @@ record of an abandoned plan.
 The study's durable finding. 620 prose `// SAFETY:` comments across 583 `unsafe`
 blocks do not represent 620 independent obligations — they factor into nine
 families, each one predicate stated once and instantiated per site. This is the
-skeleton [plan 01](plans/01-layer-invariant-specs.md) turns into a named
+skeleton `plan 01` in the retired assurance queue turns into a named
 predicate registry.
 
 | # | Family | Sites | The claim | What Rust already carries | What it doesn't |
@@ -48,7 +50,7 @@ specification-level function), and completeness facts.
 ### Two irreducible trust classes
 
 Neither is provable; both must be isolated and named. They are seed rows for
-[plan 06](plans/06-trust-register.md).
+`plan 06` in the retired assurance queue.
 
 - **The managed program as adversary.** ECMA-335 itself declares behavior
   undefined when unverifiable IL supplies invalid operands to `cpblk`,
@@ -79,7 +81,7 @@ verifier reaches; the families a verifier *would* close are the ones rated
 lowest-novelty. F4, third-largest by site count, has a cheaper correct fix than
 any proof: make the access width a type parameter so an `Int32` dispatch arm
 cannot pass `4` to a 2-byte operation — see
-[plan 03](plans/03-width-generic-atomics.md) and the same note in
+`plan 03` in the retired assurance queue and the same note in
 [`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md).
 
 **2. `cargo-anneal` is the same product, far better resourced.** Google's
@@ -120,7 +122,7 @@ previously unknown memory-safety bugs.
 (re-confirmed 2026-08-03). The pen-and-paper prior art — Fruja's ASM model of
 the CLR, Gordon–Syme's Baby IL type soundness, Kennedy–Syme on generics — remains
 the best source text for edge cases, and is the reason
-[plan 04](plans/04-model-correspondence.md) writes the correspondence down as a
+`plan 04` in the retired assurance queue writes the correspondence down as a
 table rather than as theorems.
 
 ## What the exercise actually delivered

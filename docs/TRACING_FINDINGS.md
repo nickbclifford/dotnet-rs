@@ -689,6 +689,12 @@ call site only once.
 
 ## Prioritized investigation plan
 
+These priorities rank opportunities within this profiling report; they are not the active
+project queue. Follow [the current focus](plans/README.md): CI feedback and Executor ownership precede further performance expansion. Select one investigation only
+when its expected runtime benefit or an unresolved regression justifies measurement. Use
+[the validation hierarchy](CI.md#test-hierarchy-and-migration), preserve the relevant correctness
+controls, and stop when the selected hypothesis is resolved rather than running this whole list.
+
 ### P0: correct allocation pressure and skip reference-free vector tracing
 
 1. Add source/kind counters around allocation-pressure updates.

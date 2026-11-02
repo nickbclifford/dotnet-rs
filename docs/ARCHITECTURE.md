@@ -18,8 +18,8 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 - `F10.BorrowedStorageStable`: pointers obtained from managed or shared backing storage are used only while the borrow, closure, or lock that stabilizes the allocation remains active.
 - `F10.ArchIntrinsicPrecondition`: a target-feature function or architecture intrinsic executes only when its ISA feature is guaranteed by the compilation target or by successful runtime detection at the dispatch site.
 - `F11.CliLoadKindMatchesStorage`: an atomic scalar is decoded only by the CLI `LoadType` with its storage bit-width and signedness; the object-handle case relies on its explicit caller contract.
-- `F11.PInvokeAbiAgreement`: a native symbol's real calling convention and complete parameter/return ABI agree with the prepared libffi CIF and marshalling storage. Rust can validate its CIF and storage, but agreement with an arbitrary native import is a Plan 06 `ffi-abi` trust candidate.
-- `F11.NativeLibraryLoadTrusted`: a dynamic library permitted by the configured host policy has safe initializers/finalizers, and its cached `NativeLibraries` entry remains loaded while selected symbols are used. The cache establishes retention; native initializer/finalizer behavior is a Plan 06 `ffi-abi` trust candidate.
+- `F11.PInvokeAbiAgreement`: a native symbol's real calling convention and complete parameter/return ABI agree with the prepared libffi CIF and marshalling storage. Rust can validate its CIF and storage, but agreement with an arbitrary native import is a native ABI trust boundary tracked under plan 01 M2.
+- `F11.NativeLibraryLoadTrusted`: a dynamic library permitted by the configured host policy has safe initializers/finalizers, and its cached `NativeLibraries` entry remains loaded while selected symbols are used. The cache establishes retention; native initializer/finalizer behavior is a native ABI trust boundary tracked under plan 01 M2.
 
 ## Crate Responsibilities
 

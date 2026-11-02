@@ -8,7 +8,11 @@ and is the default path in the prototype VM.
 The [four-way access comparison](region-api/index.html) retains the synchronous callback,
 always-ready async callback, checkpointing callback and chosen RAII versions of all seven
 operations. The [decision record](region-api/README.md) explains their semantics and costs.
-No public API choice remains pending.
+This records the experiment's selection; the parked redesign does not inherit an API freeze.
+
+The gallery preserves experiment comparisons, not a migration checklist. The native effort is
+[parked for redesign](../../../docs/plans/02-native-continuations.md); select one concrete runtime
+benefit before further implementation, with no automatic managed/wait/MT expansion.
 
 | Shape | Source | Verdict |
 | --- | --- | --- |

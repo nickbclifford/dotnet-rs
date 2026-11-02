@@ -1,59 +1,70 @@
-# Executor teardown ownership and panic safety plan
+# Executor teardown ownership and panic safety
 
 **Status:** Not started
-**Prepared:** 2026-11-01
-**Baseline:** `18cf9f03`
-**Scope:** Executor/TLS arena ownership, panic-safe registry drain, and the public `THREAD_ARENA` /
-`Send` Executor surface. Deferred out of the cross-arena-provenance branch (steps 8.8–8.10)
-by maintainer decision on 2026-11-01 after the step agents kept discovering deeper prerequisites.
+**Prepared:** 2026-11-01; revised 2026-11-02
+**Original baseline:** `18cf9f03`
+**Outcome:** Dropping or extracting an Executor never destroys another Executor's arena or
+frees storage still protected by an in-flight lease, including during unwind.
 
-## Evidence for the remaining ownership findings (post-repair)
+This is the next substantial runtime repair after the CI feedback work in [the queue](README.md).
+It closes a concrete part of plan 01 R08. The prior ST native refactor is parked and is not a
+prerequisite. No recovery of historical test sources is needed to begin.
 
-1. **TLS collision (was 8.8).** `Executor::new` only checks that `THREAD_ARENA` is empty. After
-   `extract_arena`, a second Executor can install its own Box; dropping the first Executor then takes
-   the successor's Box with its own `None` registration and fallback first ID. Observed (non-UB
-   witness): successor arena's `DropWitness` destroyed while another thread held a valid lease.
-   Independent recreation (not recovered originals):
-   `executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership`
-   (multithreading; currently `#[ignore]` pending repair; fails with `extracted Executor allowed a
-   successor before its own drop`). No-features has no extraction/TLS backend (control:
-   `recreation_executor_single_arena_cleanup_control`).
-2. **Panic-unsafe drain (was 8.9, source-derived, unreproduced).** `teardown_arena` owns a plain `Box`
-   across `ArenaRegistration::unregister_and_drain`. `drain_leases` calls `tracing::warn!` after 100ms
-   and the self-held-lease branch calls `eprintln!` before `mem::forget`; a panicking subscriber or I/O
-   error would unwind and free the arena before the drain completes. The 5.4 claim that teardown cannot
-   panic is therefore not established.
-3. **Public surface (was 8.10, source-derived, unexploited).** `Executor: Send` (compile-time checked),
-   so it can move to a thread whose TLS slot differs; `gc::arena::THREAD_ARENA` is a public mutable
-   `RefCell<Option<Box<GCArena>>>` re-exported from `gc`.
+## Established evidence
 
-Separately, step 8.6 established retrospective native pre-fix baselines for the 5.3–5.5 tests
-by overlaying their post-fix source on `cdb7b642`; those baselines are not evidence that the
-remaining ownership findings above were repaired, and were not contemporaneous or Miri runs.
+- **Extracted TLS collision, observed.** After `extract_arena` empties `THREAD_ARENA`, a second
+  Executor can install its Box. Dropping the older Executor can take the successor's Box.
+  A non-dereferencing drop witness observed destruction while a valid lease was held.
+  `executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership`
+  is the independent, currently ignored failing regression. No-features uses
+  `recreation_executor_single_arena_cleanup_control`; it has no TLS extraction backend.
+- **Drain panic safety, source-derived.** `teardown_arena` owns a Box across
+  `ArenaRegistration::unregister_and_drain`; `drain_leases` invokes `tracing::warn!` and
+  the self-held-lease branch calls `eprintln!` before `mem::forget`. A panic may free the Box
+  before access drains. The claim that stderr cannot unwind is incorrect. This failure path
+  needs a controlled regression; it is not an observed UAF result.
+- **Ownership surface, source-derived.** Executor is Send and THREAD_ARENA is publicly mutable.
+  Moving an Executor changes which TLS cell its methods/drop use. A mutable public slot can
+  bypass the ownership protocol.
 
-A lease prevents teardown but is not a GC root.
+Cross-arena runs `ee84ff60` (8.6) and `0aa1627a` (8.8) record the collision and subsequent
+questions. Earlier 5.3–5.5 before-results were reconstructed on `cdb7b642`; they are retrospective
+native evidence, not contemporaneous or Miri results. The ordinary teardown repairs remain useful.
 
-## Proposed direction (not reviewed)
+## One coherent ownership change
 
-- Fail closed: reject successor Executor creation on the same OS thread until an extracted Executor
-  drops; an extracted guard may outlive it. A prototype passed the native test on the ordinary path but
-  was discarded unreviewed.
-- Make the TLS slot internal and Executor thread-affine (`!Send`), or document and test a reviewed
-  alternative; audit public consumers.
-- Make drain panic-safe (leak-on-unwind or non-panicking logging) without holding registry locks or TLS
-  borrows during drain or leases across scheduler parking.
-- Tests, regression-first: guard-first / Executor-first / repeated extraction / real successor teardown /
-  panic-in-subscriber, release and join lease holders on every assertion path; native and Miri in both
-  feature configurations.
+Keep an explicit owner identity independent of whether the TLS Box has been extracted. Reject
+successor creation until the owning Executor drops; a separately owned extracted guard may outlive
+it, and must never take a successor's slot. Validate guard-first, Executor-first and repeated
+extraction lifecycles. Retain the owner-qualified registration through drain.
 
-## Completion gates
+Default to internal TLS and a thread-affine Executor. Audit workspace consumers and explain the
+public Rust API consequence in review. Escalate only if an identified supported consumer requires
+cross-thread transfer or public TLS mutation; routine implementation details need no renewed
+approval. A supported transfer alternative must establish an explicit ownership protocol.
 
-- Un-ignore the recreation and have it pass; panic-safety tests pass; no new pending-repair ignores.
-- Both ceiling scripts and `./check.sh --fast` pass without exclusions.
-- Reconcile docs that claim non-panicking teardown (5.4 combined entry, REVIEW F-LIFE-201).
+Establish arena retention before any operation that can unwind. A retention guard that leaks
+on an incomplete drain is preferable to freeing leased memory. Logging must not be the safety
+boundary. Do not hold registry/coordinator locks or TLS borrows during drain, and do not hold a
+lease across safepoint parking. A same-thread held lease must neither deadlock nor free storage.
 
-## Known residual risk on the originating branch
+Include the supporting registry, guard and API edits needed for this outcome in the same work.
+Do not split a newly exposed part of this ownership invariant into another approval ticket.
 
-Until this plan lands, R08 acceptance is not closed: the extracted-Executor collision and the
-drain-panic path are open. The recreation remains in-tree as the single `#[ignore]`d pending-repair
-test, and the multithreading cfg ceiling carries +1 for it (477 → 478, maintainer-approved 2026-11-01).
+## Completion and stopping conditions
+
+- The collision regression is enabled and passes, with no replacement pending-repair ignore.
+- Native drop-order witnesses cover extraction, real successor creation/teardown and held/released
+  leases; panic injection establishes retention through interrupted drain.
+- Workers are released and joined on every test exit. Applicable MT ownership/teardown tests pass
+  pinned Miri; ST cleanup remains a control, not claimed cross-arena coverage.
+- Run the relevant GC/registry/concurrency checks and one fast integration pass under
+  [CI policy](../CI.md#test-hierarchy-and-migration). Full affected suites are required if the
+  implementation changes the wider collection protocol. Do not repeat them per edit.
+- Reconcile non-panicking teardown and public ownership claims in code and owning documentation.
+  Explain any bounded lexical-budget changes under CONTRIBUTING's normal review rules.
+
+Stop when this ownership invariant and its regressions are complete. The real-VM collection
+fixture's foreign-brand concern remains separate plan 01 acceptance work: an approval cannot
+establish brand validity. Leases do not establish object roots, ranges, synchronization or FFI
+lifetimes. Do not claim universal R08 closure from teardown tests alone.
