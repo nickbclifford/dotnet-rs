@@ -1,72 +1,18 @@
 name: Self-hosted probe
 
-# Manual probe of the ephemeral self-hosted Miri runner (see docs/CI.md "Self-hosted runners").
-# It always runs on the self-hosted labels, independent of vars.SELF_HOSTED_MIRI, and never
-# on pull_request. It checks the image pins against this commit, runs one pointer batch and
-# reports wall time and the container cgroup memory peak. Timings from this workflow are
-# self-hosted evidence and must not be mixed with hosted samples.
+# THROWAWAY: live denial test for the self-hosted admission gate. Never merge.
+# A pull_request job on the self-hosted labels must be rejected before any step runs.
 
 on:
-  workflow_dispatch:
-    inputs:
-      configuration:
-        description: 'Pointer control configuration'
-        type: choice
-        options: [no-features, multithreading]
-        default: no-features
-      batch:
-        description: 'Pointer batch number (1-4)'
-        type: choice
-        options: ['1', '2', '3', '4']
-        default: '2'
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
   probe:
-    name: Self-hosted probe (${{ inputs.configuration }}, batch ${{ inputs.batch }})
-    if: github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    name: Self-hosted denial test
     runs-on: [self-hosted, linux, x64, miri]
-    timeout-minutes: 60
-    env:
-      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
-      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
-      CI_DIAG_FEATURES: ${{ inputs.configuration }}
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Verify image pins match this checkout
-        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
-      - name: Runner and container limits
-        run: |
-          {
-            echo "### Self-hosted probe"
-            echo "- runner: \`${{ runner.name }}\` (environment \`${{ runner.environment }}\`)"
-            echo "- cpus visible: $(nproc)"
-            for f in cpu.max memory.max; do
-              if [ -r "/sys/fs/cgroup/$f" ]; then echo "- cgroup $f: $(cat "/sys/fs/cgroup/$f")"; fi
-            done
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Compile Miri controls
-        run: |
-          features=(--no-default-features)
-          if [ '${{ inputs.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
-          start=$(date +%s)
-          cargo +nightly-2026-05-27 miri setup
-          cargo +nightly-2026-05-27 miri test -p dotnet-vm --lib "${features[@]}" --no-run
-          echo "compile wall time: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run one pointer batch
-        run: |
-          start=$(date +%s)
-          status=0
-          bash scripts/pointer_provenance.sh batch --configuration '${{ inputs.configuration }}' --batch '${{ inputs.batch }}' || status=$?
-          wall=$(( $(date +%s) - start ))
-          {
-            echo "- batch ${{ inputs.batch }} (${{ inputs.configuration }}) wall time: ${wall} s (exit ${status})"
-            if [ -r /sys/fs/cgroup/memory.peak ]; then
-              echo "- container cgroup memory.peak: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB (covers compile and batch since container start)"
-            else
-              echo "- container cgroup memory.peak: unavailable"
-            fi
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+      - run: echo "DENIAL-TEST-STEP-RAN"
