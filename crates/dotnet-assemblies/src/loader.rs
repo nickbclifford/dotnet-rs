@@ -136,13 +136,16 @@ pub struct AssemblyLoader {
 /// The default parse options. A VM run typically executes only a fraction of the
 /// methods in a loaded assembly, so deferring body/attribute decode work to first use avoids
 /// parsing metadata that is never touched.
+///
+/// Under Miri, metadata heap strings and blobs are copied into owned values. Thousands of live
+/// borrows into one input buffer make Tree Borrows checks super-linear (dotnetdll 0.4.0
+/// measured `p00_smoke` at 271 s borrowed vs 35 s owned); native runs keep zero-copy parsing.
 pub fn default_read_options() -> ReadOptions {
-    ReadOptions {
-        lazy_method_bodies: true,
-        lazy_method_signatures: false,
-        lazy_attributes: true,
-        ..Default::default()
-    }
+    ReadOptions::new()
+        .with_lazy_method_bodies(true)
+        .with_lazy_method_signatures(false)
+        .with_lazy_attributes(true)
+        .with_own_heap_values(cfg!(miri))
 }
 static_collect!(AssemblyLoader);
 

@@ -58,12 +58,10 @@ impl AlignedAssembly {
 }
 
 fn lazy_opts() -> ReadOptions {
-    ReadOptions {
-        lazy_method_bodies: true,
-        lazy_method_signatures: true,
-        lazy_attributes: true,
-        ..Default::default()
-    }
+    ReadOptions::new()
+        .with_lazy_method_bodies(true)
+        .with_lazy_method_signatures(true)
+        .with_lazy_attributes(true)
 }
 
 fn eager_opts() -> ReadOptions {

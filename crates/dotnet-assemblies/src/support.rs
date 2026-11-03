@@ -155,16 +155,8 @@ impl AssemblyLoader {
         // Attributes are accessed below through `type_attributes()` and `field_attributes()`, so
         // they can remain lazy. Attribute instantiation reads constructor signatures directly,
         // however, so support-library method signatures must be decoded eagerly.
-        let support_res_raw = Resolution::parse(
-            byte_slice,
-            ReadOptions {
-                lazy_method_bodies: true,
-                lazy_method_signatures: false,
-                lazy_attributes: true,
-                ..Default::default()
-            },
-        )
-        .map_err(AssemblyLoadError::from)?;
+        let support_res_raw = Resolution::parse(byte_slice, crate::loader::default_read_options())
+            .map_err(AssemblyLoadError::from)?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
         // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawAllocationOwnership. `support_res_ptr` came from `Box::into_raw` immediately above. MetadataArena

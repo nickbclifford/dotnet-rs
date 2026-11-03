@@ -141,6 +141,13 @@ Make the next CI change concrete and bounded:
    likely pay the same per-process parse of the embedded support library; that is a follow-up
    candidate and is unmeasured.
 
+   Update (dotnetdll 0.4.0): under Miri the loader now parses with
+   `ReadOptions::with_own_heap_values(true)` (`default_read_options()`, which also covers the
+   support-library parse). Measured locally with the same flags: `p00_smoke` 233 s -> 36 s and
+   `batch_2` (single control, no-features) 240 s -> 41 s; with `--features multithreading`
+   `batch_2` takes 44 s. The 233 s figures in this document predate that change and are not
+   re-measured elsewhere; hosted budgets below are unchanged.
+
    Local evidence for the batching (single developer machine, not hosted; no hosted measurement
    exists): under Miri (no-features, permissive Tree Borrows flags) `pointer_provenance_tests::p00_smoke`
    (6 IL instructions) took 233 s wall time while a trivial `dotnet-vm` unit test
