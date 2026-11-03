@@ -31,23 +31,22 @@ permissions:
 
 jobs:
   # Chooses which deep lanes run (see scripts/ci_select.py and docs/CI.md). Fail-safe:
-  # the fallback step is first and its full-sweep outputs are used whenever the
-  # checkout or selector step does not produce its own, so a selector failure can
-  # only select MORE, never fewer, deep checks.
+  # the fallback step is first; failed selector steps cannot publish partial outputs.
+  # Missing outputs also fall back to full-sweep values.
   select-deep:
     name: Select deep checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      mode: ${{ steps.select.outputs.mode || steps.fallback.outputs.mode }}
-      cross_arena: ${{ steps.select.outputs.cross_arena || steps.fallback.outputs.cross_arena }}
-      pointer_controls: ${{ steps.select.outputs.pointer_controls || steps.fallback.outputs.pointer_controls }}
-      pointer_mode: ${{ steps.select.outputs.pointer_mode || steps.fallback.outputs.pointer_mode }}
-      fuzz_any: ${{ steps.select.outputs.fuzz_any || steps.fallback.outputs.fuzz_any }}
-      fuzz_matrix: ${{ steps.select.outputs.fuzz_matrix || steps.fallback.outputs.fuzz_matrix }}
-      reason_cross_arena: ${{ steps.select.outputs.reason_cross_arena || steps.fallback.outputs.reason_cross_arena }}
-      reason_pointer_controls: ${{ steps.select.outputs.reason_pointer_controls || steps.fallback.outputs.reason_pointer_controls }}
-      reason_fuzz: ${{ steps.select.outputs.reason_fuzz || steps.fallback.outputs.reason_fuzz }}
+      mode: ${{ steps.select.outcome == 'success' && steps.select.outputs.mode || steps.fallback.outputs.mode }}
+      cross_arena: ${{ steps.select.outcome == 'success' && steps.select.outputs.cross_arena || steps.fallback.outputs.cross_arena }}
+      pointer_controls: ${{ steps.select.outcome == 'success' && steps.select.outputs.pointer_controls || steps.fallback.outputs.pointer_controls }}
+      pointer_mode: ${{ steps.select.outcome == 'success' && steps.select.outputs.pointer_mode || steps.fallback.outputs.pointer_mode }}
+      fuzz_any: ${{ steps.select.outcome == 'success' && steps.select.outputs.fuzz_any || steps.fallback.outputs.fuzz_any }}
+      fuzz_matrix: ${{ steps.select.outcome == 'success' && steps.select.outputs.fuzz_matrix || steps.fallback.outputs.fuzz_matrix }}
+      reason_cross_arena: ${{ steps.select.outcome == 'success' && steps.select.outputs.reason_cross_arena || steps.fallback.outputs.reason_cross_arena }}
+      reason_pointer_controls: ${{ steps.select.outcome == 'success' && steps.select.outputs.reason_pointer_controls || steps.fallback.outputs.reason_pointer_controls }}
+      reason_fuzz: ${{ steps.select.outcome == 'success' && steps.select.outputs.reason_fuzz || steps.fallback.outputs.reason_fuzz }}
     steps:
       # Keep this fuzz_matrix literal equal to `scripts/ci_select.py --full`
       # (test_ci_select.py enforces it).
@@ -118,6 +117,8 @@ jobs:
         run: bash scripts/pointer_provenance.sh verify-batches
       - name: Test deep-check selector
         run: python3 scripts/tests/test_ci_select.py
+      - name: Test CI result aggregates
+        run: python3 scripts/tests/test_ci_aggregates.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links

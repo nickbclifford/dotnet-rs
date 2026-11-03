@@ -243,7 +243,7 @@ class OutputTests(unittest.TestCase):
         fallback = re.search(r"- id: fallback\n.*?(?=\n      - uses:)", text, re.S).group(0)
         self.assertIn("echo 'pointer_mode=singleton'", fallback)
         self.assertNotIn("batched", fallback)
-        self.assertIn("pointer_mode: ${{ steps.select.outputs.pointer_mode || steps.fallback.outputs.pointer_mode }}", text)
+        self.assertIn("pointer_mode: ${{ steps.select.outcome == 'success' && steps.select.outputs.pointer_mode || steps.fallback.outputs.pointer_mode }}", text)
         self.assertEqual(run_cli(["--full"])["pointer_mode"], "singleton")
 
     def test_pointer_mode_by_selection(self):

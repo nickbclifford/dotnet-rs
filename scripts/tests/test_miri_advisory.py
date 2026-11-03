@@ -38,6 +38,26 @@ class AdvisoryTests(unittest.TestCase):
             self.assertEqual(len(set(shards)), count)
             self.assertTrue(all(r["crate"] == miri.CONFIGS[config][0] for r in rows if r["configuration"] == config))
 
+    def test_workflow_discovers_each_configuration_once_without_suppressing_shards(self):
+        workflow = (ROOT / ".github/workflows/miri.yml").read_text()
+        def section(name):
+            match = re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow, re.M | re.S)
+            self.assertIsNotNone(match, name)
+            return match.group(1)
+        discovery = section("advisory-discovery")
+        shards = section("advisory-shards")
+        matrix = re.search(r"^        configuration: \[([^]]+)\]$", discovery, re.M)
+        self.assertIsNotNone(matrix)
+        configs = [part.strip() for part in matrix.group(1).split(",")]
+        self.assertCountEqual(configs, miri.CONFIGS)
+        self.assertEqual(len(configs), len(set(configs)))
+        self.assertEqual(discovery.count("scripts/miri_advisory.py verify --configuration"), 1)
+        self.assertNotIn("continue-on-error: true", discovery)
+        self.assertNotIn("scripts/miri_advisory.py verify", shards)
+        self.assertIn("scripts/miri_advisory.py execute --configuration", shards)
+        self.assertIn("needs: advisory-matrix", shards)
+        self.assertNotIn("advisory-discovery", shards)
+
     def test_manifest_rejects_missing_extra_duplicate_and_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "m.json"

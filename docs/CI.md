@@ -4,7 +4,7 @@ This document describes the CI workflows for `dotnet-rs`, why they are split, an
 
 ## Test hierarchy and migration
 
-**Agreed policy, 2026-11-02; steps 1-3 of the workflow implementation are in YAML (hosted effect unverified), step 4 is partially implemented (pointer-control batching only; hosted effect unverified), step 5 pending.** Shorten the time to a useful
+**Agreed policy, 2026-11-02; steps 1-3 are in YAML, step 4 is partially implemented, and step 5 is in progress.** Shorten the time to a useful
 answer while preserving checks for meaningful runtime regressions. The workflow inventory
 below describes current YAML. Step 2 changed only when work runs; step 3 adds path-based
 selection of the deep lanes and a nightly full sweep; step 4 (partial) runs the selected pointer
@@ -136,10 +136,11 @@ Make the next CI change concrete and bounded:
    4 batch jobs per configuration (8 jobs; the 33 controls run sequentially on one thread per batch,
    so the support library is parsed once per batch); on a batch failure the 66 singleton jobs re-run
    for attribution; the nightly/manual full sweep and the selector fallback stay singleton.
-   Not done: the broader per-crate discovery/build amortization across lanes, and batching of any
-   other lane. Advisory VM/assembly Miri shards (`miri.yml`) and the cross-arena VM recreations
-   likely pay the same per-process parse of the embedded support library; that is a follow-up
-   candidate and is unmeasured.
+   Advisory Miri discovery now runs once per configuration instead of once per singleton shard;
+   exact singleton executions remain separate. This removes 51 duplicate discovery jobs' work,
+   but introduces three independent discovery jobs. Hosted impact is unmeasured. Broader build
+   amortization and other batching remain open. Cross-arena VM recreations construct fresh loaders
+   independently, so grouping them alone would not share the support-library parse.
 
    Update (dotnetdll 0.4.0): under Miri the loader now parses with
    `ReadOptions::with_own_heap_values(true)` (`default_read_options()`, which also covers the
@@ -159,14 +160,22 @@ Make the next CI change concrete and bounded:
    `get_mock_loader()` in `pointer_provenance_tests.rs` is a `thread_local!`, libtest runs each
    test on a fresh thread and each shard is its own Miri process, so every singleton control re-parses
    the support library. A batch calls its controls sequentially on one thread and shares the parse.
-5. Verify representative selection cases, shared-dependency fallback, missing/ignored tests,
-   failures and cancellation with the existing guard harnesses and bounded local checks.
-   Measure the next available hosted candidate's fast, selected-deep and all-advisory elapsed
-   times separately. If hosted evidence is unavailable, leave latency targets unverified.
+5. **In progress.** Selector and pointer guard harnesses cover representative paths, dependency
+   fallback and missing/ignored tests. `scripts/tests/test_ci_aggregates.py` exercises the actual
+   aggregate shell blocks with selected and unselected lanes, missing results, failures and
+   cancellation. Selector outputs are discarded if the selector step fails, even if it wrote
+   partial outputs. This is local simulation, not a hosted cancellation test.
+
+   One [push CI run](https://github.com/nickbclifford/dotnet-rs/actions/runs/41555605366) at
+   `b9ffaf5c` succeeded: fast-core completed 5m40s after run creation and deep-safety completed
+   10m15s after creation. A separate successful [manual advisory Miri run](https://github.com/nickbclifford/dotnet-rs/actions/runs/41568669566)
+   at the same SHA took 9m50s; it is not an all-advisory measurement or necessarily the same
+   runner configuration. These are single-run observations, not verified latency guarantees.
+   Measure the full advisory fleet and representative hosted changes when available.
 
 Stop when that behavior is reviewable, regression coverage is accounted for, and job selection
-and result reporting agree. Workflow changes land in bounded steps (1-3 are implemented as noted above; step 4 is partial; step 5 is
-not). No runtime repair, new test platform or automatic timeout
+and result reporting agree. Workflow changes land in bounded steps (1-3 are implemented as noted above; steps 4 and 5 are partial).
+No runtime repair, new test platform or automatic timeout
 increase is part of this CI slice. Do not trigger/retry hosted workflows without authorization.
 
 ### Costs, retained signal and risks
@@ -836,9 +845,11 @@ advisory duration-based campaigns.
 The retained advisory `miri` job has a single `dotnet-utils` no-features leg, which runs the full suite.
 The singleton matrix has 38 `dotnet-assemblies` default-feature selections (A01–A38) and the
 same eight `dotnet-vm` selections (V01–V08) in each of no-features and multithreading: 54 jobs.
-Its Miri discovery guards verify the original assembly suite and VM `jmp_tests`, `tail_calls`,
-`fault_tests` union, no duplicates, no ignored selections and empty ancillary listings. Each shard
-requires one pass, zero failures and zero ignored. The manifest in
+Three independent discovery jobs, one per configuration, verify the original assembly suite and VM
+`jmp_tests`, `tail_calls`, `fault_tests` union, no duplicates, no ignored selections and empty
+ancillary listings. A discovery failure fails this advisory workflow; it does not prevent singleton
+execution in any configuration. Each shard requires one pass, zero failures and zero ignored.
+The manifest in
 `scripts/miri_advisory_manifest.json` is:
 
 | Shard | Exact library test |

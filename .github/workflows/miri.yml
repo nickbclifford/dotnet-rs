@@ -118,6 +118,77 @@ jobs:
           matrix="$(python3 scripts/miri_advisory.py matrix)"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  # Verify each original selection once, independently of the execution shards. A
+  # guard failure is visible in the advisory workflow but does not suppress the
+  # other runtime tests, including those in unaffected configurations.
+  advisory-discovery:
+    name: Miri discovery (${{ matrix.configuration }})
+    runs-on: ${{ (github.repository == 'nickbclifford/dotnet-rs' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && vars.SELF_HOSTED_MIRI == 'on') && fromJSON('["self-hosted","linux","x64","miri"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [default-features, no-features, multithreading]
+    env:
+      MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+      CI_DIAG_TOOLCHAIN: nightly-2026-05-27
+      CI_DIAG_FEATURES: ${{ matrix.configuration }}
+    steps:
+      - name: Start diagnostics budget
+        run: |
+          echo "CI_DIAG_DIR=$RUNNER_TEMP/ci-diagnostics" >> "$GITHUB_ENV"
+          echo "CI_DIAG_DEADLINE=$(( $(date +%s) + 30 * 60 - 180 ))" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-diagnostics"
+      - uses: actions/checkout@v4
+      - name: Verify image pins match this checkout
+        if: runner.environment != 'github-hosted'
+        run: dotnet-rs-check-pins --installed "$GITHUB_WORKSPACE"
+      - name: Setup Rust (nightly + miri)
+        if: runner.environment == 'github-hosted'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-27
+          components: miri
+      - name: Rust Cache
+        if: runner.environment == 'github-hosted'
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          shared-key: miri-advisory-discovery-v1-nightly-2026-05-27-${{ matrix.configuration }}
+      - name: Record cache identity
+        run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
+      - name: Setup .NET SDK (10.0.x)
+        if: runner.environment == 'github-hosted'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+      - name: Miri sysroot setup
+        run: python3 scripts/ci_diagnostics.py run --phase setup --subphase miri-sysroot --case miri-sysroot --timeout 300 -- cargo +nightly-2026-05-27 miri setup
+      - name: Verify original Miri selection and singleton partition
+        run: |
+          python3 scripts/ci_diagnostics.py run --phase guard --case '${{ matrix.configuration }}' --timeout 900 -- \
+            python3 scripts/miri_advisory.py verify --configuration '${{ matrix.configuration }}'
+      - name: Summarize diagnostics
+        if: always()
+        run: |
+          if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
+            python3 scripts/ci_diagnostics.py summarize --advisory --outcome '${{ job.status }}' \
+              --title 'Miri discovery (${{ matrix.configuration }})' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-miri-discovery-${{ matrix.configuration }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
   advisory-shards:
     name: Miri (${{ matrix.crate }}, ${{ matrix.configuration }}, ${{ matrix.shard }})
     needs: advisory-matrix
@@ -176,10 +247,6 @@ jobs:
           if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
           python3 scripts/ci_diagnostics.py run --phase compile --case '${{ matrix.shard }}' --timeout 300 -- \
             cargo +nightly-2026-05-27 miri test -p '${{ matrix.crate }}' "${features[@]}" --no-run
-      - name: Verify original Miri selection and singleton partition
-        run: |
-          python3 scripts/ci_diagnostics.py run --phase guard --case '${{ matrix.shard }}' --timeout 300 -- \
-            python3 scripts/miri_advisory.py verify --configuration '${{ matrix.configuration }}'
       - name: Run exact singleton
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case '${{ matrix.shard }}' --timeout 3000 -- \

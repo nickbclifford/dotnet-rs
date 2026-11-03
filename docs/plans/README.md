@@ -8,9 +8,9 @@ audits or artifacts. These priorities were revised with the maintainer on 2026-1
 
 **Shorten the feedback loop first.** Implement the [CI hierarchy and migration](../CI.md#test-hierarchy-and-migration):
 fast core checks get runner capacity first; affected code selects deeper checks; full sweeps
-run on a schedule and before accepting broad architectural changes. Move source-policy scans
-out of Miri and remove duplicate validation without dropping runtime regressions. The workflows
-have not yet been changed to implement this policy.
+run on a schedule and before accepting broad architectural changes. Source-policy scans and
+duplicate validation have been moved or removed. Selection and pointer batching are implemented;
+broader setup amortization and validation of the hierarchy remain in [CI.md](../CI.md#implementing-the-hierarchy).
 
 The maintainer is retiring `supervised/native-continuations-stage1` for a proper redesign.
 Its implementation and unfinished benchmarks are not merged into main and are not prerequisites
