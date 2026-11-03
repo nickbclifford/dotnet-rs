@@ -8,11 +8,9 @@ use crate::stack::GCArenaRoot;
 use gc_arena::arena::MarkedArena;
 
 #[cfg(feature = "multithreading")]
-pub mod arena;
+pub(crate) mod arena;
 pub mod coordinator;
 
-#[cfg(feature = "multithreading")]
-pub use arena::THREAD_ARENA;
 #[cfg(feature = "multithreading")]
 pub use coordinator::{
     ALLOCATION_THRESHOLD, ArenaHandle, CollectionSession, GCCommand, GCCoordinator, GcCycleGuard,

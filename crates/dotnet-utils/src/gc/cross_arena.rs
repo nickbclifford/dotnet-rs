@@ -397,6 +397,10 @@ impl ArenaRegistration {
     /// Remove this registration if still present, then wait until every lease on
     /// it is released, regardless of who removed the entry. Never waits under the
     /// registry lock, and never waits on a lease held by the calling thread.
+    /// Protected storage may be freed only after `Drained` is returned.
+    /// `SelfHeldLease` or an unwind (including from a tracing subscriber during
+    /// drain) requires retaining that storage. Removal alone is not a drain.
+    #[must_use = "free protected storage only after Drained; retain it on unwind or SelfHeldLease"]
     pub fn unregister_and_drain(self) -> TeardownOutcome {
         let id = self.identity.arena_id;
         remove_registration(id, Some(self.identity));

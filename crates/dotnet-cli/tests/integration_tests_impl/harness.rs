@@ -364,7 +364,8 @@ impl TestHarness {
         // thread never calls safe_point again, so wait_on_other_arenas hangs forever.
         //
         // The arena has already been extracted above (in multithreading mode), so
-        // Executor::drop will find THREAD_ARENA empty and skip clearing it.
+        // Executor::drop releases only its reservation; the thread-affine guard
+        // independently owns storage and drains its exact registration below.
         drop(executor);
 
         on_complete(result.clone());

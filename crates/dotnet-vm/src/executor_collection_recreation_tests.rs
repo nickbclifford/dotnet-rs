@@ -93,7 +93,9 @@ fn m1e_recreation_vm_collection() {
 
 #[cfg(feature = "multithreading")]
 fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
-    use crate::{gc::coordinator::GcCycleGuard, threading::ThreadManagerOps};
+    use crate::{
+        gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
+    };
     use dotnet_utils::gc::GCHandleType;
     use dotnet_value::object::ObjectPtr;
     use std::{sync::mpsc, thread, time::Duration};
@@ -127,6 +129,7 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
         }
     });
 
+    let owner_b = Worker::new(owner_b, collected_tx);
     let mut a = Executor::new(Arc::clone(&state));
     let (b_id, Handoff(ptr)) = ptr_rx.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_ne!(a.thread_id, b_id);
@@ -158,7 +161,7 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
         let cycle = GcCycleGuard::new(session, stw);
         cycle.collect_all_arenas(a.thread_id);
         drop(cycle);
-        collected_tx.send(()).unwrap();
+        owner_b.resources().send(()).unwrap();
         let observed = probe_rx
             .recv_timeout(Duration::from_secs(30))
             .expect("arena B reported");
@@ -177,8 +180,7 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
         }
     }
 
-    drop(collected_tx);
-    owner_b.join().unwrap();
+    owner_b.finish().unwrap();
     drop(a);
     seen
 }
@@ -220,7 +222,9 @@ fn m1e_recreation_vm_collection_unrooted_negative_control() {
 #[cfg(feature = "multithreading")]
 #[test]
 fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
-    use crate::{gc::coordinator::GcCycleGuard, threading::ThreadManagerOps};
+    use crate::{
+        gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
+    };
     use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
     use dotnet_utils::gc::GCHandleType;
     use dotnet_value::{
@@ -287,16 +291,14 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
             .unwrap()
     }
 
-    fn spawn_owner(
-        state: &Arc<SharedGlobalState>,
-        vector: bool,
-    ) -> (
+    type OwnerHandoff = (
         dotnet_utils::ArenaId,
         Handoff,
-        mpsc::Sender<Cmd>,
+        Worker<(), mpsc::Sender<Cmd>>,
         mpsc::Receiver<Option<String>>,
-        thread::JoinHandle<()>,
-    ) {
+    );
+
+    fn spawn_owner(state: &Arc<SharedGlobalState>, vector: bool) -> OwnerHandoff {
         let (ptr_tx, ptr_rx) = mpsc::channel::<(dotnet_utils::ArenaId, Handoff)>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (reply_tx, reply_rx) = mpsc::channel::<Option<String>>();
@@ -368,19 +370,23 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
                 }
             }
         });
+        let worker = Worker::new(join, cmd_tx);
         let (id, ptr) = ptr_rx.recv_timeout(Duration::from_secs(30)).unwrap();
-        (id, ptr, cmd_tx, reply_rx, join)
+        (id, ptr, worker, reply_rx)
     }
 
     let state = shared();
     // Y (string) in arena C, X (vector) in arena B, root in arena A (this thread).
-    let (c_id, Handoff(y_ptr), c_tx, c_rx, c_join) = spawn_owner(&state, false);
-    let (b_id, Handoff(x_ptr), b_tx, b_rx, b_join) = spawn_owner(&state, true);
+    let (c_id, Handoff(y_ptr), c_worker, c_rx) = spawn_owner(&state, false);
+    let (b_id, Handoff(x_ptr), b_worker, b_rx) = spawn_owner(&state, true);
     let mut a = Executor::new(Arc::clone(&state));
     assert!(a.thread_id != b_id && a.thread_id != c_id && b_id != c_id);
 
     let recv = |rx: &mpsc::Receiver<Option<String>>| rx.recv_timeout(Duration::from_secs(30));
-    b_tx.send(Cmd::Link(Handoff(y_ptr))).unwrap();
+    b_worker
+        .resources()
+        .send(Cmd::Link(Handoff(y_ptr)))
+        .unwrap();
     recv(&b_rx).expect("arena B linked X -> Y");
     a.with_arena(|arena| {
         arena.mutate_root(|_gc, engine| {
@@ -412,9 +418,9 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
         drop(cycle);
     };
     let observe = || {
-        b_tx.send(Cmd::Probe).unwrap();
+        b_worker.resources().send(Cmd::Probe).unwrap();
         let x = recv(&b_rx).expect("arena B reported");
-        c_tx.send(Cmd::Probe).unwrap();
+        c_worker.resources().send(Cmd::Probe).unwrap();
         let y = recv(&c_rx).expect("arena C reported");
         (x, y)
     };
@@ -443,7 +449,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     let mut written = None;
     if survived_two {
         // Payload read/write after two collections, then a third collection keeps the write.
-        c_tx.send(Cmd::Write(WRITTEN)).unwrap();
+        c_worker.resources().send(Cmd::Write(WRITTEN)).unwrap();
         recv(&c_rx).expect("arena C wrote payload");
         collect(&a);
         written = Some(observe());
@@ -468,10 +474,8 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
         }
     }
 
-    drop(b_tx);
-    drop(c_tx);
-    b_join.join().unwrap();
-    c_join.join().unwrap();
+    b_worker.finish().unwrap();
+    c_worker.finish().unwrap();
     drop(a);
 
     assert_eq!(

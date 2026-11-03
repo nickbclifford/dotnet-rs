@@ -319,12 +319,10 @@ impl super::ThreadManagerBackend for ThreadManager {
         // Clear thread-local cache
         MANAGED_THREAD_ID.set(None);
 
-        // NOTE: We do NOT call unregister_arena here anymore.
-        // Arena unregistration happens when the arena memory is actually freed:
-        // - In Executor::drop when THREAD_ARENA is cleared (normal case)
-        // - In ArenaGuard::drop when the extracted arena is dropped (test case)
-        // This ensures the arena remains valid for cross-arena references until
-        // the memory is actually destroyed.
+        // The Executor or extracted ArenaGuard removes the exact registry entry
+        // separately, before draining existing leases. Removal prevents new
+        // leases; storage is destroyed only after drain completes, and retained
+        // if cleanup is incomplete or unwinds.
 
         #[cfg(feature = "multithreading")]
         {
@@ -704,13 +702,12 @@ fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
 }
 
 pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &GCCoordinator) {
-    use crate::gc::arena::THREAD_ARENA;
+    use crate::gc::arena::with_current;
     match command {
         GCCommand::Mark(mark_command) => match mark_command {
             MarkPhaseCommand::All => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                    if let Some(arena) = arena_opt.as_mut() {
+                with_current(|arena| {
+                    if let Some(arena) = arena {
                         let thread_id = get_current_thread_id();
                         set_currently_tracing(Some(thread_id));
 
@@ -750,9 +747,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 });
             }
             MarkPhaseCommand::Objects(ptrs) => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                    if let Some(arena) = arena_opt.as_mut() {
+                with_current(|arena| {
+                    if let Some(arena) = arena {
                         let thread_id = get_current_thread_id();
                         set_currently_tracing(Some(thread_id));
 
@@ -815,9 +811,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
         },
         GCCommand::Sweep(sweep_command) => match sweep_command {
             SweepPhaseCommand::Finalize => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                    if let Some(arena) = arena_opt.as_mut() {
+                with_current(|arena| {
+                    if let Some(arena) = arena {
                         // Ensure we are in Marked phase
                         let marked = arena.finish_marking();
 
@@ -828,9 +823,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 });
             }
             SweepPhaseCommand::Sweep => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                    if let Some(arena) = arena_opt.as_mut() {
+                with_current(|arena| {
+                    if let Some(arena) = arena {
                         // Finish the collection (finalize and sweep)
                         arena.finish_cycle();
                     }

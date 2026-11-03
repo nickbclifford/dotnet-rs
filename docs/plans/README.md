@@ -16,15 +16,15 @@ The maintainer is retiring `supervised/native-continuations-stage1` for a proper
 Its implementation and unfinished benchmarks are not merged into main and are not prerequisites
 for the pivot. [Plan 02](02-native-continuations.md) is parked: preserve useful historical
 findings, but do not resume the old checklist, require its closeout or freeze its API choices.
-After CI feedback work, Executor/arena ownership in plan 03 is the next substantial runtime
-repair, followed by stable byref homes under a common access protocol in plan 01. Native interop
+Executor/arena ownership in plan 03 is complete; the next substantial runtime repair is stable
+byref homes under a common access protocol in plan 01. Native interop
 remains a separate bounded repair with its current fail-closed exclusions retained.
 
 | ID | Plan | Priority | Status | Dependencies |
 |---|---|---|---|---|
 | 01 | [Pointer/provenance model](01-pointer-provenance.md) | After ownership: stable homes and common access | In progress — scoped repairs retained; M1e/M1g acceptance open | Plan 03 for R08; storage, shared access and affected copy/barrier paths migrate together |
 | 02 | [Native continuations (async/await as VM effects)](02-native-continuations.md) | Parked for redesign after CI feedback | Parked — prior implementation unmerged; redesign not started | Select one useful behavior before implementation; MT requires accepted cross-arena ownership/publication |
-| 03 | [Executor teardown ownership and panic safety](03-executor-teardown-ownership.md) | Next substantial runtime repair | Not started | No historical-artifact recovery prerequisite; blocks R08/M1e acceptance of plan 01 |
+| 03 | [Executor teardown ownership and panic safety](03-executor-teardown-ownership.md) | Scoped ownership repair | Complete — scoped ownership outcome accepted | No historical-artifact recovery prerequisite; broader R08/M1e acceptance remains open |
 
 ## How work proceeds
 

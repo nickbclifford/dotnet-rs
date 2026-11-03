@@ -2,8 +2,8 @@
 
 Current priorities, remaining outcomes and stopping conditions are owned by the
 [pointer plan](../plans/01-pointer-provenance.md) and [project queue](../plans/README.md).
-M1a–M1d scoped repairs are retained; M1e/M1g implementation has advanced but acceptance remains
-open, including Executor ownership and the collection fixture's foreign-brand concern.
+M1a–M1d scoped repairs and the plan 03 Executor ownership outcome are retained; broader M1e/M1g
+acceptance remains open, including the collection fixture's foreign-brand concern.
 
 This page and [INVENTORY.md](INVENTORY.md) preserve measured outcomes and limits. Historical
 milestone/shard counts describe their snapshots. Current YAML remains broad; the agreed
@@ -82,7 +82,7 @@ M1a repaired heap `ManagedPtr::with_data` to validate checked ranges against act
 Remaining obligations, not fixed by the scoped M1d work, include:
 
 - **M3:** p09 stack-home relocation, Stack/Static observation and stack fallback, final pointer codecs and struct layout, and static `GuestBlock` alignment (p12); p36 addresses only the tested static allocation lifetime.
-- **M1e/M1g:** Retained GC transport, root publication and generation-qualified identity are implemented, but acceptance remains open. In particular, [plan 03](../plans/03-executor-teardown-ownership.md) owns the extracted-Executor collision and panic-safety/ownership gaps. A lease does not itself establish a GC root, range or synchronization.
+- **M1e/M1g:** Retained GC transport, root publication and generation-qualified identity are implemented, but broader acceptance remains open. The extracted-Executor collision and panic-safety/ownership repair is accepted as the scoped outcome of [plan 03](../plans/03-executor-teardown-ownership.md); the real-VM fixture's foreign-brand concern remains separate. A lease does not itself establish a GC root, range or synchronization.
 - **M4:** a shared-memory/atomic protocol, including overlapping and static/raw accesses.
 - **M2:** P/Invoke pin/guard lifetime, cross-arena access, ABI and return/copy semantics.
 - **M1f/M5:** block-operation count width, complete ranges, barriers/rooting and `cpblk`/`initblk`/`Memmove` yield/resumption; negative-index exception behavior also remains open.

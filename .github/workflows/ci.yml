@@ -605,14 +605,11 @@ jobs:
 
   # Independent recreations (not recovered originals); each invocation is guarded.
   #
-  # Matrix: configuration x group, as an explicit include list (8 jobs). The three dotnet-vm
-  # recreations used to run serially in one job, each in its own Miri process that re-parses the
-  # embedded support library (hosted samples: 563-870s each), which exhausted the 45-minute job
-  # budget. Each VM recreation now has its own job; the cheap dotnet-value/dotnet-utils singletons
-  # share a short `library` job. Together the groups execute exactly the pre-split (configuration,
-  # selector) set.
+  # Matrix: configuration x group x shard (21 jobs). Hosted VM processes historically took
+  # 563-870s each and serial execution exhausted the 45-minute budget. Each teardown selector
+  # has its own shard; the cheap dotnet-value/dotnet-utils singletons share a `library` job.
   miri-cross-arena:
-    name: Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }})
+    name: Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }}, ${{ matrix.shard }})
     needs: [fast-core, select-deep]
     # No status function, so GitHub ANDs success(): fast-core and select-deep must both
     # succeed. `!= 'false'` makes a missing selection output run the lane, not skip it.
@@ -623,19 +620,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # library: ~5 min of Miri execution plus compile on hosted runners; 30 min leaves
-          # headroom for a cold cache and a 2-3x slower runner.
-          - { configuration: no-features,    group: library,       job_timeout: 30, invocation_timeout: 900 }
-          - { configuration: multithreading, group: library,       job_timeout: 30, invocation_timeout: 900 }
-          # VM groups: one dotnet-vm Miri process each. The per-invocation timeout is 1800s
-          # (was 900s): hosted samples reached 870s for collection and runner speed varies
-          # 25-45% between runs, so 900s left no margin. See docs/CI.md.
-          - { configuration: no-features,    group: vm-teardown,   job_timeout: 45, invocation_timeout: 1800 }
-          - { configuration: multithreading, group: vm-teardown,   job_timeout: 45, invocation_timeout: 1800 }
-          - { configuration: no-features,    group: vm-collection, job_timeout: 45, invocation_timeout: 1800 }
-          - { configuration: multithreading, group: vm-collection, job_timeout: 45, invocation_timeout: 1800 }
-          - { configuration: no-features,    group: vm-stress,     job_timeout: 45, invocation_timeout: 1800 }
-          - { configuration: multithreading, group: vm-stress,     job_timeout: 45, invocation_timeout: 1800 }
+          # Each teardown shard runs exactly one VM process; each has a unique cache and artifact.
+          # VM: 1800 s per invocation, 45 min per job. Library: 900 s, 30 min.
+          - { configuration: no-features, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
+          - { configuration: multithreading, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
+          - { configuration: no-features, group: vm-teardown, shard: control, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control }
+          - { configuration: multithreading, group: vm-teardown, shard: normal, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: extracted, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_extracted_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: unwind, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_unwind_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: nested, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_nested_creation_fails_closed }
+          - { configuration: multithreading, group: vm-teardown, shard: self-held, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_self_held_lease_leaks_instead_of_deadlocking }
+          - { configuration: multithreading, group: vm-teardown, shard: external-remover, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_external_remover_does_not_release_owner }
+          - { configuration: multithreading, group: vm-teardown, shard: collision, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership }
+          - { configuration: multithreading, group: vm-teardown, shard: forgotten, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_forgotten_executor_tls_exit_retains_arena }
+          - { configuration: multithreading, group: vm-teardown, shard: repeated, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_repeated_extraction_reserves_until_owner_drop }
+          - { configuration: multithreading, group: vm-teardown, shard: constructor, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_constructor_rollback_releases_reservation }
+          - { configuration: multithreading, group: vm-teardown, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_executor_teardown_panic_retains_arena }
+          - { configuration: multithreading, group: vm-teardown, shard: owner-first, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_owner_first_guard_does_not_touch_successor }
+          - { configuration: multithreading, group: vm-teardown, shard: self-held-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_self_held_drain_panic_and_no_diagnostic }
+          - { configuration: multithreading, group: vm-teardown, shard: warning-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_drain_warning_panic_retains_arena }
+          - { configuration: no-features, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
+          - { configuration: multithreading, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
+          - { configuration: no-features, group: vm-stress, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
+          - { configuration: multithreading, group: vm-stress, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
     env:
       MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
       CI_DIAG_TOOLCHAIN: nightly-2026-05-27
@@ -661,9 +668,8 @@ jobs:
         if: runner.environment == 'github-hosted'
         id: rust-cache
         with:
-          # Keyed per group: the library and VM groups build different crate sets, and three
-          # VM jobs sharing one key would race to save identical entries.
-          key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.group }}
+          # Shards build the same VM crate set but must not race to save one cache key.
+          key: miri-cross-arena-nightly-2026-05-27-${{ matrix.configuration }}-${{ matrix.group }}-${{ matrix.shard }}
       - name: Record cache identity
         run: echo "CI_DIAG_CACHE=rust-cache-hit=${{ steps.rust-cache.outputs.cache-hit }},runner-env=${{ runner.environment }},runner=${{ runner.name }}" >> "$GITHUB_ENV"
       - uses: actions/setup-dotnet@v4
@@ -729,11 +735,7 @@ jobs:
               fi
               ;;
             vm-teardown)
-              if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton teardown dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease
-              else
-                singleton teardown-control dotnet-vm executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control
-              fi
+              singleton "teardown-${{ matrix.shard }}" dotnet-vm '${{ matrix.selector }}'
               ;;
             vm-collection)
               if [ '${{ matrix.configuration }}' = multithreading ]; then
@@ -762,13 +764,13 @@ jobs:
         if: always()
         run: |
           if [ -n "${CI_DIAG_DIR:-}" ] && [ -f scripts/ci_diagnostics.py ]; then
-            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }})' >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/ci_diagnostics.py summarize --outcome '${{ job.status }}' --title 'Miri cross-arena (${{ matrix.configuration }}, ${{ matrix.group }}, ${{ matrix.shard }})' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-miri-cross-arena-${{ matrix.configuration }}-${{ matrix.group }}-attempt-${{ github.run_attempt }}
+          name: ci-diagnostics-miri-cross-arena-${{ matrix.configuration }}-${{ matrix.group }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-diagnostics
           if-no-files-found: warn
           retention-days: 14

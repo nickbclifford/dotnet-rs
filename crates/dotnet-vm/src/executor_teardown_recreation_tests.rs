@@ -55,6 +55,7 @@ fn recreation_executor_single_arena_cleanup_control() {
 
 #[cfg(feature = "multithreading")]
 fn check_teardown(extracted: bool, unwind: bool) {
+    use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{
         sync::mpsc,
@@ -98,12 +99,15 @@ fn check_teardown(extracted: bool, unwind: bool) {
         let _ = done_tx.send(());
     });
 
+    let mut worker = Worker::new(worker, (start_tx, None));
     let id = ready_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("Executor ready");
-    let lease = try_acquire_lease(id).expect("actual Executor arena registered");
+    worker.resources_mut().1 =
+        Some(try_acquire_lease(id).expect("actual Executor arena registered"));
+    let lease = worker.resources().1.as_ref().unwrap();
     let before = drops.load(AtomicOrdering::SeqCst);
-    start_tx.send(()).unwrap();
+    worker.resources().0.send(()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while lease.is_valid() && Instant::now() < deadline {
         thread::yield_now();
@@ -115,14 +119,9 @@ fn check_teardown(extracted: bool, unwind: bool) {
 
     // Always release before any assertions: a failing regression must not strand
     // Executor or ArenaGuard in unregister_arena's lease drain.
-    drop(lease);
+    drop(worker.resources_mut().1.take());
     let completed = completed_while_held || done_rx.recv_timeout(Duration::from_secs(10)).is_ok();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !worker.is_finished() && Instant::now() < deadline {
-        thread::yield_now();
-    }
-    assert!(worker.is_finished(), "owner join timed out");
-    worker.join().unwrap();
+    worker.finish().unwrap();
     let after = drops.load(AtomicOrdering::SeqCst);
     assert_eq!(before, 0, "witness died before teardown");
     assert!(closing, "teardown did not reach registry closing");
@@ -136,6 +135,81 @@ fn check_teardown(extracted: bool, unwind: bool) {
     assert_eq!(
         during, 0,
         "arena allocation destroyed before active lease drained"
+    );
+}
+
+/// A driver panic, both before readiness and with a real lease held, must
+/// disconnect the worker, release the lease, and join before unwind returns.
+#[cfg(feature = "multithreading")]
+#[test]
+fn recreation_worker_driver_failure_releases_and_joins() {
+    use crate::test_utils::worker::Worker;
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{panic::AssertUnwindSafe, sync::mpsc, thread, time::Duration};
+
+    struct Joined(StdArc<AtomicUsize>, thread::ThreadId);
+    impl Drop for Joined {
+        fn drop(&mut self) {
+            if thread::current().id() == self.1 {
+                self.0.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        }
+    }
+
+    for after_ready in [false, true] {
+        let drops = StdArc::new(AtomicUsize::new(0));
+        let exited = StdArc::new(AtomicUsize::new(0));
+        let joined = StdArc::new(AtomicUsize::new(0));
+        let worker_drops = StdArc::clone(&drops);
+        let worker_exited = StdArc::clone(&exited);
+        let worker_joined = StdArc::clone(&joined);
+        let driver_id = thread::current().id();
+        let state = shared();
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let handle = thread::spawn(move || {
+                let mut executor = Executor::new(state);
+                allocate_witness(&mut executor, worker_drops);
+                let _ = ready_tx.send(executor.thread_id);
+                let _ = release_rx.recv(); // disconnect is cancellation
+                drop(executor);
+                worker_exited.fetch_add(1, AtomicOrdering::SeqCst);
+                Joined(worker_joined, driver_id)
+            });
+            let mut worker = Worker::new(handle, (release_tx, None));
+            if after_ready {
+                let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+                worker.resources_mut().1 = Some(try_acquire_lease(id).unwrap());
+            }
+            panic!("injected driver failure");
+        }));
+        assert!(result.is_err());
+        assert_eq!(drops.load(AtomicOrdering::SeqCst), 1, "arena released");
+        assert_eq!(exited.load(AtomicOrdering::SeqCst), 1, "worker exited");
+        assert_eq!(
+            joined.load(AtomicOrdering::SeqCst),
+            1,
+            "join result consumed"
+        );
+    }
+    let worker = Worker::new(thread::spawn(|| panic!("injected worker failure")), ());
+    assert!(
+        worker.finish().is_err(),
+        "finish must report worker failure"
+    );
+    let driver = std::panic::catch_unwind(|| {
+        let (tx, rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            let _ = rx.recv();
+            panic!("worker failure during driver unwind");
+        });
+        let _worker = Worker::new(handle, tx);
+        panic!("injected driver failure with a failing worker");
+    });
+    assert!(
+        driver.is_err(),
+        "worker failure must not cause a double panic"
     );
 }
 
@@ -187,7 +261,7 @@ fn m1e_recreation_teardown_stress() {
 #[cfg(feature = "multithreading")]
 #[test]
 fn m1e_recreation_teardown_stress() {
-    use crate::gc::coordinator::GcCycleGuard;
+    use crate::{gc::coordinator::GcCycleGuard, test_utils::worker::Worker};
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{
         sync::mpsc,
@@ -252,6 +326,7 @@ fn m1e_recreation_teardown_stress() {
             let _ = done_tx.send(());
         });
 
+        let mut worker = Worker::new(worker, (collected_tx, exit_tx, None));
         let id = registered_rx
             .recv_timeout(DEADLINE)
             .expect("owner registered");
@@ -262,24 +337,19 @@ fn m1e_recreation_teardown_stress() {
         let cycle = GcCycleGuard::new(session, stw);
         cycle.collect_all_arenas(a.thread_id);
         drop(cycle);
-        collected_tx.send(()).unwrap();
+        worker.resources().0.send(()).unwrap();
         ready_rx
             .recv_timeout(DEADLINE)
             .expect("owner ready to exit");
         let collected_before_exit = collected.load(AtomicOrdering::SeqCst);
         let before = teardown.load(AtomicOrdering::SeqCst);
-        let lease = try_acquire_lease(id).expect("owner is registered");
+        worker.resources_mut().2 = Some(try_acquire_lease(id).expect("owner is registered"));
         if !hold_lease {
             // Released lease: teardown must not wait and must still free exactly once.
-            drop(lease);
-            exit_tx.send(()).unwrap();
+            drop(worker.resources_mut().2.take());
+            worker.resources().1.send(()).unwrap();
             let completed = done_rx.recv_timeout(DEADLINE).is_ok();
-            let deadline = Instant::now() + DEADLINE;
-            while !worker.is_finished() && Instant::now() < deadline {
-                thread::yield_now();
-            }
-            assert!(worker.is_finished(), "owner join timed out");
-            worker.join().expect("owner thread");
+            worker.finish().expect("owner thread");
             drop(a);
             let after = teardown.load(AtomicOrdering::SeqCst);
             assert_eq!(
@@ -295,7 +365,8 @@ fn m1e_recreation_teardown_stress() {
             );
             continue;
         }
-        exit_tx.send(()).unwrap();
+        worker.resources().1.send(()).unwrap();
+        let lease = worker.resources().2.as_ref().unwrap();
         let deadline = Instant::now() + DEADLINE;
         while lease.is_valid() && Instant::now() < deadline {
             thread::yield_now();
@@ -305,14 +376,9 @@ fn m1e_recreation_teardown_stress() {
         let during = teardown.load(AtomicOrdering::SeqCst);
         let completed_held = done_rx.try_recv().is_ok();
         // Always release before asserting so the unregister drain can complete.
-        drop(lease);
+        drop(worker.resources_mut().2.take());
         let completed = completed_held || done_rx.recv_timeout(DEADLINE).is_ok();
-        let deadline = Instant::now() + DEADLINE;
-        while !worker.is_finished() && Instant::now() < deadline {
-            thread::yield_now();
-        }
-        assert!(worker.is_finished(), "owner join timed out");
-        worker.join().expect("owner thread");
+        worker.finish().expect("owner thread");
         let after = teardown.load(AtomicOrdering::SeqCst);
         drop(a);
         observations.push((
@@ -381,6 +447,7 @@ fn recreation_executor_nested_creation_fails_closed() {
 #[cfg(feature = "multithreading")]
 #[test]
 fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
+    use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{sync::mpsc, time::Duration};
     let drops = StdArc::new(AtomicUsize::new(0));
@@ -395,10 +462,13 @@ fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
         let _ = done_tx.send(());
         drop(lease);
     });
+    // An actual self-drain deadlock requires an outer process timeout: a join
+    // guard cannot kill a stuck thread, and must never detach it as success.
+    let worker = Worker::new(worker, ());
     done_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("teardown deadlocked on a self-held lease");
-    worker.join().unwrap();
+    worker.finish().unwrap();
     assert_eq!(
         drops.load(AtomicOrdering::SeqCst),
         0,
@@ -411,6 +481,7 @@ fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
 #[cfg(feature = "multithreading")]
 #[test]
 fn recreation_executor_external_remover_does_not_release_owner() {
+    use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::{try_acquire_lease, unregister_arena};
     use std::{
         sync::mpsc,
@@ -431,20 +502,25 @@ fn recreation_executor_external_remover_does_not_release_owner() {
         drop(executor);
         let _ = done_tx.send(());
     });
+    let owner = Worker::new(owner, go_tx);
     let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
     let lease = try_acquire_lease(id).unwrap();
     let remover = thread::spawn(move || unregister_arena(id)); // removes entry, drains
+    // Remover is dropped first on unwind: release its lease before joining it,
+    // then disconnect and join the owner.
+    let mut remover = Worker::new(remover, Some(lease));
+    let lease = remover.resources().as_ref().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while lease.is_valid() && Instant::now() < deadline {
         thread::yield_now();
     }
     assert!(!lease.is_valid(), "external removal did not begin");
-    go_tx.send(()).unwrap();
+    owner.resources().send(()).unwrap();
     let owner_done_early = done_rx.recv_timeout(Duration::from_millis(300)).is_ok();
     let freed_early = drops.load(AtomicOrdering::SeqCst);
-    drop(lease); // release before asserting so a failure cannot strand threads
-    owner.join().unwrap();
-    remover.join().unwrap();
+    drop(remover.resources_mut().take()); // release before either join
+    owner.finish().unwrap();
+    remover.finish().unwrap();
     assert!(!owner_done_early, "owner returned while a lease was held");
     assert_eq!(freed_early, 0, "arena freed while a lease was held");
     assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
@@ -455,8 +531,8 @@ fn recreation_executor_external_remover_does_not_release_owner() {
 /// until it is dropped, and its extracted guard must remain independently owned.
 #[cfg(feature = "multithreading")]
 #[test]
-#[ignore = "finding: pending repair; independent recreation (not recovered originals)"]
 fn recreation_extracted_executor_tls_ownership() {
+    use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
@@ -465,7 +541,7 @@ fn recreation_extracted_executor_tls_ownership() {
         time::Duration,
     };
 
-    fn held_lease(id: ArenaId) -> (mpsc::Sender<()>, thread::JoinHandle<bool>) {
+    fn held_lease(id: ArenaId) -> Worker<bool, mpsc::Sender<()>> {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
@@ -474,8 +550,9 @@ fn recreation_extracted_executor_tls_ownership() {
             let _ = release_rx.recv_timeout(Duration::from_secs(30));
             lease.is_valid()
         });
+        let worker = Worker::new(worker, release_tx);
         ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
-        (release_tx, worker)
+        worker
     }
 
     let state = shared();
@@ -487,7 +564,7 @@ fn recreation_extracted_executor_tls_ownership() {
         allocate_witness(&mut first, StdArc::clone(&first_drops));
         let first_id = first.thread_id;
         let guard = first.extract_arena().unwrap();
-        let (release_first, first_holder) = held_lease(first_id);
+        let first_holder = held_lease(first_id);
 
         let attempted = catch_unwind(AssertUnwindSafe(|| Executor::new(Arc::clone(&state))));
         rejected.push(attempted.is_err());
@@ -500,8 +577,8 @@ fn recreation_extracted_executor_tls_ownership() {
         let first_alive = first_drops.load(AtomicOrdering::SeqCst) == 0;
 
         if guard_first {
-            release_first.send(()).unwrap();
-            let first_was_valid = first_holder.join().unwrap();
+            first_holder.resources().send(()).unwrap();
+            let first_was_valid = first_holder.finish().unwrap();
             drop(guard);
             drop(first);
             assert!(first_was_valid && first_still_registered && first_alive);
@@ -511,15 +588,15 @@ fn recreation_extracted_executor_tls_ownership() {
             let mut successor = Executor::new(Arc::clone(&state));
             allocate_witness(&mut successor, StdArc::clone(&second_drops));
             let second_id = successor.thread_id;
-            let (release_second, second_holder) = held_lease(second_id);
+            let second_holder = held_lease(second_id);
             let first_after_executor_drop = try_acquire_lease(first_id).is_some();
-            release_first.send(()).unwrap();
-            let first_was_valid = first_holder.join().unwrap();
+            first_holder.resources().send(()).unwrap();
+            let first_was_valid = first_holder.finish().unwrap();
             drop(guard);
             let second_still_registered = try_acquire_lease(second_id).is_some();
             let second_alive = second_drops.load(AtomicOrdering::SeqCst) == 0;
-            release_second.send(()).unwrap();
-            let second_was_valid = second_holder.join().unwrap();
+            second_holder.resources().send(()).unwrap();
+            let second_was_valid = second_holder.finish().unwrap();
             drop(successor);
             assert!(
                 first_still_registered
@@ -539,4 +616,287 @@ fn recreation_extracted_executor_tls_ownership() {
         [true, true],
         "extracted Executor allowed a successor before its own drop"
     );
+}
+
+static_assertions::assert_not_impl_any!(Executor: Send, Sync);
+
+#[cfg(feature = "multithreading")]
+mod ownership {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    static_assertions::assert_not_impl_any!(ArenaGuard: Send, Sync);
+
+    // Installed only around the explicit drop on this thread. Match the actual
+    // registry warning, rather than treating an arbitrary tracing event as proof.
+    struct DrainWarning {
+        seen: StdArc<AtomicUsize>,
+        panic_on_warning: bool,
+    }
+
+    impl tracing::Subscriber for DrainWarning {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+                && metadata.target() == "dotnet_utils::gc::cross_arena"
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Message(bool);
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}").contains(
+                            "unregister_arena is waiting for outstanding cross-arena leases",
+                        );
+                    }
+                }
+            }
+            let mut message = Message(false);
+            event.record(&mut message);
+            if self.enabled(event.metadata()) && message.0 {
+                self.seen.fetch_add(1, AtomicOrdering::SeqCst);
+                assert!(!self.panic_on_warning, "injected drain warning panic");
+            }
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    struct Fault;
+    impl Fault {
+        fn at(point: &'static str) -> Self {
+            OWNERSHIP_PANIC.with(|fault| {
+                assert_eq!(fault.replace(Some(point)), None);
+            });
+            Self
+        }
+    }
+    impl Drop for Fault {
+        fn drop(&mut self) {
+            OWNERSHIP_PANIC.with(|fault| fault.set(None));
+        }
+    }
+
+    fn panic_message(result: Result<(), Box<dyn std::any::Any + Send>>) -> String {
+        let payload = result.expect_err("expected controlled panic");
+        if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_owned()
+        } else {
+            panic!("unexpected non-string panic payload");
+        }
+    }
+
+    #[test]
+    fn recreation_forgotten_executor_tls_exit_retains_arena() {
+        use crate::test_utils::worker::Worker;
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let state = shared();
+        let drops = StdArc::new(AtomicUsize::new(0));
+        let worker_drops = StdArc::clone(&drops);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut executor = Executor::new(state);
+            allocate_witness(&mut executor, worker_drops);
+            ready_tx.send(executor.thread_id).unwrap();
+            let _ = exit_rx.recv();
+            std::mem::forget(executor);
+        });
+        let worker = Worker::new(worker, exit_tx);
+        let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        let lease = dotnet_utils::gc::try_acquire_lease(id).unwrap();
+        worker.resources().send(()).unwrap();
+        worker.finish().unwrap();
+        assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+        drop(lease);
+        dotnet_utils::gc::cross_arena::unregister_arena(id);
+        assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn recreation_repeated_extraction_reserves_until_owner_drop() {
+        let state = shared();
+        let mut executor = Executor::new(Arc::clone(&state));
+        let drops = StdArc::new(AtomicUsize::new(0));
+        allocate_witness(&mut executor, StdArc::clone(&drops));
+        let id = executor.thread_id;
+        let guard = executor.extract_arena().unwrap();
+        assert!(executor.extract_arena().is_none());
+        assert!(dotnet_utils::gc::try_acquire_lease(id).is_some());
+        drop(guard);
+        assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+        assert!(executor.extract_arena().is_none());
+        assert!(dotnet_utils::gc::try_acquire_lease(id).is_none());
+        assert!(catch_unwind(AssertUnwindSafe(|| Executor::new(Arc::clone(&state)))).is_err());
+        assert!(executor.with_arena(|_| ()).is_err());
+        drop(executor);
+        drop(Executor::new(state));
+    }
+
+    #[test]
+    fn recreation_constructor_rollback_releases_reservation() {
+        let state = shared();
+        for point in ["reservation", "construction"] {
+            let _fault = Fault::at(point);
+            let result = catch_unwind(AssertUnwindSafe(|| drop(Executor::new(Arc::clone(&state)))));
+            assert!(
+                panic_message(result).contains(&format!("injected ownership panic at {point}"))
+            );
+            drop(Executor::new(Arc::clone(&state)));
+        }
+    }
+
+    #[test]
+    fn recreation_executor_teardown_panic_retains_arena() {
+        for point in ["executor", "guard", "drain"] {
+            let state = shared();
+            let drops = StdArc::new(AtomicUsize::new(0));
+            let mut executor = Executor::new(Arc::clone(&state));
+            let id = executor.thread_id;
+            allocate_witness(&mut executor, StdArc::clone(&drops));
+            let lease = dotnet_utils::gc::try_acquire_lease(id).unwrap();
+            let guard = (point == "guard").then(|| executor.extract_arena().unwrap());
+            let _fault = Fault::at(point);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                drop(executor);
+                drop(guard);
+            }));
+            assert!(
+                panic_message(result).contains(&format!("injected ownership panic at {point}"))
+            );
+            assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+            drop(lease);
+            assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+            // Early injected cleanup failure deliberately leaves bookkeeping;
+            // remove it without touching the retained storage.
+            state.gc_coordinator.unregister_arena(id);
+            state.thread_manager.unregister_thread(id);
+            dotnet_utils::gc::cross_arena::unregister_arena(id);
+            drop(Executor::new(state));
+        }
+    }
+
+    #[test]
+    fn recreation_owner_first_guard_does_not_touch_successor() {
+        let state = shared();
+        let old_drops = StdArc::new(AtomicUsize::new(0));
+        let new_drops = StdArc::new(AtomicUsize::new(0));
+        let mut old = Executor::new(Arc::clone(&state));
+        allocate_witness(&mut old, StdArc::clone(&old_drops));
+        let old_id = old.thread_id;
+        let guard = old.extract_arena().unwrap();
+        assert!(old.extract_arena().is_none());
+        drop(old);
+        let mut successor = Executor::new(state);
+        allocate_witness(&mut successor, StdArc::clone(&new_drops));
+        let new_id = successor.thread_id;
+        let lease = dotnet_utils::gc::try_acquire_lease(new_id).unwrap();
+        drop(guard);
+        assert_eq!(old_drops.load(AtomicOrdering::SeqCst), 1);
+        assert!(dotnet_utils::gc::try_acquire_lease(old_id).is_none());
+        assert!(lease.is_valid());
+        assert_eq!(new_drops.load(AtomicOrdering::SeqCst), 0);
+        assert!(successor.with_arena(|_| ()).is_ok());
+        drop(lease);
+        drop(successor);
+        assert_eq!(new_drops.load(AtomicOrdering::SeqCst), 1);
+        assert!(dotnet_utils::gc::try_acquire_lease(new_id).is_none());
+    }
+
+    #[test]
+    fn recreation_self_held_drain_panic_and_no_diagnostic() {
+        for inject_panic in [false, true] {
+            let state = shared();
+            let drops = StdArc::new(AtomicUsize::new(0));
+            let warnings = StdArc::new(AtomicUsize::new(0));
+            let mut executor = Executor::new(Arc::clone(&state));
+            let id = executor.thread_id;
+            allocate_witness(&mut executor, StdArc::clone(&drops));
+            let lease = dotnet_utils::gc::try_acquire_lease(id).unwrap();
+            let fault = inject_panic.then(|| Fault::at("drain"));
+            let subscriber = DrainWarning {
+                seen: StdArc::clone(&warnings),
+                panic_on_warning: true,
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                tracing::subscriber::with_default(subscriber, || drop(executor));
+            }));
+            drop(fault);
+            if inject_panic {
+                assert!(panic_message(result).contains("injected ownership panic at drain"));
+            } else {
+                result.expect("self-held teardown must return without diagnostic panic");
+            }
+            assert_eq!(warnings.load(AtomicOrdering::SeqCst), 0);
+            assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+            drop(lease);
+            dotnet_utils::gc::cross_arena::unregister_arena(id);
+            assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+            drop(Executor::new(state));
+        }
+    }
+
+    #[test]
+    fn recreation_drain_warning_panic_retains_arena() {
+        use crate::test_utils::worker::Worker;
+        use std::{sync::mpsc, thread, time::Duration};
+
+        // Both ordinary and extracted teardown must survive a real subscriber
+        // panic *inside* drain_leases while a different thread owns the lease.
+        for extracted in [false, true] {
+            let state = shared();
+            let drops = StdArc::new(AtomicUsize::new(0));
+            let warnings = StdArc::new(AtomicUsize::new(0));
+            let mut executor = Executor::new(Arc::clone(&state));
+            let id = executor.thread_id;
+            allocate_witness(&mut executor, StdArc::clone(&drops));
+            let guard = extracted.then(|| executor.extract_arena().unwrap());
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let handle = thread::spawn(move || {
+                let lease = dotnet_utils::gc::try_acquire_lease(id).unwrap();
+                ready_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                drop(lease);
+            });
+            let worker = Worker::new(handle, release_tx);
+            ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+            let subscriber = DrainWarning {
+                seen: StdArc::clone(&warnings),
+                panic_on_warning: true,
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                tracing::subscriber::with_default(subscriber, || {
+                    drop(executor);
+                    drop(guard);
+                });
+            }));
+            let removed = dotnet_utils::gc::try_acquire_lease(id).is_none();
+            let before_release = drops.load(AtomicOrdering::SeqCst);
+            worker.finish().unwrap();
+            assert!(panic_message(result).contains("injected drain warning panic"));
+            assert_eq!(warnings.load(AtomicOrdering::SeqCst), 1);
+            assert!(removed, "drain did not remove the registration");
+            assert_eq!(before_release, 0);
+            assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+            drop(Executor::new(state));
+        }
+    }
 }

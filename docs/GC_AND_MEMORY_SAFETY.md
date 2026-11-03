@@ -17,6 +17,7 @@ This document describes the garbage collection subsystem, memory safety invarian
 
 - `F1.StwParked`: GC-only raw accesses require a `StopTheWorldGuard`/`GcCycleGuard` pause in which every relevant mutator is parked.
 - `F1.ArenaGenerationMatch`: generation-qualified cross-arena origins and GC transport require an exact-identity live lease before dereference; GC installation also checks the destination arena’s original identity. Identity prevents registration ABA, not object reclamation. The compact `ObjectRef` codec has no generation and retains its unsafe live-original-allocation contract.
+- `F1.ExecutorArenaRetained`: the thread-affine MT owner reserves its exact TLS identity independently of storage; freeing storage requires a completed exact-registration drain. Incomplete cleanup or unwind retains it. See [arena lifecycle](#per-thread-arenas).
 - `F1.GcHandleRooted`: a GC reference used through raw storage must remain rooted throughout access. A live arena lease prevents arena teardown but is not itself an object root; the caller must establish reachability separately.
 - `F5.TracesEveryGcRef`: every unsafe `Collect` implementation enumerates every contained GC handle through its fields and variants.
 - `F6.NoEscapeAcrossArena`: arena branding, private constructors, and `for<'gc>` confinement prevent `'gc` values from escaping; the deliberate cross-arena `Gc::from_ptr` path is limited to tracing and cannot escape.
@@ -44,8 +45,9 @@ Allocation lifetime follows frame ownership rather than the lifetime of a caller
 - Normal return and exception unwind retire frames through the frame-recycling path, which releases
   their blocks before a frame can be reused. Tail-call and `jmp` replacement use that same recycling
   path, so the replaced frame's blocks end with it.
-- Clearing the frame stack or dropping the executor releases blocks still owned by active,
-  suspended, or pooled frames through normal Rust destruction.
+- Clearing the frame stack or destroying its arena releases blocks still owned by active,
+  suspended, or pooled frames through normal Rust destruction. MT teardown can instead retain
+  the arena and its frames when draining is incomplete.
 
 The allocation budget is a thread-local limit for these frame allocations; it is not an aggregate
 host-memory ledger and is not connected to `HeapManager` allocation pressure or GC triggering. M1c
@@ -101,10 +103,34 @@ open; no strict lane was run for M1d.
 ## Arena Architecture
 
 ### Per-Thread Arenas
-Each thread owns a `GCArena` stored in thread-local storage (`gc/arena.rs` → `THREAD_ARENA`). The `Executor` manages the arena lifecycle:
-- Arena is created in `Executor::new` and stored in `THREAD_ARENA`
-- `Executor::with_arena` provides mutable access for GC mutations
-- On `Drop`, the executor performs a final full GC and removes the arena
+`Executor::new` creates a boxed `GCArena`; `Executor::with_arena` gives controlled mutable
+access. Without `multithreading` the Box is stored directly in the Executor, with no TLS
+extraction backend or cross-arena drain. With `multithreading` a private TLS
+`RefCell<Option<Slot>>` holds an initializing or exact-identity owner reservation and an optional
+Box. The reservation is independent of the Box: reentrant construction is rejected until the
+owner drops, and construction rollback releases the reservation.
+
+MT `extract_arena` transfers the Box and exact registration to an `ArenaGuard` at most once;
+subsequent extraction returns `None` and arena operations are unavailable. The reservation stays
+with the Executor even if the guard drops first. The guard may outlive the Executor on the same
+thread; it never touches TLS, so it cannot take a successor's arena. `Executor` is `!Send` and
+`!Sync` in both modes; the MT guard is also `!Send` and `!Sync`. Making the formerly public TLS
+slot private and prohibiting Executor transfer are Rust API compatibility breaks; construct and
+use each Executor on its owning thread instead of mutating the slot or transferring it.
+
+On MT Drop, retention is armed before fallible cleanup. The owner removes its coordinator and
+thread bookkeeping and, if it still owns the Box, drains the captured exact registration; the
+guard drains that registration if extracted. Removal makes the entry unavailable to new leases
+before the drain completes. Only `Drained` permits destruction; a self-held lease, missing
+registration, or interrupted drain/cleanup deliberately leaks storage. Drain waits outside registry
+and coordinator locks and TLS borrows. TLS destruction also leaks a residual Box (e.g. a forgotten
+Executor), not a substitute for drain. Drop may panic and incomplete cleanup can leave bookkeeping;
+retention is not a promise of non-panicking Drop or recovery. No final full GC is performed by
+Executor Drop. Leases must end before safepoint parking and are not roots, access/range validation,
+synchronization, or FFI lifetime guarantees. See [plan 03](plans/03-executor-teardown-ownership.md)
+for the accepted scoped outcome and its evidence; broader R08 acceptance remains open.
+
+The following is an MT schematic: coordinator handles are not themselves TLS arena storage.
 
 ```mermaid
 graph TD
@@ -114,14 +140,14 @@ graph TD
         T2[Thread 2]
     end
     
-    subgraph "Thread 1 TLS"
-        A1[ArenaHandle]
-        GCA1[gc-arena]
+    subgraph "Thread 1"
+        A1[Coordinator handle]
+        GCA1[Private TLS arena slot]
     end
     
-    subgraph "Thread 2 TLS"
-        A2[ArenaHandle]
-        GCA2[gc-arena]
+    subgraph "Thread 2"
+        A2[Coordinator handle]
+        GCA2[Private TLS arena slot]
     end
     
     T1 --> A1
@@ -228,7 +254,7 @@ Cross-arena registration is backed by `ArenaState` entries in a global registry:
 - `try_acquire_lease(arena_id)` returns an `ArenaLease` guard that increments `active_leases`.
 - `unregister_arena` removes the entry, flips `is_alive`, then waits until `active_leases == 0` before returning.
 
-For the covered access paths, the lease protocol is intended to prevent teardown during access; it does not protect a later use of an observed address. The original arena must remain identifiable, and not every cross-arena consumer has been migrated. Executor TLS ownership and panic-safe drain still have open gaps; see [plan 03](plans/03-executor-teardown-ownership.md).
+For the covered access paths, the lease protocol is intended to prevent teardown during access; it does not protect a later use of an observed address. The original arena must remain identifiable, and not every cross-arena consumer has been migrated. Executor ownership and interrupted-drain retention have been accepted as a scoped outcome; broader R08 acceptance remains open. See [plan 03](plans/03-executor-teardown-ownership.md).
 
 `CrossArenaRef` retains the allocation-derived raw pointer and `ArenaIdentity` (ID and generation) through the write barrier, found buffer, coordinator and commands; numeric addresses are keys for equality/deduplication, not pointer reconstruction. Harvest reacquires an exact-identity lease; installation additionally compares the owner arena’s original identity before conversion. STW records a real generation, not a wildcard. Ordinary `CrossArenaOrigin` also carries identity and a non-reused registration token; its managed-pointer codec resolves the token on decode, rejecting old registrations after ID reuse. Neither retained pointer nor lease roots an object.
 

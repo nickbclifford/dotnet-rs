@@ -217,7 +217,7 @@ for selected work, not instructions to launch every lane after every step.
 
 | Workflow file                    | Toolchain | Blocking?                | Trigger                        | Purpose                              |
 |----------------------------------|-----------|--------------------------|--------------------------------|--------------------------------------|
-| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-cross-arena` (independent recreations; configuration x 4 groups = 8 jobs), `miri-pointer-batches` / `miri-pointer-controls` (33 filtered VM controls: 8 batch jobs on selected push/PR runs, 66 singleton jobs in full sweeps and as the attribution re-run after a batch failure), and all four fuzz-corpus replay gates |
+| `.github/workflows/ci.yml`       | stable / pinned nightly | Yes | push/PR to `main`/`master`, nightly cron (06:00 UTC, full sweep) + manual dispatch (`full` input, default true) | `select-deep` (path-based deep-lane selection), `fast-core` and `deep-safety` aggregates (deep jobs wait for `fast-core` and run only when selected, except on schedule/dispatch full sweeps); source policy, format, strict-provenance lints, clippy, test, exhaustive three-thread Loom STW model, `miri-value` (full default-feature value suite plus no-features M1a, M1b, M1d and atomic selectors), `miri-frame-blocks` (RawBlock and FrameAllocations library tests), `miri-owner-retention` (stack owner tests), `miri-cross-arena` (independent recreations; 21 configuration/group/shard jobs), `miri-pointer-batches` / `miri-pointer-controls` (33 filtered VM controls: 8 batch jobs on selected push/PR runs, 66 singleton jobs in full sweeps and as the attribution re-run after a batch failure), and all four fuzz-corpus replay gates |
 | `.github/workflows/fuzz.yml`     | stable-built driver / pinned nightly | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Fuzzing coverage                     |
 | `.github/workflows/miri.yml`     | nightly-2026-05-27 | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | UB and memory-safety checks          |
 | `.github/workflows/valgrind.yml` | stable    | No (`continue-on-error`) | daily cron + manual dispatch (no push/PR) | Leak and uninitialized-memory checks |
@@ -298,7 +298,7 @@ Jobs:
 11. `miri-frame-blocks`: pinned-nightly, blocking Miri tests for `RawBlock` and `FrameAllocations` in no-features and multithreading configurations (details below)
 12. `miri-owner-retention`: pinned-nightly, blocking `dotnet-vm-data` stack owner-retention tests in both configurations (details below)
 13. `miri-pointer-batches` and `miri-pointer-controls`: pinned-nightly, blocking filtered VM Tree Borrows controls (details below); `miri-pointer-batches` (configuration x 4 batches) runs on selected push/PR runs, `miri-pointer-controls` (configuration x 33 singleton shards) runs in full sweeps and as the attribution re-run after a batch failure; this is not a full or strict VM Miri suite
-13a. `miri-cross-arena`: pinned-nightly, blocking independent recreations; matrix of configuration x group (`library`, `vm-teardown`, `vm-collection`, `vm-stress`) = 8 jobs, one `dotnet-vm` Miri process per VM job (see [Job layout and budgets](#job-layout-and-budgets))
+13a. `miri-cross-arena`: pinned-nightly, blocking independent recreations; matrix of configuration x group (`library`, `vm-teardown`, `vm-collection`, `vm-stress`) x shard = 21 jobs, one `dotnet-vm` Miri process per VM job (see [Job layout and budgets](#job-layout-and-budgets))
 14. `fuzz-corpus-replay`: pinned-nightly, blocking replay of each committed fuzz corpus (`-runs=0`) with `cargo-fuzz` 0.13.1: `fuzz_managed_ptr_roundtrip`, `fuzz_managed_ptr_offset`, `fuzz_raw_memory_access`, and `fuzz_executor`
 15. `select-deep`: no `needs`, 5-minute timeout; runs `scripts/ci_select.py` over the changed paths (PR `base...head`, push `before..head`, `--full` for schedule and dispatch with `full` true) and publishes the lane booleans, the fuzz matrix and a reason per lane; its first step writes full-sweep fallback outputs so a failed checkout or selector selects everything. See [Implementing the hierarchy](#implementing-the-hierarchy) item 3.
 16. `fast-core`: aggregate over the twelve fast-layer jobs listed above; `if: always()`, and it fails unless every needed job's result is `success` (failed, cancelled and skipped all fail), printing the offending jobs. Not a required check.
@@ -370,10 +370,11 @@ provenance; it is not a whole-VM strict-provenance run. The ordinary Miri runs
 ignore leaks and do not prove soundness or leak-freedom. The native feature matrix
 runs the real collection and stress tests without a Miri-only substitute. The
 MT stress covers normal/extracted teardown with held/released leases (20 native
-rounds, four under Miri); a timed-out worker can still detach. The foreign-branded
-fixture concern and the deferred [Executor ownership issues](plans/03-executor-teardown-ownership.md) remain open.
+rounds, four under Miri). Test worker owners release and join on unwind; an outer process
+timeout is still needed for a genuine deadlock. The foreign-branded fixture concern remains
+separate from the [Executor ownership outcome](plans/03-executor-teardown-ownership.md).
 
-The current manifest has **7 no-features and 15 multithreading permissive
+The current manifest has **7 no-features and 28 multithreading permissive
 singletons**, plus one MT-only strict-core singleton. Each row below is one exact
 `--lib SELECTOR -- --exact --test-threads=1` invocation; `V`, `U`, and `VM`
 mean `dotnet-value`, `dotnet-utils`, and `dotnet-vm` respectively.
@@ -390,6 +391,19 @@ mean `dotnet-value`, `dotnet-utils`, and `dotnet-vm` respectively.
 | multithreading | V | `object_tests::tests::recreation_codec_id40000` |
 | multithreading | V | `object_tests::tests::recreation_codec_registered_boundaries` |
 | multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_extracted_teardown_active_lease` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_unwind_teardown_active_lease` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_nested_creation_fails_closed` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_self_held_lease_leaks_instead_of_deadlocking` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_executor_external_remover_does_not_release_owner` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_forgotten_executor_tls_exit_retains_arena` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_repeated_extraction_reserves_until_owner_drop` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_constructor_rollback_releases_reservation` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_executor_teardown_panic_retains_arena` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_owner_first_guard_does_not_touch_successor` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_self_held_drain_panic_and_no_diagnostic` |
+| multithreading | VM | `executor::executor_teardown_recreation_tests::ownership::recreation_drain_warning_panic_retains_arena` |
 | multithreading | VM | `executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation` |
 | multithreading | U | `gc::cross_arena::tests::m1e_recreation_transport` |
 | multithreading | U | `gc::cross_arena::tests::m1e_recreation_transport_permissive_control` |
@@ -401,34 +415,39 @@ mean `dotnet-value`, `dotnet-utils`, and `dotnet-vm` respectively.
 | multithreading | U | `gc::cross_arena::tests::m1g_recreation_registry_checked_counter_control` |
 | multithreading, strict-core | V | `pointer::tests::m1e_recreation_transport_strict_core` |
 
-The strict-core invocation appends `-Zmiri-strict-provenance`. The 22 permissive
-and one strict invocations passed locally in step 7.1; hosted execution and
-branch protection are not established by those local runs.
+The strict-core invocation appends `-Zmiri-strict-provenance`. The prior 22 permissive
+and one strict invocations passed locally in step 7.1, before the 13 new MT selectors.
+Those historical results are not a pass of the expanded manifest. The helper-only
+`recreation_worker_driver_failure_releases_and_joins` is native-only: it checks the
+worker harness failure/join protocol, whereas the selected tests exercise real ownership
+and panic-retention behavior. Final scoped ownership acceptance passed the expanded manifest;
+see the [ownership plan](plans/03-executor-teardown-ownership.md#baseline-and-current-evidence).
 
 #### Job layout and budgets
 
 The job id stays `miri-cross-arena` (so `select-deep` gating, `needs`, `if` and
 `deep-safety` are unchanged), but its matrix is an explicit `include` list of
-configuration x group: **8 jobs**, named `Miri cross-arena (<configuration>, <group>)`.
-The set of executed (configuration, selector) pairs is identical to the previous
-single-job-per-configuration layout; only the grouping changed.
+configuration x group x shard: **21 jobs**, named
+`Miri cross-arena (<configuration>, <group>, <shard>)`. There are 15 teardown
+jobs (one ST control and 14 MT ownership/teardown singletons); the other six
+jobs preserve the library, collection and stress configurations.
 
 | Group | Contents (per configuration) | Compiles | Job timeout | Per-invocation timeout |
 |---|---|---|---|---|
 | `library` | All `V` and `U` rows of the table above for that configuration (no-features: codec-id-control, codec-boundaries-control, publication-model, origin-aba, plus the utils compile check and the two registry/transport absence checks; multithreading: codec-id, codec-boundaries, publication-model, origin-aba, transport-structural, transport-runtime, the six registry recreations, and the isolated strict-provenance transport core with its own `MIRIFLAGS`) | `dotnet-value` (+ `dotnet-utils` in multithreading) | 30 min | 900 s |
-| `vm-teardown` | One `VM` row: `teardown` (multithreading) or `teardown-control` (no-features) | `dotnet-vm` | 45 min | 1800 s |
+| `vm-teardown` | One `VM` teardown row per shard: one no-features control or one of the 14 MT teardown/ownership rows | `dotnet-vm` | 45 min | 1800 s |
 | `vm-collection` | One `VM` row: `collection` (multithreading) or `collection-control` (no-features) | `dotnet-vm` | 45 min | 1800 s |
 | `vm-stress` | `teardown-stress` (both configurations) | `dotnet-vm` | 45 min | 1800 s |
 
 Every group keeps `MIRIFLAGS`, the `--require 'test result: ok. 1 passed; 0 failed; 0 ignored;'`
-guard, the `--exact --test-threads=1` invocation shape, the ci_diagnostics case ids,
-600 s sysroot setup and 900 s per compile or absence check. `CI_DIAG_DEADLINE` is the
+guard, the `--exact --test-threads=1` invocation shape, diagnostic case attribution
+(teardown case ids now include their shard), 600 s sysroot setup and 900 s per compile
+or absence check. `CI_DIAG_DEADLINE` is the
 group's job timeout minus 180 s (`matrix.job_timeout`). Each job uploads
-`ci-diagnostics-miri-cross-arena-<configuration>-<group>-attempt-N`. The rust-cache
-key is `miri-cross-arena-nightly-2026-05-27-<configuration>-<group>`: it is keyed per
-group because library and VM jobs build different crate sets, and three VM jobs
-sharing one key would race to save identical cache entries (at the cost of three
-redundant `dotnet-vm` caches per configuration).
+`ci-diagnostics-miri-cross-arena-<configuration>-<group>-<shard>-attempt-N`. The rust-cache
+key is `miri-cross-arena-nightly-2026-05-27-<configuration>-<group>-<shard>`: unique
+keys avoid concurrent saves to one entry, at the cost of redundant VM caches and runner
+capacity. Shards all contribute to the existing `miri-cross-arena` aggregate.
 
 **Why the split (measured, hosted).** Run 41495133436 (ff3ee98a) hit the 45-minute job
 deadline during `teardown-stress` in the multithreading job
@@ -456,6 +475,17 @@ hosted) fits in the unchanged 45-minute job budget with wide margin. This is a
 justified, bounded change in the sense of
 [CONTRIBUTING](../CONTRIBUTING.md#engineering-decisions-and-plan-authority): sized from
 the samples above, applied only to the VM groups, with the library group's 900 s kept.
+
+**Ownership shard measurement.** On the ownership-repair tree, a clean
+`CARGO_TARGET_DIR=/tmp/dnrs-step41-measure`, prebuilt managed fixtures and pinned
+nightly/permissive flags, the guarded MT `ownership::recreation_owner_first_guard_does_not_touch_successor`
+singleton passed (1 passed, 0 failed, 0 ignored; 36.84 s test time, 45 s wall
+including clean compilation). This local measurement is not hosted timing and is not
+representative of every warning/panic case. The much slower hosted samples above make
+serially packing these additional VM processes into 45 minutes unjustified; each
+selector gets its own 1800 s invocation and 45-minute job instead. New hosted shards,
+including the real drain-warning wait, have not yet been timed; timeouts or unexpected
+ignores remain failures, and final acceptance remains separate.
 
 **Follow-up (not implemented).** The per-process support-library parse appears to
 dominate VM Miri tests in general, but has not been measured for these recreations.

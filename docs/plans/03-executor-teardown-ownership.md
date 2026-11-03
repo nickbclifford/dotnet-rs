@@ -1,35 +1,37 @@
 # Executor teardown ownership and panic safety
 
-**Status:** Not started
+**Status:** Complete — scoped ownership outcome accepted
 **Prepared:** 2026-11-01; revised 2026-11-02
 **Original baseline:** `18cf9f03`
 **Outcome:** Dropping or extracting an Executor never destroys another Executor's arena or
 frees storage still protected by an in-flight lease, including during unwind.
 
-This is the next substantial runtime repair after the CI feedback work in [the queue](README.md).
-It closes a concrete part of plan 01 R08. The prior ST native refactor is parked and is not a
-prerequisite. No recovery of historical test sources is needed to begin.
+This repair targets a concrete part of plan 01 R08; broader R08 acceptance remains open.
+The prior ST native refactor is parked and is not a prerequisite.
 
-## Established evidence
+## Baseline and current evidence
 
-- **Extracted TLS collision, observed.** After `extract_arena` empties `THREAD_ARENA`, a second
-  Executor can install its Box. Dropping the older Executor can take the successor's Box.
-  A non-dereferencing drop witness observed destruction while a valid lease was held.
-  `executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership`
-  is the independent, currently ignored failing regression. No-features uses
-  `recreation_executor_single_arena_cleanup_control`; it has no TLS extraction backend.
-- **Drain panic safety, source-derived.** `teardown_arena` owns a Box across
-  `ArenaRegistration::unregister_and_drain`; `drain_leases` invokes `tracing::warn!` and
-  the self-held-lease branch calls `eprintln!` before `mem::forget`. A panic may free the Box
-  before access drains. The claim that stderr cannot unwind is incorrect. This failure path
-  needs a controlled regression; it is not an observed UAF result.
-- **Ownership surface, source-derived.** Executor is Send and THREAD_ARENA is publicly mutable.
-  Moving an Executor changes which TLS cell its methods/drop use. A mutable public slot can
-  bypass the ownership protocol.
+At the original baseline, an extracted Box left the TLS slot available to a successor; the
+older Executor could take that successor's Box. A non-dereferencing witness observed destruction
+while a lease was held. Drain also held a normally-droppable Box across fallible warning and
+self-held-lease diagnostics; this was a source-derived panic risk, not an observed UAF. Executor
+transfer and public TLS mutation could bypass ownership. Cross-arena runs `ee84ff60` (8.6) and
+`0aa1627a` (8.8) record the collision and questions; reconstructed `cdb7b642` before-results
+are retrospective native evidence, not contemporaneous or Miri results.
 
-Cross-arena runs `ee84ff60` (8.6) and `0aa1627a` (8.8) record the collision and subsequent
-questions. Earlier 5.3–5.5 before-results were reconstructed on `cdb7b642`; they are retrospective
-native evidence, not contemporaneous or Miri results. The ordinary teardown repairs remain useful.
+The repair now reserves a private exact-identity MT slot until owner Drop, gives extracted
+storage to a thread-affine guard, and arms retention before cleanup. Exact-registration drain is
+required for destruction; incomplete drain or unwind leaks. ST uses a direct Box. See the
+[arena lifecycle contract](../GC_AND_MEMORY_SAFETY.md#per-thread-arenas) for the public Rust API
+break and limits. The collision is enabled. Native ST, MT and MT-validation teardown regressions
+passed, including drop order and injected panic cases; worker cleanup and registry controls passed.
+Final acceptance on runtime source `b97b950412be5a1fe28af3be387566483b6343a4` passed all
+36 guarded manifest Miri singletons (7 ST, 28 MT permissive and one isolated strict-core),
+focused GC/concurrency and Loom, executor corpus replay, workspace consumers and the three-mode
+fast integration pass. Permissive Miri ignores leaks; the strict-core result is not whole-VM
+strict-provenance evidence. The pre-finalizer session log in branch history
+(`git show 6148da3c:AGENT_MEMORY.md`, if that history is retained) records counts, timeouts,
+timings and the initial fixture-path setup failure separately.
 
 ## One coherent ownership change
 
@@ -61,7 +63,7 @@ Do not split a newly exposed part of this ownership invariant into another appro
 - Run the relevant GC/registry/concurrency checks and one fast integration pass under
   [CI policy](../CI.md#test-hierarchy-and-migration). Full affected suites are required if the
   implementation changes the wider collection protocol. Do not repeat them per edit.
-- Reconcile non-panicking teardown and public ownership claims in code and owning documentation.
+- Reconcile teardown panic/retention and public ownership claims in code and owning documentation; do not promise non-panicking Drop.
   Explain any bounded lexical-budget changes under CONTRIBUTING's normal review rules.
 
 Stop when this ownership invariant and its regressions are complete. The real-VM collection

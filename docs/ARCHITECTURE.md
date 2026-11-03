@@ -143,8 +143,9 @@ becomes `System.OutOfMemoryException`.
 
 The owning frame keeps its blocks across nested calls and while it is suspended and later restored.
 Retiring a frame releases its blocks on normal return, exception unwind, or tail-call/`jmp` frame
-replacement; pooling explicitly clears its allocations, and dropping the executor tears down any
-frames still active. A pointer must not be used after its frame's allocation lifetime ends.
+replacement; pooling explicitly clears its allocations, and arena destruction tears down any
+frames still active. MT teardown can retain the arena if drain is incomplete; see the
+[arena lifecycle contract](GC_AND_MEMORY_SAFETY.md#per-thread-arenas). A pointer must not be used after its frame's allocation lifetime ends.
 
 This is the localloc-specific application of the allocation portion of the planned M3 `GuestBlock`
 contract. `RawBlock` is not the general `GuestBlock` abstraction: this change does not migrate heap,

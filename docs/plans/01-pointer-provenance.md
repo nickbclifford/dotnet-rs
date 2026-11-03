@@ -11,8 +11,8 @@ collection and suspension without host undefined behavior. Preserve guest native
 semantics through an explicit exposed-provenance boundary. A universal strict-provenance VM
 or recovery of every historical experiment is not a prerequisite for a useful repair.
 
-[The queue](README.md) sets current priority: CI feedback first, then Executor ownership,
-then stable byref homes and their shared access paths. The M identifiers below remain finding
+[The queue](README.md) sets current priority: after the scoped Executor ownership repair,
+stable byref homes and their shared access paths are next. The M identifiers below remain finding
 categories and historical references; they are not a mandate for separate agent sessions.
 [The inventory](../pointer-provenance/INVENTORY.md) owns detailed measurements and R01–R13 evidence.
 
@@ -125,10 +125,11 @@ The compact object codec still requires a live original allocation and lacks a g
 Its lower-48-bit address/16-bit owner limits and the VM's 65,535 lifetime arena limit remain real
 constraints, not the final representation.
 
-Acceptance remains open for [plan 03](03-executor-teardown-ownership.md), and for the real-VM
-collection fixture's foreign-branded `Gc`. The latter was accepted by a maintainer decision,
-not made safe by that approval. Replace or justify the fixture's actual contract before using
-it as closure evidence. A lease prevents arena teardown, not object collection.
+The scoped ownership outcome in [plan 03](03-executor-teardown-ownership.md) is accepted;
+broader R08 acceptance remains open, including the real-VM collection fixture's foreign-branded
+`Gc`. That concern was accepted by a maintainer decision, not made safe by that approval.
+Replace or justify the fixture's actual contract before using it as closure evidence. A lease
+prevents arena teardown, not object collection.
 
 #### M1c status and coverage (2026-10-29)
 
@@ -213,7 +214,7 @@ findings open until reproduced, refuted or covered by an explicit enforceable li
 | Findings | Remaining owner and outcome |
 |---|---|
 | R01/R02/R05 | M3 stable homes/storage and codecs; retain completed heap, arithmetic and localloc regressions |
-| R03/R04/R08 | Plan 03 ownership; valid cross-arena collection fixture; M3 remaining codecs |
+| R03/R04/R08 | Retain accepted plan 03 ownership repair; valid cross-arena collection fixture; M3 remaining codecs |
 | R06/R07 | M2 native fixture and supported ABI/lifetime boundary |
 | R09/R12 | M4 common access/ordering; confirm source-derived sync/handle findings |
 | R10/R11 | Affected M1f/M5 copies, count/range handling and negative-index exception behavior |

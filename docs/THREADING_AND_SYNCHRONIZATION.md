@@ -250,7 +250,7 @@ Call path:
 In both branches, `wait_graph` cleanup must already be complete before control returns to `initialize_static_storage`.
 
 ### Threading ↔ Executor
-Each `Executor` owns a `GCArena` in thread-local storage. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
+Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
 
 `CallStack` owns the executor's `ArenaLocalState`, including the cached P/Invoke last-error scalar; `VesContext` borrows it directly, so no ThreadManager lookup or shared lock is involved. Native `errno`/`GetLastError` capture at the P/Invoke boundary is not implemented by this state migration.
 
@@ -310,17 +310,17 @@ structure and code review.
 ## Subsystem Details
 
 ### GC Command Processing (`execute_gc_command_for_current_thread`)
-During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObjects`, `Finalize`, `Sweep`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. They access their own heap using the thread-local `THREAD_ARENA` without needing global locks. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state. `CommandCompletionGuard<Armed>` wraps each command dispatch so panic paths still signal `command_finished`; normal paths call `disarm(self)` and then explicitly signal completion once.
+During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObjects`, `Finalize`, `Sweep`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. In MT they access the optional Box through the private TLS slot without needing a global arena lock; if the Box is absent (including after extraction), the command performs no arena work. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state. `CommandCompletionGuard<Armed>` wraps each command dispatch so panic paths still signal `command_finished`; normal paths call `disarm(self)` and then explicitly signal completion once.
 
 ### Cross-Arena References (`record_found_cross_arena_refs`)
 In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
 
 Cross-arena discovery transports `CrossArenaRef`: the retained raw pointer and exact registration identity, not a reconstructed numeric address. Producers capture identity under a lease or carry the existing origin identity; harvest reacquires an exact lease. The owner checks its original identity and a live exact lease before installation, and publishes roots via `mutate_root`. A lease prevents teardown, not object collection.
 
-On the tested ordinary paths, Executor and extracted `ArenaGuard` retain their arena through owner-registration removal and lease drain before freeing it. Draining happens without a registry/coordinator lock or TLS `RefCell` borrow. A same-thread held lease would deadlock drain, so the ordinary path leaks the arena; leases must not be held across safepoint parking. The normal teardown ordering was confirmed before repair, and stress covers held/released leases. The extracted-Executor TLS collision and panic safety remain open in [plan 03](plans/03-executor-teardown-ownership.md); these paths do not establish a universal teardown guarantee.
+MT teardown follows `F1.ExecutorArenaRetained`: the owner or extracted guard retains its Box before fallible cleanup and frees it only after its exact registration returns `Drained`. Registry removal precedes draining; it prevents new leases but is not evidence that existing leases ended. Draining holds no registry/coordinator lock or TLS borrow. A same-thread held lease, missing registration, or unwind before completed drain deliberately leaks storage. Drop can panic and interrupted cleanup can leave bookkeeping; leases must not be held across safepoint parking. The [arena lifecycle contract](GC_AND_MEMORY_SAFETY.md#per-thread-arenas) describes extraction, affinity, API compatibility and limits; [plan 03](plans/03-executor-teardown-ownership.md) records the accepted scoped outcome; broader R08 acceptance remains open.
 
 ### Thread-Local Storage Patterns
-- `THREAD_ARENA`: A thread-local `RefCell<Option<GCArena>>` storing the thread's local GC heap. Used to execute GC commands without lock contention.
+- `THREAD_ARENA` (MT only): private `RefCell<Option<Slot>>`, where `Slot` holds an optional exact identity and optional `Box<GCArena>`. An initializing or extracted slot remains reserved until its owner drops; internal safepoint dispatch can borrow the Box but cannot replace or extract it.
 - `MANAGED_THREAD_ID`: A thread-local `Cell<Option<ArenaId>>` in `dotnet_utils::sync`. Cached via `get_current_thread_id()` to avoid repeatedly querying the ThreadManager for identity.
 
 ### Architecture Routing (`SharedGlobalState`)
