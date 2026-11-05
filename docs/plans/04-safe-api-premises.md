@@ -6,9 +6,9 @@ memory-operation helpers decode a non-reference slot as an `ObjectRef`, read byt
 synchronization their contract needs, or call a raw-pointer copy/fill helper without an `unsafe`
 block; a test for each fails on today's code.
 
-A survey of SAFETY comments found safe functions that call an unsafe decoder or raw operation and
-justify it by a premise the signature cannot express. Each site was checked against the code on
-`main`; sites that are sound are listed under Refuted so they are not re-raised.
+These are safe functions that call an unsafe decoder or raw operation and justify it by a
+premise the signature cannot express. Sites that were checked and found sound are listed under
+Refuted so they are not re-raised.
 
 ## Problem
 
@@ -51,8 +51,7 @@ Out, with reasons:
   need barriers. Fixing that is the shared raw-memory protocol and resumable-bulk-operations work
   already listed under "Not yet planned" (R09/R12, R10/R11); it is added there as a bullet.
 - The `Stack`-origin unchecked address is plan 01's frame and locals work.
-- Stop-the-world reads aliasing a parked writer's guard (the original item 4) is not a defect
-  today; see Refuted. It is clarified in `INVARIANT_REGISTRY.md`, not planned.
+- Stop-the-world reads aliasing a parked writer's guard is not a defect today; see Refuted. It is clarified in `INVARIANT_REGISTRY.md`, not planned.
 - `ObjectPtr::with_data_mut` is a safe function over a raw pointer that skips the owner barrier
   because no owning `Gc` exists under the caller's brand. It overlaps R09/R12 and stays there.
 
@@ -110,8 +109,8 @@ pointer range that no type can carry.
 ## Done when
 
 - Each slice's tests pass in no-features and `multithreading`; Miri passes the new
-  `dotnet-value` field-access tests with the command in `CONTRIBUTING.md`.
-- `bash scripts/check_doc_drift.sh` and `bash scripts/check_plan_queue.sh` pass.
+  `dotnet-value` field-access tests (Miri command in [CI](../CI.md)).
+- `bash scripts/check_doc_drift.sh` passes.
 - `grep -rn "raw_data_unsynchronized" crates` finds only `FieldStorage::trace`, `resurrect` and
   `validate_resurrection_invariants`.
 
