@@ -167,7 +167,7 @@ fn assert_byref_like_pinvoke_rejected(fixture: &str, what: &str) {
     );
 }
 
-/// Independent recreation (not recovered originals): a byref-like aggregate
+/// A byref-like aggregate
 /// passed by value is rejected before marshaling, in every configuration.
 #[test]
 #[cfg(not(feature = "fuzzing"))]
@@ -178,7 +178,7 @@ fn pinvoke_byreflike_argument_recreation_rejected() {
     );
 }
 
-/// Independent recreation (not recovered originals): a byref-like aggregate
+/// A byref-like aggregate
 /// return type is rejected before native code runs, in every configuration.
 #[test]
 #[cfg(not(feature = "fuzzing"))]

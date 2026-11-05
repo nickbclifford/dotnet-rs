@@ -31,7 +31,7 @@
 //! ### Virtual Dispatch Integration
 //!
 //! Virtual intrinsics are integrated into the standard virtual method resolution
-//! flow in `resolve_virtual_method()` (see `src/stack/mod.rs`).
+//! flow in `resolve_virtual_method()` (in `crates/dotnet-runtime-resolver/src/methods.rs`).
 //!
 //! When resolving a virtual call:
 //! 1. Check if the target method has a `VirtualOverride` intrinsic for the runtime type.
@@ -54,14 +54,20 @@
 //! To implement a new intrinsic method:
 //!
 //! 1.  **Define the handler function**:
-//!     Create a function with the following signature and apply the `#[dotnet_intrinsic]` attribute:
+//!     Create a function with the following signature and apply the `#[dotnet_intrinsic]`
+//!     attribute. Bound `T` by the narrowest capability traits the handler uses (here
+//!     `TypedStackOps`), not the full `VesOps`. From `dotnet-intrinsics-core/src/math.rs`:
 //!     ```rust,ignore
-//!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
-//!     pub fn math_min_double<'gc, T: VesOps<'gc>>(
+//!     #[dotnet_intrinsic("static double System.Math::Sqrt(double)")]
+//!     pub fn intrinsic_math_sqrt<'gc, T: TypedStackOps<'gc>>(
 //!         ctx: &mut T,
-//!         method: MethodDescription,
-//!         generics: &GenericLookup,
-//!     ) -> StepResult { ... }
+//!         _method: MethodDescription,
+//!         _generics: &GenericLookup,
+//!     ) -> StepResult {
+//!         let val = ctx.pop_f64();
+//!         ctx.push_f64(val.sqrt());
+//!         StepResult::Continue
+//!     }
 //!     ```
 //!     Place VM-local handlers in the appropriate submodule (for example,
 //!     `src/intrinsics/object_ops.rs`) or in the responsible `dotnet-intrinsics-*` crate.

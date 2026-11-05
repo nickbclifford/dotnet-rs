@@ -1,4 +1,4 @@
-//! Independent recreation (not recovered originals) of Executor arena teardown ordering.
+//! Executor arena teardown ordering with active cross-arena leases.
 //!
 //! The witness is a real GC allocation in the Executor's arena, but carries no GC
 //! pointers and is never dereferenced across threads. The ordering tests do not
@@ -225,7 +225,7 @@ fn recreation_executor_extracted_teardown_active_lease() {
     check_teardown(true, false);
 }
 
-/// Independent recreation (not recovered originals): unwinding an actual Executor
+/// Unwinding an actual Executor
 /// must still drain another thread's lease before its arena is destroyed.
 #[cfg(feature = "multithreading")]
 #[test]
@@ -233,7 +233,7 @@ fn recreation_executor_unwind_teardown_active_lease() {
     check_teardown(false, true);
 }
 
-/// Independent recreation (not recovered originals): repeated real arena collection
+/// Repeated real arena collection
 /// followed by a separate, unrooted teardown witness. A lease does not root objects.
 #[cfg(not(feature = "multithreading"))]
 #[test]
@@ -254,7 +254,7 @@ fn m1e_recreation_teardown_stress() {
     }
 }
 
-/// Independent recreation (not recovered originals): collect two actual Executor
+/// Collect two actual Executor
 /// arenas, then deliberately hold a lease across B's exit to test the drain.
 /// The collection witness is already reclaimed before the teardown witness is
 /// allocated; no claim is made that the lease roots either allocation.
@@ -414,9 +414,9 @@ fn m1e_recreation_teardown_stress() {
     );
 }
 
-// ---- 5.3 / 5.4 / 5.5: ownership protocol recreations (independent, real Executor) ----
+// ---- TLS ownership protocol on real Executors ----
 
-/// 5.3: a second Executor on a thread that still owns one must fail closed
+/// A second Executor on a thread that still owns one must fail closed
 /// instead of replacing (and destroying) the first arena's TLS Box.
 #[cfg(feature = "multithreading")]
 #[test]
@@ -442,7 +442,7 @@ fn recreation_executor_nested_creation_fails_closed() {
     .unwrap();
 }
 
-/// 5.4: an owner thread holding a lease on its own arena must not deadlock in
+/// An owner thread holding a lease on its own arena must not deadlock in
 /// teardown, and must not free the leased arena.
 #[cfg(feature = "multithreading")]
 #[test]
@@ -476,7 +476,7 @@ fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
     );
 }
 
-/// 5.5: an external ID-only remover that is already draining must not let the
+/// An external ID-only remover that is already draining must not let the
 /// owner free the arena while a lease is still held.
 #[cfg(feature = "multithreading")]
 #[test]
@@ -526,7 +526,7 @@ fn recreation_executor_external_remover_does_not_release_owner() {
     assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
 }
 
-/// Independent recreation (not recovered originals): an extracted Executor
+/// An extracted Executor
 /// still owns its thread registration. A successor must not occupy its TLS
 /// until it is dropped, and its extracted guard must remain independently owned.
 #[cfg(feature = "multithreading")]

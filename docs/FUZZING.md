@@ -11,26 +11,26 @@ The project uses [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (backed b
 | **dotnet-vm**    | `crates/dotnet-vm/fuzz/`    | `fuzz_executor`                                                                   | CIL instruction execution, control flow, memory, exceptions        |
 | **dotnet-value** | `crates/dotnet-value/fuzz/` | `fuzz_managed_ptr_offset`, `fuzz_managed_ptr_roundtrip`, `fuzz_raw_memory_access`, `fuzz_managed_ptr_rebase` | Pointer arithmetic, serialization roundtrips, atomic memory access |
 
-Additionally, the `fuzzing.rs` module in `dotnet-vm` contains Miri-compatible unit tests that exercise the same `FuzzProgram` harness without requiring the full fuzzing toolchain.
+Additionally, the `fuzzing.rs` module in `dotnet-vm` contains unit tests that exercise the same `FuzzProgram` harness without requiring the fuzzing toolchain (see [Harness unit tests](#harness-unit-tests)).
 
-The advisory Fuzz workflow builds cargo-fuzz 0.13.1 with Rust 1.95.0 and `--locked`, then runs targets and crash minimization with `nightly-2026-05-27` (rather than floating nightly). Its green status does not establish that advisory targets passed or that checked-in corpora were replayed.
+## Where fuzzing runs
 
-## Validation selection
-
-Follow the [test hierarchy](CI.md#test-hierarchy-and-migration). Replay affected tracked corpora
-before accepting relevant changes; shared infrastructure selects broadly and full sweeps retain
-all assigned corpora. Duration-based fuzzing runs on a schedule or to investigate a named issue.
-The advisory Fuzz workflow runs only on its daily schedule and manual dispatch, not on push/PR; `fuzz-corpus-replay` in `ci.yml` waits for `fast-core` and runs only the targets `select-deep` chooses from the changed paths (value-closure changes select all four; VM-only changes select `fuzz_executor`; the nightly and manual full sweeps run all four). Preserve execution/count
-guards and promote triaged crashes to useful regressions. Advisory green does not close a crash.
+- `fuzz-corpus-replay` in `ci.yml` is blocking. It replays the committed corpora for the targets
+  `select-deep` chooses from the changed paths ([CI.md](CI.md#test-hierarchy-and-migration)), and
+  all of them in full sweeps.
+- `fuzz.yml` is advisory. It runs duration-based campaigns and crash minimization on a daily
+  schedule and on manual dispatch. A green run does not show that every campaign completed; read
+  the step logs. Triage saved crashes and promote useful ones to a corpus or unit test.
 
 ## Prerequisites
 
-```bash
-# Install the CI driver with the stable build compiler
-cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked
+The commands below use `$NIGHTLY`, the pinned nightly set in
+[CI.md](CI.md#toolchains-and-miri-flags). CI builds the `cargo-fuzz` driver with the stable
+toolchain from `rust-toolchain.toml`:
 
-# Install the target compiler used by CI
-rustup install nightly-2026-05-27
+```bash
+cargo install cargo-fuzz --version 0.13.1 --locked
+rustup toolchain install "$NIGHTLY"
 
 # For the VM fuzz target, a .NET runtime must be installed
 # (System.Runtime.dll is needed to resolve base types like System.Object)
@@ -58,8 +58,8 @@ dotnet-vm/fuzzing
 
 The fuzz crate Cargo.toml files (`crates/dotnet-vm/fuzz/Cargo.toml`, `crates/dotnet-value/fuzz/Cargo.toml`) depend on the respective library crates with `features = ["fuzzing"]` enabled.
 
-> **Note:** `check.sh --full` resolves its matrix from `xtask` (`matrix test-features`) and includes a
-`fuzzing` feature leg; the default/fast three-configuration pass does not. Running the dedicated fuzz targets still requires the nightly `cargo-fuzz` workflow described below.
+The shared feature matrix (used by CI and `./check.sh --full`) has a `fuzzing` leg;
+`./check.sh --fast` does not.
 
 ## Fuzz Targets
 
@@ -122,69 +122,34 @@ Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, size
 
 ## Blocking Corpus Regression
 
-Four assigned targets have committed, nonempty corpora and blocking `ci.yml` replay gates. The
-fourth value-workspace target `fuzz_managed_ptr_rebase` exists locally but is **not** one of those
-gates; no committed rebase corpus is implied. The repository stable default and driver build compiler
-are Rust 1.95.0. Install the driver with `cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked`;
-target compilation and replay use `nightly-2026-05-27`. The shared binary cache identity is
-`<runner.os>-<runner.arch>-cargo-fuzz-v2-0.13.1-build-1.95.0-locked-default` (Linux X64:
-`Linux-X64-cargo-fuzz-v2-0.13.1-build-1.95.0-locked-default`), without an older-key fallback.
-
-From the indicated working directories the explicit replay arguments are:
+The replay gate covers the targets in `fuzz_matrix` from `scripts/ci_select.py`; each has a
+committed, nonempty corpus. `fuzz_managed_ptr_rebase` has no committed corpus and is not gated.
+To replay locally, from the indicated working directories:
 
 ```bash
 cd crates/dotnet-value
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip fuzz/corpus/fuzz_managed_ptr_roundtrip -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset fuzz/corpus/fuzz_managed_ptr_offset -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access fuzz/corpus/fuzz_raw_memory_access -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +"$NIGHTLY" fuzz run fuzz_managed_ptr_roundtrip fuzz/corpus/fuzz_managed_ptr_roundtrip -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +"$NIGHTLY" fuzz run fuzz_managed_ptr_offset fuzz/corpus/fuzz_managed_ptr_offset -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +"$NIGHTLY" fuzz run fuzz_raw_memory_access fuzz/corpus/fuzz_raw_memory_access -- -runs=0
 cd ../dotnet-vm/fuzz
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor corpus/fuzz_executor -- -runs=0
+ASAN_OPTIONS=detect_leaks=0 cargo +"$NIGHTLY" fuzz run fuzz_executor corpus/fuzz_executor -- -runs=0
 ```
 
-CI uses `scripts/replay_fuzz_corpus.py` rather than these bare commands. It checks the Git-index
-inventory is nonempty and unchanged, with regular nonempty tracked files; loaded files and seed
-counts must equal that inventory. Child exit must succeed and ordered INITED, DONE and final counts
-must agree and be at least N+1. libFuzzer may rerun inputs, so equality to N+1 is not required;
-`corp:` retained representatives are not execution counts. Leak detection is disabled for sandboxed
-runners, not a claim about leaks.
-
-On tested candidate `b8e98239cec56a4e62c38682c27d3a59886262a0`, [CI attempt 1](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237422062)
-actually verified these counts (tracked/loaded seeds, then INITED/DONE/final callbacks):
-
-| Target | Files/seeds | Executions |
-|---|---:|---:|
-| `fuzz_managed_ptr_roundtrip` | 129/129 | 141 |
-| `fuzz_managed_ptr_offset` | 171/171 | 172 |
-| `fuzz_raw_memory_access` | 18/18 | 19 |
-| `fuzz_executor` | 252/252 | 505 |
-
-Executor driver cache hit; the other three missed and installed the stable-built driver. All target
-Rust caches missed. [Evidence ledger](ci-evidence/2026-10-31-acceptance.md) records jobs, artifacts,
-timings and later documentation versus tested SHA. The [advisory Fuzz attempt](https://github.com/nickbclifford/dotnet-rs/actions/runs/41237425991)
-completed three value campaigns but executor panicked after initialization; its green job is not
-proof of a successful executor campaign. See the ledger for the retained crash and deferred findings.
+CI wraps each replay in `scripts/replay_fuzz_corpus.py`. It requires the Git-index inventory of
+the corpus to be nonempty and unchanged, with regular nonempty tracked files, and requires the
+loaded seed count to equal that inventory. The child must exit successfully, and libFuzzer's
+INITED, DONE and final execution counts must agree and be at least N+1. libFuzzer may rerun inputs,
+so the count need not equal N+1, and `corp:` representatives are not execution counts. Leak
+detection is disabled because the runners are sandboxed.
 
 ## Seed Corpus & Dictionary
 
 ### Seed Corpus
 
-Pre-built seed inputs live in `crates/dotnet-vm/fuzz/corpus/fuzz_executor/` and cover:
+Seed inputs for `fuzz_executor` live in `crates/dotnet-vm/fuzz/corpus/fuzz_executor/`; the value
+targets' corpora are under `crates/dotnet-value/fuzz/corpus/`.
 
-| Seed                         | Category                           |
-|------------------------------|------------------------------------|
-| `seed_arithmetic_add`        | Basic arithmetic                   |
-| `seed_arithmetic_div_zero`   | Division by zero                   |
-| `seed_arithmetic_overflow`   | Integer overflow                   |
-| `seed_control_branch`        | Branching                          |
-| `seed_control_infinite_loop` | Loop with budget exhaustion        |
-| `seed_memory_cpblk_null`     | Null pointer memory copy           |
-| `seed_memory_localloc`       | Stack allocation + indirect access |
-| `seed_memory_null_deref`     | Null dereference                   |
-| `seed_stack_deep`            | Deep stack usage                   |
-| `seed_stack_dup`             | Duplicate + arithmetic             |
-| `seed_stack_underflow`       | Pop from empty stack               |
-
-All four gated target corpus directories are tracked. Keep a corpus nonempty: the CI replay explicitly
+Keep each gated corpus nonempty: the CI replay explicitly
 checks this before invoking libFuzzer. Crash artifacts remain local under `artifacts/`; minimize a
 relevant one and add the minimized input to its target's corpus before relying on it as a regression.
 
@@ -213,10 +178,10 @@ cargo run -p corpus-tools --bin generate_structured_corpus --release
 cd crates/dotnet-vm
 
 # Basic run (indefinite)
-cargo +nightly fuzz run fuzz_executor
+cargo +"$NIGHTLY" fuzz run fuzz_executor
 
 # With corpus, dictionary, and tuned options
-cargo +nightly fuzz run fuzz_executor \
+cargo +"$NIGHTLY" fuzz run fuzz_executor \
     fuzz/corpus/fuzz_executor \
     -- \
     -dict=fuzz/cil.dict \
@@ -227,13 +192,13 @@ cargo +nightly fuzz run fuzz_executor \
     -print_coverage=1
 
 # Fixed-duration run (60 seconds)
-cargo +nightly fuzz run fuzz_executor \
+cargo +"$NIGHTLY" fuzz run fuzz_executor \
     fuzz/corpus/fuzz_executor \
     -- -max_total_time=60
 
 # With AddressSanitizer (recommended for finding memory bugs)
 RUSTFLAGS="-Zsanitizer=address" \
-    cargo +nightly fuzz run fuzz_executor \
+    cargo +"$NIGHTLY" fuzz run fuzz_executor \
     fuzz/corpus/fuzz_executor
 ```
 
@@ -242,15 +207,15 @@ RUSTFLAGS="-Zsanitizer=address" \
 ```bash
 cd crates/dotnet-value
 
-cargo +nightly fuzz run fuzz_managed_ptr_offset
-cargo +nightly fuzz run fuzz_managed_ptr_roundtrip
-cargo +nightly fuzz run fuzz_raw_memory_access
+cargo +"$NIGHTLY" fuzz run fuzz_managed_ptr_offset
+cargo +"$NIGHTLY" fuzz run fuzz_managed_ptr_roundtrip
+cargo +"$NIGHTLY" fuzz run fuzz_raw_memory_access
 ```
 
 ### Listing available targets
 
 ```bash
-cargo +nightly fuzz list
+cargo +"$NIGHTLY" fuzz list
 ```
 
 ## LibFuzzer Options
@@ -274,7 +239,7 @@ The file `crates/dotnet-vm/fuzz/fuzz_executor.options` defines default libFuzzer
 Reduce the corpus to a minimal set covering all unique code paths:
 
 ```bash
-cargo +nightly fuzz cmin fuzz_executor fuzz/corpus/fuzz_executor
+cargo +"$NIGHTLY" fuzz cmin fuzz_executor fuzz/corpus/fuzz_executor
 ```
 
 ### Coverage
@@ -282,7 +247,7 @@ cargo +nightly fuzz cmin fuzz_executor fuzz/corpus/fuzz_executor
 Inspect which code paths are being exercised:
 
 ```bash
-cargo +nightly fuzz coverage fuzz_executor fuzz/corpus/fuzz_executor
+cargo +"$NIGHTLY" fuzz coverage fuzz_executor fuzz/corpus/fuzz_executor
 ```
 
 ## Crash Artifacts
@@ -295,31 +260,27 @@ When the fuzzer discovers a crash (panic, assertion failure, sanitizer violation
 To reproduce a crash:
 
 ```bash
-cargo +nightly fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
+cargo +"$NIGHTLY" fuzz run fuzz_executor fuzz/artifacts/fuzz_executor/crash-<hash>
 ```
 
-Crash artifacts and generated inputs are ignored by default; the four gated corpus directories are
-explicitly tracked exceptions, including executor and all three value targets. The exploratory workflow
+Crash artifacts and generated inputs are ignored by default; the gated corpus directories are
+explicitly tracked exceptions. The advisory workflow
 also runs `corpus-tools` before its executor campaign; that does not replace the checked-in replay corpus.
-Minimize and deliberately add a relevant input to a tracked gated corpus, or add a Miri-compatible
+Minimize and deliberately add a relevant input to a tracked gated corpus, or add a harness
 unit test in `crates/dotnet-vm/src/fuzzing.rs` for a persistent regression.
 
-## Miri-Compatible Unit Tests
+## Harness unit tests
 
-The module `crates/dotnet-vm/src/fuzzing.rs` contains unit tests (`mod tests`) that exercise the same `execute_cil_program` harness with hand-crafted `FuzzProgram` inputs. These tests:
+The module `crates/dotnet-vm/src/fuzzing.rs` (compiled only with the `fuzzing` feature) contains
+unit tests that run `execute_cil_program` on hand-written `FuzzProgram` inputs: arithmetic,
+division by zero, stack underflow, locals, null throw, out-of-bounds branches, floats, native-int
+locals, bitwise operations, `localloc` with indirect access, and arrays. They run natively in the
+`fuzzing` leg of the CI test matrix. Under Miri they switch to a mock `AssemblyLoader` that needs
+no .NET runtime, but no CI job runs them under Miri.
 
-- Run under Miri for undefined behavior detection (using a mock `AssemblyLoader` that doesn't require a .NET runtime installation).
-- Cover arithmetic, division by zero, stack underflow, locals, null throw, out-of-bounds branches, float operations, native int locals, bitwise operations, `localloc` + indirect access, and array operations.
-- Provide fast CI feedback without the nightly toolchain or libFuzzer dependency.
-
-Run them with:
 ```bash
-cargo test --package dotnet-vm fuzzing
-```
-
-Or under Miri:
-```bash
-cargo +nightly miri test --package dotnet-vm fuzzing
+cargo test -p dotnet-vm --features fuzzing fuzzing
+cargo +"$NIGHTLY" miri test -p dotnet-vm --features fuzzing fuzzing
 ```
 
 ## Architecture Diagram

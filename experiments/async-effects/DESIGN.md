@@ -89,7 +89,7 @@ review/test artifacts are unavailable. This design does not pretend to have read
 
 The architectural constraints were also checked against `docs/ARCHITECTURE.md`,
 `GC_AND_MEMORY_SAFETY.md`, `EXCEPTION_HANDLING.md`, `THREADING_AND_SYNCHRONIZATION.md`,
-`DELEGATES_AND_DISPATCH.md`, `INVARIANT_REGISTRY.md`, `SAFETY_CITATION_AUDIT.md`,
+`DELEGATES_AND_DISPATCH.md`, `INVARIANT_REGISTRY.md`,
 `BUILD_TIME_CODE_GENERATION.md`, `BENCHMARK_WORKFLOW.md`, `CI.md`, `plans/README.md`, and
 `CONTRIBUTING.md`. The active queue contains plan 01, pointer/provenance, still in progress.
 This design is queued as [plan 02](../../docs/plans/02-native-continuations.md); it is not a

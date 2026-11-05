@@ -6,46 +6,57 @@ Thanks for contributing to `dotnet-rs`.
 
 Before running local builds or tests, install:
 
-- **Rust 1.95.0**, selected by the repository's `rust-toolchain.toml` and
-  including the `clippy` and `rustfmt` components. Rustup activates this pin
-  automatically when commands are run from the repository.
+- **Rust**, at the version pinned in `rust-toolchain.toml` (rustup selects it automatically),
+  with `clippy` and `rustfmt`.
 - **.NET SDK** (required for fixture compilation and build-script paths that invoke dotnet/MSBuild)
 
-## Engineering decisions and plan authority
+## Where things are decided
 
-The current user task and accepted decisions define the outcome and scope. The
-[project queue](docs/plans/README.md) sets priorities; a numbered plan owns its runtime contract;
-[CI policy](docs/CI.md#test-hierarchy-and-migration) owns verification selection. Reviews,
-checklists, historical proposals and memory are fallible supporting records. Check claims
-against the code and distinguish implemented behavior from a proposed change.
+- The current task and the maintainer's decisions set the outcome and scope.
+- [`docs/plans/`](docs/plans/README.md) holds the queue and each plan's scope, slices and exit
+  conditions. A plan's `Status:` line is the only record of its status.
+- [`docs/CI.md`](docs/CI.md) says which checks to run.
+- Subsystem docs (`docs/*.md`) describe how the code works now. They contain no work items.
+- [`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md) defines the predicates that
+  `// SAFETY:` comments cite.
+- Evidence and history live in `docs/pointer-provenance/`, `docs/ci-evidence/` and git. They
+  are reference material, not instructions.
 
-Agents may resolve routine engineering details, correct stale prose, reorder or combine
-interdependent steps, and include supporting edits needed for a complete behavior. Explain
-consequential adaptations in the review. A changed file list, module location, benchmark command
-or checklist boundary does not by itself require maintainer approval.
+When a document and the code disagree, the code describes current behavior; fix the document.
 
-Ask when a choice materially changes supported behavior, public compatibility or agreed scope,
-weakens a safety requirement, or accepts an unresolved safety tradeoff. Present a concrete
-recommendation and its consequences. Reuse prior decisions; do not ask again because a handoff
-or historical document repeats the old question. An approval cannot prove an unsafe invariant.
-If one part needs a decision, continue independent authorized work instead of blocking the whole
-outcome. A prerequisite should describe a real missing contract or defect, not a deviation from prose.
+## Making decisions while working
 
-Read the current plan and relevant decision/evidence entries. Do not require every session to
-reread an append-only history. Keep the current contract concise and link to historical evidence.
-New findings receive an explicit disposition: fix within the outcome, record a separate defect,
-refute, or ask about a material change. Do not automatically expand the plan for every finding.
-Do not mark a larger safety claim complete because a scoped step or workflow is green.
-Generated research/step prompts must follow these rules too. Correct a generated prompt that
-reintroduces superseded approval or repetition requirements during setup; this is routine
-instruction maintenance, not another maintainer decision. The sibling orchestrator's generator
-has not been changed by this documentation revision.
+Decide routine engineering details yourself: file layout, internal APIs, combining dependent
+steps, fixing stale prose. Explain consequential choices in the commit or review.
 
-Lexical cfg/sync ceilings remain enforced by the existing scripts. Prefer module boundaries and
-repository synchronization types. Necessary bounded growth can be justified, measured and
-updated in the same reviewed implementation change without a separate permission request.
-Do not obfuscate tokens or remove unrelated code to fit a count. The semantic synchronization
-and unsafe contracts remain unchanged.
+Ask the maintainer, with a recommendation, only when a choice changes supported guest behavior
+or public compatibility, changes the agreed scope, or weakens a safety requirement. Ask once and
+reuse the answer.
+
+Keep work in enabled increments. Each change should leave the VM using what it adds, with tests
+enabled. If an increment needs support for cases the plan scoped out, or turns into several new
+modules of preparatory code, stop and propose a plan revision instead of continuing.
+
+Handle each new finding one of four ways: fix it within the current slice if it is small and
+on the path, record it under "Not yet planned" in the plans README, refute it, or ask.
+
+## Writing documentation and comments
+
+- **State each fact once and link to it.** Do not copy rules, counts, toolchain pins, statuses
+  or test lists into other files. If something has a source of truth in code or a script
+  (a manifest, `ci.yml`, `rust-toolchain.toml`), link to it instead of restating it.
+- **Describe the present.** No dated status paragraphs, run timings, commit or run IDs, step
+  numbers or "previously/now" narration in normative docs or comments. Git has the history;
+  dated evidence goes in an evidence file.
+- **Define IDs where you use them, or don't use them.** Finding codes (p01, R02) are defined
+  in the pointer-provenance inventory. Outside it, link to the inventory or write the
+  test name instead.
+- **Positive, checkable rules.** Say what must hold. Avoid piles of "this is not a proof of X"
+  caveats; state the guarantee once, with its limit, in the owning document.
+- **Cite symbols, not line numbers**, in docs.
+- **Comments explain why the code is the way it is**: the invariant, the non-obvious
+  constraint, the spec rule (cite the ECMA-335 section). They do not record which plan or step
+  produced the code or reference planning files.
 
 ## Unsafe code policy
 
@@ -81,7 +92,13 @@ root `Cargo.toml`: `undocumented_unsafe_blocks = "deny"` and
 keep unsafe operations individually proved rather than weakening the workspace
 configuration.
 
-The registry and its drift check enforce the naming part of this policy.
+`scripts/check_doc_drift.sh` checks that every cited predicate exists in the registry.
+
+A SAFETY comment states the local premise: what was checked and where, or which type or guard
+guarantees it. "The caller guarantees" belongs only inside an `unsafe fn` whose `# Safety`
+section lists that guarantee. Cite the predicate that actually matches. Do not paste the same
+justification at many sites; put the contract in the function's `# Safety` section and have
+call sites state only what is local.
 
 ## Panic-vs-Result policy
 
@@ -124,32 +141,19 @@ local `macro_rules!` only if the surviving behavior becomes genuinely uniform.
 
 ## Run the project checks
 
-Follow the [test hierarchy](docs/CI.md#test-hierarchy-and-migration): fast core checks for every
-PR, selected deep checks before accepting affected changes, full sweeps on a schedule and for
-broad architectural changes, and investigations for named uncertainties. Advisory Miri, fuzz-campaign and Valgrind
-workflows no longer run on push/PR (nightly and manual dispatch only), and `ci.yml` starts its
-deep Miri and corpus-replay jobs only after the `fast-core` aggregate succeeds, and only for
-lanes `scripts/ci_select.py` selects from the changed paths (unrecognized paths select everything;
-a nightly `schedule` run and `workflow_dispatch` with `full` run every lane). Most runtime changes
-still run all pointer shards; amortizing their discovery and build is a later step.
-
-During iteration use focused native tests/lints and relevant unsafe/lifecycle controls. At the
-completion of a coherent code outcome, run the current integration command once:
+While iterating, run focused tests for what you changed. When a coherent change is done, run
+once:
 
 ```bash
 ./check.sh --fast
 ```
 
-It builds/verifies fixtures and runs Clippy/nextest in no-features, multithreading and
-multithreading,validation-all configurations, plus source ceilings. `./check.sh --full` uses the
-full xtask matrix and extra guards. Use full affected suites before accepting shared storage,
-access or dispatch changes. Carry unchanged evidence forward with source bindings; rerun when
-new edits/findings invalidate it. Do not repeat a full pass for every small step or docs edit.
+CI selects deeper Miri and fuzz lanes from the changed paths; see
+[`docs/CI.md`](docs/CI.md) for what runs where and how to reproduce a lane locally. Run a deep
+lane locally when you are changing unsafe code it covers or debugging its failure.
 
-Select isolated SIMD/fuzzing/validation features when affected. If dependency impact is unclear,
-select broader coverage and explain it. A zero-match filter, unexpected ignore, timeout or failed
-setup is not a passed check. Report native, Miri, Loom, ABI and performance evidence separately.
-Nextest does not run doctests; run relevant compile-fail/doctests separately.
+A zero-match test filter, an unexpected ignore, a timeout or a failed setup is not a pass.
+Nextest does not run doctests; run relevant compile-fail doctests separately.
 
 ## Build test fixtures
 
@@ -159,81 +163,22 @@ Some test paths rely on managed fixtures. Build them with:
 cargo run -p xtask -- fixtures build
 ```
 
-## Miri policy
+## Miri, Loom and fuzzing
 
-Current CI runs a pinned-nightly `dotnet-value` gate. Use affected library tests during
-iteration and the relevant complete library selection when integrating unsafe/atomic changes.
-This existing broad command is a reference, not a requirement for unrelated edits:
+The pinned nightly, Miri flags, selectors and corpus-replay commands are in
+[`docs/CI.md`](docs/CI.md) and [`docs/FUZZING.md`](docs/FUZZING.md). When you change unsafe
+code, add a focused regression for the invariant you changed and run it under Miri locally.
+Broad Miri selections run in CI.
 
-```bash
-MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly-2026-05-27 miri test -p dotnet-value -- --test-threads=1
-```
+## Documentation-only changes
 
-The separate blocking cross-arena singleton lane (selected by changed paths, like the other deep lanes) and its exact feature-specific selectors are
-documented in [`docs/CI.md`](docs/CI.md); its isolated strict-core test is not whole-VM strict signoff.
-
-### VM unsafe checks
-
-Changes to unsafe or its callers require tests that exercise the changed invariant, including
-applicable feature modes. Add focused regressions with the repair, use bounded real bridge tests,
-and inspect discovery/counts. Run the existing broader advisory selection below when the changed
-interpreter/exception path warrants it, or for a full sweep. It is not an automatic per-file or
-per-step tax and does not substitute for a regression of the new unsafe boundary:
+Run `bash scripts/check_doc_drift.sh` and the intra-doc-link check:
 
 ```bash
-MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features -- --test-threads=1 jmp_tests tail_calls fault_tests
-MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks" \
-cargo +nightly-2026-05-27 miri test -p dotnet-vm --no-default-features --features multithreading -- --test-threads=1 jmp_tests tail_calls fault_tests
-```
-
-Limits of these existing invocations:
-- `-Zmiri-strict-provenance` currently fails before VM execution due dependency-level integer-to-pointer casts reached during assembly parsing (`bitvec`/`dotnetdll`, plus rayon worker-thread paths via `crossbeam-epoch`).
-- `-Zmiri-disable-isolation` is needed for host filesystem syscalls used by the test harness.
-- `-Zmiri-ignore-leaks` is needed for non-joined background worker threads that are not VM-unsafe regressions.
-
-These historical dependency blockers limit the whole-VM strict claim. Investigate exact current
-blockers when a change needs that evidence; do not require dependency research to close an
-independent runtime repair. Strict-core results must identify their isolated selection.
-The nightly used for Miri and fuzz targets is pinned separately because `rust-toolchain.toml`
-selects stable by default. Hosted advisory VM selections completed as guarded singleton shards
-in both configurations; see [`docs/CI.md`](docs/CI.md) for the tested SHA, timings and limits.
-This does not imply strict-provenance coverage or a soundness proof.
-
-## Blocking fuzz corpus replay
-
-Changes to fuzzed code should replay the tracked corpora with the CI-pinned toolchains. Build
-cargo-fuzz 0.13.1 with stable Rust 1.95.0 and `--locked`; target compilation and execution use
-`nightly-2026-05-27`. Current CI runs the selected replays (all four on the nightly and manual full sweeps) as pipeline-failing gates. Under the
-agreed hierarchy, select affected corpora before acceptance and keep all four in full sweeps.
-Changes to shared pointer/executor infrastructure select broadly. These direct commands are
-references; use the guarded runner for acceptance:
-
-```bash
-cargo +1.95.0 install cargo-fuzz --version 0.13.1 --locked
-cd crates/dotnet-value
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_roundtrip fuzz/corpus/fuzz_managed_ptr_roundtrip -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_managed_ptr_offset fuzz/corpus/fuzz_managed_ptr_offset -- -runs=0
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_raw_memory_access fuzz/corpus/fuzz_raw_memory_access -- -runs=0
-
-cd ../dotnet-vm/fuzz
-ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-05-27 fuzz run fuzz_executor corpus/fuzz_executor -- -runs=0
-```
-
-These bare commands do not implement CI's inventory and execution-count guard; see
-[`docs/FUZZING.md`](docs/FUZZING.md#blocking-corpus-regression). `ASAN_OPTIONS=detect_leaks=0`
-makes replay usable on sandboxed runners; exploratory duration-based fuzzing remains advisory.
-
-## Documentation drift check
-
-Documentation-only changes need the drift/queue checks and a link check; they do not need a
-runtime build/test matrix, Miri or benchmarks. Rustdoc is the existing intra-doc-link check:
-
-```bash
-bash scripts/check_doc_drift.sh
 DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features
 ```
+
+No runtime build, Miri or benchmarks are needed.
 
 ## Feature flag matrix reference
 

@@ -15,23 +15,60 @@ This document describes the garbage collection subsystem, memory safety invarian
 
 ## Invariants
 
-- `F1.StwParked`: GC-only raw accesses require a `StopTheWorldGuard`/`GcCycleGuard` pause in which every relevant mutator is parked.
-- `F1.ArenaGenerationMatch`: generation-qualified cross-arena origins and GC transport require an exact-identity live lease before dereference; GC installation also checks the destination arena’s original identity. Identity prevents registration ABA, not object reclamation. The compact `ObjectRef` codec has no generation and retains its unsafe live-original-allocation contract.
-- `F1.ExecutorArenaRetained`: the thread-affine MT owner reserves its exact TLS identity independently of storage; freeing storage requires a completed exact-registration drain. Incomplete cleanup or unwind retains it. See [arena lifecycle](#per-thread-arenas).
-- `F1.GcHandleRooted`: a GC reference used through raw storage must remain rooted throughout access. A live arena lease prevents arena teardown but is not itself an object root; the caller must establish reachability separately.
-- `F5.TracesEveryGcRef`: every unsafe `Collect` implementation enumerates every contained GC handle through its fields and variants.
-- `F6.NoEscapeAcrossArena`: arena branding, private constructors, and `for<'gc>` confinement prevent `'gc` values from escaping; the deliberate cross-arena `Gc::from_ptr` path is limited to tracing and cannot escape.
-- `F9.MetadataArenaOutlivesDescriptors`: owner-tied `Arc<MetadataArena>` metadata keeps leaked descriptor allocations alive for all descriptor users.
+The `// SAFETY:` predicates this subsystem relies on are stated in the
+[invariant registry](INVARIANT_REGISTRY.md): `F1.StwParked`, `F1.ArenaGenerationMatch`,
+`F1.ExecutorArenaRetained`, `F1.GcHandleRooted`, `F5.TracesEveryGcRef`,
+`F6.NoEscapeAcrossArena` and `F9.MetadataArenaOutlivesDescriptors`.
+
+## Managed pointer placement
+
+ECMA-335 §II.14.4.2 and §III.1.1.5.2 separate where a managed pointer (byref) may *point* from
+where a byref value may be *stored*.
+
+**Targets.** A byref may point into any of the storage kinds named by `PointerOrigin`
+(`crates/dotnet-value/src/pointer/origin.rs`):
+
+| Variant | Target |
+|---|---|
+| `Heap(ObjectRef)` | a field or element of a GC heap object (object, array, box, string) in this arena |
+| `CrossArenaObjectRef(CrossArenaOrigin)` | the same, for an object owned by another thread's arena (`multithreading` only) |
+| `Static(Arc<StaticMetadata>)` | static field storage |
+| `Stack(StackSlotIndex)` | a local, argument or evaluation-stack slot of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
+| `Transient(Arc<Object>)` | a value-type value that has no slot of its own, such as the result of `ldflda` on a value type on the evaluation stack |
+| `Unmanaged` | unmanaged memory, including `localloc` blocks and addresses reconstructed from native integers |
+
+**Storage.** A byref value may be stored only in:
+
+- evaluation-stack slots, locals and arguments (all `StackValue` slots of the evaluation stack);
+- fields of byref-like (`ref struct`) value types, which are themselves stored only in those
+  slots. The layout factory gives a `by_ref` field the `Scalar::ManagedPtr` layout
+  (`LayoutFactory::collect_fields` in `crates/dotnet-runtime-resolver/src/layout.rs`), as it does
+  the `ByReference<T>` family.
+
+A byref is never stored in a heap object, an array element, a static or a box. Consequently the
+GC, the write barrier for heap stores and finalization never handle a byref stored in the heap,
+and heap, array, static and box storage need no byref support.
+
+**What the VM rejects.** The VM does not check heap stores for byrefs at run time; storing a
+byref or byref-like value into a heap field, array element, static or box is invalid IL, and the
+VM relies on the input being valid. The checks that exist are:
+
+- `System.TypedReference` cannot be laid out as a field or element or read from managed
+  storage (`TypeResolutionError::InvalidLayout` from the layout factory and from
+  `read_cts_value`).
+- P/Invoke rejects signatures whose by-value arguments or return type are byref-like
+  aggregates containing managed pointer fields (`preflight_byref_like_native_aggregates` in
+  `crates/dotnet-pinvoke/src/call.rs`).
 
 ## Frame-Owned `localloc` Allocations
 
 `localloc` storage is host allocation owned by the active method frame, not storage managed by the
-`HeapManager`. `MethodState::allocations` retains one zero-initialized, non-resizing `RawBlock` per
-request. Each block has at least 16-byte alignment, a retained allocation base and `Layout`, and a
+`HeapManager`. `MethodState::allocations` (a `FrameAllocations`) retains one zero-initialized,
+non-resizing `RawBlock` per request, so a later request cannot move or invalidate an earlier
+block. Each block has at least 16-byte alignment, a retained allocation base and `Layout`, and a
 separate payload extent; zero-byte requests still own a real one-byte block. Pointers are derived
-from the retained base without forming an intermediate payload reference. This follows the
-localloc-relevant allocation contract planned for M3 `GuestBlock`, but does not implement or migrate
-the general `GuestBlock` storage model.
+from the retained base without forming an intermediate payload reference. `localloc` pushes the
+block address as an unmanaged pointer.
 
 The default limits are 128 MiB per request and per frame, and 512 MiB per thread. Checked accounting
 charges at least 64 bytes for each block. A negative signed request maps to `System.OverflowException`;
@@ -49,56 +86,38 @@ Allocation lifetime follows frame ownership rather than the lifetime of a caller
   suspended, or pooled frames through normal Rust destruction. MT teardown can instead retain
   the arena and its frames when draining is incomplete.
 
-The allocation budget is a thread-local limit for these frame allocations; it is not an aggregate
-host-memory ledger and is not connected to `HeapManager` allocation pressure or GC triggering. M1c
-also does not validate or guard guest uses of a pointer after its frame's localloc lifetime ends.
+Limits of this contract:
 
-Remaining ownership and memory-safety work is outside M1c:
+- The budget is a thread-local limit for frame allocations only. It is not connected to
+  `HeapManager` allocation pressure or GC triggering.
+- Guest use of a pointer after its frame's allocation lifetime ends is not detected.
+- `localloc` inside an exception block is not rejected.
+- Suspending frames while a nested exception filter runs has not been shown to preserve the
+  suspended frames' blocks; source inspection suggests a possible overwrite, which has not been
+  reproduced.
 
-- p09 and addressable local/argument frame homes remain M3 work; static observation and
-  alignment remain M3 work. M1d tested a narrower static allocation-lifetime hypothesis. Heap
-  and static storage have not migrated to `GuestBlock`.
-- Connecting per-thread host-allocation accounting to GC/VM-wide pressure remains M3/M4 work, as
-  does the eventual shared-memory access protocol.
-- The implementation does not reject `localloc` in exception blocks. Nested-filter suspended-frame
-  behavior (F-LIFE-004) also remains unaddressed; the ordinary catch/unwind coverage does not
-  establish that nested-filter lifecycle.
+## Pointer Ownership and Access
 
-## M1d Pointer Ownership and Access
+- **Transient ownership.** `PointerOrigin::Transient` holds a shared `Arc<Object>`: clones
+  retain the same storage, and `normalize` and `ManagedPtr::from_info_full` preserve that owner.
+  A Transient value is a snapshot of the value it was taken from; writes through it do not reach
+  any local, argument or heap location. Fallible memory stores, native-integer conversions,
+  `Unsafe.AsPointer` and CLI-to-CTS numeric narrowing reject a Transient byref instead of
+  exposing its address; infallible raw codecs do not perform this check.
+- **`RetainedPtr`.** Access-performing stack pops (`pop_retained_ptr`) return a `RetainedPtr`
+  that owns the popped `StackValue` for the synchronous operation; with `multithreading`, a
+  cross-arena operand also holds an arena lease. It does not hold a heap borrow, and must be
+  dropped before the thread parks at a safepoint.
+- **Observation.** `pop_address` returns an address with no owner. `resolve_address` borrows
+  the origin; its result and `ManagedPtr::observe_address` are address observations, not access
+  permission, a lasting lease, a storage guard or a range proof.
+- **Caller obligations.** Every access through any of these still needs provenance, extent,
+  initialization, alignment, aliasing, rooting and synchronization established by the caller
+  (`F10.RawMemoryAccessValid`).
 
-`PointerOrigin::Transient` holds a shared `Arc<Object>`: clones retain the same storage, and
-`normalize` and `ManagedPtr::from_info_full` preserve that owner. A value type converted to a
-Transient origin is initially a snapshot; sharing subsequent clones does not make it a writable
-stack home. Fallible memory stores reject Transient byrefs and native-integer conversions and
-`Unsafe.AsPointer` and CLI-to-CTS numeric narrowing reject Transient ownership escape; this is not a redesign of every infallible
-raw codec.
-
-Access-performing stack pops use `RetainedPtr` to keep the popped `StackValue` alive for the
-synchronous operation; with `multithreading`, cross-arena managed operands also retain an arena
-lease. Observation-only `pop_address` carries no owner. `resolve_address` borrows the origin;
-its result and `ManagedPtr::observe_address` are address observations, not access permission and
-not a lasting lease, storage guard, root, or range proof. Callers still owe provenance, extent,
-initialization, alignment, aliasing, rooting and synchronization for every access.
-
-Selected cross-arena checked accesses take a lease per closure or operation; observation and
-resolution take only a temporary lease. `unregister_arena` removes the registry entry before
-waiting for in-flight leases, so fresh acquisition fails while the entry is absent and a pre-existing lease can complete.
-With `memory-validation`, the holder thread's tracked lease permits its in-flight validation after
-removal, without authorizing a fresh lease. Drop leases before parking at a safepoint. A lease
-protects arena teardown for the covered access, not object reachability or shared-memory ordering;
-P/Invoke's cross-arena guard boundary remains M2.
-
-Previously recorded Miri tests exposed dangling Transient accesses and cross-arena teardown UAF
-before repair; the scoped regressions passed after repair. p36's one-byte direct static access
-survived a forced collection, refuting only that controlled allocation-lifetime hypothesis; p12
-hit an alignment debug assertion, not a teardown proof. See the [M1d evidence](pointer-provenance/INVENTORY.md#m1d-baseline-and-outcomes). Permissive Tree Borrows is not strict-provenance evidence or a soundness proof.
-
-Remaining obligations include p09 stack-home relocation and final pointer codecs/layout (M3),
-static `GuestBlock` alignment (M3), final M1e/M1g acceptance of the implemented transport,
-publication and identity contracts, the shared-memory/atomic protocol (M4), P/Invoke pin/guard and ABI
-(M2), and `cpblk`/`initblk`/`Memmove` yield resumption (M1f/M5). The source-inferred nested-filter
-suspended-frame overwrite (F-LIFE-004) is not fixed, and strict-provenance evidence (M0/M6) remains
-open; no strict lane was run for M1d.
+Cross-arena checked accesses take a lease per closure or operation; observation and resolution
+take only a temporary lease. The lease protocol is described under
+[arena liveness and leases](#arena-liveness-and-leases).
 
 ## Arena Architecture
 
@@ -114,9 +133,8 @@ MT `extract_arena` transfers the Box and exact registration to an `ArenaGuard` a
 subsequent extraction returns `None` and arena operations are unavailable. The reservation stays
 with the Executor even if the guard drops first. The guard may outlive the Executor on the same
 thread; it never touches TLS, so it cannot take a successor's arena. `Executor` is `!Send` and
-`!Sync` in both modes; the MT guard is also `!Send` and `!Sync`. Making the formerly public TLS
-slot private and prohibiting Executor transfer are Rust API compatibility breaks; construct and
-use each Executor on its owning thread instead of mutating the slot or transferring it.
+`!Sync` in both modes; the MT guard is also `!Send` and `!Sync`. The TLS slot is private:
+construct and use each Executor on its owning thread.
 
 On MT Drop, retention is armed before fallible cleanup. The owner removes its coordinator and
 thread bookkeeping and, if it still owns the Box, drains the captured exact registration; the
@@ -126,9 +144,7 @@ registration, or interrupted drain/cleanup deliberately leaks storage. Drain wai
 and coordinator locks and TLS borrows. TLS destruction also leaks a residual Box (e.g. a forgotten
 Executor), not a substitute for drain. Drop may panic and incomplete cleanup can leave bookkeeping;
 retention is not a promise of non-panicking Drop or recovery. No final full GC is performed by
-Executor Drop. Leases must end before safepoint parking and are not roots, access/range validation,
-synchronization, or FFI lifetime guarantees. See [plan 03](plans/03-executor-teardown-ownership.md)
-for the accepted scoped outcome and its evidence; broader R08 acceptance remains open.
+Executor Drop.
 
 The following is an MT schematic: coordinator handles are not themselves TLS arena storage.
 
@@ -214,51 +230,35 @@ sequenceDiagram
     C-->>T: Resume execution
 ```
 
-## Canonical GC/Threading Lock Order
+## Lock Order
 
-This GC-focused table mirrors the authoritative `define_lock_order_dag!` invocation in
-[`crates/dotnet-utils/src/sync/lock_order.rs`](../crates/dotnet-utils/src/sync/lock_order.rs)
-and the broader contract in
-[Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md). It presents one valid
-topological listing of the GC-critical levels; adjacent rows from different branches are not
-necessarily `AcquireAfter` edges.
-
-| Order | Lock | Primary path |
-|------|------|--------------|
-| 1 | `GCCoordinator::collection_lock` | `Executor::perform_full_gc` → `GCCoordinator::begin_collection` |
-| 2 | `ThreadManager::gc_coordination` | `ThreadManager::request_stop_the_world` while collection session is alive |
-| 3 | `ThreadManager::threads` | STW thread-state accounting (`thread_count`, state warnings) |
-| 4 | `GCCoordinator::arenas` | Arena snapshot/routing inside `CollectionSession` |
-| 5 | `ArenaHandle::current_command` | Per-arena command enqueue/wait/finish |
-| 6 | `GCCoordinator::cross_arena_refs` | Fixed-point cross-arena mark table updates |
-
-Forbidden inversions (must never be introduced):
-- When both are needed, never acquire `ThreadManager::gc_coordination` before `GCCoordinator::collection_lock`.
-- Never hold `ThreadManager::threads` while trying to acquire `ThreadManager::gc_coordination`.
-- Never hold `ArenaHandle::current_command` while entering code that acquires `GCCoordinator::arenas`.
-- Never acquire `GCCoordinator::collection_lock` from a path already holding `GCCoordinator::arenas` or `ArenaHandle::current_command`.
-
-These trait-level inversions are guarded by negative compile-time `AcquireAfter` assertions next
-to the authoritative DAG. Operational sequencing and lifetime rules that cannot be represented
-as trait edges are documented in the broader threading contract.
+GC and threading locks are acquired in the order declared by `define_lock_order_dag!` in
+[`crates/dotnet-utils/src/sync/lock_order.rs`](../crates/dotnet-utils/src/sync/lock_order.rs),
+with negative `AcquireAfter` assertions rejecting known inversions. The chains, forbidden
+inversions and sequencing rules are tabulated once, in
+[Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md#canonical-lock-order-multithreading).
 
 ## Cross-Arena Reference Tracking
 
 When an object in arena A stores a reference to an object in arena B, this must be tracked so arena B's collector doesn't reclaim the referenced object prematurely.
 
-### Arena Liveness and Generation Tracking (`dotnet-utils/src/gc/cross_arena.rs`)
+### Arena Liveness and Leases
 
-Cross-arena registration is backed by `ArenaState` entries in a global registry:
+Cross-arena registration (`dotnet-utils/src/gc/cross_arena.rs`) is backed by `ArenaState` entries in a global registry:
 
 - `ArenaState` contains `stw_in_progress`, `active_leases`, `is_alive`, and a monotonically increasing `generation`.
 - `try_acquire_lease(arena_id)` returns an `ArenaLease` guard that increments `active_leases`.
-- `unregister_arena` removes the entry, flips `is_alive`, then waits until `active_leases == 0` before returning.
+- `unregister_arena` removes the entry, flips `is_alive`, then waits until `active_leases == 0` before returning. A fresh acquisition fails once the entry is removed; a pre-existing lease can complete. With `memory-validation`, the holder thread's tracked lease permits its in-flight validation after removal, without authorizing a fresh lease.
 
-For the covered access paths, the lease protocol is intended to prevent teardown during access; it does not protect a later use of an observed address. The original arena must remain identifiable, and not every cross-arena consumer has been migrated. Executor ownership and interrupted-drain retention have been accepted as a scoped outcome; broader R08 acceptance remains open. See [plan 03](plans/03-executor-teardown-ownership.md).
+**A lease is not a root.** A lease prevents teardown of the arena for the duration of the covered
+access. It does not keep any object reachable, check ranges, order shared-memory accesses, or
+protect a later use of an address observed under it. Reachability needs a rooted handle or the
+cross-arena root protocol below (`F1.GcHandleRooted`). Leases must be dropped before a thread
+parks at a safepoint.
 
-`CrossArenaRef` retains the allocation-derived raw pointer and `ArenaIdentity` (ID and generation) through the write barrier, found buffer, coordinator and commands; numeric addresses are keys for equality/deduplication, not pointer reconstruction. Harvest reacquires an exact-identity lease; installation additionally compares the owner arena’s original identity before conversion. STW records a real generation, not a wildcard. Ordinary `CrossArenaOrigin` also carries identity and a non-reused registration token; its managed-pointer codec resolves the token on decode, rejecting old registrations after ID reuse. Neither retained pointer nor lease roots an object.
+`CrossArenaRef` retains the allocation-derived raw pointer and `ArenaIdentity` (ID and generation) through the write barrier, found buffer, coordinator and commands; numeric addresses are keys for equality/deduplication, not pointer reconstruction. Harvest reacquires an exact-identity lease; installation additionally compares the owner arena’s original identity before conversion. STW records a real generation, not a wildcard. Ordinary `CrossArenaOrigin` also carries identity and a non-reused registration token; its managed-pointer codec resolves the token on decode, rejecting old registrations after ID reuse. The retained pointer does not root the object either.
 
-Registration rejects duplicate live IDs; checked generation and token allocation fail on exhaustion rather than wrap. VM managed IDs are monotonic, 1..=65535, and exhaustion fails before registration. The 64-bit compact `ObjectRef` codec supports registered IDs 0..=65535 and nonzero aligned addresses below 2^48, with release-enforced checks and unsigned ID decoding. Its one-word representation stores no generation: unsafe decode requires the original allocation to remain live, rooted and provenance-valid for the required lifetime, even if an ID has been reused. M3 storage redesign remains separate.
+Registration rejects duplicate live IDs; checked generation and token allocation fail on exhaustion rather than wrap. VM managed IDs are monotonic, 1..=65535, and exhaustion fails before registration. The 64-bit compact `ObjectRef` codec supports registered IDs 0..=65535 and nonzero aligned addresses below 2^48, with release-enforced checks and unsigned ID decoding. Its one-word representation stores no generation: unsafe decode requires the original allocation to remain live, rooted and provenance-valid for the required lifetime, even if an ID has been reused.
 
 ### How References Are Recorded
 - Memory mutations occur through `RawMemoryAccess` (`dotnet-runtime-memory/src/access.rs`).
@@ -269,8 +269,8 @@ Registration rejects duplicate live IDs; checked generation and token allocation
 ### Weak References
 The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - **Implementation**: `HeapManager::finalize_check` zero-fills weak handles for objects that are unreachable and don't require (or have finished) finalization.
-- **BCL Support**: `System.WeakReference<T>` is currently not in the BCL support library and must be defined by the user or added to `support.dll`.
-- **Cross-Arena Limitation**: The current `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not currently tracked or zeroed correctly by the global coordinator. This is a known limitation for multi-threaded scenarios.
+- **BCL Support**: `System.WeakReference<T>` is not in the BCL support library and must be defined by the user or added to `support.dll`.
+- **Cross-Arena Limitation**: The `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not tracked or zeroed by the global coordinator.
 
 ## GcScopeGuard and Deadlock Prevention
 
@@ -342,14 +342,14 @@ new GC references to trace.
 - `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
   `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
 
-### Async/await prohibition (reference: F-SAFETY-001)
+### Async/await prohibition
 
 Rust `async`/`await` is prohibited in this layer. `gc-arena` brands `Gc<'gc, T>` handles with an
 invariant `'gc` lifetime scoped to `mutate_root` closures, while compiler-generated futures cannot
 provide custom `Collect<'gc>` tracing for locals captured across `.await`. Holding `Gc` handles in
 an untraced future across safe points would permit collection of still-referenced objects.
-
-Reference: `REVIEW.md` §`F-SAFETY-001`.
+Continuation state that must survive a safe point therefore lives in the traced
+`VmContinuation`/`FrameReturnAction` storage described above.
 
 ## Panic-Safety Guarantees During STW
 
@@ -367,7 +367,6 @@ Write-barrier TLS buffers are drained on panic unwind by `WriteBarrierPanicFlush
 The `HeapManager` tracks object lifetimes, registration, and finalization:
 - **Finalization**: Scans registered objects during `finalize_check` and queues unreachable ones with finalizers to a finalizer thread/queue.
 - Coordinates with `dotnet-runtime-memory/src/ops.rs`, which defines a thin `MemoryOps` trait that extends `BaseMemoryOps` with a single `heap()` accessor. The concrete allocation paths (`new_object`, `new_vector`, `box_value`) live on the `MemoryOps` trait in `dotnet-vm-ops/src/ops.rs`.
-- Maintains an `OBJECT_REGISTRY` of known heap objects, facilitating robust pointer validation.
 
 ## RawMemoryAccess (`dotnet-runtime-memory/src/access.rs`)
 
@@ -390,10 +389,9 @@ Provides atomic-capable raw byte storage for object fields:
 - Backed uniformly by `dotnet_utils::sync::RwLock<Vec<u8>>` in every build configuration. The synchronization boundary selects `parking_lot::RwLock` with `multithreading` and the `RefCell`-based compatibility lock otherwise.
 - Supports synchronised/atomic field access (`get_field_atomic`, `set_field_atomic`) under various memory ordering models.
 - Provides `raw_data_ptr()` returning `*mut u8` for low-level or STW-GC tracing access.
-- **Atomic access follow-up:** the retired width-generic assurance proposal is not an active
-  prerequisite. [Plan 01 M4](plans/01-pointer-provenance.md#m4--establish-one-host-memory-model)
-  owns a common access protocol, including overlapping widths and raw aliases. A type-level
-  width helper may support that outcome, but does not establish synchronization by itself.
+- Atomic field access does not define ordering against overlapping non-atomic, different-width
+  or raw-alias accesses to the same bytes; there is no common shared-memory access protocol
+  ([not yet planned](plans/README.md#not-yet-planned)).
 
 ## Object Representation (`dotnet-value/src/object/`)
 
@@ -402,7 +400,7 @@ Heap objects are represented via several layers of abstraction, split across `mo
 - **`ObjectInner`**: Wraps `HeapStorage` and unconditionally carries `owner_id: ArenaId` in all build configurations. Under `cfg(any(feature = "memory-validation", debug_assertions))` (i.e. also in all debug builds) it embeds a `magic` number (`0x5AFE_0B1E_C700_0000`).
 - **`ObjectPtr`**: A transparent, Send/Sync wrapper over a raw pointer to a `ThreadSafeLock<ObjectInner>`. Used primarily for cross-arena references.
 - **`ObjectRef`**: A GC-managed handle wrapping the `ThreadSafeLock`. Implements `PointerLike` and `Collect`.
-- Header layout delegates to `LayoutManager` logic but inherently stores the synchronization block index and type description pointer in the .NET-compliant object header.
+- There is no .NET-style object header. `ObjectInner` holds the monitor's `sync_block_index` as an ordinary field (`0` means no sync block yet), and each `Object` carries its `TypeDescription`.
 
 ## GC Collect Trait Implementations
 
@@ -415,7 +413,7 @@ All types stored in the GC heap or referenced by the VES stack must implement `g
 
 ### `gc-arena`: Mutation Token and `'gc` Branding Guarantees
 
-**Source reference:** `gc-arena` v0.6.0, `src/arena.rs:163-187`.
+**Source reference:** `gc-arena` v0.6.0, `Arena::mutate` and `Arena::mutate_root`.
 
 `gc-arena` enforces memory safety through two complementary mechanisms that every contributor working near the GC boundary must understand:
 
@@ -431,28 +429,28 @@ Rules:
 Every `Gc<'gc, T>` handle is branded with the invariant `'gc` lifetime of the arena that owns it. This prevents handles from outliving their arena or being compared across different arenas at compile time.
 
 Rules:
-- **Cross-arena transport is not a foreign `Gc<'gc, T>`.** `MemoryOwner::CrossArena` carries a `CrossArenaOrigin` (retained pointer, identity and token) and a local `GcLifetime<'gc>` token. This token is not a foreign arena brand and does not root the object.
+- **Cross-arena transport is not a foreign `Gc<'gc, T>`.** `MemoryOwner::CrossArena` carries a `CrossArenaOrigin` (retained pointer, identity and token) and a local `GcLifetime<'gc>` token. This token is not a foreign arena brand.
 - **`GcLifetime<'gc>` forgery is prohibited.** The token has a private constructor and is only issued by `GCHandle::lifetime()` (`crates/dotnet-utils/src/gc/mod.rs`). Any code that needs to construct a `MemoryOwner::CrossArena` must obtain a real `GCHandle<'gc>` first.
 - **Heap-storage access preserves the arena brand.** `ObjectPtr::as_heap_storage` and `MemoryOwner::as_heap_storage` require a `for<'a> FnOnce(&HeapStorage<'a>) -> T` closure. Because the closure must accept every arena brand, its return type cannot depend on the hidden brand or carry a storage-derived GC handle out as `'static`. The `ObjectRef::as_heap_storage` and `ObjectRef::try_as_heap_storage` siblings expose only their existing `'gc` brand.
 - **Unsafe cross-arena access** requires the original live object and an exact-identity lease before dereference. `validate_magic()` and `validate_arena_id()` are diagnostic and cannot establish that a stale pointer is safe to read; it is not a substitute for the lifetime, root or generation contract.
 
 ## Accepted-Risk Boundaries
 
-The following boundaries cannot currently be expressed safely through `gc-arena`'s API. They
+The following boundaries cannot be expressed safely through `gc-arena`'s API. They
 are accepted operational risks rather than type-level guarantees.
 
 ### Cross-arena root tracing (`HeapManager::trace`)
 
-**Source:** `crates/dotnet-runtime-memory/src/heap.rs:436-445`.
+**Source:** `HeapManager::trace` in `crates/dotnet-runtime-memory/src/heap.rs`.
 
 - **Mechanism:** `MarkObjects` verifies the executing owner identity and a matching live lease, then inserts the retained pointer into that owner's `cross_arena_roots` under `mutate_root`. The root barrier makes publication visible to incremental marking; `MarkAll` clears the set through the same barrier. `HeapManager::trace` temporarily converts each pointer with `Gc::from_ptr` to trace it; it does not let that handle escape.
-- **Invariant relied upon:** The producer must supply a live original object; STW prevents sweep during the fixed-point handoff, and the published root supplies reachability thereafter. Neither identity nor a lease is an object root. The owner arena performs the installation and tracing, and a temporary conversion is an unsafe boundary, not a general foreign-brand API.
-- **Limitations:** This contract relies on the coordinated protocol and caller lifetime obligations, not type-level detection. The independent real-VM recreation's foreign-branded fixture remains user-accepted but unresolved; passing permissive Miri does not prove brand discipline. See [R08](pointer-provenance/INVENTORY.md) and [plan 01](plans/01-pointer-provenance.md).
+- **Invariant relied upon:** The producer must supply a live original object; STW prevents sweep during the fixed-point handoff, and the published root supplies reachability thereafter. The owner arena performs the installation and tracing, and a temporary conversion is an unsafe boundary, not a general foreign-brand API.
+- **Limitations:** This contract relies on the coordinated protocol and caller lifetime obligations, not type-level detection. The real-VM cross-arena collection test builds its fixture with a foreign-branded `Gc`, so it does not demonstrate brand discipline ([evidence](pointer-provenance/INVENTORY.md#finding-to-work-map)).
 - **Scope:** Multithreading only; the single-threaded configuration has no `cross_arena_roots`.
 
 ### Cross-arena owner-ID read (`ObjectRef::trace`)
 
-**Source:** `crates/dotnet-value/src/object/mod.rs:289-298`.
+**Source:** the `Collect` implementation for `ObjectRef` (`ObjectRef::trace`) in `crates/dotnet-value/src/object/mod.rs`.
 
 - **Mechanism:** When `get_currently_tracing()` identifies the tracing arena, `Gc::as_ptr(h)`
   yields a raw pointer to the referenced arena's `ThreadSafeLock<ObjectInner>`. During `trace`,
@@ -461,10 +459,9 @@ are accepted operational risks rather than type-level guarantees.
 - **Invariant relied upon:** Stop-the-world (STW) has stopped every mutator before `trace` runs,
   so the owning arena is stopped and cannot be freed during this read. `ObjectInner::new` writes
   `owner_id` once at construction; the field is immutable thereafter.
-- **Unowned-write sentinel:** The former `ArenaId(0)` fallbacks in
-  `dotnet-runtime-memory/src/write_barrier.rs` (`MemoryOwner::owner_id`) and
-  `dotnet-runtime-memory/src/access.rs` (`RawMemoryAccess::write_value_internal`) now use the
-  canonical `ArenaId::INVALID` sentinel. It denotes a write with no GC-managed owner;
+- **Unowned-write sentinel:** `MemoryOwner::owner_id` (`dotnet-runtime-memory/src/write_barrier.rs`)
+  and `RawMemoryAccess::write_value_internal` (`dotnet-runtime-memory/src/access.rs`) use
+  `ArenaId::INVALID` for a write with no GC-managed owner;
   `WriteBarrierRecorder` skips object-reference and managed-pointer tracking for an `INVALID`
   recorder. The sentinel is recorder-local and is never stored in an object's `owner_id`, so the
   construction and immutability invariant above remains accurate.

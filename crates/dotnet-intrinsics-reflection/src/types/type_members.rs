@@ -61,7 +61,7 @@ pub fn intrinsic_runtime_assembly_get_name<'gc, T: ReflectionIntrinsicHost<'gc>>
     ctx.register_new_object(&name_obj);
 
     assembly_name_obj.as_object_mut(gc, |instance| {
-        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+        // `AssemblyName._name` is private BCL layout, so it is looked up by name at run time.
         instance
             .instance_storage
             .field::<ObjectRef<'gc>>(assembly_name_type.clone(), "_name")

@@ -1,46 +1,49 @@
 //! Cross-arena reference tracking and lease API.
 //!
-//! # TOCTOU Problem
+//! A registry maps each live [`ArenaId`] to a generation-qualified [`ArenaIdentity`] and its
+//! shared state. Code that dereferences into another arena first takes an [`ArenaLease`];
+//! teardown removes the registry entry and then waits until the lease count reaches zero
+//! before the arena's storage may be freed. Checking liveness with
+//! [`is_valid_cross_arena_ref`] and then dereferencing is a time-of-check/time-of-use race;
+//! the lease closes it.
 //!
-//! The original `is_valid_cross_arena_ref` + dereference pattern is a
-//! time-of-check/time-of-use (TOCTOU) race: an arena can unregister between
-//! the validity check and the pointer dereference, leaving a dangling pointer.
+//! # Lease duration
 //!
-//! # Lease API
+//! A lease lasts as long as its guard. Most callers hold one for a single access, but
+//! long-lived holders exist (for example `RetainedPtr` in `dotnet-value` keeps one for its
+//! whole lifetime), so teardown can wait indefinitely. `drain_leases` backs off from
+//! spinning to yielding and logs a warning every 100 ms while leases remain.
 //!
-//! `try_acquire_lease` returns an [`ArenaLease`] RAII guard.  While the guard
-//! is alive the target arena **cannot complete** `unregister_arena`: the
-//! function spins until `active_leases` reaches zero before returning.
+//! # Drain contract
 //!
-//! ## Protocol
+//! Leases count on the registration's shared state, not on the registry entry.
 //!
-//! ```text
-//! // Record an identity when a valid reference is created, then later:
-//! if let Some(lease) = try_acquire_lease_for_identity(identity) {
-//!     // The arena cannot finish teardown until the lease is dropped.
-//!     // A separate GC root and access discipline are still required.
-//!     drop(lease);
-//! }
-//! ```
+//! - [`ArenaRegistration::unregister_and_drain`] (exact identity, owner-held) removes its
+//!   entry if still present and then waits for every lease on that registration, even if
+//!   another caller removed the entry first. If the calling thread holds a lease it returns
+//!   [`TeardownOutcome::SelfHeldLease`] instead of deadlocking, and the storage must be leaked.
+//! - [`unregister_arena_identity`] removes and drains only when the live entry has the given
+//!   generation; on absence or mismatch it returns `false` without waiting.
+//! - [`unregister_arena`] (ID only) removes and drains whatever entry has that ID. If no entry
+//!   is present it returns at once, without waiting for leases taken on an earlier removal.
+//!   It does not detect a self-held lease.
 //!
-//! ## Correctness argument
+//! A lease does not root any object and does not establish pointer provenance; a separate
+//! GC root and access discipline are still required.
 //!
-//! `try_acquire_lease` takes a *read* lock on `VALID_ARENAS`, clones the
-//! `Arc<ArenaState>`, increments `active_leases` — all while holding that
-//! read lock.  `unregister_arena` must take the *write* lock to remove the
-//! entry; it can only do so after every in-progress `try_acquire_lease` call
-//! has released the read lock.  At that point every caller has already
-//! incremented `active_leases`, so `unregister_arena` will observe a non-zero
-//! count and spin.  Once the last `ArenaLease` drops, `active_leases` returns
-//! to zero and `unregister_arena` completes.
+//! ## Why removal cannot miss a lease
 //!
-//! ## Compatibility surface
+//! Lease acquisition takes the registry *read* lock, clones the `Arc<ArenaState>` and
+//! increments `active_leases` while holding it. Removal takes the *write* lock, so once it
+//! holds that lock every in-progress acquisition has already incremented the count, and the
+//! drain observes it.
+//!
+//! ## ID-keyed queries
 //!
 //! `register_arena`, `is_valid_cross_arena_ref`, `set_stw_in_progress` and
-//! `is_stw_in_progress` keep their ID-keyed signatures (they answer "is this ID live
-//! now?", not "is this the original registration?"). Found cross-arena references are
-//! recorded only as identity-qualified `CrossArenaRef` values; no numeric pointer
-//! transport remains.
+//! `is_stw_in_progress` are keyed by ID: they answer "is this ID live now?", not "is this
+//! the same registration?". Found cross-arena references are recorded as
+//! identity-qualified [`CrossArenaRef`] values.
 use super::{CrossArenaRef, OpaqueObjectPtr};
 use crate::{
     newtypes::ArenaId,
@@ -337,16 +340,13 @@ pub fn try_register_arena(
     registry.register(thread_id, stw_in_progress, &VALID_ARENAS_FAST)
 }
 
-/// Unregister an arena.
+/// Unregister an arena by ID.
 ///
-/// Removes the entry from the registry and then **spins** until all
-/// outstanding [`ArenaLease`] guards for this arena have been dropped.  This
-/// closes the TOCTOU window: any caller that obtained a lease before the
-/// write-lock was acquired has already incremented `active_leases`, so this
-/// function will not return until that dereference finishes.
-///
-/// In practice leases are held only for the duration of a single pointer
-/// dereference (nanoseconds), so the spin terminates almost immediately.
+/// Removes the entry with this ID, if any, and then waits until every outstanding
+/// [`ArenaLease`] on that registration has been dropped (see `drain_leases`). If no entry is
+/// present it returns immediately without waiting. It does not check for a lease held by the
+/// calling thread, which would make the wait never finish; owners use
+/// [`ArenaRegistration::unregister_and_drain`] instead.
 pub fn unregister_arena(thread_id: ArenaId) {
     remove_and_drain(thread_id, None);
 }
@@ -412,8 +412,8 @@ impl ArenaRegistration {
     }
 }
 
-// Independent recreation checkpoint: observe the actual removal path immediately
-// before its write-lock acquisition, without adding a production synchronization path.
+// Test-only checkpoint: lets a test observe the removal path immediately before it takes the
+// registry write lock, without adding a production synchronization path.
 #[cfg(test)]
 thread_local! {
     static RECREATION_REMOVE_CHECKPOINT: RefCell<Option<std::sync::mpsc::Sender<bool>>> = const { RefCell::new(None) };
@@ -492,7 +492,7 @@ fn drain_leases(thread_id: ArenaId, state: Arc<ArenaState>) {
 }
 
 // ---------------------------------------------------------------------------
-// Lease acquisition (new primary dereference API)
+// Lease acquisition
 // ---------------------------------------------------------------------------
 
 /// Attempt to pin an arena and obtain a dereference lease.
@@ -576,7 +576,7 @@ fn track_lease(lease: ArenaLease) -> ArenaLease {
 }
 
 // ---------------------------------------------------------------------------
-// Backward-compatible helpers (kept for callers not yet migrated)
+// Liveness queries and registry reset
 // ---------------------------------------------------------------------------
 
 /// Check whether an arena is currently registered.
@@ -1404,9 +1404,8 @@ mod lease_tests {
     }
 }
 
-/// Independent recreation (not recovered originals) of the cross-arena pointer transport
-/// contract (F-CODEC-202 / M1e): a found cross-arena reference must carry the pointer itself
-/// from tracing to harvest, with numeric keys used only for equality/dedup.
+/// Registry and cross-arena transport tests: a found cross-arena reference carries the pointer
+/// itself from tracing to harvest, with numeric keys used only for equality and deduplication.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1416,7 +1415,7 @@ mod tests {
         Arc::new(AtomicBool::new(false))
     }
 
-    /// Independent recreation (not recovered originals): duplicate publication must not
+    /// Duplicate publication must not
     /// replace a live registration or leave its outstanding lease detached from the map.
     #[test]
     fn m1g_recreation_registry_duplicate() {
@@ -1437,7 +1436,7 @@ mod tests {
         );
     }
 
-    /// Independent recreation (not recovered originals): the fast bit and map must not
+    /// The fast bit and map must not
     /// disagree while unregister is waiting for the registry write lock.
     #[test]
     fn m1g_recreation_registry_fast_bit_transaction() {
@@ -1472,7 +1471,7 @@ mod tests {
         );
     }
 
-    /// Independent recreation (not recovered originals): re-register after removal while
+    /// Re-register after removal while
     /// the old unregister is draining. This is a production-registry control, not a model.
     #[test]
     fn m1g_recreation_registry_drain_reuse_control() {
@@ -1547,7 +1546,7 @@ mod tests {
         assert_eq!(after_drain, Some((new_identity, new_token)));
     }
 
-    /// Independent recreation (not recovered originals): exercise production allocation
+    /// Exercise production allocation
     /// against an isolated registry, including failed-publication and token exhaustion.
     #[test]
     fn m1g_recreation_registry_generation_exhaustion() {
@@ -1620,7 +1619,7 @@ mod tests {
         assert_eq!(RegistrationToken::from_raw(0), None);
     }
 
-    /// Independent recreation (not recovered originals): tokens, exact leases and stale
+    /// Tokens, exact leases and stale
     /// unregisters must not bind an old registration to its successor.
     #[test]
     fn m1g_recreation_registry_identity_token_reuse() {
@@ -1657,7 +1656,7 @@ mod tests {
         assert!(try_acquire_lease_for_token(new_token).is_none());
     }
 
-    /// Independent recreation (not recovered originals): an isolated checked-counter model
+    /// An isolated checked-counter model
     /// for generation and future u32 tokens. It is not production token-allocation evidence.
     #[test]
     fn m1g_recreation_registry_checked_counter_control() {

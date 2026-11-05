@@ -1,52 +1,12 @@
 //! Bounded IL-level pointer provenance probes on the real VM.
-//! The 39-entry catalog has 33 controls and 6 diagnostic-only probes. Recorded local
-//! pinned permissive Tree Borrows runs pass the controls in both configurations. p13 is
-//! additionally ignored when memory-validation is enabled; only p19 permits native diagnostics.
 //!
-//! Current classifications and measured outcomes are summarized in
-//! docs/pointer-provenance/INVENTORY.md. Historical failures are labeled as pre-repair;
-//! unverified diagnostic outcomes remain review evidence, not new runs:
-//! | Probe | Finding | Work item | Lane | Current outcome / history |
-//! |---|---|---|---|---|
-//! | `p00_smoke` | harness control | M0 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p01_ldloca_convu_stind_i4` | slot/byref | M3 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
-//! | `p02_ldloca_stind_i4_control` | slot/byref control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p03_ldloca_convu_ldind_i4` | slot/byref read control | M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p04_double_localloc_write_first` | localloc/arithmetic | M1c | blocking-native + blocking-permissive-TB | M1c repair passed in both configurations; pre-repair Miri UB (`access.rs:1172`) |
-//! | `p05_single_localloc_roundtrip` | serde/transport control; localloc | M1c/M1e/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p06_localloc_minus_one_then_plus_one` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair Miri UB |
-//! | `p07_localloc_one_past_end` | localloc/arithmetic control | M1b | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p08_localloc_overshoot` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair Miri UB |
-//! | `p09_ldloca_convu_survives_callee_stack_growth` | slot/byref | M3 | diagnostic-permissive-TB | UB historically reported; exact current outcome unknown |
-//! | `p10_ldelema_convu_stind_heap_array` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations; pre-repair Miri UB |
-//! | `p11_ldelema_stind_heap_array_control` | heap slice/address control | M1a/M3 | blocking-native + blocking-permissive-TB | pass in both configurations (final lane) |
-//! | `p12_ldsflda_convu_stind_static` | slot/static address; guards | M3/M1d | diagnostic-permissive-TB | alignment debug assertion in both configs; no UB reported, not a teardown proof |
-//! | `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u` | heap slice/address | M1a/M3 | blocking-native + blocking-permissive-TB | M1a repair passed in both configs; conditionally ignored with memory-validation |
-//! | `p14_initblk_heap_array_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations |
-//! | `p15_initblk_stack_local_via_managed_ptr` | slot/byref; block | M3/M1f/M5 | diagnostic-permissive-TB | suspected UB; exact current outcome unknown |
-//! | `p16_cpblk_heap_arrays_via_managed_ptr` | heap slice/address; block | M1a/M1f/M5 | blocking-native + blocking-permissive-TB | M1a repair passed in both configurations |
-//! | `p17_localloc_ptr_ceq_self` | localloc/arithmetic comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair native and VM-M assertions failed |
-//! | `p18_localloc_ptr_clt` | localloc/arithmetic comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair native and VM-M assertions failed |
-//! | `p19_ldelem_negative_index` | negative index/native-int | M1f | diagnostic-native (permitted) or diagnostic-permissive-TB | native panic historically reported; not rerun |
-//! | `p20_heap_convu_then_typed_write_then_raw_store` | heap slice/address interleaving | M1a/M3 | blocking-native + blocking-permissive-TB | post-repair control passed in both configs; pre-repair Miri UB |
-//! | `p21_localloc_signed_extreme_offsets_roundtrip` | localloc/arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features Miri UB |
-//! | `p22_localloc_wrap_to_zero_roundtrip` | localloc/arithmetic/null | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features Miri UB |
-//! | `p23_localloc_pointer_loop_unsigned_branch_compare` | localloc/arithmetic/comparison | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair semantic assertion failed |
-//! | `p24_unsafe_byte_offset_direction_and_deref` | unsafe intrinsics/pointer arithmetic | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair ByteOffset sign assertion failed |
-//! | `p25_convi_and_stind_i_pointer_roundtrip_deref` | conversion/native-int store | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair conversion/store diagnostic failed |
-//! | `p26_native_int_boundary_store_load_roundtrip` | native-int width/sign | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs; pre-repair no-features diagnostic passed |
-//! | `p27_stind_i_fresh_pointer_through_local_slot_dereferences` | pointer store/local slot | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (296/348 s) |
-//! | `p28_stind_i_fresh_pointer_through_heap_memory_dereferences` | pointer store/heap memory | M1b | blocking-native + blocking-permissive-TB | Phase 6 pass in both configs (302/321 s) |
-//! | `p29_localloc_blocks_survive_growth_and_are_16_byte_aligned` | localloc allocation/alignment | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p30_localloc_block_survives_nested_callee_localloc` | localloc allocation/nested call | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p31_localloc_blocks_released_on_return_and_pooling` | localloc allocation/return lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p32_localloc_blocks_released_on_tail_call_replacement` | localloc allocation/tail-call lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p33_localloc_blocks_released_on_exception_unwind` | localloc allocation/unwind lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p34_localloc_blocks_released_on_executor_teardown` | localloc allocation/teardown lifecycle | M1c | blocking-native + blocking-permissive-TB | M1c control passed in both configurations |
-//! | `p35_ldflda_on_stack_value_type_then_ldind` | slot/byref; owner retention | M1d | blocking-native + blocking-permissive-TB | post-repair Miri pass in both configs; pre-repair exception resolution failure, source of throw inferred to be `ldind.i4` (no UB reported) |
-//! | `p36_static_address_survives_forced_collection` | static allocation lifetime | M1d | blocking-native + blocking-permissive-TB | Miri pass after forced collection in both configs |
-//! | `p_null_through_pointer_local_address` | localloc/arithmetic null; native-int store | M1b/M3 | blocking-native + blocking-permissive-TB | step 0.1 and Phase 6 control passes in both configurations |
-//! | `p_wide_store_into_int_local` | slot/byref width; native-int stores | M3 | diagnostic-permissive-TB | baseline and current outcome unknown |
+//! Each `p*` test builds a small CIL method that forms, converts and dereferences pointers
+//! (locals, `localloc`, heap arrays, statics) and checks the result. Controls must pass
+//! natively and under pinned permissive Tree Borrows Miri; diagnostic-only probes are
+//! `#[ignore]`d and run on demand. Run them through `scripts/pointer_provenance.sh`
+//! (`list`, `controls`, `batch`, `diagnostic`), which owns the shard and batch tables that
+//! the `batches` module must match. Probe classifications and recorded outcomes live in
+//! `docs/pointer-provenance/INVENTORY.md`.
 
 use crate::{
     StepResult,
@@ -416,7 +376,7 @@ fn p03_ldloca_convu_ldind_i4() {
     assert_eq!(r, 9);
 }
 
-// ---- Historical Claim 2 (pre-M1c): Vec-backed localloc could invalidate the first pointer; M1c now uses stable frame-owned blocks. ----
+// ---- A second `localloc` must not invalidate the first block's pointer: blocks are frame-owned and never move. ----
 #[test]
 fn p04_double_localloc_write_first() {
     let r = run_il(
@@ -818,7 +778,8 @@ fn p36_static_address_survives_forced_collection() {
     assert_eq!(r, 7);
 }
 
-// `ldflda` on a stack-resident value type followed by `ldind.i4` (M1d F-OWN-102).
+// `ldflda` on a stack-resident value type followed by `ldind.i4`: the field address must keep
+// its owning slot alive and readable.
 #[test]
 fn p35_ldflda_on_stack_value_type_then_ldind() {
     let r = run_program("P35", |res, _type_idx| {
@@ -1160,7 +1121,7 @@ fn p16_cpblk_heap_arrays_via_managed_ptr() {
 // =================================================================================================
 // Batch 5: comparison controls and a diagnostic-only negative-index panic probe.
 // =================================================================================================
-// Regression: identical localloc pointers previously compared unequal under ceq.
+// Identical localloc pointers must compare equal under `ceq`.
 #[test]
 fn p17_localloc_ptr_ceq_self() {
     let r = run_il(
@@ -1180,7 +1141,7 @@ fn p17_localloc_ptr_ceq_self() {
     assert_eq!(r, 1, "p == p must be true");
 }
 
-// Regression: clt on localloc pointers previously failed, preventing pointer loops from running.
+// `clt` on localloc pointers must order them by address, so pointer loops terminate.
 #[test]
 fn p18_localloc_ptr_clt() {
     let r = run_il(

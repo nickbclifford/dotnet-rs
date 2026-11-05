@@ -607,18 +607,20 @@ fn heap_read_windows_are_exact_for_array_object_and_boxed_payloads() {
                 assert_eq!(clamped, expected);
 
                 let end = make_ptr(len);
-                // SAFETY: F1.GcHandleRooted — the empty range at the payload end is valid.
+                // SAFETY: F10.RawMemoryAccessValid — `owner` is live and an empty range at the
+                // payload end is in bounds.
                 let end_read = unsafe { end.try_with_data(0, |data| data.len()) };
                 assert_eq!(end_read, Some(0));
 
                 let past_end = make_ptr(len + 1);
-                // SAFETY: F1.GcHandleRooted — this asserts rejection before the callback or
-                // any payload reference is constructed.
+                // SAFETY: F10.RawMemoryAccessValid — `try_with_data` checks the window against
+                // the payload extent and returns `None` before forming any slice.
                 let past_end_read = unsafe { past_end.try_with_data(0, |data| data.len()) };
                 assert_eq!(past_end_read, None);
 
                 let overflow = make_ptr(1);
-                // SAFETY: F1.GcHandleRooted — checked offset-plus-size overflow must reject.
+                // SAFETY: F10.RawMemoryAccessValid — `try_with_data` rejects the overflowing
+                // offset-plus-size before forming any slice.
                 let overflow_read =
                     unsafe { overflow.try_with_data(usize::MAX, |data| data.len()) };
                 assert_eq!(overflow_read, None);
@@ -686,7 +688,8 @@ fn cross_arena_heap_read_uses_exact_payload_range() {
         // cross-arena read validates its range under the object and field read guards.
         let byte = unsafe { ptr.with_data(1, |data| data[0]) };
         assert_eq!(byte, 0xA5);
-        // SAFETY: F1.GcHandleRooted — the exact non-panicking API rejects this overlong range.
+        // SAFETY: F10.RawMemoryAccessValid — `try_with_data` rejects this overlong range
+        // against the payload extent before forming any slice.
         let invalid = unsafe { ptr.try_with_data(2, |data| data.len()) };
         assert_eq!(invalid, None);
     });
@@ -1078,8 +1081,8 @@ fn test_managed_ptr_serialization_roundtrip() {
         {
             use crate::object::ObjectPtr;
             let ptr_raw = obj.with_data(|d| d.as_ptr());
-            // SAFETY: F1.GcHandleRooted — `obj` is kept alive for the duration of this test closure.
-            // We only use this raw pointer to validate serialization/deserialization logic.
+            // `obj` is kept alive for the duration of this test closure; the raw pointer is used
+            // only to validate serialization/deserialization.
             let ptr_lock = Gc::as_ptr(obj.0.unwrap())
                 .cast::<dotnet_utils::gc::ThreadSafeLock<crate::object::ObjectInner<'static>>>();
             // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
@@ -1251,7 +1254,7 @@ fn test_stack_rebase_preserves_golden_three_word_encoding_and_full_offset() {
     assert_eq!(stack_info.offset, ByteOffset::new(stack_offset));
 
     // A self-consistent XOR alone must not permit the canonical word-1 offset
-    // to disagree with the legacy packed mirror in word 0.
+    // to disagree with the packed mirror in word 0.
     let word0 = usize::from_ne_bytes(buffer[..ptr_size].try_into().unwrap());
     let mismatched_word1 = stack_offset + 1;
     buffer[ptr_size..ptr_size * 2].copy_from_slice(&mismatched_word1.to_ne_bytes());
@@ -2283,7 +2286,8 @@ mod m1d_cross_arena {
 
         // Both accesses reject the unregistered arena without touching the freed object.
         assert_eq!(ptr.observe_address(), None);
-        // SAFETY: F1.GcHandleRooted — the absent arena lease prevents any access to the freed owner.
+        // SAFETY: F1.ArenaGenerationMatch — the arena is unregistered, so no lease can be
+        // acquired and `try_with_data` returns `None` without touching the freed owner.
         let byte = unsafe { ptr.try_with_data(1, |data| data[0]) };
         assert_eq!(byte, None);
     }
@@ -2306,7 +2310,8 @@ mod m1d_cross_arena {
             assert!(!unregistered.load(Ordering::Acquire));
             assert_eq!(data[0], 0xA5);
             assert_eq!(ptr.observe_address(), None);
-            // SAFETY: F1.GcHandleRooted — the absent lease rejects the nested access.
+            // SAFETY: F1.ArenaGenerationMatch — the entry is already removed, so the nested
+            // access cannot acquire a lease and returns `None` without dereferencing.
             assert_eq!(unsafe { ptr.try_with_data(1, |_| ()) }, None);
             assert!(!unregistered.load(Ordering::Acquire));
             teardown
@@ -2380,10 +2385,10 @@ mod m1d_cross_arena {
         }
     }
 
-    /// F-GUARD-101 / 5.7: the pre-repair `SpanHelpers.Fill` byte fast path observed the
-    /// destination address under `observe_address`'s temporary lease and then wrote with
-    /// only the `StackValue` retained. Teardown after observation leaves the write
-    /// dangling. Known-dangling by construction: run under pinned Miri `--ignored` only.
+    /// Observing a destination address under `observe_address`'s temporary lease and then
+    /// writing with only the `StackValue` retained is unsound: teardown after observation
+    /// leaves the write dangling. Writers must keep a lease across the write. Known-dangling
+    /// by construction: run under pinned Miri `--ignored` only.
     #[test]
     #[ignore = "F-GUARD-101: documents the pre-repair Fill fast-path pattern (observe, then write unprotected); known-dangling, Miri --ignored only"]
     #[allow(
@@ -2402,7 +2407,7 @@ mod m1d_cross_arena {
         unsafe { observed.as_ptr().write(7) };
     }
 
-    /// F-GUARD-103: validation must accept an object access made under a lease
+    /// Validation must accept an object access made under a lease
     /// acquired before teardown removed the registry entry, while a fresh
     /// lease is still refused.
     #[test]
@@ -2427,13 +2432,13 @@ mod m1d_cross_arena {
 }
 
 // ---------------------------------------------------------------------------
-// M1g/M1e recreations (F-CODEC-202): independent recreation (not recovered originals).
+// Registry ABA and cross-arena pointer transport.
 // ---------------------------------------------------------------------------
 
-/// Independent recreation (not recovered originals) of the ordinary-origin and serialized
-/// registry ABA: the owner arena is unregistered and the same `ArenaId` is registered again
-/// (a new generation). The old arena's memory is deliberately kept alive so the pre-repair
-/// acceptance is observable through assertions instead of a dangling read.
+/// Ordinary-origin and serialized registry ABA: the owner arena is unregistered and the same
+/// `ArenaId` is registered again (a new generation). The old arena's memory is deliberately
+/// kept alive so a wrongful acceptance shows up as an assertion failure instead of a dangling
+/// read.
 #[cfg(feature = "multithreading")]
 mod m1g_recreation_origin_aba_support {
     use super::m1d_cross_arena::CrossArenaFixture;
@@ -2500,7 +2505,7 @@ mod m1g_recreation_origin_aba_support {
     }
 }
 
-/// Independent recreation (not recovered originals): both the in-memory origin and its
+/// Both the in-memory origin and its
 /// serialized bytes are rejected after the owner ID is unregistered and re-registered.
 #[cfg(feature = "multithreading")]
 #[test]
@@ -2514,7 +2519,7 @@ fn m1g_recreation_origin_aba() {
     );
 }
 
-/// Independent recreation (not recovered originals): the in-memory half of the ABA check
+/// The in-memory half of the ABA check
 /// alone, without decoding serialized bytes (covered by `m1g_recreation_origin_aba`).
 #[cfg(feature = "multithreading")]
 #[test]
@@ -2531,7 +2536,7 @@ fn m1g_recreation_origin_aba_registry_control() {
     m1g_recreation_origin_aba_support::registry_control();
 }
 
-/// Independent recreation (not recovered originals): CrossArena word 1 must carry the
+/// CrossArena word 1 must carry the
 /// non-reused registration token, not the reusable arena ID. A spare registration is
 /// consumed if needed so the fixture's ID and token differ and the assertion is specific.
 #[cfg(feature = "multithreading")]
@@ -2690,8 +2695,8 @@ fn m1e_recreation_transport_permissive_control() {
 
 #[cfg(feature = "multithreading")]
 #[test]
-/// Same replay as the permissive control. Verified to pass under pinned Miri with
-/// `-Zmiri-strict-provenance` after the 4.1/4.2 transport migration, so it runs everywhere.
+/// Same replay as the permissive control. The transport carries pointers rather than
+/// integers, so this passes under pinned Miri with `-Zmiri-strict-provenance` and runs everywhere.
 fn m1e_recreation_transport_strict_core() {
     m1e_recreation_transport_support::transport_round_trip();
 }

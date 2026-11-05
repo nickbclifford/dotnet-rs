@@ -321,7 +321,7 @@ fn invoke_ffi_call_with_write_backs<'gc>(
     call_data: &mut PInvokeCallData<'_, 'gc>,
     ret_ptr: *mut c_void,
 ) -> Result<(), StepResult> {
-    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate); F10.RawMemoryAccessValid —
+    // SAFETY: F11.PInvokeAbiAgreement; F10.RawMemoryAccessValid —
     // the selected native function is assumed to use the prepared CIF's calling convention and
     // complete parameter/return ABI. `call_data.cif` is a prepared libffi CIF,
     // `call_data.arg_ptrs` points to
@@ -348,7 +348,7 @@ fn read_pinvoke_return<'gc, T>(
 
     let mut ret = std::mem::MaybeUninit::<T>::uninit();
     invoke_ffi_call_with_write_backs(ctx, call_data, ret.as_mut_ptr() as *mut c_void)?;
-    // SAFETY: F11.PInvokeAbiAgreement; F10.RawMemoryAccessValid (Plan 06 trust candidate) — `ffi_call` initialized the entire return slot after ABI validation.
+    // SAFETY: F11.PInvokeAbiAgreement; F10.RawMemoryAccessValid — `ffi_call` initialized the entire return slot after ABI validation.
     Ok(unsafe { ret.assume_init() })
 }
 
@@ -639,8 +639,8 @@ fn preflight_byref_like_native_aggregates(
 }
 
 // Reject unguarded native escape before marshalling pins any earlier arguments.
-// TEMPORARY fail-closed restriction handed off to plan 01 M2 ("M2 handoff"): keep it until
-// native-call rooting, guard lifetime and callback/safepoint behavior are designed and tested.
+// This fail-closed restriction stays until native-call rooting, guard lifetime and
+// callback/safepoint behavior are handled; see "Native call boundary" in docs/plans/README.md.
 #[cfg(feature = "multithreading")]
 fn rejects_cross_arena_native_escape(value: &StackValue<'_>, is_ref: bool) -> bool {
     match value {
@@ -904,7 +904,7 @@ fn external_call_impl<'gc>(
                         // SAFETY: F1.GcHandleRooted; F10.BorrowedStorageStable — The heap owner is pinned above, and this guard is retained in
                         // `local_guards` for the whole synchronous native call.
                         let guard = unsafe { PinnedGuard::new(*handle) };
-                        // SAFETY: F10.BorrowedStorageStable — `guard` keeps the pinned object storage stable through the native call.
+                        // `guard` keeps the pinned object storage stable through the native call.
                         // Observation uses the retained allocation base; the resulting address itself
                         // retains no root or guard and grants no access right. The pin and guard are
                         // retained separately in `pinned_objects`/`local_guards`.
@@ -926,8 +926,9 @@ fn external_call_impl<'gc>(
                     }
                     #[cfg(feature = "multithreading")]
                     PointerOrigin::CrossArenaObjectRef(_) => {
-                        // Cross-arena native-call lifetime and callbacks require M2. A
-                        // scoped lease cannot protect a pointer throughout arbitrary FFI.
+                        // A scoped lease cannot protect a pointer throughout arbitrary FFI.
+                        // Not yet handled: cross-arena native-call lifetime and callbacks.
+                        // See docs/plans/README.md.
                         return StepResult::Error(
                             ExecutionError::InvalidCil(
                                 "cross-arena typedrefs cannot escape to native code".into(),
@@ -936,11 +937,11 @@ fn external_call_impl<'gc>(
                         );
                     }
                     _ => {
-                        // SAFETY: F10.RawMemoryAccessValid — This keeps the legacy non-heap
-                        // `with_data(0, ..)` path and its caller-provided P/Invoke lifetime
-                        // contract. Stack/Static fallback migration belongs to M3. Transient
-                        // clones share their owner, but the address itself retains no owner
-                        // or guard and grants no native access right; P/Invoke guards are M2.
+                        // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads
+                        // the cached address of a non-heap origin; no payload bytes are accessed
+                        // here. The address retains no owner or guard: for Stack, Static and
+                        // Unmanaged origins the P/Invoke caller supplies its lifetime; Transient
+                        // clones share their owner.
                         unsafe { p.with_data(0, |data| data.as_ptr().cast_mut()) }
                     }
                 };
@@ -977,8 +978,9 @@ fn external_call_impl<'gc>(
                     )]
                     // SAFETY: F10.RawMemoryAccessValid — For Heap/CrossArena origins,
                     // `with_data_up_to` clamps to the actual payload extent (not accounting
-                    // `size_bytes()`) while the read guard is held. Other origins keep the
-                    // legacy behavior. The destination buffer is at least `buf_len` bytes and
+                    // `size_bytes()`) while the read guard is held. Other origins read through
+                    // the cached address, whose range the P/Invoke caller supplies. The
+                    // destination buffer is at least `buf_len` bytes and
                     // its untouched tail remains zero-filled.
                     unsafe {
                         p.with_data_up_to(buf_len, |data| {
@@ -1025,15 +1027,15 @@ fn external_call_impl<'gc>(
 
                     #[expect(
                         clippy::multiple_unsafe_ops_per_block,
-                        reason = "heap observation and legacy raw-pointer forwarding share one managed-pointer marshaling proof"
+                        reason = "heap observation and cached-address forwarding share one managed-pointer marshaling proof"
                     )]
                     let ptr =
                         // SAFETY: F10.RawMemoryAccessValid — The explicit Heap-owner branch
                         // observes the retained allocation base; that address itself is not a
                         // root/guard or access right. Its pin/guard is retained separately in
-                        // `local_guards`. Other accepted origin variants retain their legacy
-                        // forwarding path. CrossArena escape is rejected above; Transient
-                        // clones share their owner and Stack/Static remain M3.
+                        // `local_guards`. Other accepted origins forward their cached address,
+                        // whose lifetime the P/Invoke caller supplies. CrossArena escape is
+                        // rejected above; Transient clones share their owner.
                         unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
@@ -1047,7 +1049,7 @@ fn external_call_impl<'gc>(
                                 ptr
                             } else {
                                 // SAFETY: F10.RawMemoryAccessValid — A handle-less Heap origin
-                                // reaches this legacy P/Invoke raw-address fallback only. Rebuilding
+                                // reaches this raw-address fallback only. Rebuilding
                                 // its address from integer bits does not root an allocation or grant
                                 // access; native-call validity remains the caller's contract.
                                 unmanaged_ptr_from_addr(p.byte_offset().as_usize())
@@ -1059,9 +1061,9 @@ fn external_call_impl<'gc>(
 
                     // SAFETY: F10.RawMemoryAccessValid — The explicit Heap owner is pinned
                     // and its guard remains in `local_guards`; the raw address itself does
-                    // not provide that lifetime or an access right. Other origins retain the
-                    // legacy caller-provided native-call validity contract. Transient clones
-                    // share their owner; CrossArena escape is rejected, Stack/Static remain M3.
+                    // not provide that lifetime or an access right. For other origins the
+                    // P/Invoke caller supplies native-call validity. Transient clones share
+                    // their owner; CrossArena escape is rejected above.
                     if let Err(e) = unsafe {
                         push_ptr_arg(
                             &mut temp_buffers,
@@ -1122,7 +1124,7 @@ mod tests {
     use super::*;
     use dotnet_types::error::MemoryAccessError;
 
-    /// Independent recreation (not recovered originals): native escape is
+    /// Native escape is
     /// rejected before marshalling; ref arguments use the existing copy path.
     #[cfg(feature = "multithreading")]
     #[test]

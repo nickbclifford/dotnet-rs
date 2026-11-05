@@ -325,7 +325,7 @@ mod opaque_transport_recreation_tests {
     assert_impl_all!(OpaqueObjectPtr: Send, Sync, Copy);
     assert_impl_all!(CrossArenaRef: Send, Sync, Copy);
 
-    /// Independent recreation (not recovered originals): isolate the command
+    /// Isolate the command
     /// wrapper with a Box stand-in, not a GC object or a whole-VM test. No raw
     /// address is exposed; only inert metadata crosses the worker thread.
     #[test]

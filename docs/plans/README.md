@@ -1,50 +1,54 @@
-# Project focus and plan queue
+# Plans
 
-Build a maintainable ECMA-335 runtime whose supported behavior, safety boundaries and
-completion criteria are understandable. Prefer a completed runtime path over more milestones,
-audits or artifacts. These priorities were revised with the maintainer on 2026-11-02.
+The project goal is a maintainable ECMA-335 runtime whose supported behavior and safety
+boundaries are understandable. Prefer one working runtime path over more infrastructure,
+audits or documents.
 
-## Next useful work
+## Queue
 
-**Shorten the feedback loop first.** Implement the [CI hierarchy and migration](../CI.md#test-hierarchy-and-migration):
-fast core checks get runner capacity first; affected code selects deeper checks; full sweeps
-run on a schedule and before accepting broad architectural changes. Source-policy scans and
-duplicate validation have been moved or removed. Selection and pointer batching are implemented;
-broader setup amortization and validation of the hierarchy remain in [CI.md](../CI.md#implementing-the-hierarchy).
+In priority order. Each plan's own `Status:` line is the only record of its status.
 
-The maintainer is retiring `supervised/native-continuations-stage1` for a proper redesign.
-Its implementation and unfinished benchmarks are not merged into main and are not prerequisites
-for the pivot. [Plan 02](02-native-continuations.md) is parked: preserve useful historical
-findings, but do not resume the old checklist, require its closeout or freeze its API choices.
-Executor/arena ownership in plan 03 is complete; the next substantial runtime repair is stable
-byref homes under a common access protocol in plan 01. Native interop
-remains a separate bounded repair with its current fail-closed exclusions retained.
+| ID | Plan | Note |
+|---|---|---|
+| 01 | [Stable homes for addressable locals and arguments](01-stable-frame-homes.md) | Next |
+| 02 | [Native continuations](02-native-continuations.md) | Parked until a specific operation is chosen |
+| 03 | [Executor teardown ownership](03-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
 
-| ID | Plan | Priority | Status | Dependencies |
-|---|---|---|---|---|
-| 01 | [Pointer/provenance model](01-pointer-provenance.md) | After ownership: stable homes and common access | In progress — scoped repairs retained; M1e/M1g acceptance open | Plan 03 for R08; storage, shared access and affected copy/barrier paths migrate together |
-| 02 | [Native continuations (async/await as VM effects)](02-native-continuations.md) | Parked for redesign after CI feedback | Parked — prior implementation unmerged; redesign not started | Select one useful behavior before implementation; MT requires accepted cross-arena ownership/publication |
-| 03 | [Executor teardown ownership and panic safety](03-executor-teardown-ownership.md) | Scoped ownership repair | Complete — scoped ownership outcome accepted | No historical-artifact recovery prerequisite; broader R08/M1e acceptance remains open |
+## Not yet planned
 
-## How work proceeds
+Known problems without a plan. Write a plan for one only when it is chosen as the next work.
+Evidence and IDs (p01…, R01…) are defined in the
+[pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
-The numbered plan owns the runtime outcome, boundaries and stopping conditions.
-[CONTRIBUTING.md](../../CONTRIBUTING.md#engineering-decisions-and-plan-authority) owns agent
-discretion and escalation; [CI.md](../CI.md#test-hierarchy-and-migration) owns validation selection.
-Research, checklists and memory are supporting evidence, not competing sources of authority.
-Later maintainer decisions supersede earlier proposals; passing checks do not resolve an
-unproven safety contract.
+- **Static field addresses:** `ldsflda; conv.u` writes and static payload alignment
+  (`p12_ldsflda_convu_stind_static`).
+- **Native call boundary:** payload addresses, ABI returns, by-ref/out copy-back and pinned
+  lifetime for P/Invoke (R06/R07). The current cross-arena raw-escape and by-value
+  managed-pointer aggregate rejections stay until this is done.
+- **Shared raw-memory access:** one protocol for competing plain, volatile, atomic, block and
+  raw-alias accesses to shared storage (heap, statics) under `multithreading` (R09/R12).
+- **Resumable bulk operations and barriers:** `cpblk`/`initblk`/`Memmove`/`Array.Copy`/`Fill`
+  that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
+- **Cross-arena collection fixture:** the real-VM collection test builds a foreign-branded
+  `Gc`; replace it with a validly branded fixture (remainder of R08).
+- **CI feedback:** remaining steps of the [test hierarchy](../CI.md#test-hierarchy-and-migration).
 
-An assignment covers the smallest complete behavior, including necessary supporting edits.
-Agents resolve routine integration choices, correct stale prose, combine dependent steps and
-explain consequential adaptations in review. Ask only about supported behavior, compatibility,
-scope or unresolved safety tradeoffs. Do not create a new prerequisite ticket for each such
-adaptation or repeat a settled approval.
+## Writing a plan
 
-Run focused checks during iteration, then one relevant integration pass. Documentation-only
-changes need documentation checks. Missing historical sources remain explicit evidence limits;
-fresh, labelled regressions can establish the current behavior. Further assurance research and
-new async consumers require an outcome that justifies them.
+A plan is a short, current document an agent can act on. Keep history in git and evidence in
+`docs/pointer-provenance/` or `docs/ci-evidence/`.
 
-Keep the status here synchronized with the plan's `Status` header. Validate with
-`bash scripts/check_plan_queue.sh`.
+- **Header:** `Status:` (Not started / In progress / Parked / Complete) and a one-sentence
+  **Outcome** that a test can check.
+- **Problem:** what goes wrong today, with code paths and test names.
+- **Scope:** what is in, and what is out with the reason. Use the spec (ECMA-335 section
+  numbers) to rule out cases that valid programs cannot produce.
+- **Design:** the chosen approach, briefly. Reuse existing mechanisms where one fits.
+- **Slices:** ordered increments. Each slice ends with the VM using the new path and its tests
+  enabled. A slice never builds support that only a later slice uses.
+- **Done when:** the checkable exit conditions.
+- **Ask the maintainer only if:** a short list of specific triggers.
+
+If a slice turns out to need much more than its description (new modules, or support for
+cases outside the stated scope), stop and revise the plan rather than splitting the work into
+more preparatory steps.

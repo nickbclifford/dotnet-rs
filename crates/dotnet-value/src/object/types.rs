@@ -128,7 +128,7 @@ impl<'gc> CTSValue<'gc> {
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 Pointer(p) => {
                     // This infallible CTS codec cannot reject a Transient pointer;
-                    // its encoding cannot retain its owner or be decoded (M3).
+                    // its encoding cannot retain its owner or be decoded.
                     p.write(dest);
                 }
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),

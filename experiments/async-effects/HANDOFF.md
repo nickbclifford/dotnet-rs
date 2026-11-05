@@ -118,7 +118,7 @@ The prototype polls **outside** `mutate` instead, with the arena in a `RefCell` 
 
 Read `docs/ARCHITECTURE.md`, `docs/GC_AND_MEMORY_SAFETY.md`, `docs/EXCEPTION_HANDLING.md`,
 `docs/THREADING_AND_SYNCHRONIZATION.md`, `docs/DELEGATES_AND_DISPATCH.md`,
-`docs/INVARIANT_REGISTRY.md` and `docs/SAFETY_CITATION_AUDIT.md` (the `F1.*` / `F5.*` SAFETY
+`docs/INVARIANT_REGISTRY.md` (the `F1.*` / `F5.*` SAFETY
 citation scheme any new `unsafe` must follow), `docs/BENCHMARK_WORKFLOW.md`, `docs/CI.md`,
 `docs/plans/README.md` (the active plan queue; position this work relative to it), and
 `CONTRIBUTING.md`.

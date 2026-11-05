@@ -24,10 +24,9 @@ fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> Result<*const u8, TypeResolu
             observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
         }
         _ => {
-            // SAFETY: F10.RawMemoryAccessValid — Non-heap conversion retains the legacy
-            // zero-length `with_data` address path; the caller still supplies its
-            // validity/lifetime contract. Stack/Static migration is M3; Transient
-            // was rejected above because an integer cannot retain its owner.
+            // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the cached
+            // address of a Stack, Static or Unmanaged origin; no payload bytes are accessed.
+            // Transient was rejected above because an integer cannot retain its owner.
             unsafe { pointer.with_data(0, |data| data.as_ptr()) }
         }
     })

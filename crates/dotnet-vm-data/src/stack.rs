@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(byte, 0xA5);
     }
 
-    /// 4.6: the P/Invoke non-ref marshalling shape (`call.rs` pass 1): a
+    /// The P/Invoke non-ref marshalling shape (`dotnet-pinvoke` `call.rs`): a
     /// `peek_stack_at` clone derives a raw address, is dropped, and the address
     /// is then used while the original stack slot is still alive.
     #[test]
@@ -571,7 +571,7 @@ mod tests {
         );
     }
 
-    /// 4.6: ref write-back clones the origin; it must retain the same owner
+    /// Ref write-back clones the origin; it must retain the same owner
     /// and stay valid after the argument slots are popped.
     #[test]
     fn m1d_write_back_origin_clone_retains_transient_owner() {
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(obj.with_data(|data| data[0]), 0xA5);
     }
 
-    /// 4.6: a TypedRef slot clones with the stack value and keeps the owner.
+    /// A TypedRef slot clones with the stack value and keeps the owner.
     #[test]
     fn m1d_typed_ref_clone_retains_transient_owner() {
         use dotnet_utils::sync::Arc;

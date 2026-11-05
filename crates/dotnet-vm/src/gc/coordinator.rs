@@ -830,7 +830,7 @@ mod tests {
     use crate::sync::{Arc, AtomicBool, Ordering};
     use crate::threading::{ThreadManager, ThreadManagerOps};
 
-    /// Independent recreation (not recovered originals): exercise the actual
+    /// Exercise the actual
     /// fixed-point dispatcher and command slot with a simulated worker that
     /// rediscovers an old edge alongside a new one. This is command-transport
     /// evidence, not a real multi-arena collection/root test.

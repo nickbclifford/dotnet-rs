@@ -43,8 +43,7 @@ This keeps metadata lifetime explicit while preserving stable, hashable descript
 Every metadata-backed `ConcreteType` retains a non-null `ResolutionS`, whose `Arc<MetadataArena>`
 pins the metadata that the descriptor can dereference. A future compact or interned identifier
 therefore cannot replace that ownership with a bare ID unless an equally long-lived owner retains
-the corresponding arena.
-This refactor does not intern descriptors, so the existing arena-pinning model is unchanged.
+the corresponding arena. Descriptors are not interned.
 
 `ConcreteType`, `GenericLookup`, `ResolutionS`, `MethodDescription`, and `FieldDescription` use
 `static_collect!`: they may own ordinary Rust values such as `Arc` and the memoized `u64`, but must

@@ -1474,8 +1474,7 @@ mod tests {
     // method is a property getter that lives in `def.properties[i].getter`, even
     // though the getter is NOT present in `TypeDefinition.methods`.
     //
-    // This previously panicked when the lookup path only scanned
-    // `def.methods` and missed accessor-backed methods.
+    // A lookup that scans only `def.methods` misses accessor-backed methods.
     #[test]
     fn property_getter_lookup_panics_on_ptr_eq_unwrap() {
         use crate::TypeDescription;
@@ -1546,8 +1545,8 @@ mod tests {
         let mut resolution = Resolution::new(Module::new("test.dll"));
         resolution.type_definitions.push(type_def);
 
-        // SAFETY: F10.RawAllocationOwnership. Pointer comes from Box::into_raw; MetadataArena::drop calls
-        // Box::from_raw on the same pointer, so ownership is correctly transferred.
+        // Ownership of this `Box::into_raw` pointer passes to `arena` below; `MetadataArena::drop`
+        // calls `Box::from_raw` on it exactly once.
         let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
         let arena = Arc::new(MetadataArena::new());
         // SAFETY: F10.RawAllocationOwnership. `ptr` was just created with `Box::into_raw`; `arena` owns it and

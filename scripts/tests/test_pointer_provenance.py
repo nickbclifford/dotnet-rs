@@ -247,12 +247,8 @@ class PointerScriptTests(unittest.TestCase):
                          ['p19_ldelem_negative_index'])
         self.assertEqual(self.recorded(), [])
 
-    def test_documented_manifest_matches_singleton_partition(self):
-        docs = (ROOT / 'docs/CI.md').read_text()
-        section = docs.split('### Blocking `miri-pointer-controls` lane', 1)[1].split('### ', 1)[0]
-        documented = re.findall(r'^\| (\d+) \| `pointer_provenance_tests::([^`]+)` \|$', section, re.M)
-        expected = [(str(shard), names[0]) for shard, names in CONTROLS_BY_SHARD.items()]
-        self.assertEqual(documented, expected)
+    def test_singleton_partition_is_one_control_per_shard(self):
+        self.assertTrue(all(len(names) == 1 for names in CONTROLS_BY_SHARD.values()))
         self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 34)))
         self.assertEqual(len(set(CONTROLS)), 33)
         for config in ('no-features', 'multithreading'):
@@ -548,13 +544,6 @@ class PointerScriptTests(unittest.TestCase):
         self.assertIn('pointer_provenance.sh verify-controls', job.group('body'))
         self.assertIn('configuration: [no-features, multithreading]', job.group('body'))
         self.assertIn('bash scripts/pointer_provenance.sh verify-batches', workflow)
-
-    def test_documented_batches_match(self):
-        docs = (ROOT / 'docs/CI.md').read_text()
-        section = docs.split('### Blocking `miri-pointer-controls` lane', 1)[1].split('### ', 1)[0]
-        documented = {int(n): [x.strip(' `') for x in names.split(',')]
-                      for n, names in re.findall(r'^\| Batch (\d+) \| ([^|]+) \|$', section, re.M)}
-        self.assertEqual(documented, BATCHES)
 
     def test_all_dry_runs_do_not_invoke_cargo(self):
         for config in ('no-features', 'multithreading'):

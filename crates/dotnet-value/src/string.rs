@@ -155,8 +155,8 @@ fn intern_chars(chars: Vec<u16>, interner: &mut StringInternerCache) -> StringSt
         return StringStorage::Interned(Arc::clone(existing));
     }
 
-    // The interner is an optimization only. Clearing keeps it bounded without the eviction-path
-    // panic that high-cardinality workloads previously triggered.
+    // The interner is an optimization only. Clearing it wholesale keeps it bounded under
+    // high-cardinality workloads without a per-entry eviction path.
     if interner.len() >= INTERN_CONFIG.max_entries {
         interner.clear();
     }

@@ -151,7 +151,8 @@ pub fn unbox_any<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
                             });
 
                             // Set Value = data from boxed object.
-                            // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+                            // `Nullable<T>`'s payload field is private BCL layout, so it is looked up by name; `value`
+                            // and `_value` cover the BCL versions this VM loads.
                             let value_field = layout
                                 .fields
                                 .iter()
@@ -314,7 +315,8 @@ pub fn unbox<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
             });
 
             // Set Value = data from boxed object.
-            // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+            // `Nullable<T>`'s payload field is private BCL layout, so it is looked up by name; `value`
+            // and `_value` cover the BCL versions this VM loads.
             let value_field = layout
                 .fields
                 .iter()

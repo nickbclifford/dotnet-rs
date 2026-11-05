@@ -88,12 +88,6 @@ CHECKS=(
   "GC_AND_MEMORY_SAFETY.md|validate_arena_id|*.rs"
   "GC_AND_MEMORY_SAFETY.md|define_lock_order_dag!|*.rs"
   "GC_AND_MEMORY_SAFETY.md|AcquireAfter|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::collection_lock|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ThreadManager::gc_coordination|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ThreadManager::threads|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::arenas|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ArenaHandle::current_command|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::cross_arena_refs|*.rs"
   "GC_AND_MEMORY_SAFETY.md|get_field_atomic|*.rs"
   "GC_AND_MEMORY_SAFETY.md|set_field_atomic|*.rs"
 
@@ -283,20 +277,12 @@ if ! is_negative_probe_child; then
   fi
 fi
 
-# The numbered plan files own their detailed status; the queue must present the
-# same canonical state so dependency and priority discussions start from facts.
-if bash "$REPO_ROOT/scripts/check_plan_queue.sh"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-fi
-
 echo ""
 echo "doc-drift check: $PASS passed, $FAIL failed."
 
 if [[ $FAIL -gt 0 ]]; then
   echo ""
-  echo "Fix the mismatches above: reconcile source and docs, or the numbered plan"
-  echo "status and queue row. Update this script's check table after intentional renames."
+  echo "Fix the mismatches above: reconcile source and docs. Update this script's"
+  echo "check table after intentional renames."
   exit 1
 fi

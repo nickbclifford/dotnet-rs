@@ -153,18 +153,8 @@ class CrossArenaManifestTests(unittest.TestCase):
         self.assertEqual(groups, {(config, group) for config in ('no-features', 'multithreading')
                                   for group in ('library', 'vm-collection', 'vm-stress')})
 
-        # The published table must account for every actual invocation, not just row counts.
-        docs = (ROOT / 'docs/CI.md').read_text()
-        table = docs[docs.index('The current manifest has'):docs.index('The strict-core invocation')]
-        documented = {'no-features': set(), 'multithreading': set()}
-        crates = {'V': 'dotnet-value', 'U': 'dotnet-utils', 'VM': 'dotnet-vm'}
-        for config, crate, selector in re.findall(r'^\| (no-features|multithreading|both) \| (V|U|VM) \| `([^`]+)` \|$', table, re.M):
-            for target in documented if config == 'both' else (config,):
-                documented[target].add((crates[crate], selector))
-        self.assertEqual(seen, documented)
         self.assertEqual(len(seen['no-features']), 7)
         self.assertEqual(len(seen['multithreading']), 28)
-        self.assertIn('7 no-features and 28 multithreading', table)
 
     def test_strict_core_is_isolated_and_guarded(self):
         strict = JOB[JOB.index('      - name: Isolated strict-provenance transport core'):

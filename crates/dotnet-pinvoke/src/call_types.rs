@@ -202,7 +202,7 @@ pub(crate) fn ffi_return_layout_from_raw(
 }
 
 pub(crate) fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), ExecutionError> {
-    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate) — `Cif` owns a prepared `ffi_cif`; rtype is set by `ffi_prep_cif`.
+    // SAFETY: F11.PInvokeAbiAgreement — `Cif` owns a prepared `ffi_cif`; rtype is set by `ffi_prep_cif`.
     let rtype = unsafe { (*cif.as_raw_ptr()).rtype };
     if rtype.is_null() {
         return Err(ExecutionError::InternalError(
@@ -212,7 +212,7 @@ pub(crate) fn ffi_cif_return_layout(cif: &Cif) -> Result<(usize, usize), Executi
 
     // Use a conservative fallback when libffi leaves alignment unset for aggregate metadata.
     // This keeps return buffers safely over-aligned even when rtype alignment is unknown.
-    // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate) — null checked above.
+    // SAFETY: F11.PInvokeAbiAgreement — null checked above.
     let raw = unsafe { &*rtype };
     ffi_return_layout_from_raw(raw, 64)
 }

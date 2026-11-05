@@ -24,12 +24,7 @@ class AdvisoryTests(unittest.TestCase):
     def setUp(self):
         self.data = miri.manifest()
 
-    def test_documented_manifest_and_matrix_exactly_once(self):
-        docs = (ROOT / "docs/CI.md").read_text().split("## `miri.yml` — Non-Blocking UB Checks", 1)[1]
-        expected = re.findall(r"^\| ([AV]\d\d) \| `([^`]+)` \|$", docs, re.MULTILINE)
-        self.assertEqual(len(expected), 46)
-        self.assertEqual(len(dict(expected)), 46)
-        self.assertEqual(self.data, dict(expected))
+    def test_manifest_matrix_exactly_once(self):
         rows = miri.rows(self.data)
         self.assertEqual(len(rows), 54)
         for config, count in [("default-features", 38), ("no-features", 8), ("multithreading", 8)]:

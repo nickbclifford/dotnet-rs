@@ -1,5 +1,10 @@
 # Performance Trace Findings
 
+> **Dated snapshot (2026-08-06).** This report describes the code as profiled on that date. It is
+> not a work queue: [docs/plans/](plans/README.md) is the only queue. Code references may have
+> moved since; items already implemented are marked **Done** in the
+> [prioritized plan](#prioritized-investigation-plan).
+
 This document records the findings from the end-to-end performance traces captured on
 2026-08-06 under:
 
@@ -274,8 +279,9 @@ receiver. It then calls `unified_dispatch` or `unified_dispatch_tail`, whose com
 - [`crates/dotnet-vm/src/instructions/calls.rs`](../crates/dotnet-vm/src/instructions/calls.rs)
 - [`crates/dotnet-vm/src/stack/call_ops_impl.rs`](../crates/dotnet-vm/src/stack/call_ops_impl.rs)
 
-The first resolved method and lookup should be passed into the common path. Phase 2 implemented
-that direct handoff; no call-site target cache is required to remove this duplicate work.
+The first resolved method and lookup should be passed into the common path. **Done:**
+`dispatch_callvirt` now hands its resolution to unified dispatch; no call-site target cache was
+needed.
 
 #### Delegate classification walks metadata hierarchy on every invocation
 
@@ -328,7 +334,7 @@ That architecture forces hot instructions to keep presenting metadata tokens and
 to general resolver APIs. Existing global caches reduce deep lookup work, but their hits still
 require descriptor construction/cloning, hashing, locking, and result cloning.
 
-A Phase 3 prototype tested caching resolved descriptors and guarded monomorphic virtual/
+A later prototype tested caching resolved descriptors and guarded monomorphic virtual/
 constrained targets at an instruction offset. It is not a viable design. Although some warm cases
 improved, EF Core exposed incorrect virtual targets, managed access violations and overflows, and
 host `SIGSEGV`s. Structural descriptor equality, `Arc` identity guards for generic slices, and
@@ -698,6 +704,11 @@ controls, and stop when the selected hypothesis is resolved rather than running 
 
 ### P0: correct allocation pressure and skip reference-free vector tracing
 
+**Done** for items 1–3: `EvalStackOps` charges allocation pressure only for value-type writes,
+per-source counters exist under `bench-instrumentation` (`AllocationPressureSource`), and
+`Vector::trace` returns early when the element layout contains no references
+(`is_or_contains_refs`).
+
 1. Add source/kind counters around allocation-pressure updates.
 2. Stop charging primitive evaluation-stack movement in an experimental branch.
 3. Add the `has_managed_ptrs` vector trace fast path.
@@ -709,6 +720,10 @@ the unconditional push accounting, the collection threshold, and the exact vecto
 in the profiles.
 
 ### P0: remove duplicate resolution and repeated delegate work
+
+**Done** for items 1–3: `callvirt` passes its first resolution into unified dispatch,
+`try_delegate_dispatch` caches the method's `DelegateDispatchKind`, and `invoke_delegate` reuses
+the VM call-argument buffer.
 
 1. Pass the first `callvirt` resolution result into unified dispatch.
 2. Cache delegate method classification.

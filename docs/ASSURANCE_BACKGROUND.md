@@ -1,10 +1,9 @@
 # Assurance background
 
-**Historical study, not an active plan.** The retired assurance queue mentioned below is
-separate from today's [runtime plan queue](plans/README.md). Plan numbers in this study refer
-to that retired queue; they do not create current prerequisites. The current work prioritizes
-useful runtime behavior, selected validation and explicit stopping conditions. This note
-is the distilled output of a feasibility study on machine-checking the project's
+**Historical record, not instructions.** Current work is in [docs/plans/](plans/README.md).
+The study proposed a separate assurance queue whose items are called A01–A06 below; that queue
+was retired and its items are not current prerequisites. Counts and measurements below are dated
+August 2026 and describe the code at that time. This note is the distilled output of a feasibility study on machine-checking the project's
 `// SAFETY:` comments with a Lean 4-backed proof DSL, run 2026-08-01 → 2026-08-03
 and terminated. The full 44-page study and its five implemented Rust crates are
 history, not documentation:
@@ -18,16 +17,16 @@ history, not documentation:
   `ves-tokens`, `ves-macros`, `ves-check`) and `~/Desktop/ves-proof-lean`, both
   archived read-only. No code from either is in this repository.
 
-Everything below is current: it is the rationale for the plan queue, not a
-record of an abandoned plan.
+What remains useful is the families table (still the structure of the
+[invariant registry](INVARIANT_REGISTRY.md)) and the process lessons.
 
 ## The invariant families
 
-The study's durable finding. 620 prose `// SAFETY:` comments across 583 `unsafe`
+The study's durable finding. As counted in August 2026, 620 prose `// SAFETY:` comments across 583 `unsafe`
 blocks do not represent 620 independent obligations — they factor into nine
 families, each one predicate stated once and instantiated per site. This is the
-skeleton `plan 01` in the retired assurance queue turns into a named
-predicate registry.
+skeleton that A01 in the retired assurance queue turned into the named
+[predicate registry](INVARIANT_REGISTRY.md). Site counts are August 2026 estimates.
 
 | # | Family | Sites | The claim | What Rust already carries | What it doesn't |
 | --- | --- | --- | --- | --- | --- |
@@ -36,7 +35,7 @@ predicate registry.
 | F3 | Eval-stack slot typing | ~20 | This slot was pushed as *X*; this raw view is valid, and recorded interior pointers survive `Vec` reallocation | Enum discriminants, `Vec` growth semantics | The history fact — *this offset was recorded from that slot at pointer-creation time* — plus re-establishment after every `apply_reallocation_fixup()` |
 | F4 | Atomic width / alignment | ~40 | The pointer is valid and aligned for the selected atomic width, and no concurrent non-atomic access races it | `align_of`, guard exclusion | Which of three coexisting discharge mechanisms is actually being cited |
 | F5 | Tracing completeness | 22 `unsafe impl Collect` | This `trace` visits every contained GC reference | Match exhaustiveness, field enumeration | That the root set and `VmContinuation` state are complete — a universally quantified property |
-| F6 | `gc-arena` brand discipline | ~10 | This `'gc`-branded value cannot escape its arena | Invariant lifetimes, private constructors, `for<'a>` confinement | Almost nothing — this family is the clearest win for lifetime branding. One deliberate violation: cross-arena tracing mints `Gc::from_ptr` with the *wrong* arena's brand (`heap.rs:436–445`), justified by F1 plus non-escape |
+| F6 | `gc-arena` brand discipline | ~10 | This `'gc`-branded value cannot escape its arena | Invariant lifetimes, private constructors, `for<'a>` confinement | Almost nothing — this family is the clearest win for lifetime branding. One deliberate violation: cross-arena tracing mints `Gc::from_ptr` with the *wrong* arena's brand (`HeapManager::trace`), justified by F1 plus non-escape |
 | F7 | Immutable-field publication | ~8 | `owner_id` is written once at construction, so this lock-free read is race-free | Immutability | The happens-before edge publishing the initializing write |
 | F8 | Lock order & safepoint discipline | — | Locks are acquired in DAG order; no safepoint poll or allocation while holding a heap borrow | `define_lock_order_dag!` with negative compile-time assertions | The four `GcScopeGuard` conventions — a rely-guarantee protocol |
 | F9 | Leaked-`Box` metadata lifetime | ~14 | `MetadataArena` solely owns these leaked allocations and outlives every descriptor into them | Conventional ownership reasoning | Little; low risk, low novelty |
@@ -49,8 +48,8 @@ specification-level function), and completeness facts.
 
 ### Two irreducible trust classes
 
-Neither is provable; both must be isolated and named. They are seed rows for
-`plan 06` in the retired assurance queue.
+Neither is provable; both must be isolated and named. They were seed rows for
+A06 in the retired assurance queue.
 
 - **The managed program as adversary.** ECMA-335 itself declares behavior
   undefined when unverifiable IL supplies invalid operands to `cpblk`,
@@ -80,9 +79,7 @@ The families carrying this project's novelty (F1, F2, F6) need premises no Rust
 verifier reaches; the families a verifier *would* close are the ones rated
 lowest-novelty. F4, third-largest by site count, has a cheaper correct fix than
 any proof: make the access width a type parameter so an `Int32` dispatch arm
-cannot pass `4` to a 2-byte operation — see
-`plan 03` in the retired assurance queue and the same note in
-[`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md).
+cannot pass `4` to a 2-byte operation (A03 in the retired assurance queue).
 
 **2. `cargo-anneal` is the same product, far better resourced.** Google's
 zerocopy team ([`0.1.0-alpha.24`](https://crates.io/crates/cargo-anneal), 7 June
@@ -96,7 +93,7 @@ to handle separation logic" is still open at 18/71 tasks on its tracking issue.
 But the Rust→Lean arrow is now a funded program at Google, MPI-SWS and KU
 Leuven. Building a fourth one solo was never the comparative advantage.
 
-**3. A feature census eliminates every candidate verifier.** Measured over
+**3. A feature census eliminates every candidate verifier.** Measured in August 2026 over
 `crates/*/src` (61,395 lines of Rust; approximate greps): ~920 closures, 489
 generic fns with bounds, 75 associated types, 30 `dyn`, 256 atomic uses, 154
 `Mutex`/`RwLock`, 16 `thread::spawn`, 78 `expose_provenance`/`from_exposed`; and
@@ -122,7 +119,7 @@ previously unknown memory-safety bugs.
 (re-confirmed 2026-08-03). The pen-and-paper prior art — Fruja's ASM model of
 the CLR, Gordon–Syme's Baby IL type soundness, Kennedy–Syme on generics — remains
 the best source text for edge cases, and is the reason
-`plan 04` in the retired assurance queue writes the correspondence down as a
+A04 in the retired assurance queue proposed writing the correspondence down as a
 table rather than as theorems.
 
 ## What the exercise actually delivered
@@ -131,14 +128,14 @@ Phase 0 of the study was due diligence, not verification, and it shipped
 (`208a6c8b`, 2026-08-01): two live soundness defects fixed, `miri-value` and
 `fuzz-raw-memory-access` promoted to blocking CI legs, and the differential
 harness expanded from one fixture to seven. That came from the *survey*, not
-from the proof layer — which is the observation the plan queue is built on.
+from the proof layer.
 
 Both defects were instances of one failure mode: **prose asserting a witness
 that no code establishes.** One cited a `cfg`-gated no-op as an alignment
 witness; the other justified a `Sync` implementation with a false claim. That
 failure mode is a failure of *naming*, not of proving — a comment saying
 "aligned" cannot be cross-checked, while one citing `F4.WidthAligned` can. Hence
-plan 01.
+A01, the invariant registry.
 
 ## Process lessons
 

@@ -1055,7 +1055,7 @@ mod tests {
         }
     }
 
-    /// Independent recreation (not recovered originals): validate addresses without pointers.
+    /// Validate addresses without pointers.
     #[cfg(feature = "multithreading")]
     #[test]
     fn recreation_codec_address_limits() {
@@ -1070,7 +1070,7 @@ mod tests {
         }
     }
 
-    /// Independent recreation (not recovered originals): short slices fail before memory access.
+    /// Short slices fail before memory access.
     #[test]
     fn recreation_codec_short_storage() {
         for len in 0..ObjectRef::SIZE {
@@ -1119,7 +1119,7 @@ mod tests {
         assert!(matches!(result, Err(ObjectCodecError::OwnerUnavailable(id)) if id == arena_id));
     }
 
-    /// Independent recreation (not recovered originals): a real GC allocation
+    /// A real GC allocation
     /// passes through the inert cross-arena wrapper without exposing its pointer.
     #[cfg(feature = "multithreading")]
     #[test]

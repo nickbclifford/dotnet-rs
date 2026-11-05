@@ -41,8 +41,7 @@ const _: () = assert!(size_of::<TypeIndex>() == size_of::<usize>());
 pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
     // SAFETY: F2.DescriptorMatchesEcmaLayout is the registry's assumed correspondence
     // label for this upstream representation; it does not prove `dotnetdll`'s private
-    // Rust layout. Plan 06 records this as a temporary upstream entry to remove on any
-    // layout change, despite this source's permanent-approach disposition below.
+    // Rust layout.
     // `dotnetdll`'s `basic_index!` macro currently defines `TypeIndex` as `pub struct
     // TypeIndex(pub(crate) usize)`. Its sole field accepts every `usize` bit pattern, so
     // `index` is valid for `TypeIndex`; the const assertion above confirms equal sizes.
@@ -51,7 +50,6 @@ pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
     // `Resolution`, which by design has no counterpart here. This helper only produces
     // the compile-time null sentinel below, where no `Resolution` exists to check against
     // and the resulting index is never used to index one (see `TypeDescription::is_null`).
-    // This transmute is the permanent approach for that sentinel, not a stopgap.
     unsafe { std::mem::transmute::<usize, TypeIndex>(index) }
 }
 

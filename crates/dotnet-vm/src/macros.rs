@@ -26,14 +26,6 @@ macro_rules! vm_debug {
     }
 }
 
-/// Legacy alias for [`vm_debug!`].
-#[macro_export]
-macro_rules! vm_msg {
-    ($src:expr, $($format:tt)*) => {
-        $crate::vm_debug!($src, $($format)*)
-    };
-}
-
 #[macro_export]
 macro_rules! vm_trace {
     ($src:expr, $($format:tt)*) => {

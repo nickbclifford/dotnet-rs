@@ -6,8 +6,8 @@
 
 ### Prerequisites
 
-- Rust 1.95.0 (`cargo`, `rustc`), selected automatically by
-  [`rust-toolchain.toml`](rust-toolchain.toml)
+- Rust, at the version pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (selected
+  automatically by rustup)
 - .NET SDK installed locally (provides the runtime assemblies and supports fixture/build-script paths)
 
 ### Build the CLI
@@ -34,7 +34,7 @@ cargo build -p dotnet-cli --bin dotnet-rs
 
 ## Workspace layout
 
-This repository is a Rust workspace with 26 crates under `crates/` plus the `xtask/` automation crate.
+This repository is a Rust workspace: crates under `crates/` plus the `xtask/` automation crate.
 
 - `crates/` — runtime, VM, intrinsic, tooling, and CLI crates
 - `docs/` — architecture and subsystem design documentation
@@ -43,14 +43,11 @@ This repository is a Rust workspace with 26 crates under `crates/` plus the `xta
 
 For a subsystem-level overview, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). For contributor setup and validation commands, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## CI
+## CI and contributing
 
-CI workflows live in [`.github/workflows/`](.github/workflows). The agreed
-[test hierarchy](docs/CI.md#test-hierarchy-and-migration) gives fast checks capacity first,
-selects deeper validation for affected code, and keeps full scheduled sweeps. Advisory Miri, fuzz and Valgrind workflows
-run on schedule or manual dispatch. In `ci.yml`, deep Miri and corpus-replay jobs wait for the `fast-core` aggregate and
-run only when the changed paths can affect them (`scripts/ci_select.py`); a nightly and manual full sweep runs every deep lane. See [the project focus](docs/plans/README.md) for the next bounded work.
-Documentation changes are validated by [`scripts/check_doc_drift.sh`](scripts/check_doc_drift.sh) and a `cargo doc` intra-doc-link pass with `DOTNET_SKIP_BUILD=1`. The same blocking job enforces the ratcheted multithreading cfg-occurrence budget through [`scripts/check_mt_cfg_ceiling.sh`](scripts/check_mt_cfg_ceiling.sh).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to build, test and make changes, and
+[`docs/CI.md`](docs/CI.md) for what CI runs. Planned work is in
+[`docs/plans/README.md`](docs/plans/README.md).
 
 ## Design documentation
 
@@ -61,9 +58,6 @@ Start with:
 - [`docs/EXCEPTION_HANDLING.md`](docs/EXCEPTION_HANDLING.md)
 - [`docs/THREADING_AND_SYNCHRONIZATION.md`](docs/THREADING_AND_SYNCHRONIZATION.md)
 - [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
-
-For the unified pointer/provenance implementation plan and its project queue, see
-[`docs/plans/README.md`](docs/plans/README.md).
 
 See the `docs/` directory for additional deep dives.
 

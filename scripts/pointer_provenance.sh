@@ -399,7 +399,7 @@ if ((!dry)); then
     fi
     echo "output directory: $logdir"
 fi
-# Per-process budget in seconds. A batch runs 8-9 controls (about 540 s locally, see docs/CI.md),
+# Per-process budget in seconds. A batch runs 8-9 controls (about 540 s locally),
 # so it gets more than a singleton; ci.yml wraps each in a matching ci_diagnostics.py timeout.
 proc_timeout=2700
 [[ $command != batch ]] || proc_timeout=3000

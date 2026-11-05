@@ -76,7 +76,8 @@ where
                 }
 
                 // HasValue is true, box the 'value' field.
-                // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+                // `Nullable<T>`'s payload field is private BCL layout, so it is looked up by name; `value`
+                // and `_value` cover the BCL versions this VM loads.
                 let value_field = layout
                     .fields
                     .iter()
@@ -561,8 +562,7 @@ where
                     let mut ptr_bytes = [0u8; ObjectRef::SIZE];
                     ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
-                    // SAFETY: F10.RawMemoryAccessValid — This legacy `ValuePointer`
-                    // representation is a raw-address storage boundary. `data` contains no
+                    // The `ValuePointer` representation is a raw-address storage boundary. `data` contains no
                     // owner or origin handle from which provenance could be recovered, so its
                     // producer must ensure the address remains valid for the resulting unmanaged
                     // pointer's use.

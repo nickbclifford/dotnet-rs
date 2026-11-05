@@ -1,4 +1,4 @@
-//! Independent recreation (not recovered originals) of a real multi-arena VM collection.
+//! Multi-arena collection through real `Executor` arenas.
 //!
 //! Two actual `Executor` arenas are created: arena B allocates an object that has no root in B,
 //! and arena A roots a cross-arena reference to it through its heap GC handles. The collection
@@ -8,7 +8,7 @@
 //!
 //! The survival witness is a production weak GC handle checked in B after each collection;
 //! a missed publication clears the foreign handle before another trace. This fixture retains a
-//! foreign-branded `Gc` in A; that concern was accepted by user decision, not resolved.
+//! foreign-branded `Gc` in A, which production code never does; it is a test-only shortcut.
 
 use super::*;
 use dotnet_assemblies::AssemblyLoader;
@@ -208,8 +208,7 @@ fn m1e_recreation_vm_collection_unrooted_negative_control() {
     );
 }
 
-/// Independent recreation (not recovered originals) of the complete real-VM collection
-/// contract (step 6.2): three actual `Executor` arenas on three threads, driven through the
+/// The complete real-VM collection contract: three actual `Executor` arenas on three threads, driven through the
 /// production coordinator and `THREAD_ARENA` command path.
 ///
 /// * arena A holds the only root: a normal GC handle to vector X owned by arena B;
@@ -338,8 +337,8 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
                         owner
                             .with_arena(|arena| {
                                 arena.mutate_root(|gc, engine| {
-                                    // SAFETY: F6.NoEscapeAcrossArena — accepted cross-arena
-                                    // boundary (see 4.9): the target's owner arena outlives the
+                                    // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena
+                                    // boundary (see the module doc): the target's owner arena outlives the
                                     // collections; the reference is serialized into vector bytes
                                     // immediately and no branded handle escapes this closure.
                                     let target = ObjectRef(Some(unsafe {
@@ -390,7 +389,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     recv(&b_rx).expect("arena B linked X -> Y");
     a.with_arena(|arena| {
         arena.mutate_root(|_gc, engine| {
-            // SAFETY: F6.NoEscapeAcrossArena — accepted cross-arena boundary (see 4.9); B's
+            // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena boundary (see the module doc); B's
             // arena outlives the collections and the handle is cleared below before any
             // trace that could follow a missed publication.
             let obj = ObjectRef(Some(unsafe {
@@ -496,7 +495,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     );
 }
 
-/// Independent recreation (not recovered originals): keep the original arena
+/// Keep the original arena
 /// and its allocation live while replacing its registry entry. No stale object
 /// is freed or dereferenced by the test. A mark command from the old registration
 /// must not install that object into the replacement registration's roots.
@@ -621,7 +620,7 @@ fn m1e_recreation_mark_command_rejects_stale_registration() {
     drop(foreign_arena);
 }
 
-/// Independent recreation (not recovered originals): the registry's current
+/// The registry's current
 /// generation alone does not identify the particular destination arena.
 #[cfg(feature = "multithreading")]
 #[test]

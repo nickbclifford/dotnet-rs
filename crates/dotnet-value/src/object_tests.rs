@@ -15,7 +15,7 @@ mod tests {
     use dotnetdll::prelude::BaseType;
     use hashbrown::HashMap;
 
-    // Independent recreation (not recovered originals): compact ObjectRef codec regressions.
+    // Compact ObjectRef codec regressions.
     #[cfg(feature = "multithreading")]
     struct RecreationRegistration(crate::ArenaId);
 
@@ -58,7 +58,7 @@ mod tests {
         assert_eq!(value.as_string(), "codec recreation");
     }
 
-    /// Independent recreation (not recovered originals): registered owner 40000.
+    /// Registered owner 40000.
     #[cfg(feature = "multithreading")]
     #[test]
     fn recreation_codec_id40000() {
@@ -74,7 +74,7 @@ mod tests {
         });
     }
 
-    /// Independent recreation (not recovered originals): registered compact owner boundaries.
+    /// Registered compact owner boundaries.
     #[cfg(feature = "multithreading")]
     #[test]
     fn recreation_codec_registered_boundaries() {
@@ -92,7 +92,7 @@ mod tests {
         }
     }
 
-    /// Independent recreation (not recovered originals): unrepresentable owners must fail loudly.
+    /// Unrepresentable owners must fail loudly.
     #[cfg(feature = "multithreading")]
     #[test]
     fn recreation_codec_reject_large_owners() {
@@ -124,7 +124,7 @@ mod tests {
         );
     }
 
-    /// Independent recreation (not recovered originals): absent owner is a host invariant failure.
+    /// Absent owner is a host invariant failure.
     #[cfg(feature = "multithreading")]
     #[test]
     fn recreation_codec_unavailable_owner() {
@@ -155,7 +155,7 @@ mod tests {
         });
     }
 
-    /// Independent recreation (not recovered originals): INVALID stays local and untagged.
+    /// INVALID stays local and untagged.
     #[test]
     fn recreation_codec_local_invalid_control() {
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
@@ -169,7 +169,7 @@ mod tests {
         });
     }
 
-    // Independent recreation (not recovered originals): a gc-arena publication model,
+    // A gc-arena publication model,
     // not the VM MarkObjects path. The raw slot models its manually traced root set.
     struct RecreationPublicationRoot(std::cell::Cell<Option<*const RecreationWitness>>);
 
@@ -227,19 +227,19 @@ mod tests {
         observed
     }
 
-    /// Independent recreation (not recovered originals): old publication loses the witness.
+    /// Old publication loses the witness.
     #[test]
     fn recreation_publication_old_path_diagnostic() {
         assert_eq!(recreation_publication_drops(false), 1);
     }
 
-    /// Independent recreation (not recovered originals): a root barrier preserves the witness.
+    /// A root barrier preserves the witness.
     #[test]
     fn recreation_publication_root_barrier_control() {
         assert_eq!(recreation_publication_drops(true), 0);
     }
 
-    /// Independent recreation (not recovered originals): publication through the root barrier survives.
+    /// Publication through the root barrier survives.
     #[test]
     fn recreation_publication_pending_survival() {
         assert_eq!(

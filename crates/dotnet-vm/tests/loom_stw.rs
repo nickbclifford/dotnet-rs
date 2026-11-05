@@ -190,7 +190,7 @@ fn mutator(
 }
 
 fn gc_only_heap_access(shared: &Shared) {
-    // SAFETY: F1.StwParked — both mutators acknowledged their safepoints with
+    // F1.StwParked: both mutators acknowledged their safepoints with
     // AcqRel, and the collector observed those acknowledgements with Acquire.
     assert_eq!(
         shared.parked_mutators.load(Ordering::Acquire),

@@ -10,16 +10,11 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 
 ## Invariants
 
-- `F2.DescriptorMatchesEcmaLayout`: a layout descriptor's offsets, sizes, and field types match the corresponding instantiated ECMA-335 layout. The resolver's layout factory supplies the descriptor, but the specification correspondence is assumed.
-- `F3.StackSlotMatchesView`: raw evaluation-stack access reads a slot only through the type used to push it; enum discriminants and instruction stack discipline establish this locally.
-- `F3.InteriorPointerRebased`: an interior pointer retains its originating slot association and is re-established by `apply_reallocation_fixup()` after stack-vector reallocation.
-- `F10.RawMemoryAccessValid`: raw reads, writes, copies, and pointer derivations stay in live storage with the required range, initialization, alignment, and aliasing conditions. A nearby bounds/integrity check or the immediate unsafe function's caller contract establishes that condition.
-- `F10.RawAllocationOwnership`: a raw allocation is converted to a reference or reclaimed only with the provenance, lifetime, and unique ownership supplied by its originating allocation protocol. `Box::into_raw`/`Box::leak` pointers are converted or reclaimed only through their single matching ownership operation; `alloc_zeroed` allocations are paired with `dealloc` exactly once by their unique owner using the retained matching `Layout`. Other raw-pointer conversions rely on their documented provenance and lifetime contract.
-- `F10.BorrowedStorageStable`: pointers obtained from managed or shared backing storage are used only while the borrow, closure, or lock that stabilizes the allocation remains active.
-- `F10.ArchIntrinsicPrecondition`: a target-feature function or architecture intrinsic executes only when its ISA feature is guaranteed by the compilation target or by successful runtime detection at the dispatch site.
-- `F11.CliLoadKindMatchesStorage`: an atomic scalar is decoded only by the CLI `LoadType` with its storage bit-width and signedness; the object-handle case relies on its explicit caller contract.
-- `F11.PInvokeAbiAgreement`: a native symbol's real calling convention and complete parameter/return ABI agree with the prepared libffi CIF and marshalling storage. Rust can validate its CIF and storage, but agreement with an arbitrary native import is a native ABI trust boundary tracked under plan 01 M2.
-- `F11.NativeLibraryLoadTrusted`: a dynamic library permitted by the configured host policy has safe initializers/finalizers, and its cached `NativeLibraries` entry remains loaded while selected symbols are used. The cache establishes retention; native initializer/finalizer behavior is a native ABI trust boundary tracked under plan 01 M2.
+The `// SAFETY:` predicates for layout, evaluation-stack, raw-memory and P/Invoke code are stated
+in the [invariant registry](INVARIANT_REGISTRY.md): `F2.DescriptorMatchesEcmaLayout`,
+`F3.StackSlotMatchesView`, `F3.InteriorPointerRebased`, `F10.RawMemoryAccessValid`,
+`F10.RawAllocationOwnership`, `F10.BorrowedStorageStable`, `F10.ArchIntrinsicPrecondition`,
+`F11.CliLoadKindMatchesStorage`, `F11.PInvokeAbiAgreement` and `F11.NativeLibraryLoadTrusted`.
 
 ## Crate Responsibilities
 
@@ -110,53 +105,60 @@ dotnet-benchmarks
 
 - **Heap Management**: `HeapManager` handles the allocation of objects. Each thread typically has its own arena for allocation to minimize contention.
 - **GC Roots**: The evaluation stack, local variables, and static fields serve as the primary roots for GC.
-- **STW Coordination**: When a GC is triggered, all threads are brought to a "Safe Point" (e.g., at a loop back-edge or method call). Once all threads are paused, the collector traces all reachable objects across all arenas.
+- **STW Coordination**: When a GC is triggered, all threads are brought to a safe point (see [Safe Points](THREADING_AND_SYNCHRONIZATION.md#safe-points) for where they are polled). Once all threads are paused, the collector traces all reachable objects across all arenas. The GC is non-moving.
 - **GcScopeGuard**: To prevent deadlocks during STW, `GcScopeGuard` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
 - **Collect Trait**: Every type stored on the heap or containing GC references must implement the `Collect` trait to allow the tracer to find nested references.
 
-### Pointer owners and scoped access
+### Evaluation stack, locals and managed pointers
 
-Transient pointer origins share an owned object across clones; access-performing stack pops use
-`RetainedPtr` to retain the popped value, and cross-arena operands also retain a lease during the
-synchronous operation. Address observation alone retains no access guard or root. These mechanisms
-do not replace range, provenance, rooting or synchronization requirements, and leases must end
-before safepoint parking. Stack-home relocation, final codecs/layout and the shared-memory protocol
-remain future work. See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access)
-for the scoped M1d results and boundaries. Cross-arena origins retain registration identity;
-GC transport retains the pointer and publishes owner roots through a root barrier. Neither
-identity nor a lease roots the object, and compact `ObjectRef` decoding retains its unsafe
-live-original-allocation obligation. Final M1e/M1g acceptance remains open.
+Each thread's `EvaluationStack` (`crates/dotnet-vm-data/src/stack.rs`) keeps one
+`Vec<StackValue>` in its `stack` field. A frame's arguments, locals and evaluation-stack
+temporaries are consecutive slots in that `Vec`; the frame's `BasePointer` records the absolute
+slot index where each region starts. When frames are suspended (for example while an exception
+filter runs), `suspend_above` moves the slots above a point into `suspended_stack` and
+`restore_suspended` appends them back.
+
+A managed pointer is a `ManagedPtr` (`crates/dotnet-value/src/pointer/mod.rs`) with these fields:
+a cached raw address (`_value`), the `PointerOrigin` that owns the target, the target
+`inner_type`, a compact byte `offset` from the origin's base, `flags` (pinned) and a validation
+`magic`. Its serialized form is `ManagedPtr::SIZE` (24) bytes. The `PointerOrigin` variants
+(`Heap`, `CrossArenaObjectRef`, `Static`, `Stack`, `Transient`, `Unmanaged`) and where a managed
+pointer may be stored are described in
+[Managed pointer placement](GC_AND_MEMORY_SAFETY.md#managed-pointer-placement).
+
+`ldloca` and `ldarga` (`crates/dotnet-vm/src/instructions/stack_ops.rs`) push a
+`PointerOrigin::Stack` managed pointer naming the absolute slot index and caching that slot's
+`StackValue::data_location`. For a scalar slot that address is inside the `Vec` element; for a
+value-type slot it is the value's own storage buffer.
+
+When the `Vec` reallocates on growth, `apply_reallocation_fixup` calls `update_stack_pointers`,
+which recomputes every slot's data location and rebases each Stack-origin pointer it can find:
+in slots, in typed references, and serialized inside value-type slots (`ref` fields of byref-like
+values). `suspend_above` and `restore_suspended` call `update_stack_pointers` directly. This is the
+mechanism behind `F3.InteriorPointerRebased`.
+
+Known limits of this scheme:
+
+- `stloc`/`starg` to a value-type variable replaces the slot's value and its buffer, so a byref
+  taken earlier with `ldloca`/`ldarga` is left pointing at the old buffer.
+- An address converted to a native integer (`ldloca; conv.u`) is not a managed pointer and is not
+  rebased when the `Vec` reallocates.
+
+The plan [Stable homes for addressable locals and arguments](plans/01-stable-frame-homes.md)
+covers both.
 
 ### Frame-local `localloc` storage
 
-Each active method's `MethodState` owns a `FrameAllocations` collection. Every IL `localloc`
-request receives its own zero-initialized `RawBlock`; later requests cannot resize or invalidate an
-earlier block. The block retains its allocation base and `Layout`, and returned pointers are derived
-from that base without first creating a payload reference. Payload extent is tracked separately from
-the host layout. Blocks have at least 16-byte alignment, and even a zero-byte request receives a
-real one-byte allocation.
-
-The default limits are 128 MiB for a single request, 128 MiB of accounted allocations per frame,
-and 512 MiB per thread. Checked accounting charges at least 64 bytes per block. A negative signed
-request becomes `System.OverflowException`; an over-limit request or any other allocation failure
-becomes `System.OutOfMemoryException`.
-
-The owning frame keeps its blocks across nested calls and while it is suspended and later restored.
-Retiring a frame releases its blocks on normal return, exception unwind, or tail-call/`jmp` frame
-replacement; pooling explicitly clears its allocations, and arena destruction tears down any
-frames still active. MT teardown can retain the arena if drain is incomplete; see the
-[arena lifecycle contract](GC_AND_MEMORY_SAFETY.md#per-thread-arenas). A pointer must not be used after its frame's allocation lifetime ends.
-
-This is the localloc-specific application of the allocation portion of the planned M3 `GuestBlock`
-contract. `RawBlock` is not the general `GuestBlock` abstraction: this change does not migrate heap,
-static, local, or argument storage to it.
+Each active method's `MethodState` owns the `localloc` blocks it requested; they do not move and
+are released with the frame. The allocation, limit and lifetime contract is in
+[GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#frame-owned-localloc-allocations).
 
 ## Threading Model
 
 The VM supports multi-threading (feature-gated via `multithreading`). For detailed mechanics, see [Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md):
 
 - **Thread Manager**: Manages the lifecycle of managed threads and coordinates STW pauses.
-- **Safe Points**: Execution periodically checks if a GC or suspension has been requested via `ctx.check_gc_safe_point()`.
+- **Safe Points**: Execution polls for a pending GC between instruction batches and inside long-running intrinsics; see [Safe Points](THREADING_AND_SYNCHRONIZATION.md#safe-points).
 - **Synchronization**: .NET `Monitor` (lock/unlock) is implemented using `SyncBlockManager`, providing thread-safe access to objects with monitor-style semantics.
 
 Each executor's `CallStack` owns `ArenaLocalState` for arena/thread-private heap, reflection, and cached P/Invoke last-error state; cross-thread services remain in `SharedGlobalState`.
@@ -263,7 +265,7 @@ pub fn handle_instruction<'gc, T: VesOps<'gc>>(
 
 ## Assembly Isolation and Load Contexts
 
-As of the current implementation, `dotnet-rs` utilizes a single global **Assembly Load Context** (represented by the `AssemblyLoader` in `SharedGlobalState`).
+`dotnet-rs` uses a single global **Assembly Load Context** (represented by the `AssemblyLoader` in `SharedGlobalState`).
 
 - **Single Namespace**: All assemblies are loaded into a single global namespace. Loading multiple versions of the same assembly name is not supported and will result in a version mismatch error (if strict versioning is enabled) or a warning.
 - **Global Statics**: Static fields are managed by a single `StaticStorageManager` in `SharedGlobalState`, meaning they are shared across all threads and assemblies.
