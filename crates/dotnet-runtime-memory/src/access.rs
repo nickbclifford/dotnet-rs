@@ -493,7 +493,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Atomically compares and exchanges a value in memory.
     ///
     /// # Safety
-    /// Caller must ensure the offset and size are valid for the owner object.
+    /// With an `owner`, `offset` is relative to its storage and an out-of-range `offset`/`size`
+    /// is rejected with a bounds error before any access.
     /// If `owner` is `None`, `offset` must be the non-null address of storage valid and
     /// synchronized for a `size`-byte read and write.
     #[allow(clippy::too_many_arguments)]
@@ -513,12 +514,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 .with_data_mut(gc, |data| {
                     let base = data.as_mut_ptr();
                     let len = data.len();
-                    // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
-                    // The result may be out-of-bounds, but `check_bounds_internal`
-                    // (called immediately after) validates the range before any
-                    // dereference.  The slice length is bounded by `isize::MAX`, so
-                    // the arithmetic does not overflow.
-                    let ptr = unsafe { base.add(offset.as_usize()) };
+                    // Wrapping arithmetic: `offset` is unchecked here, and `check_bounds_internal`
+                    // rejects any result outside `base..base + len` before it is used.
+                    let ptr = base.wrapping_add(offset.as_usize());
 
                     self.check_bounds_internal(ptr, base, len, size)
                         .map_err(CompareExchangeError::Bounds)?;
@@ -601,7 +599,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Atomically exchanges a value in memory.
     ///
     /// # Safety
-    /// Caller must ensure the offset and size are valid for the owner object.
+    /// With an `owner`, `offset` is relative to its storage and an out-of-range `offset`/`size`
+    /// is rejected with a bounds error before any access.
     /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
     /// for a `size`-byte read and write.
     pub unsafe fn exchange_atomic(
@@ -617,9 +616,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
-                // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
-                // Bounds are checked immediately after by `check_bounds_internal`.
-                let ptr = unsafe { base.add(offset.as_usize()) };
+                // Wrapping arithmetic: `offset` is unchecked here, and `check_bounds_internal`
+                // rejects any result outside `base..base + len` before it is used.
+                let ptr = base.wrapping_add(offset.as_usize());
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
@@ -681,7 +680,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Atomically adds a value to a memory location.
     ///
     /// # Safety
-    /// Caller must ensure the offset and size are valid for the owner object.
+    /// With an `owner`, `offset` is relative to its storage and an out-of-range `offset`/`size`
+    /// is rejected with a bounds error before any access.
     /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
     /// for a `size`-byte read and write.
     pub unsafe fn exchange_add_atomic(
@@ -697,9 +697,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
-                // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
-                // Bounds are checked immediately after by `check_bounds_internal`.
-                let ptr = unsafe { base.add(offset.as_usize()) };
+                // Wrapping arithmetic: `offset` is unchecked here, and `check_bounds_internal`
+                // rejects any result outside `base..base + len` before it is used.
+                let ptr = base.wrapping_add(offset.as_usize());
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
@@ -759,7 +759,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Loads a value atomically when aligned, with synchronized memcpy for misaligned storage.
     ///
     /// # Safety
-    /// Caller must ensure the offset and size are valid for the owner object.
+    /// With an `owner`, `offset` is relative to its storage and an out-of-range `offset`/`size`
+    /// is rejected with a bounds error before any access.
     /// If `owner` is `None`, `offset` must be the address of storage valid for a `size`-byte read.
     /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn load_atomic(
@@ -773,9 +774,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data(|data| {
                 let base = data.as_ptr();
                 let len = data.len();
-                // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage
-                // (immutable borrow).  Bounds are checked immediately after.
-                let ptr = unsafe { base.add(offset.as_usize()) };
+                // Wrapping arithmetic: `offset` is unchecked here, and `check_bounds_internal`
+                // rejects any result outside `base..base + len` before it is used.
+                let ptr = base.wrapping_add(offset.as_usize());
                 self.check_bounds_internal(ptr, base, len, size)?;
                 // SAFETY: F10.RawMemoryAccessValid — Bounds and the storage guard provide valid synchronized access.
                 Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
@@ -815,7 +816,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Stores a value atomically when aligned, with synchronized memcpy for misaligned storage.
     ///
     /// # Safety
-    /// Caller must ensure the offset and size are valid for the owner object.
+    /// With an `owner`, `offset` is relative to its storage and an out-of-range `offset`/`size`
+    /// is rejected with a bounds error before any access.
     /// If `owner` is `None`, `offset` must be the address of storage valid for a `size`-byte write.
     /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn store_atomic(
@@ -831,9 +833,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let result = owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
-                // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing storage.
-                // Bounds are checked immediately after by `check_bounds_internal`.
-                let ptr = unsafe { base.add(offset.as_usize()) };
+                // Wrapping arithmetic: `offset` is unchecked here, and `check_bounds_internal`
+                // rejects any result outside `base..base + len` before it is used.
+                let ptr = base.wrapping_add(offset.as_usize());
                 self.check_bounds_internal(ptr, base, len, size)?;
                 // SAFETY: F10.RawMemoryAccessValid — Bounds and the storage guard provide valid synchronized access.
                 unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
@@ -1707,6 +1709,71 @@ mod tests {
             };
             assert_eq!(result, Ok(()));
             assert_eq!(dest, [0; ManagedPtr::SIZE]);
+        });
+        #[cfg(feature = "multithreading")]
+        // SAFETY: F10.RawMemoryAccessValid — The handle was allocated above and mutate has finished using it.
+        unsafe {
+            drop(Box::from_raw(arena_handle))
+        };
+    }
+
+    #[test]
+    fn owner_atomic_load_rejects_offset_past_allocation() {
+        use dotnet_types::{TypeDescription, generics::GenericLookup};
+        use dotnet_utils::{ByteOffset, gc::GCHandle, sync::Arc};
+        use dotnet_value::object::{HeapStorage, Object, ObjectRef};
+        use dotnet_value::storage::FieldStorage;
+
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_| ());
+        let _arena_id = ArenaId::new(4051);
+        #[cfg(feature = "multithreading")]
+        let arena_handle = Box::into_raw(Box::new(ArenaHandle::new(_arena_id)));
+
+        arena.mutate(|mc, _| {
+            let gc = GCHandle::new(
+                mc,
+                #[cfg(feature = "multithreading")]
+                // SAFETY: F1.GcHandleRooted — The boxed arena handle remains live until after mutate returns.
+                unsafe {
+                    (&*arena_handle).as_inner()
+                },
+                #[cfg(feature = "memory-validation")]
+                _arena_id,
+            );
+            let layout = Arc::new(FieldLayoutManager {
+                fields: Default::default(),
+                total_size: 8,
+                alignment: 8,
+                gc_desc: GcDesc::default(),
+                has_ref_fields: false,
+            });
+            let obj = ObjectRef::new(
+                gc,
+                HeapStorage::Obj(Box::new(Object::new(
+                    TypeDescription::NULL,
+                    GenericLookup::default(),
+                    FieldStorage::new(layout, vec![0; 8]),
+                ))),
+            );
+            let heap = crate::heap::HeapManager::new();
+            let memory = super::RawMemoryAccess::new(&heap);
+            for offset in [8usize, 4096, usize::MAX / 2] {
+                // SAFETY: F10.RawMemoryAccessValid — with an owner, an out-of-range offset is
+                // rejected before any access, which is what this test checks.
+                let result = unsafe {
+                    memory.load_atomic(
+                        Some(crate::MemoryOwner::Local(obj)),
+                        ByteOffset::new(offset),
+                        4,
+                        dotnet_utils::sync::Ordering::SeqCst,
+                    )
+                };
+                assert!(
+                    matches!(result, Err(MemoryAccessError::BoundsCheck { .. })),
+                    "offset {offset}: {result:?}"
+                );
+            }
         });
         #[cfg(feature = "multithreading")]
         // SAFETY: F10.RawMemoryAccessValid — The handle was allocated above and mutate has finished using it.
