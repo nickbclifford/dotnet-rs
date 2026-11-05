@@ -58,6 +58,14 @@ on the path, record it under "Not yet planned" in the plans README, refute it, o
   constraint, the spec rule (cite the ECMA-335 section). They do not record which plan or step
   produced the code or reference planning files.
 
+## Feature gating and synchronization
+
+Gate `multithreading`-only code at module or item boundaries rather than scattering `#[cfg]`
+through function bodies. Use the lock and atomic types from `dotnet_utils::sync` instead of
+`std::sync`/`parking_lot` equivalents; they switch to Loom under `cfg(loom)`, to single-threaded
+stand-ins without `multithreading`, and participate in lock ordering. `Arc`, `OnceLock`,
+`LazyLock` and test-only `std::sync` types are fine.
+
 ## Unsafe code policy
 
 Unsafe code must make the invariant that justifies it reviewable at the point

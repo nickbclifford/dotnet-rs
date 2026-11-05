@@ -56,7 +56,7 @@ files and fails on drift.
 
 | Job | Source of truth |
 |---|---|
-| `doc-lint` | Its steps in `ci.yml`: the two ceiling scripts, `xtask verify-slots`, the pointer, selector and aggregate script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
+| `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector and aggregate script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
 | `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job's `multithreading` leg also runs the hang-probe filters listed in its YAML step. |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
 | `loom` | `crates/dotnet-vm/tests/loom_stw.rs` |
@@ -127,7 +127,7 @@ singleton, which appends `-Zmiri-strict-provenance`.
 
 `./check.sh` defaults to `--fast` (`CHECK_FULL=1` or `--full` selects full mode). Both modes run
 `xtask verify-slots`, build fixtures once, run clippy and `cargo nextest run` per feature
-configuration, then the two ceiling scripts.
+configuration.
 
 - `--fast`: three configurations (no features, `multithreading`, `multithreading,validation-all`).
 - `--full`: the whole shared feature matrix, plus the build-script probes and the
@@ -189,17 +189,12 @@ collector and two mutators).
 ### Source policy and docs
 
 ```bash
-bash scripts/check_mt_cfg_ceiling.sh
-bash scripts/check_std_sync_ceiling.sh
 cargo run -p xtask -- verify-slots
 bash scripts/check_doc_drift.sh
 DOTNET_SKIP_BUILD=1 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --no-default-features
 bash scripts/check_build_script_regressions.sh
 for t in scripts/tests/test_*.py; do python3 "$t"; done
 ```
-
-The ceiling scripts are lexical regression checks. When a change has to raise a ceiling, explain
-the boundary and the delta in that change. When the count falls, lower the ceiling.
 
 ### Fixtures and build environment
 

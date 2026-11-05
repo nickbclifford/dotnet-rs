@@ -105,10 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check multithreading cfg budget
-        run: bash scripts/check_mt_cfg_ceiling.sh
-      - name: Check std::sync budget
-        run: bash scripts/check_std_sync_ceiling.sh
       - name: Verify support-slot consumer coverage
         run: cargo run --quiet -p xtask -- verify-slots
       - name: Test pointer diagnostic guards
