@@ -314,7 +314,7 @@ pub enum GCCommand {
 }
 
 #[cfg(all(test, feature = "multithreading"))]
-mod opaque_transport_recreation_tests {
+mod opaque_transport_tests {
     use super::{
         ArenaIdentity, CrossArenaRef, MarkObjectPointers, MarkPhaseCommand, OpaqueObjectPtr,
     };

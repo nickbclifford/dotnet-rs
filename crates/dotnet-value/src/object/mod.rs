@@ -1068,7 +1068,7 @@ mod tests {
     /// Validate addresses without pointers.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn recreation_codec_address_limits() {
+    fn codec_address_limits() {
         for addr in [8, (1usize << 48) - 8] {
             assert_eq!(check_compact_address(addr), Ok(()));
         }
@@ -1082,7 +1082,7 @@ mod tests {
 
     /// Short slices fail before memory access.
     #[test]
-    fn recreation_codec_short_storage() {
+    fn codec_short_storage() {
         for len in 0..ObjectRef::SIZE {
             assert_eq!(
                 check_object_storage(len),

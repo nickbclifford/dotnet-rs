@@ -171,9 +171,9 @@ fn assert_byref_like_pinvoke_rejected(fixture: &str, what: &str) {
 /// passed by value is rejected before marshaling, in every configuration.
 #[test]
 #[cfg(not(feature = "fuzzing"))]
-fn pinvoke_byreflike_argument_recreation_rejected() {
+fn pinvoke_byreflike_argument_rejected() {
     assert_byref_like_pinvoke_rejected(
-        "tests/fixtures/pinvoke/pinvoke_byreflike_argument_recreation_255.cs",
+        "tests/fixtures/pinvoke/pinvoke_byreflike_argument_255.cs",
         "argument 0",
     );
 }
@@ -182,9 +182,9 @@ fn pinvoke_byreflike_argument_recreation_rejected() {
 /// return type is rejected before native code runs, in every configuration.
 #[test]
 #[cfg(not(feature = "fuzzing"))]
-fn pinvoke_byreflike_return_recreation_rejected() {
+fn pinvoke_byreflike_return_rejected() {
     assert_byref_like_pinvoke_rejected(
-        "tests/fixtures/pinvoke/pinvoke_byreflike_return_recreation_255.cs",
+        "tests/fixtures/pinvoke/pinvoke_byreflike_return_255.cs",
         "return type",
     );
 }

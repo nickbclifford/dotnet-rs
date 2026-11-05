@@ -70,7 +70,7 @@ Runner speed varied 25–45% between the runs. The 870 s sample was within 4% of
 per-invocation cap, so VM invocations moved to 1800 s and one process per 45-minute job. The
 `library` group's execute phase measured about 5 minutes hosted (about 4 of them in
 `transport-structural`), hence its 30-minute job. One MT ownership singleton
-(`recreation_owner_first_guard_does_not_touch_successor`) took 36.84 s test time locally.
+(`owner_first_guard_does_not_touch_successor`) took 36.84 s test time locally.
 
 ## After the hierarchy
 

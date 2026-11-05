@@ -16,7 +16,7 @@ use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_value::string::CLRString;
 use gc_arena::Gc;
 
-const PAYLOAD: &str = "executor_collection_recreation_payload";
+const PAYLOAD: &str = "executor_collection_payload";
 
 fn shared() -> Arc<SharedGlobalState> {
     #[allow(
@@ -24,7 +24,7 @@ fn shared() -> Arc<SharedGlobalState> {
         reason = "the single-thread configuration keeps shared state on its Executor's thread"
     )]
     Arc::new(SharedGlobalState::new(Arc::new(
-        AssemblyLoader::new_bare("executor_collection_recreation".to_string()).unwrap(),
+        AssemblyLoader::new_bare("executor_collection".to_string()).unwrap(),
     )))
 }
 
@@ -92,7 +92,7 @@ fn arena_lifetime_vm_collection() {
 }
 
 #[cfg(feature = "multithreading")]
-fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
+fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
     use crate::{
         gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
     };
@@ -188,7 +188,7 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
 #[cfg(feature = "multithreading")]
 #[test]
 fn arena_lifetime_vm_collection() {
-    let seen = run_vm_collection_recreation(true);
+    let seen = run_vm_collection(true);
     assert_eq!(
         seen,
         vec![Some(PAYLOAD.to_string()), Some(PAYLOAD.to_string())],
@@ -201,7 +201,7 @@ fn arena_lifetime_vm_collection() {
 fn arena_lifetime_vm_collection_unrooted_negative_control() {
     // Without arena A's reference the collection really sweeps B's object (born-black
     // allocation can survive the first cycle, so the second collection is the witness).
-    let seen = run_vm_collection_recreation(false);
+    let seen = run_vm_collection(false);
     assert_eq!(
         seen[1], None,
         "unreferenced object must be swept by the second collection"
@@ -233,7 +233,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     use dotnetdll::prelude::BaseType;
     use std::{sync::mpsc, thread, time::Duration};
 
-    const WRITTEN: &str = "executor_collection_recreation_payload_written";
+    const WRITTEN: &str = "executor_collection_payload_written";
     const VECTOR_MARK: &str = "<vector>";
 
     struct Handoff(ObjectPtr);

@@ -1411,7 +1411,7 @@ mod tests {
     use super::*;
     use crate::ArenaId;
 
-    fn recreation_flag() -> Arc<AtomicBool> {
+    fn new_arena_flag() -> Arc<AtomicBool> {
         Arc::new(AtomicBool::new(false))
     }
 
@@ -1420,10 +1420,10 @@ mod tests {
     #[test]
     fn arena_identity_registry_duplicate() {
         let id = ArenaId::new(10_151);
-        register_arena(id, recreation_flag());
+        register_arena(id, new_arena_flag());
         let original = try_acquire_lease(id).expect("original registration");
         let original_generation = original.generation();
-        let rejected = std::panic::catch_unwind(|| register_arena(id, recreation_flag())).is_err();
+        let rejected = std::panic::catch_unwind(|| register_arena(id, new_arena_flag())).is_err();
         let current_generation = try_acquire_lease(id).map(|lease| lease.generation());
         let original_alive = original.is_valid();
         drop(original);
@@ -1441,7 +1441,7 @@ mod tests {
     #[test]
     fn arena_identity_registry_fast_bit_transaction() {
         let id = ArenaId::new(51);
-        register_arena(id, recreation_flag());
+        register_arena(id, new_arena_flag());
         let map = VALID_ARENAS.write();
         let (checkpoint_tx, checkpoint_rx) = std::sync::mpsc::channel();
         let worker = thread::spawn(move || {
@@ -1476,7 +1476,7 @@ mod tests {
     #[test]
     fn arena_identity_registry_drain_reuse_control() {
         let id = ArenaId::new(52);
-        register_arena(id, recreation_flag());
+        register_arena(id, new_arena_flag());
         let old = try_acquire_lease(id).expect("old lease");
         let old_generation = old.generation();
         let old_identity = old.identity();
@@ -1502,7 +1502,7 @@ mod tests {
         // Collect observations before asserting, so even a regression releases
         // the old lease and joins the draining worker before the test fails.
         let observations = (|| {
-            try_register_arena(id, recreation_flag()).map_err(|e| format!("{e:?}"))?;
+            try_register_arena(id, new_arena_flag()).map_err(|e| format!("{e:?}"))?;
             let new = try_acquire_lease(id).ok_or("new registration unavailable")?;
             let new_identity = new.identity();
             let new_token = new.token();
@@ -1554,12 +1554,12 @@ mod tests {
         let fast = AtomicU64::new(0);
         registry.next_generation = u64::MAX - 1;
         let first = registry
-            .register(ArenaId::new(54), recreation_flag(), &fast)
+            .register(ArenaId::new(54), new_arena_flag(), &fast)
             .unwrap();
         assert_eq!(first.generation, u64::MAX - 1);
         let duplicate_counters = (registry.next_generation, registry.next_token);
         assert_eq!(
-            registry.register(first.arena_id, recreation_flag(), &fast),
+            registry.register(first.arena_id, new_arena_flag(), &fast),
             Err(ArenaRegistrationError::DuplicateLive(first.arena_id))
         );
         assert_eq!(
@@ -1573,7 +1573,7 @@ mod tests {
         );
         for _ in 0..2 {
             assert_eq!(
-                registry.register(ArenaId::new(55), recreation_flag(), &fast),
+                registry.register(ArenaId::new(55), new_arena_flag(), &fast),
                 Err(ArenaRegistrationError::GenerationExhausted)
             );
             assert!(!registry.by_id.contains_key(&ArenaId::new(55)));
@@ -1592,7 +1592,7 @@ mod tests {
         let fast_tokens = AtomicU64::new(0);
         tokens.next_token = u32::MAX as u64;
         let last = tokens
-            .register(ArenaId::new(56), recreation_flag(), &fast_tokens)
+            .register(ArenaId::new(56), new_arena_flag(), &fast_tokens)
             .unwrap();
         assert_eq!(tokens.by_id[&last.arena_id].token.as_u32(), u32::MAX);
         let before = (
@@ -1602,7 +1602,7 @@ mod tests {
         );
         for _ in 0..2 {
             assert_eq!(
-                tokens.register(ArenaId::new(57), recreation_flag(), &fast_tokens),
+                tokens.register(ArenaId::new(57), new_arena_flag(), &fast_tokens),
                 Err(ArenaRegistrationError::TokenExhausted)
             );
             assert!(!tokens.by_id.contains_key(&ArenaId::new(57)));
@@ -1624,7 +1624,7 @@ mod tests {
     #[test]
     fn arena_identity_registry_identity_token_reuse() {
         let id = ArenaId::new(53);
-        let old_id = try_register_arena(id, recreation_flag()).unwrap();
+        let old_id = try_register_arena(id, new_arena_flag()).unwrap();
         let old = try_acquire_lease_for_identity(old_id).unwrap();
         let old_token = old.token();
         assert_eq!(
@@ -1632,13 +1632,13 @@ mod tests {
             old_id
         );
         assert_eq!(
-            try_register_arena(id, recreation_flag()),
+            try_register_arena(id, new_arena_flag()),
             Err(ArenaRegistrationError::DuplicateLive(id))
         );
         drop(old);
         assert!(unregister_arena_identity(old_id));
         assert!(try_acquire_lease_for_token(old_token).is_none());
-        let new_id = try_register_arena(id, recreation_flag()).unwrap();
+        let new_id = try_register_arena(id, new_arena_flag()).unwrap();
         let new = try_acquire_lease_for_identity(new_id).unwrap();
         let new_token = new.token();
         assert_ne!(old_id, new_id);

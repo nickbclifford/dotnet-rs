@@ -842,12 +842,12 @@ impl Drop for Executor {
 }
 
 #[cfg(test)]
-#[path = "executor_teardown_recreation_tests.rs"]
-mod executor_teardown_recreation_tests;
+#[path = "executor_teardown_tests.rs"]
+mod executor_teardown_tests;
 
 #[cfg(test)]
-#[path = "executor_collection_recreation_tests.rs"]
-mod executor_collection_recreation_tests;
+#[path = "executor_collection_tests.rs"]
+mod executor_collection_tests;
 
 #[cfg(test)]
 mod tests {

@@ -28,7 +28,7 @@ fn shared() -> Arc<SharedGlobalState> {
         reason = "the single-thread configuration keeps shared state on its Executor's thread"
     )]
     Arc::new(SharedGlobalState::new(Arc::new(
-        AssemblyLoader::new_bare("executor_teardown_recreation".to_string()).unwrap(),
+        AssemblyLoader::new_bare("executor_teardown".to_string()).unwrap(),
     )))
 }
 
@@ -44,7 +44,7 @@ fn allocate_witness(executor: &mut Executor, drops: StdArc<AtomicUsize>) {
 
 #[cfg(not(feature = "multithreading"))]
 #[test]
-fn recreation_executor_single_arena_cleanup_control() {
+fn executor_single_arena_cleanup_control() {
     let drops = StdArc::new(AtomicUsize::new(0));
     let mut executor = Executor::new(shared());
     allocate_witness(&mut executor, StdArc::clone(&drops));
@@ -142,7 +142,7 @@ fn check_teardown(extracted: bool, unwind: bool) {
 /// disconnect the worker, release the lease, and join before unwind returns.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_worker_driver_failure_releases_and_joins() {
+fn worker_driver_failure_releases_and_joins() {
     use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{panic::AssertUnwindSafe, sync::mpsc, thread, time::Duration};
@@ -215,13 +215,13 @@ fn recreation_worker_driver_failure_releases_and_joins() {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_normal_teardown_active_lease() {
+fn executor_normal_teardown_active_lease() {
     check_teardown(false, false);
 }
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_extracted_teardown_active_lease() {
+fn executor_extracted_teardown_active_lease() {
     check_teardown(true, false);
 }
 
@@ -229,7 +229,7 @@ fn recreation_executor_extracted_teardown_active_lease() {
 /// must still drain another thread's lease before its arena is destroyed.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_unwind_teardown_active_lease() {
+fn executor_unwind_teardown_active_lease() {
     check_teardown(false, true);
 }
 
@@ -420,7 +420,7 @@ fn arena_lifetime_teardown_stress() {
 /// instead of replacing (and destroying) the first arena's TLS Box.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_nested_creation_fails_closed() {
+fn executor_nested_creation_fails_closed() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let drops = StdArc::new(AtomicUsize::new(0));
     let worker_drops = StdArc::clone(&drops);
@@ -446,7 +446,7 @@ fn recreation_executor_nested_creation_fails_closed() {
 /// teardown, and must not free the leased arena.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
+fn executor_self_held_lease_leaks_instead_of_deadlocking() {
     use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{sync::mpsc, time::Duration};
@@ -480,7 +480,7 @@ fn recreation_executor_self_held_lease_leaks_instead_of_deadlocking() {
 /// owner free the arena while a lease is still held.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_executor_external_remover_does_not_release_owner() {
+fn executor_external_remover_does_not_release_owner() {
     use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::{try_acquire_lease, unregister_arena};
     use std::{
@@ -531,7 +531,7 @@ fn recreation_executor_external_remover_does_not_release_owner() {
 /// until it is dropped, and its extracted guard must remain independently owned.
 #[cfg(feature = "multithreading")]
 #[test]
-fn recreation_extracted_executor_tls_ownership() {
+fn extracted_executor_tls_ownership() {
     use crate::test_utils::worker::Worker;
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{
@@ -703,7 +703,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_forgotten_executor_tls_exit_retains_arena() {
+    fn forgotten_executor_tls_exit_retains_arena() {
         use crate::test_utils::worker::Worker;
         use std::{sync::mpsc, thread, time::Duration};
 
@@ -731,7 +731,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_repeated_extraction_reserves_until_owner_drop() {
+    fn repeated_extraction_reserves_until_owner_drop() {
         let state = shared();
         let mut executor = Executor::new(Arc::clone(&state));
         let drops = StdArc::new(AtomicUsize::new(0));
@@ -751,7 +751,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_constructor_rollback_releases_reservation() {
+    fn constructor_rollback_releases_reservation() {
         let state = shared();
         for point in ["reservation", "construction"] {
             let _fault = Fault::at(point);
@@ -764,7 +764,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_executor_teardown_panic_retains_arena() {
+    fn executor_teardown_panic_retains_arena() {
         for point in ["executor", "guard", "drain"] {
             let state = shared();
             let drops = StdArc::new(AtomicUsize::new(0));
@@ -794,7 +794,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_owner_first_guard_does_not_touch_successor() {
+    fn owner_first_guard_does_not_touch_successor() {
         let state = shared();
         let old_drops = StdArc::new(AtomicUsize::new(0));
         let new_drops = StdArc::new(AtomicUsize::new(0));
@@ -821,7 +821,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_self_held_drain_panic_and_no_diagnostic() {
+    fn self_held_drain_panic_and_no_diagnostic() {
         for inject_panic in [false, true] {
             let state = shared();
             let drops = StdArc::new(AtomicUsize::new(0));
@@ -854,7 +854,7 @@ mod ownership {
     }
 
     #[test]
-    fn recreation_drain_warning_panic_retains_arena() {
+    fn drain_warning_panic_retains_arena() {
         use crate::test_utils::worker::Worker;
         use std::{sync::mpsc, thread, time::Duration};
 

@@ -908,7 +908,7 @@ mod tests {
 
     /// Compact managed-ID exhaustion.
     #[test]
-    fn recreation_managed_id_exhaustion() {
+    fn managed_id_exhaustion() {
         let first = AtomicU64::new(1);
         assert_eq!(allocate_managed_thread_id(&first), 1);
         assert_eq!(allocate_managed_thread_id(&first), 2);
