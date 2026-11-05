@@ -64,64 +64,25 @@ exhaustion are enforced in release, independent of `memory-validation`. Exact id
 are not a substitute for rooting or the unsafe live-original-allocation contract; magic/arena
 validation diagnostics cannot safely validate a stale pointer. See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#cross-arena-reference-tracking).
 
-## CI Leg Mapping
+## Feature configurations in CI
 
-This is the current full-matrix implementation, not the desired PR trigger policy. The
-[test hierarchy](CI.md#test-hierarchy-and-migration) keeps three core configurations on the fast
-path, selects isolated features for affected code, and retains the full matrix for sweeps and
-broad changes. Its workflow migration is pending.
+The `test` and `clippy` jobs in `.github/workflows/ci.yml` run every combination in
+`SHARED_FEATURE_MATRIX` (`xtask/src/main.rs`); print it with
+`cargo run -p xtask -- matrix test-features`. Each leg builds with `--no-default-features`
+plus the listed features. Miri lanes are separate explicit jobs; [CI.md](CI.md) maps each job to
+its source of truth, and `./check.sh --fast` runs a smaller local subset.
 
-The CI pipeline (`.github/workflows/ci.yml`) does not hardcode named legs. Instead, a single
-`Test Suite` job (and a parallel `Clippy Check` job) runs over a dynamic matrix resolved at
-runtime from `cargo run -p xtask -- matrix test-features --format json`. The matrix is the
-`SHARED_FEATURE_MATRIX` constant in `xtask/src/main.rs` — that constant is the source of truth,
-so consult it directly to avoid drift. As of this writing it contains the following legs (each run
-with `cargo test --no-default-features [--features <combo>]`):
-
-- `(none)`
-- `multithreading`
-- `simd`
-- `multithreading,simd`
-- `generic-constraint-validation`
-- `memory-validation`
-- `metadata-validation`
-- `multithreading,memory-validation`
-- `multithreading,validation-all`
-- `fuzzing`
-
-## Miri CI Lane Mapping
-
-The table records current workflow selections. Placement will change under the agreed hierarchy;
-none of the rows establishes required branch protection. The retired branch's native ops/data/bridge
-selections are not implemented on main. Future selections must document actual tests and counts
-in [CI.md](CI.md).
-
-The feature matrix above describes the dynamic stable test/clippy jobs; Miri jobs are separate,
-explicit workflow lanes and are not represented by `SHARED_FEATURE_MATRIX`.
-
-| Current CI job | Pipeline-failing? | Configuration / selection | Meaning and limits |
-|---|---|---|---|
-| `miri-value` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; full `dotnet-value` test suite with default features (multithreading; the `stack_value_cross_arena_retired` source-policy scan is `cfg(not(miri))` and runs natively), plus no-default-features selectors `pointer::tests::m1a_` (3 tests), `pointer::tests::m1b_` (8 tests), and `pointer::tests::m1d_` (11 tests) | Blocking full value-crate Miri coverage in the default configuration. The no-features selectors cover exactly the three M1a, eight M1b and eleven M1d library regressions, not the full crate; none is a VM gate; multithreading-only cross-arena tests are covered by the full default-feature suite. |
-| `miri-frame-blocks` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `raw_block::` in `dotnet-utils` and `frame_alloc::` in `dotnet-vm-data`, each in no-features and multithreading configurations; 15-minute timeout | Blocking library tests: each raw-block run requires 7 passed and each frame-allocation run 8 passed, all with 0 ignored; the latter includes frame suspension/restoration. This is not VM Miri coverage, does not establish strict provenance, and is not a soundness proof. |
-| `miri-owner-retention` in `ci.yml` | Yes | Pinned `nightly-2026-05-27`; `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`; `dotnet-vm-data` `stack::tests::m1d_` in no-features and multithreading; 15-minute timeout | Each library selector requires 8 passed and 0 ignored; not a VM Miri suite, strict-provenance evidence, or a soundness proof. |
-| `miri-pointer-batches` / `miri-pointer-controls` in `ci.yml` (start after `fast-core`; run only when `select-deep` selects the lane, always on the nightly/full sweep) | Yes | Pinned `nightly-2026-05-27`; permissive Tree Borrows, disable-isolation and ignore-leaks; no-features and multithreading; selected push/PR runs execute 4 batches per configuration (the 33 controls sequentially on one thread each), while full sweeps and the attribution re-run after a batch failure execute 33 singleton shards per configuration | Each batch requires one passing batch test, zero ignored and the exact expected `batch-control ok` lines; each singleton shard requires one passing VM control and zero ignored. A failed batch fails the lane regardless of the singleton re-run, which only attributes it. Six diagnostic-only probes are not executed by CI. This is not a full VM Miri suite, strict-provenance validation, leak-freedom or a soundness proof; see [CI](CI.md) for the catalog. |
-| `miri-cross-arena` in `ci.yml` (starts after `fast-core`; runs only when `select-deep` selects it, always on the nightly/full sweep) | Yes | Pinned nightly and permissive flags as above; 7 no-features and 15 MT exact singleton invocations, plus one MT isolated strict-core singleton; 8 jobs (configuration x `library`/`vm-teardown`/`vm-collection`/`vm-stress`): 30-minute library jobs with 900-second per-test deadlines, 45-minute VM jobs with 1800-second per-test deadlines (measured adjustment) | Each requires 1 passed/0 failed/0 ignored. Utils registry/transport selectors are cfg-absent without MT. Includes library models and real VM collection/teardown recreations; the foreign-brand fixture concern remains unresolved. See the [exact manifest and limitations](CI.md). |
-| `miri` matrix in `miri.yml` (daily schedule and manual dispatch only, not push/PR) | No (`continue-on-error`) | Pinned `nightly-2026-05-27`; VM entries use `jmp_tests tail_calls fault_tests` substring filters in no-features and multithreading configurations | Existing advisory VM unsafe-gate runs remain unchanged; their bounded filters do not establish whole-VM coverage. Other crate entries are also advisory. |
-| Strict-provenance Miri | Scoped blocking singleton | MT isolated transport core in `miri-cross-arena` | This isolated test is not strict-provenance validation of the VM or other paths. |
+Combined validation does not replace an isolated feature leg: select the configuration whose
+`cfg` branches you changed.
 
 The following tests are conditionally ignored under `memory-validation` because their deliberate
 managed-pointer offsets trigger its debug bounds trap:
 
 - VM control `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`;
 - VM regression `conv_u8_after_far_oob_managed_add_does_not_panic`;
-- value regression `m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
+- value regression `ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
 
-They run in the pinned Miri configurations without that feature.
-
-The pointer-control job uses a 45-minute timeout per matrix leg. Measured hosted phase/cache
-samples and their limits are in [CI.md](CI.md#hosted-evidence-and-budgets); caps are not runtimes. Ignored pointer probes may only be executed through the explicit
-diagnostic entrypoint in `scripts/pointer_provenance.sh`; native diagnostics are limited to catalog
-entry p19.
+The pinned Miri lanes run without that feature, so these tests execute there.
 
 ## Debugging Environment Variables
 

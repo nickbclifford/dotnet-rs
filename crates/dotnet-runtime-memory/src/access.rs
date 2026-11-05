@@ -225,8 +225,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             let dest_layout = self.get_layout_from_owner(owner)?;
 
-            // SAFETY: F10.RawMemoryAccessValid — with_data_mut provides exclusive access for the duration of the closure.
-            // write_value_internal will copy the data.
+            // `write_heap_value_with_barrier` writes under `with_data_mut`, which provides
+            // exclusive access for the duration of the closure.
             self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
             // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
@@ -264,8 +264,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // Get layout before acquiring field access to avoid deadlock/borrow re-entry.
             let src_layout = self.get_layout_from_owner(owner)?;
 
-            // SAFETY: F10.RawMemoryAccessValid — with_data provides stable shared access for the duration of the closure.
-            // read_value_internal will read the data.
+            // `with_data` provides stable shared access for the duration of the closure.
             owner.with_data(|data| {
                 let base = data.as_ptr();
                 let len = data.len();
@@ -1614,7 +1613,7 @@ mod tests {
     use dotnet_value::layout::{FieldLayoutManager, GcDesc};
 
     #[test]
-    fn m1d_transient_managed_ptr_store_is_rejected() {
+    fn owner_retention_transient_managed_ptr_store_is_rejected() {
         use dotnet_types::{TypeDescription, generics::GenericLookup};
         use dotnet_utils::{ByteOffset, gc::GCHandle, sync::Arc};
         use dotnet_value::{
@@ -2175,18 +2174,18 @@ mod tests {
             let heap = crate::heap::HeapManager::new();
             let mut memory = super::RawMemoryAccess::new(&heap);
             let mut dest = [0x5a];
-            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the raw read.
+            // SAFETY: F1.ArenaGenerationMatch — no lease can be acquired for the unavailable owner, so it is rejected before the raw read.
             let read = unsafe {
                 memory.read_bytes(Some(owner), dotnet_utils::ByteOffset::new(0), &mut dest)
             };
             assert!(matches!(read, Err(MemoryAccessError::CrossArenaViolation)));
             assert_eq!(dest, [0x5a]);
-            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the raw write.
+            // SAFETY: F1.ArenaGenerationMatch — no lease can be acquired for the unavailable owner, so it is rejected before the raw write.
             let write = unsafe {
                 memory.write_bytes(gc, Some(owner), dotnet_utils::ByteOffset::new(0), &[1])
             };
             assert!(matches!(write, Err(MemoryAccessError::CrossArenaViolation)));
-            // SAFETY: F1.GcHandleRooted — unavailable owner is rejected before the atomic access.
+            // SAFETY: F1.ArenaGenerationMatch — no lease can be acquired for the unavailable owner, so it is rejected before the atomic access.
             let cas = unsafe {
                 memory.compare_exchange_atomic(
                     gc,
@@ -2212,11 +2211,11 @@ mod tests {
             drop(Box::from_raw(arena_handle));
         }
     }
-    /// Independent recreation (not recovered originals): stale MemoryOwner access
+    /// Stale MemoryOwner access
     /// is rejected after an ID is re-registered, before the callback runs.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn m1g_recreation_memory_owner_aba() {
+    fn arena_identity_memory_owner_aba() {
         let id = ArenaId::new(190_433);
         register_arena(id, Arc::new(AtomicBool::new(false)));
         let raw = Box::into_raw(Box::new(ThreadSafeLock::new(ObjectInner::new(

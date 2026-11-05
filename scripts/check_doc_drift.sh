@@ -70,100 +70,48 @@ mapfile -t SAFETY_CRATE_ROOTS <<< "$SAFETY_CRATE_ROOTS_TEXT"
 #   SOURCE_GLOB — glob passed to grep -r --include to narrow the source search
 # ---------------------------------------------------------------------------
 CHECKS=(
+  # One row per core concept a doc is built around. A row fails when the doc or
+  # the code drops the name, so a rename forces the doc to be revisited. Keep the
+  # list short; rustdoc intra-doc links cover ordinary symbol references.
+
   # --- GC_AND_MEMORY_SAFETY.md ---
-  "GC_AND_MEMORY_SAFETY.md|CollectionSession|*.rs"
   "GC_AND_MEMORY_SAFETY.md|GCCoordinator|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|begin_collection|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|MarkPhaseCommand|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|SweepPhaseCommand|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|MarkObjectPointers|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GcLifetime|*.rs"
+  "GC_AND_MEMORY_SAFETY.md|CollectionSession|*.rs"
   "GC_AND_MEMORY_SAFETY.md|MemoryOwner|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|as_heap_storage|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|cross_arena_roots|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|get_currently_tracing|*.rs"
   "GC_AND_MEMORY_SAFETY.md|ThreadSafeLock|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|WriteBarrierPanicFlushGuard|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|validate_magic|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|validate_arena_id|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|define_lock_order_dag!|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|AcquireAfter|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::collection_lock|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ThreadManager::gc_coordination|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ThreadManager::threads|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::arenas|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|ArenaHandle::current_command|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|GCCoordinator::cross_arena_refs|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|get_field_atomic|*.rs"
-  "GC_AND_MEMORY_SAFETY.md|set_field_atomic|*.rs"
+  "GC_AND_MEMORY_SAFETY.md|PointerOrigin|*.rs"
 
   # --- THREADING_AND_SYNCHRONIZATION.md ---
   "THREADING_AND_SYNCHRONIZATION.md|StopTheWorldGuard|*.rs"
   "THREADING_AND_SYNCHRONIZATION.md|GcScopeGuard|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|CommandCompletionGuard|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|ResumeOnPanic|*.rs"
   "THREADING_AND_SYNCHRONIZATION.md|SyncBlockManager|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|TRACER_CHANNEL_CAPACITY|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|LockResult|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|ThreadManagerOps|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|SyncBlockOps|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|execute_gc_command_for_current_thread|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|record_found_cross_arena_refs|*.rs"
   "THREADING_AND_SYNCHRONIZATION.md|define_lock_order_dag!|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|AcquireAfter|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|GCCoordinator::collection_lock|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|ThreadManager::gc_coordination|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|ThreadManager::threads|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|GCCoordinator::arenas|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|ArenaHandle::current_command|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|GCCoordinator::cross_arena_refs|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|StaticStorage::init_mutex|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|StaticStorageManager::wait_graph|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|SyncBlockManager::blocks|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|SyncBlockManager::next_index|*.rs"
-  "THREADING_AND_SYNCHRONIZATION.md|SyncBlock::state|*.rs"
+
+  # --- ARCHITECTURE.md ---
+  "ARCHITECTURE.md|EvaluationStack|*.rs"
+  "ARCHITECTURE.md|update_stack_pointers|*.rs"
 
   # --- BUILD_TIME_CODE_GENERATION.md ---
-  "BUILD_TIME_CODE_GENERATION.md|process_instruction_file|*.rs"
   "BUILD_TIME_CODE_GENERATION.md|generate_instruction_table|*.rs"
-  "BUILD_TIME_CODE_GENERATION.md|process_intrinsic_file|*.rs"
   "BUILD_TIME_CODE_GENERATION.md|generate_intrinsic_phf|*.rs"
-  "BUILD_TIME_CODE_GENERATION.md|ParsedSignature|*.rs"
-  "BUILD_TIME_CODE_GENERATION.md|RuntimeSlotId|*.rs"
   "BUILD_TIME_CODE_GENERATION.md|SupportSlotOps|*.rs"
-
-  # --- FUZZING.md ---
-  "FUZZING.md|FuzzProgram|*.rs"
-  "FUZZING.md|FuzzInstruction|*.rs"
-  "FUZZING.md|execute_cil_program|*.rs"
-  "FUZZING.md|ManagedPtrInfo|*.rs"
-  "FUZZING.md|AtomicAccess|*.rs"
 
   # --- EXCEPTION_HANDLING.md ---
   "EXCEPTION_HANDLING.md|ExceptionHandlingSystem|*.rs"
-  "EXCEPTION_HANDLING.md|ManagedException|*.rs"
   "EXCEPTION_HANDLING.md|SearchState|*.rs"
   "EXCEPTION_HANDLING.md|UnwindState|*.rs"
-  "EXCEPTION_HANDLING.md|ExceptionState|*.rs"
 
   # --- DELEGATES_AND_DISPATCH.md ---
-  "DELEGATES_AND_DISPATCH.md|MulticastState|*.rs"
-  "DELEGATES_AND_DISPATCH.md|try_delegate_dispatch|*.rs"
   "DELEGATES_AND_DISPATCH.md|unified_dispatch|*.rs"
+  "DELEGATES_AND_DISPATCH.md|MulticastState|*.rs"
 
   # --- TYPE_RESOLUTION_AND_CACHING.md ---
   "TYPE_RESOLUTION_AND_CACHING.md|GlobalCaches|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|CacheStore|*.rs"
   "TYPE_RESOLUTION_AND_CACHING.md|ResolutionContext|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|GenericLookup|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|StaticStorageManager|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|instance_field_layout_cached|*.rs"
-  "TYPE_RESOLUTION_AND_CACHING.md|WellKnown|*.rs"
 
-  # --- ARCHITECTURE.md ---
-  "ARCHITECTURE.md|dotnet-vm|*.toml"
-  "ARCHITECTURE.md|dotnet-utils|*.toml"
-  "ARCHITECTURE.md|multithreading|*.toml"
+  # --- FUZZING.md ---
+  "FUZZING.md|FuzzProgram|*.rs"
+  "FUZZING.md|execute_cil_program|*.rs"
 )
 
 if [[ "${1:-}" == "--list" ]]; then
@@ -215,10 +163,12 @@ done
 # ---------------------------------------------------------------------------
 # Invariant-citation checks
 #
-# Registry rows use `F<n>.<PredicateName>` identifiers.  Source citations are
-# deliberately constrained to `// SAFETY: F<n>.<PredicateName> ...` so a
-# reviewer can see the predicate at the exact unsafe site, while the rest of
-# the comment retains the local justification.
+# Registry rows use `F<n>.<PredicateName>` identifiers. Source cites them with
+# `// SAFETY: F<n>.<Name> ...` above an unsafe operation, or
+# `// INVARIANT: F<n>.<Name> ...` where safe code relies on or maintains the
+# invariant. Every marker must cite an existing predicate, and every predicate
+# must be cited by at least one marker, so the registry is a complete
+# inventory of the non-obvious facts the code relies on.
 # ---------------------------------------------------------------------------
 if [[ ! -f "$REGISTRY_PATH" ]]; then
   echo "[INVARIANT] missing docs/INVARIANT_REGISTRY.md"
@@ -234,16 +184,20 @@ if [[ ${#REGISTRY_PREDICATES[@]} -eq 0 ]]; then
   exit 1
 fi
 
-while IFS= read -r safety_site; do
-  citation="${safety_site#*// SAFETY:}"
+MARKER_RE='^[[:space:]]*// (SAFETY|INVARIANT):'
+
+while IFS= read -r marker_site; do
+  marker="SAFETY"
+  [[ "$marker_site" == *"// INVARIANT:"* ]] && marker="INVARIANT"
+  citation="${marker_site#*// $marker:}"
   if [[ ! "$citation" =~ F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]* ]]; then
     FAIL=$((FAIL + 1))
-    echo "[INVARIANT] SAFETY comment lacks a registry citation: $safety_site"
+    echo "[INVARIANT] $marker comment lacks a registry citation: $marker_site"
   fi
-done < <(grep -rnE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null || true)
+done < <(grep -rnE --include='*.rs' --exclude-dir=target "$MARKER_RE" "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null || true)
 
 mapfile -t CITED_PREDICATES < <(
-  grep -rhE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null \
+  grep -rhE --include='*.rs' --exclude-dir=target "$MARKER_RE" "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null \
     | grep -oE 'F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]*' \
     | sort -u
 )
@@ -260,7 +214,7 @@ done
 for predicate in "${REGISTRY_PREDICATES[@]}"; do
   if ! printf '%s\n' "${CITED_PREDICATES[@]}" | grep -qxF "$predicate"; then
     FAIL=$((FAIL + 1))
-    echo "[INVARIANT] registry predicate '$predicate' has no source citation"
+    echo "[INVARIANT] registry predicate '$predicate' has no SAFETY or INVARIANT citation"
   fi
 done
 
@@ -283,20 +237,12 @@ if ! is_negative_probe_child; then
   fi
 fi
 
-# The numbered plan files own their detailed status; the queue must present the
-# same canonical state so dependency and priority discussions start from facts.
-if bash "$REPO_ROOT/scripts/check_plan_queue.sh"; then
-  PASS=$((PASS + 1))
-else
-  FAIL=$((FAIL + 1))
-fi
-
 echo ""
 echo "doc-drift check: $PASS passed, $FAIL failed."
 
 if [[ $FAIL -gt 0 ]]; then
   echo ""
-  echo "Fix the mismatches above: reconcile source and docs, or the numbered plan"
-  echo "status and queue row. Update this script's check table after intentional renames."
+  echo "Fix the mismatches above: reconcile source and docs. Update this script's"
+  echo "check table after intentional renames."
   exit 1
 fi

@@ -1,4 +1,4 @@
-//! Independent recreation (not recovered originals) of a real multi-arena VM collection.
+//! Multi-arena collection through real `Executor` arenas.
 //!
 //! Two actual `Executor` arenas are created: arena B allocates an object that has no root in B,
 //! and arena A roots a cross-arena reference to it through its heap GC handles. The collection
@@ -8,7 +8,7 @@
 //!
 //! The survival witness is a production weak GC handle checked in B after each collection;
 //! a missed publication clears the foreign handle before another trace. This fixture retains a
-//! foreign-branded `Gc` in A; that concern was accepted by user decision, not resolved.
+//! foreign-branded `Gc` in A, which production code never does; it is a test-only shortcut.
 
 use super::*;
 use dotnet_assemblies::AssemblyLoader;
@@ -16,7 +16,7 @@ use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_value::string::CLRString;
 use gc_arena::Gc;
 
-const PAYLOAD: &str = "executor_collection_recreation_payload";
+const PAYLOAD: &str = "executor_collection_payload";
 
 fn shared() -> Arc<SharedGlobalState> {
     #[allow(
@@ -24,7 +24,7 @@ fn shared() -> Arc<SharedGlobalState> {
         reason = "the single-thread configuration keeps shared state on its Executor's thread"
     )]
     Arc::new(SharedGlobalState::new(Arc::new(
-        AssemblyLoader::new_bare("executor_collection_recreation".to_string()).unwrap(),
+        AssemblyLoader::new_bare("executor_collection".to_string()).unwrap(),
     )))
 }
 
@@ -67,7 +67,7 @@ fn probe(executor: &mut Executor) -> Option<String> {
 
 #[cfg(not(feature = "multithreading"))]
 #[test]
-fn m1e_recreation_vm_collection() {
+fn arena_lifetime_vm_collection() {
     // Single-arena no-features control: forced collections keep a GC-handle-rooted object.
     let mut executor = Executor::new(shared());
     let ptr = allocate_unrooted(&mut executor);
@@ -92,7 +92,7 @@ fn m1e_recreation_vm_collection() {
 }
 
 #[cfg(feature = "multithreading")]
-fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
+fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
     use crate::{
         gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
     };
@@ -187,8 +187,8 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection() {
-    let seen = run_vm_collection_recreation(true);
+fn arena_lifetime_vm_collection() {
+    let seen = run_vm_collection(true);
     assert_eq!(
         seen,
         vec![Some(PAYLOAD.to_string()), Some(PAYLOAD.to_string())],
@@ -198,18 +198,17 @@ fn m1e_recreation_vm_collection() {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection_unrooted_negative_control() {
+fn arena_lifetime_vm_collection_unrooted_negative_control() {
     // Without arena A's reference the collection really sweeps B's object (born-black
     // allocation can survive the first cycle, so the second collection is the witness).
-    let seen = run_vm_collection_recreation(false);
+    let seen = run_vm_collection(false);
     assert_eq!(
         seen[1], None,
         "unreferenced object must be swept by the second collection"
     );
 }
 
-/// Independent recreation (not recovered originals) of the complete real-VM collection
-/// contract (step 6.2): three actual `Executor` arenas on three threads, driven through the
+/// The complete real-VM collection contract: three actual `Executor` arenas on three threads, driven through the
 /// production coordinator and `THREAD_ARENA` command path.
 ///
 /// * arena A holds the only root: a normal GC handle to vector X owned by arena B;
@@ -221,7 +220,7 @@ fn m1e_recreation_vm_collection_unrooted_negative_control() {
 ///   further collections (weak-handle witnesses in the owners; no dangling read is possible).
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
+fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     use crate::{
         gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
     };
@@ -234,7 +233,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     use dotnetdll::prelude::BaseType;
     use std::{sync::mpsc, thread, time::Duration};
 
-    const WRITTEN: &str = "executor_collection_recreation_payload_written";
+    const WRITTEN: &str = "executor_collection_payload_written";
     const VECTOR_MARK: &str = "<vector>";
 
     struct Handoff(ObjectPtr);
@@ -338,8 +337,8 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
                         owner
                             .with_arena(|arena| {
                                 arena.mutate_root(|gc, engine| {
-                                    // SAFETY: F6.NoEscapeAcrossArena — accepted cross-arena
-                                    // boundary (see 4.9): the target's owner arena outlives the
+                                    // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena
+                                    // boundary (see the module doc): the target's owner arena outlives the
                                     // collections; the reference is serialized into vector bytes
                                     // immediately and no branded handle escapes this closure.
                                     let target = ObjectRef(Some(unsafe {
@@ -390,7 +389,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     recv(&b_rx).expect("arena B linked X -> Y");
     a.with_arena(|arena| {
         arena.mutate_root(|_gc, engine| {
-            // SAFETY: F6.NoEscapeAcrossArena — accepted cross-arena boundary (see 4.9); B's
+            // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena boundary (see the module doc); B's
             // arena outlives the collections and the handle is cleared below before any
             // trace that could follow a missed publication.
             let obj = ObjectRef(Some(unsafe {
@@ -496,13 +495,13 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
     );
 }
 
-/// Independent recreation (not recovered originals): keep the original arena
+/// Keep the original arena
 /// and its allocation live while replacing its registry entry. No stale object
 /// is freed or dereferenced by the test. A mark command from the old registration
 /// must not install that object into the replacement registration's roots.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_mark_command_rejects_stale_registration() {
+fn arena_lifetime_mark_command_rejects_stale_registration() {
     use crate::gc::coordinator::{GCCommand, MarkObjectPointers, MarkPhaseCommand};
     use crate::threading::{ThreadManagerOps, execute_gc_command_for_current_thread};
     use dotnet_utils::gc::{register_arena, try_acquire_lease, unregister_arena};
@@ -621,11 +620,11 @@ fn m1e_recreation_mark_command_rejects_stale_registration() {
     drop(foreign_arena);
 }
 
-/// Independent recreation (not recovered originals): the registry's current
+/// The registry's current
 /// generation alone does not identify the particular destination arena.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_installation_checks_arena_generation() {
+fn arena_lifetime_installation_checks_arena_generation() {
     let source = include_str!("threading/basic.rs");
     let command = source
         .split("MarkPhaseCommand::Objects(ptrs) =>")

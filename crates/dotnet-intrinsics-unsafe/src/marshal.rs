@@ -21,7 +21,7 @@ pub(super) fn offset_ptr<'gc>(
         let new_m = m.into_inner().checked_offset(byte_offset).map_err(|error| {
             ExecutionError::NotImplemented(
                 format!(
-                    "managed pointer offset is unrepresentable ({error:?}; signed or wider offsets require M3)"
+                    "managed pointer offset is unrepresentable ({error:?}; negative or out-of-range managed pointer offsets are not supported)"
                 )
                 .into(),
             )

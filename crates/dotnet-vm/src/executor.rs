@@ -771,7 +771,7 @@ impl RetainedArena {
     }
 
     fn drain(self, registration: Option<dotnet_utils::gc::ArenaRegistration>) {
-        // SAFETY: F1.ExecutorArenaRetained. Only an exact, completed drain
+        // INVARIANT: F1.ExecutorArenaRetained — only an exact, completed drain
         // disarms retention. Missing handles and interrupted drains leak.
         if let Some(registration) = registration {
             #[cfg(test)]
@@ -842,12 +842,12 @@ impl Drop for Executor {
 }
 
 #[cfg(test)]
-#[path = "executor_teardown_recreation_tests.rs"]
-mod executor_teardown_recreation_tests;
+#[path = "executor_teardown_tests.rs"]
+mod executor_teardown_tests;
 
 #[cfg(test)]
-#[path = "executor_collection_recreation_tests.rs"]
-mod executor_collection_recreation_tests;
+#[path = "executor_collection_tests.rs"]
+mod executor_collection_tests;
 
 #[cfg(test)]
 mod tests {

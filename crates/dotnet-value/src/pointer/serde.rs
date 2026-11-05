@@ -200,7 +200,7 @@ impl<'gc> ManagedPtr<'gc> {
     ///   the GC-handle reconstruction boundary.
     /// - `Stack`: word 0 is `1 | (slot_idx << 3) | (offset << 33)`; word 1 is
     ///   the full compact byte offset, never a cached address. The packed
-    ///   word-0 field mirrors its low 31 bits for legacy tag compatibility.
+    ///   word-0 field mirrors its low 31 bits, and decoding rejects a mismatch.
     /// - `Static`: word 0 is
     ///   `7 | (1 << 3) | (registry_id << 6) | (offset << 38)`; word 1 is the
     ///   full compact byte offset, never a cached address. The packed word-0
@@ -473,7 +473,7 @@ impl<'gc> ManagedPtr<'gc> {
     /// it proves neither bounds nor read/write/copy/atomic permission, and the
     /// raw address retains no root or borrow/lease. Later access needs the
     /// separately retained origin/owner and its own guards and range checks.
-    /// Stack/Static fallback migration remains M3. A resolver that cannot supply
+    /// Stack and Static origins are not owner-checked. A resolver that cannot supply
     /// a base receives a contextual deserialization error instead of an address
     /// reconstructed from an integer.
     ///

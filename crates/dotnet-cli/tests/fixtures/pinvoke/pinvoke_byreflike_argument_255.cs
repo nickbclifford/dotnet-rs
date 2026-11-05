@@ -5,7 +5,7 @@
 // offset; for a cross-arena ref, the arena identity word) instead of
 // (address, Denom).
 // Expected disposition: the VM rejects the call before invoking native code
-// (exit 255, see `pinvoke_byreflike_argument_recreation_rejected` in fixtures.rs).
+// (exit 255, see `pinvoke_byreflike_argument_rejected` in fixtures.rs).
 using System.Runtime.InteropServices;
 
 public ref struct DivArgs {

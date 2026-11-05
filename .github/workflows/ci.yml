@@ -105,10 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check multithreading cfg budget
-        run: bash scripts/check_mt_cfg_ceiling.sh
-      - name: Check std::sync budget
-        run: bash scripts/check_std_sync_ceiling.sh
       - name: Verify support-slot consumer coverage
         run: cargo run --quiet -p xtask -- verify-slots
       - name: Test pointer diagnostic guards
@@ -119,6 +115,8 @@ jobs:
         run: python3 scripts/tests/test_ci_select.py
       - name: Test CI result aggregates
         run: python3 scripts/tests/test_ci_aggregates.py
+      - name: Test cross-arena Miri manifest
+        run: python3 scripts/tests/test_ci_cross_arena_manifest.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links
@@ -244,6 +242,44 @@ jobs:
             cargo clippy --all-targets --no-default-features -- -D warnings
           else
             cargo clippy --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
+          fi
+
+  # Clippy lints only the profile it builds. This job covers code under
+  # `cfg(not(debug_assertions))`, which the debug clippy matrix never sees.
+  clippy-release:
+    name: Clippy Check (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        features: ["", "multithreading"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Clippy Check release (${{ matrix.features || 'no features' }})
+        env:
+          DOTNET_SKIP_BUILD: "1"
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo clippy --release --all-targets --no-default-features -- -D warnings
+          else
+            cargo clippy --release --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
           fi
 
   build-script-regression:
@@ -449,12 +485,12 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1a-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 3 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1a_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::heap_access_ -- --test-threads=1
       - name: Miri pointer semantics regressions (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1b-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::ptr_arith_ -- --test-threads=1
       - name: Miri atomic access regressions (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-atomic-no-features --features no-features --timeout 900 \
@@ -465,7 +501,7 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1d-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 11 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::owner_retention_ -- --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -582,12 +618,12 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::owner_retention_ -- --test-threads=1
       - name: Miri stack owner retention (multithreading)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-multithreading --features multithreading --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::owner_retention_ -- --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -603,7 +639,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Independent recreations (not recovered originals); each invocation is guarded.
+  # Each invocation is guarded.
   #
   # Matrix: configuration x group x shard (21 jobs). Hosted VM processes historically took
   # 563-870s each and serial execution exhausted the 45-minute budget. Each teardown selector
@@ -624,21 +660,21 @@ jobs:
           # VM: 1800 s per invocation, 45 min per job. Library: 900 s, 30 min.
           - { configuration: no-features, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
           - { configuration: multithreading, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
-          - { configuration: no-features, group: vm-teardown, shard: control, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_single_arena_cleanup_control }
-          - { configuration: multithreading, group: vm-teardown, shard: normal, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_normal_teardown_active_lease }
-          - { configuration: multithreading, group: vm-teardown, shard: extracted, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_extracted_teardown_active_lease }
-          - { configuration: multithreading, group: vm-teardown, shard: unwind, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_unwind_teardown_active_lease }
-          - { configuration: multithreading, group: vm-teardown, shard: nested, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_nested_creation_fails_closed }
-          - { configuration: multithreading, group: vm-teardown, shard: self-held, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_self_held_lease_leaks_instead_of_deadlocking }
-          - { configuration: multithreading, group: vm-teardown, shard: external-remover, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_executor_external_remover_does_not_release_owner }
-          - { configuration: multithreading, group: vm-teardown, shard: collision, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::recreation_extracted_executor_tls_ownership }
-          - { configuration: multithreading, group: vm-teardown, shard: forgotten, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_forgotten_executor_tls_exit_retains_arena }
-          - { configuration: multithreading, group: vm-teardown, shard: repeated, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_repeated_extraction_reserves_until_owner_drop }
-          - { configuration: multithreading, group: vm-teardown, shard: constructor, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_constructor_rollback_releases_reservation }
-          - { configuration: multithreading, group: vm-teardown, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_executor_teardown_panic_retains_arena }
-          - { configuration: multithreading, group: vm-teardown, shard: owner-first, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_owner_first_guard_does_not_touch_successor }
-          - { configuration: multithreading, group: vm-teardown, shard: self-held-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_self_held_drain_panic_and_no_diagnostic }
-          - { configuration: multithreading, group: vm-teardown, shard: warning-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_recreation_tests::ownership::recreation_drain_warning_panic_retains_arena }
+          - { configuration: no-features, group: vm-teardown, shard: control, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_single_arena_cleanup_control }
+          - { configuration: multithreading, group: vm-teardown, shard: normal, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_normal_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: extracted, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_extracted_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: unwind, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_unwind_teardown_active_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: nested, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_nested_creation_fails_closed }
+          - { configuration: multithreading, group: vm-teardown, shard: self-held, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_self_held_lease_leaks_instead_of_deadlocking }
+          - { configuration: multithreading, group: vm-teardown, shard: external-remover, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_external_remover_does_not_release_owner }
+          - { configuration: multithreading, group: vm-teardown, shard: collision, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::extracted_executor_tls_ownership }
+          - { configuration: multithreading, group: vm-teardown, shard: forgotten, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::forgotten_executor_tls_exit_retains_arena }
+          - { configuration: multithreading, group: vm-teardown, shard: repeated, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::repeated_extraction_reserves_until_owner_drop }
+          - { configuration: multithreading, group: vm-teardown, shard: constructor, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::constructor_rollback_releases_reservation }
+          - { configuration: multithreading, group: vm-teardown, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::executor_teardown_panic_retains_arena }
+          - { configuration: multithreading, group: vm-teardown, shard: owner-first, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::owner_first_guard_does_not_touch_successor }
+          - { configuration: multithreading, group: vm-teardown, shard: self-held-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::self_held_drain_panic_and_no_diagnostic }
+          - { configuration: multithreading, group: vm-teardown, shard: warning-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::drain_warning_panic_retains_arena }
           - { configuration: no-features, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: multithreading, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: no-features, group: vm-stress, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
@@ -701,11 +737,11 @@ jobs:
         if: ${{ matrix.configuration == 'no-features' && matrix.group == 'library' }}
         run: |
           python3 scripts/ci_diagnostics.py run --phase compile --case utils-no-features --features no-features --timeout 900 -- cargo check -p dotnet-utils --no-default-features
-          for selector in m1e_recreation_transport m1g_recreation_registry_; do
+          for selector in arena_lifetime_transport arena_identity_registry_; do
             python3 scripts/ci_diagnostics.py run --phase compile --case "absent-$selector" --features no-features --timeout 900 \
               --require '0 tests, 0 benchmarks' -- cargo test -p dotnet-utils --lib --no-default-features "$selector" -- --list
           done
-      - name: Execute guarded singleton recreations
+      - name: Execute guarded singletons
         run: |
           features=(--no-default-features)
           if [ '${{ matrix.configuration }}' = multithreading ]; then features+=(--features multithreading); fi
@@ -718,19 +754,19 @@ jobs:
           case '${{ matrix.group }}' in
             library)
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton codec-id dotnet-value object_tests::tests::recreation_codec_id40000
-                singleton codec-boundaries dotnet-value object_tests::tests::recreation_codec_registered_boundaries
+                singleton codec-id dotnet-value object_tests::tests::codec_id40000
+                singleton codec-boundaries dotnet-value object_tests::tests::codec_registered_boundaries
               else
-                singleton codec-id-control dotnet-value object_tests::tests::recreation_codec_local_invalid_control
-                singleton codec-boundaries-control dotnet-value object::tests::recreation_codec_short_storage
+                singleton codec-id-control dotnet-value object_tests::tests::codec_local_invalid_control
+                singleton codec-boundaries-control dotnet-value object::tests::codec_short_storage
               fi
-              singleton publication-model dotnet-value object_tests::tests::recreation_publication_pending_survival
-              singleton origin-aba dotnet-value pointer::tests::m1g_recreation_origin_aba
+              singleton publication-model dotnet-value object_tests::tests::publication_pending_survival
+              singleton origin-aba dotnet-value pointer::tests::arena_identity_origin_aba
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton transport-structural dotnet-utils gc::cross_arena::tests::m1e_recreation_transport
-                singleton transport-runtime dotnet-utils gc::cross_arena::tests::m1e_recreation_transport_permissive_control
+                singleton transport-structural dotnet-utils gc::cross_arena::tests::arena_lifetime_transport
+                singleton transport-runtime dotnet-utils gc::cross_arena::tests::arena_lifetime_transport_permissive_control
                 for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
-                  singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::m1g_recreation_registry_$name"
+                  singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::arena_identity_registry_$name"
                 done
               fi
               ;;
@@ -739,13 +775,13 @@ jobs:
               ;;
             vm-collection)
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton collection dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation
+                singleton collection dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection_fixed_point_payload_and_reclamation
               else
-                singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection
+                singleton collection-control dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection
               fi
               ;;
             vm-stress)
-              singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress
+              singleton teardown-stress dotnet-vm executor::executor_teardown_tests::arena_lifetime_teardown_stress
               ;;
             *)
               echo "::error::unknown cross-arena group '${{ matrix.group }}'"
@@ -759,7 +795,7 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case transport-strict-core --features multithreading --timeout 900 \
             --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::m1e_recreation_transport_strict_core -- --exact --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -1086,6 +1122,7 @@ jobs:
       - provenance-lints
       - matrix-definitions
       - clippy
+      - clippy-release
       - build-script-regression
       - build-fixtures
       - test

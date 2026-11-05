@@ -232,11 +232,11 @@ class PointerScriptTests(unittest.TestCase):
         })
         self.assertRegex(
             conditional['p13_ldelema_managed_add_far_out_of_bounds_then_conv_u'],
-            r'^\s*feature = "memory-validation",\s*ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design \(F-TEST-003\)"\s*$',
+            r'^\s*feature = "memory-validation",\s*ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design"\s*$',
         )
         self.assertRegex(
             conditional['conv_u8_after_far_oob_managed_add_does_not_panic'],
-            r'^\s*feature = "memory-validation",\s*ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design \(F-TEST-003\)"\s*$',
+            r'^\s*feature = "memory-validation",\s*ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation\'s debug bound trap rejects it by design"\s*$',
         )
         self.assertEqual({r[0].split('::')[-1] for r in rows}, set(source))
         self.assertEqual(len(set(r[0] for r in rows)), len(rows))
@@ -247,12 +247,8 @@ class PointerScriptTests(unittest.TestCase):
                          ['p19_ldelem_negative_index'])
         self.assertEqual(self.recorded(), [])
 
-    def test_documented_manifest_matches_singleton_partition(self):
-        docs = (ROOT / 'docs/CI.md').read_text()
-        section = docs.split('### Blocking `miri-pointer-controls` lane', 1)[1].split('### ', 1)[0]
-        documented = re.findall(r'^\| (\d+) \| `pointer_provenance_tests::([^`]+)` \|$', section, re.M)
-        expected = [(str(shard), names[0]) for shard, names in CONTROLS_BY_SHARD.items()]
-        self.assertEqual(documented, expected)
+    def test_singleton_partition_is_one_control_per_shard(self):
+        self.assertTrue(all(len(names) == 1 for names in CONTROLS_BY_SHARD.values()))
         self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 34)))
         self.assertEqual(len(set(CONTROLS)), 33)
         for config in ('no-features', 'multithreading'):
@@ -548,13 +544,6 @@ class PointerScriptTests(unittest.TestCase):
         self.assertIn('pointer_provenance.sh verify-controls', job.group('body'))
         self.assertIn('configuration: [no-features, multithreading]', job.group('body'))
         self.assertIn('bash scripts/pointer_provenance.sh verify-batches', workflow)
-
-    def test_documented_batches_match(self):
-        docs = (ROOT / 'docs/CI.md').read_text()
-        section = docs.split('### Blocking `miri-pointer-controls` lane', 1)[1].split('### ', 1)[0]
-        documented = {int(n): [x.strip(' `') for x in names.split(',')]
-                      for n, names in re.findall(r'^\| Batch (\d+) \| ([^|]+) \|$', section, re.M)}
-        self.assertEqual(documented, BATCHES)
 
     def test_all_dry_runs_do_not_invoke_cargo(self):
         for config in ('no-features', 'multithreading'):

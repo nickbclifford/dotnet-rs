@@ -212,7 +212,7 @@ pub fn resolve_runtime_type<'gc>(
             return Ok(ctx.reflection_runtime_type_by_index(index_field.read()));
         }
 
-        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+        // `TypeDelegator.typeImpl` is private BCL layout, so it is looked up by name at run time.
         if let Some(type_impl) = ctx
             .loader()
             .corlib_wkt(WellKnown::ReflectionTypeDelegator)

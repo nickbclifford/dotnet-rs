@@ -6,8 +6,7 @@
 # editing every crate root. Pointer-to-integer conversions must use `.addr()` (pure
 # compare/hash/alignment/diagnostics) or `.expose_provenance()` (the integer may be
 # turned back into a pointer); integer-to-pointer conversions must use
-# `with_exposed_provenance*` or `without_provenance*`. See
-# docs/plans/01-pointer-provenance.md (M0, provenance-lint migration).
+# `with_exposed_provenance*` or `without_provenance*`.
 #
 # Usage: scripts/check_provenance_lints.sh [extra cargo check args]
 set -euo pipefail

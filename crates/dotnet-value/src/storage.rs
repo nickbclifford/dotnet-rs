@@ -221,8 +221,8 @@ impl FieldStorage {
         self.with_data_window(offset, size, false, f)
     }
 
-    /// Invokes `f` with up to `max_size` bytes from `offset`, explicitly
-    /// preserving the legacy short-read behavior needed by P/Invoke buffers.
+    /// Invokes `f` with up to `max_size` bytes from `offset`, passing a shorter
+    /// slice when the payload ends first, as P/Invoke buffers require.
     pub(crate) fn with_data_up_to<T>(
         &self,
         offset: usize,

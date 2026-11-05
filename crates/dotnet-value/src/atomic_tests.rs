@@ -13,9 +13,9 @@ mod tests {
     }
 
     // Each width gets its own slot: mixed-size atomic accesses to one location trip a Miri ICE
-    // in its weak-memory store buffer (weak_memory.rs:239, still present on nightly-2026-05-27),
-    // and width coverage, not mixed-size overlap, is what this test is for. Overlapping
-    // mixed-size access is an M4 (R09) concern.
+    // in its weak-memory store buffer, and width coverage, not mixed-size overlap, is what this
+    // test is for. Overlapping mixed-size access is not yet handled (shared raw-memory access;
+    // see docs/plans/README.md).
     #[test]
     #[expect(
         clippy::multiple_unsafe_ops_per_block,

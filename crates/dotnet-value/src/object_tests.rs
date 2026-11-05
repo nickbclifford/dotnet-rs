@@ -15,7 +15,7 @@ mod tests {
     use dotnetdll::prelude::BaseType;
     use hashbrown::HashMap;
 
-    // Independent recreation (not recovered originals): compact ObjectRef codec regressions.
+    // Compact ObjectRef codec regressions.
     #[cfg(feature = "multithreading")]
     struct RecreationRegistration(crate::ArenaId);
 
@@ -38,7 +38,7 @@ mod tests {
         }
     }
 
-    fn recreation_object<'gc>(mc: &gc_arena::Mutation<'gc>, id: crate::ArenaId) -> ObjectRef<'gc> {
+    fn codec_test_object<'gc>(mc: &gc_arena::Mutation<'gc>, id: crate::ArenaId) -> ObjectRef<'gc> {
         let inner = crate::object::ObjectInner::new(
             HeapStorage::Str(crate::string::CLRString::from("codec recreation")),
             id,
@@ -49,7 +49,7 @@ mod tests {
         )))
     }
 
-    fn recreation_check_payload(obj: ObjectRef<'_>) {
+    fn check_codec_payload(obj: ObjectRef<'_>) {
         let handle = obj.0.expect("live object decoded as null");
         let inner = handle.borrow();
         let HeapStorage::Str(value) = &inner.storage else {
@@ -58,50 +58,50 @@ mod tests {
         assert_eq!(value.as_string(), "codec recreation");
     }
 
-    /// Independent recreation (not recovered originals): registered owner 40000.
+    /// Registered owner 40000.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn recreation_codec_id40000() {
+    fn codec_id40000() {
         let _registration = RecreationRegistration::new(40000);
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         arena.mutate(|mc, _| {
-            let obj = recreation_object(mc, crate::ArenaId::new(40000));
+            let obj = codec_test_object(mc, crate::ArenaId::new(40000));
             let ptr = obj.to_storage_ptr();
             assert_eq!(ptr.addr() & 7, 5);
             // SAFETY: F1.GcHandleRooted — The live allocation and its registered arena remain
             // in this mutation; the pointer comes directly from that allocation's codec.
-            recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+            check_codec_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
         });
     }
 
-    /// Independent recreation (not recovered originals): registered compact owner boundaries.
+    /// Registered compact owner boundaries.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn recreation_codec_registered_boundaries() {
+    fn codec_registered_boundaries() {
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         for id in [0, 1, 32767, 32768, 40000, 65535] {
             let _registration = RecreationRegistration::new(id);
             arena.mutate(|mc, _| {
-                let obj = recreation_object(mc, crate::ArenaId::new(id));
+                let obj = codec_test_object(mc, crate::ArenaId::new(id));
                 let ptr = obj.to_storage_ptr();
                 assert_eq!((ptr.addr() >> 48) as u16, id as u16);
                 // SAFETY: F1.GcHandleRooted — The allocation is live and its matching owner
                 // remains registered throughout this mutation; ptr is its own encoded pointer.
-                recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+                check_codec_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
             });
         }
     }
 
-    /// Independent recreation (not recovered originals): unrepresentable owners must fail loudly.
+    /// Unrepresentable owners must fail loudly.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn recreation_codec_reject_large_owners() {
+    fn codec_reject_large_owners() {
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         let mut accepted = Vec::new();
         for id in [65536, u64::MAX - 1] {
             let _registration = RecreationRegistration::new(id);
             arena.mutate(|mc, _| {
-                let obj = recreation_object(mc, crate::ArenaId::new(id));
+                let obj = codec_test_object(mc, crate::ArenaId::new(id));
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     obj.to_storage_ptr()
                 })) {
@@ -124,15 +124,15 @@ mod tests {
         );
     }
 
-    /// Independent recreation (not recovered originals): absent owner is a host invariant failure.
+    /// Absent owner is a host invariant failure.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn recreation_codec_unavailable_owner() {
+    fn codec_unavailable_owner() {
         let id = crate::ArenaId::new(43210);
         let registration = RecreationRegistration::new(id.as_u64());
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         arena.mutate(|mc, _| {
-            let obj = recreation_object(mc, id);
+            let obj = codec_test_object(mc, id);
             let ptr = obj.to_storage_ptr();
             drop(registration);
             let encode =
@@ -155,21 +155,21 @@ mod tests {
         });
     }
 
-    /// Independent recreation (not recovered originals): INVALID stays local and untagged.
+    /// INVALID stays local and untagged.
     #[test]
-    fn recreation_codec_local_invalid_control() {
+    fn codec_local_invalid_control() {
         let arena = gc_arena::Arena::<gc_arena::Rootable![()]>::new(|_| ());
         arena.mutate(|mc, _| {
-            let obj = recreation_object(mc, crate::ArenaId::INVALID);
+            let obj = codec_test_object(mc, crate::ArenaId::INVALID);
             let ptr = obj.to_storage_ptr();
             assert_eq!(ptr.addr() & 7, 0);
             // SAFETY: F1.GcHandleRooted — The untagged pointer was obtained from the live
             // allocation in this mutation and the arena is retained until the callback returns.
-            recreation_check_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
+            check_codec_payload(unsafe { ObjectRef::from_storage_ptr(ptr) });
         });
     }
 
-    // Independent recreation (not recovered originals): a gc-arena publication model,
+    // A gc-arena publication model,
     // not the VM MarkObjects path. The raw slot models its manually traced root set.
     struct RecreationPublicationRoot(std::cell::Cell<Option<*const RecreationWitness>>);
 
@@ -197,7 +197,7 @@ mod tests {
         }
     }
 
-    fn recreation_publication_drops(barrier: bool) -> usize {
+    fn publication_drops(barrier: bool) -> usize {
         use std::sync::atomic::Ordering;
         let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut arena =
@@ -227,23 +227,23 @@ mod tests {
         observed
     }
 
-    /// Independent recreation (not recovered originals): old publication loses the witness.
+    /// Old publication loses the witness.
     #[test]
-    fn recreation_publication_old_path_diagnostic() {
-        assert_eq!(recreation_publication_drops(false), 1);
+    fn publication_old_path_diagnostic() {
+        assert_eq!(publication_drops(false), 1);
     }
 
-    /// Independent recreation (not recovered originals): a root barrier preserves the witness.
+    /// A root barrier preserves the witness.
     #[test]
-    fn recreation_publication_root_barrier_control() {
-        assert_eq!(recreation_publication_drops(true), 0);
+    fn publication_root_barrier_control() {
+        assert_eq!(publication_drops(true), 0);
     }
 
-    /// Independent recreation (not recovered originals): publication through the root barrier survives.
+    /// Publication through the root barrier survives.
     #[test]
-    fn recreation_publication_pending_survival() {
+    fn publication_pending_survival() {
         assert_eq!(
-            recreation_publication_drops(true),
+            publication_drops(true),
             0,
             "published witness was collected"
         );

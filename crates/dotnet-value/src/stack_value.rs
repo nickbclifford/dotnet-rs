@@ -99,7 +99,7 @@ unsafe impl<'gc> Collect<'gc> for StackManagedPtr<'gc> {
 
 /// A frame-owned `typedref` value.
 ///
-/// Unlike the legacy byte representation, this slot retains both the managed
+/// Unlike a byte-encoded `typedref`, this slot retains both the managed
 /// pointer's recoverable origin and a strong reference to the type descriptor.
 /// It may only live in a parameter, local, or evaluation-stack slot.
 #[derive(Clone, Debug)]
@@ -589,11 +589,11 @@ impl<'gc> StackValue<'gc> {
                 .observe_address()
                 .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
             _ => {
-                // SAFETY: F10.RawMemoryAccessValid — This deliberately keeps the legacy
-                // non-heap `with_data(0, ..)` address path; the caller still supplies
-                // its validity and lifetime contract, and observation grants no access
-                // right. Stack/Static migration belongs to M3; Transient ownership is
-                // shared but the observed address alone does not retain it.
+                // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
+                // cached address of a non-heap origin; no payload bytes are accessed. The
+                // address grants no access right: for Stack, Static and Unmanaged origins the
+                // caller supplies range and lifetime, and a Transient address does not retain
+                // its shared owner.
                 unsafe { pointer.with_data(0, |data| data.as_ptr() as *mut u8) }
             }
         }
@@ -1016,7 +1016,7 @@ impl<'gc> PartialOrd for StackValue<'gc> {
 
 fn managed_offset_error() -> ExecutionError {
     ExecutionError::NotImplemented(
-        "managed pointer offset is unrepresentable (negative or beyond the compact range requires the signed representation planned for M3; overflow or null cached address is unsupported)".into(),
+        "managed pointer offset is unrepresentable (negative or beyond the compact offset range is not supported; overflow or null cached address is unsupported)".into(),
     )
 }
 

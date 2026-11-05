@@ -1,15 +1,17 @@
 # Invariant Registry
 
-This is the authoritative index of named predicates cited by `// SAFETY:`
-comments.  A citation identifies the invariant; the co-located prose explains
-why it holds at that site.  `scripts/check_doc_drift.sh` verifies that every
-source citation names a row below and that every row has a source citation.
+The inventory of every non-obvious fact the code relies on for soundness. Code cites a
+predicate with `// SAFETY:` above an unsafe operation or `// INVARIANT:` where safe code relies
+on or maintains it (see [CONTRIBUTING](../CONTRIBUTING.md#invariants-and-unsafe-code)). The
+citation names the fact; the comment's prose explains why it holds at that site.
+`scripts/check_doc_drift.sh` verifies that every citation names a row below and that every row
+is cited.
 
 | Name | Family | Statement | What establishes it | Defined in | Falsifier |
 | --- | --- | --- | --- | --- | --- |
 | `F1.StwParked` | Rooting / STW liveness | A GC-only access occurs only while every mutator that could access the storage is parked. | `StopTheWorldGuard` / `GcCycleGuard` protocol | [GC and Memory Safety — Invariants](GC_AND_MEMORY_SAFETY.md#invariants) | STW multithreaded tests and guard-off CI leg |
 | `F1.ArenaGenerationMatch` | Rooting / STW liveness | A cross-arena pointer is dereferenced only while its live lease has the recorded arena generation. | Exact-identity leases validate recorded generations; GC installation also compares the executing arena’s original identity. Leases do not root objects; root-barrier publication remains a separate obligation. | [GC and Memory Safety — Invariants](GC_AND_MEMORY_SAFETY.md#invariants) | registry reuse and ordinary/serialized origin ABA recreations; compact `ObjectRef` still requires its unsafe original-allocation lifetime contract |
-| `F1.ExecutorArenaRetained` | Arena teardown ownership | In MT, only the thread-affine owner may take its reserved TLS Box; extraction leaves the reservation until owner Drop. Storage is freed only after the exact registration completes draining, and retained on incomplete cleanup or unwind. | Private owner-qualified slot, ArenaOwner rollback, RetainedArena armed at Drop entry and exact ArenaRegistration | [Executor teardown ownership](plans/03-executor-teardown-ownership.md) | extraction collision, construction rollback and teardown panic regressions |
+| `F1.ExecutorArenaRetained` | Arena teardown ownership | In MT, only the thread-affine owner may take its reserved TLS Box; extraction leaves the reservation until owner Drop. Storage is freed only after the exact registration completes draining, and retained on incomplete cleanup or unwind. | Private owner-qualified slot, ArenaOwner rollback, RetainedArena armed at Drop entry and exact ArenaRegistration | [GC and Memory Safety — Per-thread arenas](GC_AND_MEMORY_SAFETY.md#per-thread-arenas) | extraction collision, construction rollback and teardown panic regressions |
 | `F1.GcHandleRooted` | Rooting / STW liveness | A GC reference used through raw storage remains rooted for the duration of the access. | A live rooted GC handle or other applicable reachability protocol; an arena lease alone only prevents arena teardown. | [GC and Memory Safety — Invariants](GC_AND_MEMORY_SAFETY.md#invariants) | root-barrier model and real-VM recreations; lease alone is not a root; foreign-brand fixture concern remains open |
 | `F2.DescriptorMatchesEcmaLayout` | Layout faithfulness | A descriptor's offsets, sizes, and field types match the instantiated ECMA-335 layout it describes. | nothing — assumed | [Architecture — Invariants](ARCHITECTURE.md#invariants) | Layout differential fixtures |
 | `F2.HandleValueOverride` | Layout faithfulness | Only the generated `RuntimeTypeHandleValue`, `RuntimeFieldHandleValue`, and `RuntimeMethodHandleValue` IDs store an `ObjectRef` in their support types' ECMA-335 `nint` `_value` fields; no other `nint` field receives this override. | Exact generated-ID metadata validation, the ID-to-exact-`TypeDescription` registry, and the layout factory's explicit three-ID match. | [GC and Memory Safety — Runtime-handle `_value` layout override](GC_AND_MEMORY_SAFETY.md#runtime-handle-value-layout-override) | Focused runtime-handle layout and contract round-trip tests |

@@ -4,8 +4,9 @@
 //! workspace, so we use a tiny stable shim: route the uncommon side through a
 //! `#[cold]` function and return the original boolean unchanged.
 //!
-//! These helpers are intentionally used only on branches with measured skew from
-//! benchmark instrumentation (Step 4b).
+//! Use them only on branches expected to be heavily one-sided. The existing hints are
+//! judgment calls, not backed by a recorded measurement; drop one if profiling shows it
+//! is wrong.
 
 #[inline]
 pub(crate) fn likely(b: bool) -> bool {

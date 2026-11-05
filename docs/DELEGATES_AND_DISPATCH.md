@@ -52,12 +52,12 @@ A delegate is an object that wraps a method reference (and optionally a target o
 
 ### Delegate Object Layout
 
-Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are accessed through the typed `DelegateView` / `DelegateViewMut` helpers, which read/write via `instance_storage.field::<T>(type, "name")` (see `crates/dotnet-intrinsics-delegates/src/helpers.rs`):
+Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are support-assembly runtime slots, accessed through the typed `DelegateView` / `DelegateViewMut` helpers (`crates/dotnet-intrinsics-delegates/src/helpers.rs`). Those helpers use the generated support-slot accessors `delegate_target_field`, `delegate_method_index_field` and `multicast_delegate_targets_field`, which look a field up by its validated slot ID and declaring `TypeDescription`, not by name:
 - `_target` (ObjectRef): The `this` reference for instance methods. For static methods, this is typically null.
 - `_method` (usize): A method index. This index points to a `MethodDescription` cached in the runtime's global lookup.
 - `targets` (ObjectRef, on `System.MulticastDelegate`): For multicast delegates, an array of individual delegate objects.
 
-The runtime accesses these directly by name when performing delegate invocation or intrinsic operations like `Delegate.Target` and `Delegate.Method`.
+Delegate invocation and intrinsics such as `Delegate.Target` and `Delegate.Method` read and write these fields only through those accessors. See [Support-assembly slot annotation policy](ARCHITECTURE.md#support-assembly-slot-annotation-policy).
 
 ### Special Dispatch Path: `try_delegate_dispatch`
 

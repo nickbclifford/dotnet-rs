@@ -19,9 +19,9 @@ use std::ptr::{self, NonNull};
 /// Heap origins use slice-free, wrapping address observation from the retained
 /// allocation base. The returned raw pointer carries no root or borrow/lock and
 /// grants no read/write/copy/atomic right; the caller must separately retain the
-/// owner and establish the required access contract. Other origins retain the
-/// zero-length `with_data` fallback (Stack/Static migration: M3). Transient
-/// ownership is shared, but this address does not retain it or grant access.
+/// owner and establish the required access contract. Other origins return their
+/// cached address through a zero-length `with_data`. Transient ownership is shared,
+/// but this address does not retain it or grant access.
 pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
     match m.origin() {
         PointerOrigin::Heap(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
@@ -30,8 +30,8 @@ pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
             m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
         }
         _ => {
-            // SAFETY: F10.RawMemoryAccessValid — non-heap origins retain their
-            // existing Unsafe intrinsic address path; no payload bytes are read.
+            // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
+            // cached address of a non-heap origin; no payload bytes are accessed.
             unsafe { m.with_data(0, |data| data.as_ptr().cast_mut()) }
         }
     }
@@ -60,7 +60,7 @@ pub fn intrinsic_unsafe_as_pointer<
                 }
             };
             match m.origin() {
-                // Preserve the legacy zero-length access path for these origins.
+                // Origins without an owner to observe: return the cached address.
                 PointerOrigin::Stack(_) | PointerOrigin::Static(_) | PointerOrigin::Unmanaged => {
                     managed_ptr_address(&m)
                 }

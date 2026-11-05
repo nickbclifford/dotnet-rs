@@ -1,6 +1,6 @@
 # Hosted candidate evidence — 2026-10-31
 
-Tested candidate: `b8e98239cec56a4e62c38682c27d3a59886262a0` on `supervised/unblock-ci`. All runs below are attempt **1**, workflow_dispatch. Later evidence/documentation commits are not this tested SHA. No workflow, budgets, runtime semantics, pointer controls, denial rules, seeds or workloads changed in step 5.1.
+Tested candidate: `b8e98239cec56a4e62c38682c27d3a59886262a0`. All runs below are attempt **1**, workflow_dispatch. Later evidence/documentation commits are not this tested SHA.
 
 ## Conclusions
 
@@ -38,7 +38,7 @@ Pointer caps: job 45min, shared inner deadline 42min from diagnostics start, set
 
 ## Library and native gates
 
-- Blocking value: default library 74 passed/3 ignored, additional integration binary 1 passed/0 ignored; focused no-feature M1a/M1b/M1d selections 3/8/11 passed, 0 ignored.
+- Blocking value: default library 74 passed/3 ignored, additional integration binary 1 passed/0 ignored; focused no-feature `pointer::tests::heap_access_`/`ptr_arith_`/`owner_retention_` selections 3/8/11 passed, 0 ignored.
 - Blocking frame controls, each no-features and multithreading: raw-block 7 passed/0 ignored and frame-allocation 8 passed/0 ignored. Owner retention: 8 passed/0 ignored in each configuration.
 - Advisory retained value/default: 74 passed/3 ignored plus integration 1 passed; utils/no-features: 32 passed/0 ignored. This corrects the swapped value/utils counts in the preceding 4.4 memory entry.
 - Native fixture selectors `gc_finalizer_after_entrypoint_0` and `finalizer_runs_after_entrypoint_completes` both report `ok`, not ignored, in normal and fuzzing (also all other matrix legs).

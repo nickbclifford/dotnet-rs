@@ -1,10 +1,9 @@
-//! Structural evidence that the retired `StackValue::CrossArenaObjectRef(ObjectPtr, ArenaId)`
-//! variant stays retired (commit 8e3768fe, checklist 4.5/4.6).
+//! Source scan that keeps a `StackValue::CrossArenaObjectRef(ObjectPtr, ArenaId)` variant from
+//! reappearing.
 //!
-//! The historical variant carried no registration generation, exposed provenance in
-//! `Collect::trace`, and was dereferenced by the resolver without an identity-qualified lease.
-//! Nothing in production constructed it, so there is no live producer whose ABA behavior could
-//! be recreated; this scan stops a replacement from reappearing, in any workspace crate
+//! Such a variant carries no registration generation, exposed provenance in
+//! `Collect::trace`, and would be dereferenced without an identity-qualified lease. With no
+//! producer to test against, this scan rejects the variant in any workspace crate
 //! (sources, tests, fuzz targets and benches). It is deliberately path-specific: it matches the
 //! variant name only, never unrelated equality or exposure code, and `PointerOrigin::
 //! CrossArenaObjectRef` (the identity-carrying ordinary origin) is allowed. Live-path ABA

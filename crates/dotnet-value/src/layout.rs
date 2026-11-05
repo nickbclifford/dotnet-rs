@@ -608,8 +608,8 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
         ManagedPtr::from_info_full(info, dotnet_types::TypeDescription::NULL, false)
     }
     fn write_to(&self, bytes: &mut [u8]) {
-        // FieldType is infallible: Transient encodings cannot retain their owner and
-        // cannot be decoded. Fallible codec/layout handling remains M3 work.
+        // FieldType is infallible, so a Transient pointer is written even though its
+        // encoding cannot retain its owner and cannot be decoded.
         self.write(bytes);
     }
 }

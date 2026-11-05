@@ -27,8 +27,8 @@
 //!
 //! ## Safe Points
 //!
-//! Safe points are locations in the code where the GC can safely inspect and move
-//! objects. Threads must check [`ThreadManagerOps::is_gc_stop_requested`] and call
+//! Safe points are locations in the code where the GC can safely trace and collect
+//! objects (the collector is non-moving). Threads must check [`ThreadManagerOps::is_gc_stop_requested`] and call
 //! [`ThreadManagerOps::safe_point`] at regular intervals (e.g., method entry, loop
 //! backedges).
 //!

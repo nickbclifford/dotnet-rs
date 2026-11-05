@@ -13,7 +13,7 @@ struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        // SAFETY: F1.ExecutorArenaRetained. TLS destruction is not evidence
+        // INVARIANT: F1.ExecutorArenaRetained — TLS destruction is not evidence
         // of a completed drain (the Executor may have been forgotten).
         if let Some(arena) = self.arena.take() {
             std::mem::forget(arena);
@@ -104,7 +104,7 @@ impl Drop for ArenaOwner {
                 .as_ref()
                 .is_some_and(|s| s.identity == self.identity.get())
             {
-                // SAFETY: F1.ExecutorArenaRetained. A construction unwind must
+                // INVARIANT: F1.ExecutorArenaRetained — a construction unwind must
                 // not free storage whose drain has not completed.
                 if let Some(arena) = slot.take().and_then(|mut s| s.arena.take()) {
                     std::mem::forget(arena);

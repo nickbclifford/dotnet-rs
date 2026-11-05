@@ -1,4 +1,0 @@
-command: ['cargo', 'fmt', '--all', '--check']
-environment: {}
-exit: 0
-wall seconds: 0.416

@@ -116,7 +116,7 @@ fn read_enum_value(obj: &Object<'_>) -> Option<(i128, bool)> {
     };
 
     match &*base {
-        // BCL-dynamic layout probe — see REVIEW.md §4 (F-SCOPE-001)
+        // An enum's single instance field (ECMA-335 II.14.3) is read by its compiler-emitted name `value__`.
         dotnetdll::prelude::BaseType::Int8 => Some((
             i128::from(
                 obj.instance_storage

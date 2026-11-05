@@ -138,7 +138,7 @@ impl NativeLibraries {
         let mut last_error = None;
 
         for n in &names_to_try {
-            // SAFETY: F11.NativeLibraryLoadTrusted (Plan 06 trust candidate) — the configured
+            // SAFETY: F11.NativeLibraryLoadTrusted — the configured
             // host policy permits this library's initializers/finalizers to execute, and
             // `NativeLibraries` caches successfully loaded libraries while selected symbols are
             // used. Loading is inherently unsafe because constructors may run and symbol layouts
@@ -183,7 +183,7 @@ impl NativeLibraries {
             return Err(PInvokeError::SymbolNotFound(library.into(), name.into()));
         }
         let l = self.get_library(library, tracer)?;
-        // SAFETY: F11.PInvokeAbiAgreement (Plan 06 trust candidate) — We request the raw symbol as an untyped C function pointer and immediately pass
+        // SAFETY: F11.PInvokeAbiAgreement — We request the raw symbol as an untyped C function pointer and immediately pass
         // it to libffi. Arity/signature validation is handled by metadata-driven marshalling before
         // invocation; lookup failure is converted to `PInvokeError::SymbolNotFound`.
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }

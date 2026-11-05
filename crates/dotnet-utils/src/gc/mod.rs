@@ -314,7 +314,7 @@ pub enum GCCommand {
 }
 
 #[cfg(all(test, feature = "multithreading"))]
-mod opaque_transport_recreation_tests {
+mod opaque_transport_tests {
     use super::{
         ArenaIdentity, CrossArenaRef, MarkObjectPointers, MarkPhaseCommand, OpaqueObjectPtr,
     };
@@ -325,11 +325,11 @@ mod opaque_transport_recreation_tests {
     assert_impl_all!(OpaqueObjectPtr: Send, Sync, Copy);
     assert_impl_all!(CrossArenaRef: Send, Sync, Copy);
 
-    /// Independent recreation (not recovered originals): isolate the command
+    /// Isolate the command
     /// wrapper with a Box stand-in, not a GC object or a whole-VM test. No raw
     /// address is exposed; only inert metadata crosses the worker thread.
     #[test]
-    fn m1e_recreation_opaque_transport() {
+    fn arena_lifetime_opaque_transport() {
         let source = include_str!("mod.rs");
         let wrapper = source
             .split("pub struct OpaqueObjectPtr")

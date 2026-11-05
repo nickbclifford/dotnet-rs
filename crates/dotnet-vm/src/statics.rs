@@ -156,14 +156,11 @@ impl Drop for WaitGraphEdgeGuard<'_> {
 // SAFETY: F5.TracesEveryGcRef — `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
-// During tracing, we use data_ptr() to bypass locks, which is safe during stop-the-world GC pauses.
+// Release builds read each shard without its lock, relying on the stop-the-world pause.
 // The `wait_graph` contains only primitive IDs and does not need tracing.
 unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for shard in &self.shards {
-            // SAFETY: F5.TracesEveryGcRef — Tracing happens during a stop-the-world pause, so no other
-            // threads are running. We can safely access the inner value without
-            // acquiring the lock.
             #[cfg(debug_assertions)]
             {
                 #[cfg(feature = "multithreading")]
@@ -180,6 +177,8 @@ unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
                     }
                 }
 
+                // INVARIANT: F1.StwParked — tracing runs during a stop-the-world pause, so no mutator
+                // holds a shard write lock and `try_read` succeeds; failure means STW was violated.
                 let map = shard.try_read().expect(
                     "StaticStorageManager::trace: failed to acquire lock; STW failed? \
                      (another thread is holding a write lock)",
@@ -190,6 +189,20 @@ unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
             }
             #[cfg(not(debug_assertions))]
             {
+                #[allow(
+                    clippy::mutable_key_type,
+                    reason = "the key's Hash/Eq never inspect interior-mutable metadata state; see the same allowance in dotnet-runtime-resolver's method caches"
+                )]
+                #[cfg_attr(
+                    not(feature = "multithreading"),
+                    expect(
+                        clippy::multiple_unsafe_ops_per_block,
+                        reason = "the single-threaded lock's `data_ptr` is itself unsafe; both operations share the stop-the-world premise"
+                    )
+                )]
+                // SAFETY: F1.StwParked — tracing runs during a stop-the-world pause, so no mutator
+                // holds or can acquire the shard lock while this shared reference is live. Debug
+                // builds take `try_read` instead to check that premise.
                 let map = unsafe { &*shard.data_ptr() };
                 for v in map.values() {
                     v.trace(cc);

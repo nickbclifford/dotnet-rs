@@ -713,7 +713,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
 
                         #[cfg(feature = "bench-instrumentation")]
                         let clear_cross_arena_roots_start = Instant::now();
-                        // Root-set edit: use the root barrier consistently (F-XARENA-202).
+                        // `cross_arena_roots` is a manually traced root, so every edit to it
+                        // goes through `mutate_root` (the root barrier).
                         arena.mutate_root(|_, c| {
                             c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
                         });
@@ -756,7 +757,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         let install_roots_start = Instant::now();
                         // `cross_arena_roots` is a manually traced root; publishing after
                         // marking began must go through the root barrier or the second
-                        // `finish_marking` may not retrace it (F-XARENA-202).
+                        // `finish_marking` may not retrace it.
                         arena.mutate_root(|_, c| {
                             for reference in ptrs {
                                 let identity = reference.identity();
@@ -840,10 +841,10 @@ mod tests {
     use crate::threading::ThreadManagerOps;
     use std::{sync::mpsc, thread, time::Duration};
 
-    /// Independent recreation (not recovered originals): harvest preserves a
+    /// Harvest preserves a
     /// live identity and discards a queued stale generation before conversion.
     #[test]
-    fn m1e_recreation_harvest_rejects_stale_registration() {
+    fn arena_lifetime_harvest_rejects_stale_registration() {
         use dotnet_utils::gc::{
             CrossArenaRef, OpaqueObjectPtr, ThreadSafeLock, record_cross_arena_ref,
             try_acquire_lease, unregister_arena,
@@ -905,9 +906,9 @@ mod tests {
         drop(arena);
     }
 
-    /// Independent recreation (not recovered originals): compact managed-ID exhaustion.
+    /// Compact managed-ID exhaustion.
     #[test]
-    fn recreation_managed_id_exhaustion() {
+    fn managed_id_exhaustion() {
         let first = AtomicU64::new(1);
         assert_eq!(allocate_managed_thread_id(&first), 1);
         assert_eq!(allocate_managed_thread_id(&first), 2);

@@ -61,8 +61,7 @@ where
     // We MUST NOT use ctx.read_unaligned with span_ptr.origin because that would
     // incorrectly tag the ManagedPtr with the Span's origin (e.g., Stack) instead of
     // the actual origin stored in the serialized bytes (e.g., Heap).
-    // SAFETY: F3.InteriorPointerRebased — `span_ptr` points to a Span value validated by the caller and `ptr_bytes` matches
-    // the serialized `ManagedPtr` width expected for the `_reference` field.
+    // `ptr_bytes` matches the serialized `ManagedPtr` width expected for the `_reference` field.
     let mut ptr_bytes = ManagedPtr::serialization_buffer();
     // SAFETY: F10.RawMemoryAccessValid — The field position and serialization buffer were validated above; `read_bytes`
     // accesses exactly that in-bounds `_reference` representation.
@@ -260,9 +259,9 @@ pub fn with_span_data<
             }
         })
     } else {
-        // SAFETY: F10.RawMemoryAccessValid — Non-heap origins retain their legacy
-        // access behavior and caller-provided validity contract. Stack/Static
-        // migration belongs to M3; a Transient pointer retains its shared owner.
+        // SAFETY: F10.RawMemoryAccessValid — non-heap origins use the unchecked cached-address
+        // path: for Stack, Static and Unmanaged the caller supplies range and lifetime; a
+        // Transient pointer retains its shared owner.
         Ok(unsafe { m_ptr.with_data(total_size, f) })
     }
 }

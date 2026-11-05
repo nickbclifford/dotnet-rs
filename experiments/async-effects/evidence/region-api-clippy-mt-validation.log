@@ -1,9 +1,0 @@
-command: ['cargo', 'clippy', '--offline', '--workspace', '--all-targets', '--features', 'effect-ops/multithreading,effect-ops/memory-validation', '--', '-D', 'warnings']
-environment: {}
-exit: 0
-wall seconds: 0.311
-
-    Checking effect-ops v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/ops)
-    Checking effect-intrinsics v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/intrinsics)
-    Checking effect-vm v0.0.0 (/home/nick/Desktop/dotnet-rs-async/experiments/async-effects/layered/vm)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s

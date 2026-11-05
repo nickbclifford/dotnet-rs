@@ -3,7 +3,7 @@
 // while the native ABI writes one pointer word, so the native `rem` lands in
 // managed-pointer word 1 (the arena identity word) and `Rem` reads garbage.
 // Expected disposition: the VM rejects the call before invoking native code
-// (exit 255, see `pinvoke_byreflike_return_recreation_rejected` in fixtures.rs).
+// (exit 255, see `pinvoke_byreflike_return_rejected` in fixtures.rs).
 using System.Runtime.InteropServices;
 
 public ref struct LdivRef {

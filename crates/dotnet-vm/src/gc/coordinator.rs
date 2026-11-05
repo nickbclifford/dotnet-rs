@@ -830,12 +830,12 @@ mod tests {
     use crate::sync::{Arc, AtomicBool, Ordering};
     use crate::threading::{ThreadManager, ThreadManagerOps};
 
-    /// Independent recreation (not recovered originals): exercise the actual
+    /// Exercise the actual
     /// fixed-point dispatcher and command slot with a simulated worker that
     /// rediscovers an old edge alongside a new one. This is command-transport
     /// evidence, not a real multi-arena collection/root test.
     #[test]
-    fn m1e_recreation_fixed_point_command_retains_identity() {
+    fn arena_lifetime_fixed_point_command_retains_identity() {
         use dotnet_utils::gc::{
             OpaqueObjectPtr, ThreadSafeLock, register_arena, try_acquire_lease, unregister_arena,
         };

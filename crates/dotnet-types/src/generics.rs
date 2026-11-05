@@ -1070,14 +1070,9 @@ mod constraint_cycle_tests {
     // Cyclic constraint via TypeSource::Generic — triggers unbounded recursion
     // -------------------------------------------------------------------------
 
-    /// Regression test for the fixed behavior:
-    ///
-    /// After the visited-set guard was added to `make_concrete`, a cyclic
-    /// constraint `T : ICyclicConstraint<T>` must be detected on the *first*
-    /// re-entry and must **not** call `locate_type` more than once.
-    ///
-    /// Previously this test documented the bug (`locate_type` called > 1 time);
-    /// now it documents the correct fixed behaviour.
+    /// `make_concrete`'s visited-set guard must detect a cyclic constraint
+    /// `T : ICyclicConstraint<T>` on the *first* re-entry and must **not** call
+    /// `locate_type` more than once.
     #[test]
     fn test_cyclic_generic_constraint_causes_unbounded_recursion_regression() {
         let (res, type_index) = make_resolution_with_type(make_cyclic_type_def());

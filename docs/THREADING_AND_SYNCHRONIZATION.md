@@ -16,12 +16,10 @@ CLI's Rayon pool, tracer, and integration-test timeout harness can do so in eith
 
 ## Invariants
 
-- `F4.WidthAligned`: selected atomic widths have valid, correctly aligned storage and no conflicting non-atomic access; alignment checks and exclusion guards establish the local premise.
-- `F7.InitializationPublished`: immutable fields read without a lock are written before their owner is published. This happens-before edge is assumed and must remain a trust-register candidate.
-- `F8.LockOrderRespected`: all nested locking follows the `define_lock_order_dag!` order, with negative `AcquireAfter` assertions rejecting known inversions.
-- `F8.NoSafepointWhileHeapBorrowed`: a `GcScopeGuard` or `ThreadSafeLock` exclusion prevents safepoint polling and allocation while a heap borrow is held.
-- `F11.ObjectPointerThreadSafe`: `ObjectPtr` may be sent or shared only because it points to `ThreadSafeLock<ObjectInner>` satisfying the required `Send`/`Sync` bounds.
-- `F11.PInvokeLastErrorArenaLocal`: each executor initializes its runtime-cached P/Invoke last-error value to zero in `ArenaLocalState`, and Marshal Get/Set access only that current context's cell.
+The `// SAFETY:` predicates for atomics, publication, lock order and per-thread state are stated
+in the [invariant registry](INVARIANT_REGISTRY.md): `F4.WidthAligned`,
+`F7.InitializationPublished`, `F8.LockOrderRespected`, `F8.NoSafepointWhileHeapBorrowed`,
+`F11.ObjectPointerThreadSafe` and `F11.PInvokeLastErrorArenaLocal`.
 
 ## Thread Lifecycle (`threading/`)
 
@@ -59,7 +57,7 @@ Each thread has:
 
 ### Stop-The-World Protocol (`basic.rs` → `request_stop_the_world`)
 
-The Stop-The-World (STW) protocol synchronizes all managed threads to a halt so the `GCCoordinator` can safely trace and move objects.
+The Stop-The-World (STW) protocol synchronizes all managed threads to a halt so the `GCCoordinator` can safely trace and collect each arena. The GC is non-moving.
 
 ```mermaid
 sequenceDiagram
@@ -122,38 +120,46 @@ than spawning a worker.
 
 ## Safe Points
 
-Safe points are checked at:
-- **Loop back-edges**: The `br` / `brtrue` / `brfalse` instructions targeting earlier offsets
-- **Method calls**: Before pushing a new frame
-- **Explicit checks**: two `check_gc_safe_point` methods exist. `CallStack::check_gc_safe_point` (`dispatch/mod.rs`) is a bare `is_gc_stop_requested()` load. The scope-counter-aware variant is `VesContext`'s `RawMemoryOps::check_gc_safe_point` (`stack/raw_memory_ops_impl/mod.rs`), used by intrinsics/handlers.
+A thread stops for a collection only between the `mutate_root` calls made by the executor loop
+(`Executor::run`), which checks `is_gc_stop_requested` and calls `ThreadManagerOps::safe_point`.
+The interpreter returns to that loop, usually with `StepResult::Yield`, when a poll observes a
+pending request:
+
+- **Dispatch loop.** `ExecutionEngine::run` (`crates/dotnet-vm/src/dispatch/mod.rs`) polls
+  `CallStack::check_gc_safe_point` on entry and before each exception-handling step. Inside an
+  instruction batch it polls every `DOTNET_SAFE_POINT_POLL_INTERVAL` instructions (32 by
+  default; 64 and 128 are also accepted). Branches stay inside the batch. A batch ends after 128
+  instructions, or earlier at any result other than `Continue` (for example a call that pushes a
+  frame, a yield or an exception), and control returns to the executor loop.
+- **Long-running operations.** Chunked intrinsics and handlers (string, span, `Unsafe`/`Buffer`
+  block operations, `cpblk`/`initblk`, array operations, some reflection) call the scope-aware
+  `RawMemoryOps::check_gc_safe_point` on `VesContext` between chunks and yield.
+- **Waits.** Monitor waits (`enter_safe`) and static-constructor waits (`wait_for_init`) check
+  for a pending stop while blocked; see below.
+
+There are two `check_gc_safe_point` methods. `CallStack::check_gc_safe_point` is a bare
+`is_gc_stop_requested()` load. `VesContext`'s `RawMemoryOps::check_gc_safe_point`
+(`stack/raw_memory_ops_impl/mod.rs`) also consults the `GcScopeGuard` counter.
 
 ### Safe Point ↔ GcScopeGuard Interaction
 When a `GcScopeGuard` is active (the `active_borrows` scope counter > 0), `VesContext`'s `RawMemoryOps::check_gc_safe_point` returns `false` early without blocking. (The plain `CallStack::check_gc_safe_point` does *not* consult the counter — it only loads `is_gc_stop_requested()`.) This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
 
 The path to thread suspension:
 1. `VesContext::check_gc_safe_point()` first checks the `active_borrows` scope counter; if it is > 0 it returns `false` to prevent deadlocks (the thread cannot safely park while holding GC borrows). Otherwise it evaluates `ThreadManager::is_gc_stop_requested()`.
-2. If `true`, the loop or instruction handler exits early (often returning `StepResult::Continue` without advancing IP, or completing a chunk of work).
-3. The main execution loop in `crates/dotnet-vm/src/executor.rs` catches this, drops any transient locks, and explicitly calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
+2. If `true`, the instruction handler stops early (after completing a chunk of work) and yields, usually through `yield_and_retry` so the instruction re-runs after the pause.
+3. The executor loop in `crates/dotnet-vm/src/executor.rs` sees the request after `mutate_root` returns and calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
 4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false or the thread-local `IS_PERFORMING_GC` flag is set; otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.
 6. Once the STW guard is dropped, the condition variable is pulsed, the state resets to `Running`, and execution resumes.
 
 ### Cross-arena leases and shared access
 
-Under `multithreading`, selected cross-arena checked operations acquire an `ArenaLease` for
-each synchronous access or closure. `unregister_arena` removes the registry entry before waiting
-for outstanding leases: a new acquisition fails while the entry is absent, while an in-flight lease delays
-teardown until dropped. Under `memory-validation`, a thread's already-held lease also permits
-validation of that in-flight access after removal. Address observation and `resolve_address`
-release their temporary lease before returning; later use needs its own protection. `RetainedPtr`
-keeps a lease across the synchronous block operation, but must be dropped before the scheduler
-parks at a safepoint. The ordinary P/Invoke cross-arena path is still an M2 boundary.
-
-A lease is not a payload lock, GC root, range check, or shared-memory ordering protocol. M4 must
-still define synchronization for overlapping raw, locked, atomic and static accesses. Ordinary
-cross-arena origins retain their registration identity and token, and exact-identity leases reject
-ID reuse; this does not establish object rooting or the broader shared-memory properties. The scoped
-M1d teardown tests do not establish those properties; see [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#m1d-pointer-ownership-and-access).
+Under `multithreading`, cross-arena checked operations acquire an `ArenaLease` for each
+synchronous access or closure, and `RetainedPtr` keeps one across a block operation. Leases must
+be dropped before the thread parks at a safepoint. What a lease does and does not guarantee is
+stated once, in [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md#arena-liveness-and-leases).
+There is no common protocol ordering overlapping raw, locked, atomic and static accesses to shared
+storage.
 
 ## Monitor Synchronization (`sync/`)
 
@@ -179,12 +185,12 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 - **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<NonZeroUsize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` (starting at 1) for index generation.
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
 - **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`) and `recursion_count` to support re-entrant locking by the same thread.
-- Objects are identified by their sync block index, stored in the object's header/layout.
+- Objects are identified by their sync block index, stored in the `ObjectInner::sync_block_index` field (`0` means none yet).
 - `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and checks `thread_manager.is_gc_stop_requested()`. If a STW pause is pending, it returns `LockResult::Yield` without calling `safe_point()` directly — the caller converts this to `StepResult::Yield`, and the executor's main loop drives the safe-point handshake on the next iteration. This prevents deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
 
 #### `get_or_create_sync_block` two-step contract
 
-`SyncBlockManager::get_or_create_sync_block` now takes `current_index: Option<NonZeroUsize>` and returns
+`SyncBlockManager::get_or_create_sync_block` takes `current_index: Option<NonZeroUsize>` and returns
 `(new_index, Arc<SyncBlock>)`.
 
 - The manager does all map/index allocation work internally while `SyncBlockManager::blocks` is
@@ -252,12 +258,10 @@ In both branches, `wait_graph` cleanup must already be complete before control r
 ### Threading ↔ Executor
 Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
 
-`CallStack` owns the executor's `ArenaLocalState`, including the cached P/Invoke last-error scalar; `VesContext` borrows it directly, so no ThreadManager lookup or shared lock is involved. Native `errno`/`GetLastError` capture at the P/Invoke boundary is not implemented by this state migration.
+`CallStack` owns the executor's `ArenaLocalState`, including the cached P/Invoke last-error scalar; `VesContext` borrows it directly, so no ThreadManager lookup or shared lock is involved. Native `errno`/`GetLastError` capture at the P/Invoke boundary is not implemented.
 
 ### SyncBlock ↔ Object Identity
-Monitor locks are keyed by a lazily allocated sync block index stored in the object layout. This means:
-- The GC can safely move objects without breaking sync blocks, as the object retains its index.
-- Sync blocks can be dynamically allocated on demand.
+Monitor locks are keyed by a lazily allocated sync block index stored in the object's `ObjectInner`. Sync blocks are therefore allocated on demand, and objects without a monitor carry only the zero index.
 
 ### Feature Flag Interactions
 - `multithreading`: Full multi-threaded execution with per-thread arenas, monitor locking, and STW coordination across arenas.
@@ -282,6 +286,7 @@ an unqualified acquisition merely because another guard happens to be in scope.
 |-------|---------------|-----------------------|
 | GC/STW top-level | `GCCoordinator::collection_lock` → `ThreadManager::gc_coordination` | `Executor::perform_full_gc` (`begin_collection` then `request_stop_the_world`) |
 | STW bookkeeping | `ThreadManager::gc_coordination` → `ThreadManager::threads` | `ThreadManager::request_stop_the_world` (thread counts, warning dump) |
+| Thread registry under collection | `GCCoordinator::collection_lock` → `ThreadManager::threads` | Thread-registry reads while a `CollectionSession` holds the collection lock |
 | GC command routing | `GCCoordinator::collection_lock` → `GCCoordinator::arenas` → `ArenaHandle::current_command` | `CollectionSession::{send_command_to_all_and_wait,wait_on_other_arenas,enqueue_command_for_arena}` |
 | GC cross-arena table | `GCCoordinator::collection_lock` → `GCCoordinator::cross_arena_refs` | `CollectionSession::collect_all_arenas` |
 | Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`INIT_STATE_INITIALIZING` branch) |
@@ -315,9 +320,9 @@ During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObject
 ### Cross-Arena References (`record_found_cross_arena_refs`)
 In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
 
-Cross-arena discovery transports `CrossArenaRef`: the retained raw pointer and exact registration identity, not a reconstructed numeric address. Producers capture identity under a lease or carry the existing origin identity; harvest reacquires an exact lease. The owner checks its original identity and a live exact lease before installation, and publishes roots via `mutate_root`. A lease prevents teardown, not object collection.
+Cross-arena discovery transports `CrossArenaRef`: the retained raw pointer and exact registration identity, not a reconstructed numeric address. Producers capture identity under a lease or carry the existing origin identity; harvest reacquires an exact lease. The owner checks its original identity and a live exact lease before installation, and publishes roots via `mutate_root`.
 
-MT teardown follows `F1.ExecutorArenaRetained`: the owner or extracted guard retains its Box before fallible cleanup and frees it only after its exact registration returns `Drained`. Registry removal precedes draining; it prevents new leases but is not evidence that existing leases ended. Draining holds no registry/coordinator lock or TLS borrow. A same-thread held lease, missing registration, or unwind before completed drain deliberately leaks storage. Drop can panic and interrupted cleanup can leave bookkeeping; leases must not be held across safepoint parking. The [arena lifecycle contract](GC_AND_MEMORY_SAFETY.md#per-thread-arenas) describes extraction, affinity, API compatibility and limits; [plan 03](plans/03-executor-teardown-ownership.md) records the accepted scoped outcome; broader R08 acceptance remains open.
+MT executor teardown (extraction, thread affinity, draining and deliberate leaks on incomplete cleanup) follows the [arena lifecycle contract](GC_AND_MEMORY_SAFETY.md#per-thread-arenas).
 
 ### Thread-Local Storage Patterns
 - `THREAD_ARENA` (MT only): private `RefCell<Option<Slot>>`, where `Slot` holds an optional exact identity and optional `Box<GCArena>`. An initializing or extracted slot remains reserved until its owner drops; internal safepoint dispatch can borrow the Box but cannot replace or extract it.
@@ -333,7 +338,7 @@ The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` t
   In this configuration, `SharedGlobalState` is deliberately `!Send` and executor-confined. The
   integration-test timeout waiter receives only an `AbortSignal`, whose private state is an
   `Arc<AtomicBool>`; it cannot access the VM state or compat locks.
-*(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
+*(Note: `ThreadSafeLock` lives in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
 
 ## Asynchronous Exceptions (Thread.Abort and Thread.Interrupt)
 
@@ -343,20 +348,19 @@ Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **do
 
 - **Rationale**: `Thread.Abort` is inherently unsafe as it injects a `ThreadAbortException` at arbitrary execution points (asynchronous exceptions per ECMA-335 §I.12.4.2.3). This can interrupt static constructors, leave shared state in an inconsistent manner, or fail to release unmanaged resources.
 - **Compliance**: While ECMA-335 §I.12.4.2.3 describes the mechanism for asynchronous exceptions, it does not mandate that a CLI implementation must provide a public `Thread.Abort` API.
-- **Behavior**: `Thread.Abort` is unimplemented in the VM. No `Abort` intrinsic or `PlatformNotSupportedException` guard currently exists in the codebase; the intended/planned behavior is to throw `PlatformNotSupportedException`, consistent with modern .NET runtimes.
+- **Behavior**: The VM has no `Thread.Abort` intrinsic and no guard for it. A call reaches whatever the loaded CoreLib or support assembly provides; the VM does not itself throw `PlatformNotSupportedException` as modern .NET does.
 
 ### Thread.Interrupt
 
-`Thread.Interrupt` is currently **not implemented** in the `dotnet-rs` VM.
+`Thread.Interrupt` is **not implemented** in the `dotnet-rs` VM.
 
-- **Status**: Unlike `Thread.Abort`, `Thread.Interrupt` is still supported in modern .NET for waking threads from waiting states (e.g., `Wait`, `Sleep`, `Join`). However, it has been omitted from the current implementation to maintain a simpler thread state machine.
-- **Future Work**: Implementation would require tracking "interruptible" states and injecting a `ThreadInterruptedException` when the thread next enters or is already in a waiting state.
+- Modern .NET supports `Thread.Interrupt` for waking threads from waiting states (`Wait`, `Sleep`, `Join`). The VM's thread state machine has no interruptible-wait state and never raises `ThreadInterruptedException`.
 
 ## Upstream Crate Contributor Notes
 
 ### `dashmap`: Deadlock Caveats (`len` / `iter_mut` / shard references)
 
-**Source reference:** `dashmap 6.1.0`, `src/lib.rs:565-567, 723-725, 838-844`.
+**Source reference:** `dashmap 6.1.0`, `DashMap::len`, `DashMap::iter_mut` and the `Ref`/`RefMut` guards.
 
 `DashMap` shards its data across a fixed set of `RwLock`-protected buckets. Several operations lock **all** shards simultaneously, which interacts dangerously with live shard references:
 
@@ -374,7 +378,7 @@ Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **do
 
 ### `crossbeam-channel`: Bounded vs Unbounded Behavior
 
-**Source reference:** `crossbeam-channel 0.5.15`, `src/channel.rs:45-54, 106-126, 435-445, 812-838`.
+**Source reference:** `crossbeam-channel 0.5.15`, `bounded`, `unbounded`, `Sender::try_send` and `select!`.
 
 `crossbeam-channel` offers two channel flavors with fundamentally different backpressure properties:
 
@@ -409,7 +413,7 @@ attempted to use a condition variable with two mutexes
 
 Rules in this codebase:
 - Each `Condvar` must be declared alongside its paired `Mutex` as a logical unit (e.g., in the same struct or adjacent `static`/field slots).
-- **Never pass a guard from mutex A to a `Condvar` that was previously used with mutex B**, even if the types are identical. The coordinator's `collection_condvar` is permanently bound to `collection_lock`; the thread manager's `state_condvar` is permanently bound to `state_lock`.
+- **Never pass a guard from mutex A to a `Condvar` that was previously used with mutex B**, even if the types are identical. For example, `ThreadManager::all_threads_stopped` (`crates/dotnet-vm/src/threading/basic.rs`) is always waited on with the `ThreadManager::gc_coordination` guard.
 - When refactoring: if a `Condvar` is moved to a new mutex, also reset (replace) the `Condvar` itself.
 
 #### Fairness and notification semantics

@@ -6,8 +6,7 @@
 //!
 //! # Trait Hierarchy
 //!
-//! - [`VesOps`]: The unified trait that combines all other operational traits. This is the
-//!   primary trait used by instruction handlers.
+//! - [`VesOps`]: The unified trait that combines all other operational traits.
 //! - [`VmStackOps`]: VM-local stack operations (frame and slot access helpers).
 //! - [`VmCallOps`]: VM-local frame management and method dispatch operations.
 //! - [`ExceptionOps`]: Exception throwing and flow control (leave, endfinally).
@@ -17,9 +16,9 @@
 //!
 //! # Usage
 //!
-//! Handlers should typically take a generic parameter `T: VesOps<'gc> + ?Sized`.
-//! This allows them to work with both `VesContext` and potentially other implementations
-//! for testing or specialized execution.
+//! Handlers and intrinsics bound their context parameter by the narrowest traits they use
+//! (for example `T: EvalStackOps<'gc>` or `T: TypedStackOps<'gc>`); `VesOps` is for code
+//! that genuinely needs the whole VM surface.
 //!
 use crate::{
     ByteOffset, MethodInfo, ResolutionContext, StackSlotIndex, StepResult,

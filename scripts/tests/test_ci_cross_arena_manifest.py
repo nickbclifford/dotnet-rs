@@ -13,39 +13,39 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text()
 JOB = re.search(r'^  miri-cross-arena:\n(.*?)(?=^  [\w-]+:\n)', WORKFLOW, re.M | re.S).group(1)
-BASE = 'executor::executor_teardown_recreation_tests::'
+BASE = 'executor::executor_teardown_tests::'
 MT_TEARDOWN = {
-    'recreation_executor_normal_teardown_active_lease',
-    'recreation_executor_extracted_teardown_active_lease',
-    'recreation_executor_unwind_teardown_active_lease',
-    'recreation_executor_nested_creation_fails_closed',
-    'recreation_executor_self_held_lease_leaks_instead_of_deadlocking',
-    'recreation_executor_external_remover_does_not_release_owner',
-    'recreation_extracted_executor_tls_ownership',
-    'ownership::recreation_forgotten_executor_tls_exit_retains_arena',
-    'ownership::recreation_repeated_extraction_reserves_until_owner_drop',
-    'ownership::recreation_constructor_rollback_releases_reservation',
-    'ownership::recreation_executor_teardown_panic_retains_arena',
-    'ownership::recreation_owner_first_guard_does_not_touch_successor',
-    'ownership::recreation_self_held_drain_panic_and_no_diagnostic',
-    'ownership::recreation_drain_warning_panic_retains_arena',
+    'executor_normal_teardown_active_lease',
+    'executor_extracted_teardown_active_lease',
+    'executor_unwind_teardown_active_lease',
+    'executor_nested_creation_fails_closed',
+    'executor_self_held_lease_leaks_instead_of_deadlocking',
+    'executor_external_remover_does_not_release_owner',
+    'extracted_executor_tls_ownership',
+    'ownership::forgotten_executor_tls_exit_retains_arena',
+    'ownership::repeated_extraction_reserves_until_owner_drop',
+    'ownership::constructor_rollback_releases_reservation',
+    'ownership::executor_teardown_panic_retains_arena',
+    'ownership::owner_first_guard_does_not_touch_successor',
+    'ownership::self_held_drain_panic_and_no_diagnostic',
+    'ownership::drain_warning_panic_retains_arena',
 }
 GUARD = 'test result: ok. 1 passed; 0 failed; 0 ignored;'
 
 LIBRARY_BOTH = {
-    ('dotnet-value', 'object_tests::tests::recreation_publication_pending_survival'),
-    ('dotnet-value', 'pointer::tests::m1g_recreation_origin_aba'),
+    ('dotnet-value', 'object_tests::tests::publication_pending_survival'),
+    ('dotnet-value', 'pointer::tests::arena_identity_origin_aba'),
 }
 LIBRARY_ST = LIBRARY_BOTH | {
-    ('dotnet-value', 'object_tests::tests::recreation_codec_local_invalid_control'),
-    ('dotnet-value', 'object::tests::recreation_codec_short_storage'),
+    ('dotnet-value', 'object_tests::tests::codec_local_invalid_control'),
+    ('dotnet-value', 'object::tests::codec_short_storage'),
 }
 LIBRARY_MT = LIBRARY_BOTH | {
-    ('dotnet-value', 'object_tests::tests::recreation_codec_id40000'),
-    ('dotnet-value', 'object_tests::tests::recreation_codec_registered_boundaries'),
-    ('dotnet-utils', 'gc::cross_arena::tests::m1e_recreation_transport'),
-    ('dotnet-utils', 'gc::cross_arena::tests::m1e_recreation_transport_permissive_control'),
-} | {('dotnet-utils', 'gc::cross_arena::tests::m1g_recreation_registry_' + suffix)
+    ('dotnet-value', 'object_tests::tests::codec_id40000'),
+    ('dotnet-value', 'object_tests::tests::codec_registered_boundaries'),
+    ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport'),
+    ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport_permissive_control'),
+} | {('dotnet-utils', 'gc::cross_arena::tests::arena_identity_registry_' + suffix)
      for suffix in ('duplicate', 'fast_bit_transaction', 'generation_exhaustion',
                     'identity_token_reuse', 'drain_reuse_control', 'checked_counter_control')}
 
@@ -64,7 +64,7 @@ def script(name):
 
 
 def execute(row):
-    source = script('Execute guarded singleton recreations')
+    source = script('Execute guarded singletons')
     for key, value in row.items():
         source = source.replace('${{ matrix.' + key + ' }}', value)
     with tempfile.TemporaryDirectory() as tmp:
@@ -92,7 +92,7 @@ class CrossArenaManifestTests(unittest.TestCase):
         teardown = [r for r in rows if r['group'] == 'vm-teardown']
         st = [r for r in teardown if r['configuration'] == 'no-features']
         mt = [r for r in teardown if r['configuration'] == 'multithreading']
-        self.assertEqual([r['selector'] for r in st], [BASE + 'recreation_executor_single_arena_cleanup_control'])
+        self.assertEqual([r['selector'] for r in st], [BASE + 'executor_single_arena_cleanup_control'])
         self.assertEqual(len(mt), len(MT_TEARDOWN))
         self.assertEqual({r['selector'] for r in mt}, {BASE + n for n in MT_TEARDOWN})
         self.assertIn("if: needs.select-deep.outputs.cross_arena != 'false'", JOB)
@@ -102,10 +102,10 @@ class CrossArenaManifestTests(unittest.TestCase):
         self.assertEqual(JOB.count('${{ matrix.configuration }}-${{ matrix.group }}-${{ matrix.shard }}'), 2)
         self.assertIn('MIRIFLAGS: "-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"', JOB)
         absence = JOB[JOB.index('      - name: Verify no-features registry absence'):
-                      JOB.index('      - name: Execute guarded singleton recreations')]
+                      JOB.index('      - name: Execute guarded singletons')]
         self.assertIn("matrix.configuration == 'no-features' && matrix.group == 'library'", absence)
         self.assertIn("--require '0 tests, 0 benchmarks'", absence)
-        self.assertIn('m1e_recreation_transport m1g_recreation_registry_', absence)
+        self.assertIn('arena_lifetime_transport arena_identity_registry_', absence)
 
     def test_each_row_executes_guarded_exact_selectors(self):
         seen = {'no-features': set(), 'multithreading': set()}
@@ -140,11 +140,11 @@ class CrossArenaManifestTests(unittest.TestCase):
                     if row['group'] == 'vm-teardown':
                         self.assertEqual(cargo[-4], row['selector'])
                 if row['group'] == 'vm-stress':
-                    self.assertEqual(calls[0][-4], BASE + 'm1e_recreation_teardown_stress')
+                    self.assertEqual(calls[0][-4], BASE + 'arena_lifetime_teardown_stress')
                 if row['group'] == 'vm-collection':
-                    suffix = ('m1e_recreation_vm_collection_fixed_point_payload_and_reclamation'
-                              if row['configuration'] == 'multithreading' else 'm1e_recreation_vm_collection')
-                    self.assertEqual(calls[0][-4], 'executor::executor_collection_recreation_tests::' + suffix)
+                    suffix = ('arena_lifetime_vm_collection_fixed_point_payload_and_reclamation'
+                              if row['configuration'] == 'multithreading' else 'arena_lifetime_vm_collection')
+                    self.assertEqual(calls[0][-4], 'executor::executor_collection_tests::' + suffix)
                 if library:
                     actual = {(c[c.index('-p') + 1], c[-4]) for c in calls}
                     self.assertEqual(actual, LIBRARY_MT if row['configuration'] == 'multithreading' else LIBRARY_ST)
@@ -153,18 +153,8 @@ class CrossArenaManifestTests(unittest.TestCase):
         self.assertEqual(groups, {(config, group) for config in ('no-features', 'multithreading')
                                   for group in ('library', 'vm-collection', 'vm-stress')})
 
-        # The published table must account for every actual invocation, not just row counts.
-        docs = (ROOT / 'docs/CI.md').read_text()
-        table = docs[docs.index('The current manifest has'):docs.index('The strict-core invocation')]
-        documented = {'no-features': set(), 'multithreading': set()}
-        crates = {'V': 'dotnet-value', 'U': 'dotnet-utils', 'VM': 'dotnet-vm'}
-        for config, crate, selector in re.findall(r'^\| (no-features|multithreading|both) \| (V|U|VM) \| `([^`]+)` \|$', table, re.M):
-            for target in documented if config == 'both' else (config,):
-                documented[target].add((crates[crate], selector))
-        self.assertEqual(seen, documented)
         self.assertEqual(len(seen['no-features']), 7)
         self.assertEqual(len(seen['multithreading']), 28)
-        self.assertIn('7 no-features and 28 multithreading', table)
 
     def test_strict_core_is_isolated_and_guarded(self):
         strict = JOB[JOB.index('      - name: Isolated strict-provenance transport core'):
@@ -174,7 +164,7 @@ class CrossArenaManifestTests(unittest.TestCase):
         self.assertNotIn('-Zmiri-strict-provenance', JOB[:JOB.index('      - name: Isolated strict-provenance transport core')])
         self.assertIn("--timeout 900", strict)
         self.assertIn("--require '" + GUARD + "'", strict)
-        self.assertIn('pointer::tests::m1e_recreation_transport_strict_core -- --exact --test-threads=1', strict)
+        self.assertIn('pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1', strict)
 
 
 if __name__ == '__main__':

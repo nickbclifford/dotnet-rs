@@ -43,25 +43,12 @@
 //!
 //! # Garbage Collection
 //!
-//! Stack structures implement the `gc_arena::Collect` trait for tracing GC-managed
-//! references. The [`CallStack`] type is the root of the GC arena for a thread's
-//! execution context.
+//! Stack structures implement `gc_arena::Collect`. The arena root is
+//! [`ExecutionEngine`](crate::dispatch::ExecutionEngine) (see [`GCArenaRoot`]), which owns the
+//! thread's [`CallStack`] and traces it.
 //!
-//! # Example
-//!
-//! ```ignore
-//! let mut call_stack = CallStack::new(shared, local);
-//! let mut ctx = call_stack.ves_context(gc);
-//!
-//! // Push a value onto the evaluation stack
-//! ctx.push_i32(42);
-//!
-//! // Call a method (simplified)
-//! ctx.invoke_method(method_ref, args)?;
-//!
-//! // Pop result
-//! let result = ctx.pop_i32()?;
-//! ```
+//! Instruction handlers reach this state through a [`VesContext`] borrowed from the
+//! `CallStack`; see the [`ops`] traits for the operations it exposes.
 use crate::{
     MethodState, StepResult,
     dispatch::ExecutionEngine,
@@ -123,10 +110,13 @@ pub struct CallStack<'gc> {
     pub arena: dotnet_utils::gc::ArenaHandle,
 }
 
-// SAFETY: F5.TracesEveryGcRef — `CallStack` correctly traces all GC-managed fields (`execution`, `local`, and
-// `shared.statics`) in its `trace` implementation. The `thread_id` and `arena` fields are not GC-managed
-// and do not need tracing. This implementation is safe because it delegates to the
-// `Collect` implementations of its components, which are themselves safe.
+// SAFETY: F5.TracesEveryGcRef — `trace` visits every field that can hold a `Gc` handle of
+// this arena: `execution` (frames and evaluation stack), `heap_managed_ptr_decode_cache`
+// (its cached handles stay live until `GCArena::finish_cycle` invalidates the cache),
+// `local`, and `shared.statics` (static field storage). The remaining fields hold no `Gc`
+// handles: `thread_id`, `arena_identity` and `arena` are plain identifiers and registry
+// handles, and the other `SharedGlobalState` fields hold `'static` metadata, caches and
+// runtime services.
 unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // NOTE: tracing_id is managed by execute_gc_command_for_current_thread,
