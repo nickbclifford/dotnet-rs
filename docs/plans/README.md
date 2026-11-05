@@ -11,6 +11,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | ID | Plan | Note |
 |---|---|---|
 | 01 | [Stable homes for addressable locals and arguments](01-stable-frame-homes.md) | Next |
+| 04 | [Safe APIs whose soundness rests on unchecked caller premises](04-safe-api-premises.md) | Queued |
 | 02 | [Native continuations](02-native-continuations.md) | Parked until a specific operation is chosen |
 | 03 | [Executor teardown ownership](03-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
 
@@ -31,6 +32,10 @@ Evidence and IDs (p01…, R01…) are defined in the
   managed-pointer aggregate rejections stay until this is done.
 - **Shared raw-memory access:** one protocol for competing plain, volatile, atomic, block and
   raw-alias accesses to shared storage (heap, statics) under `multithreading` (R09/R12).
+- **Safe byte writes into reference slots:** `Vector::get_mut`, `FieldStorage::with_data_mut` and
+  `ObjectRef::with_data_mut` hand out `&mut [u8]` over storage the collector traces, so safe code
+  can write forged pointer bytes; `ObjectPtr::with_data_mut` also skips the owner barrier
+  (`ThreadSafeLock::borrow_mut_unbarriered`). Fold into R09/R12 and R10/R11.
 - **Resumable bulk operations and barriers:** `cpblk`/`initblk`/`Memmove`/`Array.Copy`/`Fill`
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
 - **Cross-arena collection fixture:** the real-VM collection test builds a foreign-branded
