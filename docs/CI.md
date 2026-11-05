@@ -15,7 +15,7 @@ earlier one.
 
 | Layer | When it runs | What it covers |
 |---|---|---|
-| Fast core | Every push and PR to `main`/`master` | Source policy and doc lint, format, provenance lints, the Loom STW model, clippy and native tests over the shared feature matrix, build-script probes, fixtures, and the library Miri jobs (`miri-value`, `miri-frame-blocks`, `miri-owner-retention`). The `fast-core` job aggregates them. |
+| Fast core | Every push and PR to `main`/`master` | Source policy and doc lint, format, provenance lints, the Loom STW model, clippy and native tests over the shared feature matrix, release-profile clippy (`clippy-release`), build-script probes, fixtures, and the library Miri jobs (`miri-value`, `miri-frame-blocks`, `miri-owner-retention`). The `fast-core` job aggregates them. |
 | Selected deep | Push and PR, after `fast-core` succeeds, only for lanes `select-deep` chooses | VM Miri (`miri-cross-arena`, pointer controls) and `fuzz-corpus-replay`. The `deep-safety` job aggregates them. |
 | Full sweep | `ci.yml` nightly cron and `workflow_dispatch` with `full: true`; the advisory workflows on their own schedules | Every deep lane, the pointer controls as singletons, plus the advisory Miri, fuzz and Valgrind workflows. |
 
@@ -56,8 +56,9 @@ files and fails on drift.
 
 | Job | Source of truth |
 |---|---|
-| `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector and aggregate script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
+| `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector, aggregate and cross-arena manifest script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
 | `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job's `multithreading` leg also runs the hang-probe filters listed in its YAML step. |
+| `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
 | `loom` | `crates/dotnet-vm/tests/loom_stw.rs` |
 | `build-script-regression` | `scripts/check_build_script_regressions.sh` |
@@ -81,6 +82,7 @@ diagnostics can still upload. Dated measurements are in [ci-evidence/](ci-eviden
 | `select-deep`, `fast-core`, `deep-safety` | 5 min | Git diff and result aggregation only |
 | `loom`, `clippy`, `miri-value`, `miri-frame-blocks`, `miri-owner-retention`, `fuzz-corpus-replay` | 15 min | Small library suites or `-runs=0` replays |
 | `build-script-regression` | 20 min | Several clean builds |
+| `clippy-release` | 20 min | Release-profile workspace build per configuration |
 | `provenance-lints`, `test` | 30 min | Whole-workspace builds per configuration |
 | `miri-cross-arena` | 30 min library, 45 min VM | One VM Miri process per job, 1800 s per invocation |
 | `miri-pointer-controls` | 45 min | One VM Miri process per control |

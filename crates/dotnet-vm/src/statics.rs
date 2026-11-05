@@ -189,6 +189,17 @@ unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
             }
             #[cfg(not(debug_assertions))]
             {
+                #[allow(
+                    clippy::mutable_key_type,
+                    reason = "the key's Hash/Eq never inspect interior-mutable metadata state; see the same allowance in dotnet-runtime-resolver's method caches"
+                )]
+                #[cfg_attr(
+                    not(feature = "multithreading"),
+                    expect(
+                        clippy::multiple_unsafe_ops_per_block,
+                        reason = "the single-threaded lock's `data_ptr` is itself unsafe; both operations share the stop-the-world premise"
+                    )
+                )]
                 // SAFETY: F1.StwParked — tracing runs during a stop-the-world pause, so no mutator
                 // holds or can acquire the shard lock while this shared reference is live. Debug
                 // builds take `try_read` instead to check that premise.

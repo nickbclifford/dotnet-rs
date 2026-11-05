@@ -115,6 +115,8 @@ jobs:
         run: python3 scripts/tests/test_ci_select.py
       - name: Test CI result aggregates
         run: python3 scripts/tests/test_ci_aggregates.py
+      - name: Test cross-arena Miri manifest
+        run: python3 scripts/tests/test_ci_cross_arena_manifest.py
       - name: Check doc-to-code drift
         run: bash scripts/check_doc_drift.sh
       - name: Check intra-doc links
@@ -240,6 +242,44 @@ jobs:
             cargo clippy --all-targets --no-default-features -- -D warnings
           else
             cargo clippy --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
+          fi
+
+  # Clippy lints only the profile it builds. This job covers code under
+  # `cfg(not(debug_assertions))`, which the debug clippy matrix never sees.
+  clippy-release:
+    name: Clippy Check (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        features: ["", "multithreading"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Clippy Check release (${{ matrix.features || 'no features' }})
+        env:
+          DOTNET_SKIP_BUILD: "1"
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo clippy --release --all-targets --no-default-features -- -D warnings
+          else
+            cargo clippy --release --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
           fi
 
   build-script-regression:
@@ -1082,6 +1122,7 @@ jobs:
       - provenance-lints
       - matrix-definitions
       - clippy
+      - clippy-release
       - build-script-regression
       - build-fixtures
       - test

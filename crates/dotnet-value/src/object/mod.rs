@@ -1,4 +1,4 @@
-#[cfg(any(feature = "memory-validation", debug_assertions, test))]
+#[cfg(any(feature = "memory-validation", debug_assertions))]
 use crate::ValidationTag;
 
 use crate::{ArenaId, ptr_common::PointerLike};
@@ -188,14 +188,17 @@ impl<'gc> ObjectInner<'gc> {
         owner_id: ArenaId,
         magic: u64,
     ) -> Self {
-        let mut inner = Self::new(storage, owner_id);
         #[cfg(any(feature = "memory-validation", debug_assertions))]
         {
+            let mut inner = Self::new(storage, owner_id);
             inner.magic = ValidationTag::new(magic);
+            inner
         }
         #[cfg(not(any(feature = "memory-validation", debug_assertions)))]
-        let _ = magic;
-        inner
+        {
+            let _ = magic;
+            Self::new(storage, owner_id)
+        }
     }
 }
 
@@ -582,9 +585,16 @@ impl<'gc> ObjectRef<'gc> {
         unsafe { Self::try_from_storage_ptr(ptr) }.unwrap_or_else(|error| codec_invariant(error))
     }
 
-    #[expect(
-        clippy::multiple_unsafe_ops_per_block,
-        reason = "the validation reads the live lock and its interior as one operation"
+    #[cfg_attr(
+        any(
+            feature = "multithreading",
+            feature = "memory-validation",
+            debug_assertions
+        ),
+        expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "the validation reads the live lock and its interior as one operation"
+        )
     )]
     unsafe fn try_from_storage_ptr(ptr: *mut u8) -> Result<Self, ObjectCodecError> {
         let addr = ptr.addr();
