@@ -4,7 +4,7 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps, StaticsOps,
+            ArgumentOps, CallArgumentBufferOps, EvalStackOps, ExceptionOps, LoaderOps, StaticsOps,
             TypedStackOps, UnifiedDispatchTarget, VmCallOps, VmLoaderOps, VmResolutionOps,
         },
         receiver_object_generics,
@@ -1044,7 +1044,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         lookup: GenericLookup,
     ) -> StepResult {
         let target_sig = method.signature();
-        let (arg_count, args_base, clear_from) = {
+        let (arg_count, clear_from) = {
             let frame = self.frame_stack.current_frame();
 
             // ECMA-335: evaluation stack shall be empty.
@@ -1102,11 +1102,15 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             (
                 target_sig.instance as usize + target_sig.parameters.len(),
                 frame.base.arguments,
-                frame.base.arguments,
             )
         };
 
-        self.copy_slots_into_call_args_buffer(args_base, arg_count);
+        // Argument homes are authoritative after starg or an indirect write.
+        self.call_args_buffer.clear();
+        for index in 0..arg_count {
+            let value = self.get_argument(crate::ArgumentIndex::new(index));
+            self.call_args_buffer.push(value);
+        }
         let mut args = std::mem::take(self.call_args_buffer);
 
         // Discard the current frame and its locals/eval stack

@@ -50,6 +50,8 @@ CONTROLS_BY_SHARD = {
     35: ["p37_ldloca_value_type_survives_stloc"],
     36: ["p09_ldloca_convu_survives_callee_stack_growth"],
     37: ["p38_ldarga_value_type_survives_starg"],
+    38: ["p39_frame_homes_survive_filter_suspension"],
+    39: ["p40_jmp_forwards_modified_home_argument"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
 DIAGNOSTICS = ['p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
@@ -78,6 +80,7 @@ BATCHES = {
         'p29_localloc_blocks_survive_growth_and_are_16_byte_aligned',
         'p33_localloc_blocks_released_on_exception_unwind',
         'p01_ldloca_convu_stind_i4',
+        'p40_jmp_forwards_modified_home_argument',
     ],
     3: [
         'p03_ldloca_convu_ldind_i4',
@@ -100,6 +103,7 @@ BATCHES = {
         'p31_localloc_blocks_released_on_return_and_pooling',
         'p35_ldflda_on_stack_value_type_then_ldind',
         'p09_ldloca_convu_survives_callee_stack_growth',
+        'p39_frame_homes_survive_filter_suspension',
     ],
 }
 BATCH_CONTROLS = [name for names in BATCHES.values() for name in names]
@@ -255,19 +259,19 @@ class PointerScriptTests(unittest.TestCase):
 
     def test_singleton_partition_is_one_control_per_shard(self):
         self.assertTrue(all(len(names) == 1 for names in CONTROLS_BY_SHARD.values()))
-        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 38)))
-        self.assertEqual(len(set(CONTROLS)), 37)
+        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 40)))
+        self.assertEqual(len(set(CONTROLS)), 39)
         for config in ('no-features', 'multithreading'):
-            for invalid in ('0', '38'):
+            for invalid in ('0', '40'):
                 self.invoke('controls', '--configuration', config, '--shard', invalid, '--dry-run', ok=False)
         self.assertEqual(self.recorded(), [])
 
     def test_guard_good_and_stale_or_ignored(self):
         for config in ('no-features', 'multithreading'):
-            self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
+            self.assertIn('39 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
             for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed', 'new-enabled'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
-        self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
+        self.assertIn('39 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
@@ -415,7 +419,7 @@ class PointerScriptTests(unittest.TestCase):
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
                 self.assertEqual(self.recorded(), [])
                 # Even changing both catalogs cannot silently grow or pair the
-                # reviewed 37 singleton controls; a promotion needs a review.
+                # reviewed 39 singleton controls; a promotion needs a review.
                 self.script.write_text(catalog_only.replace(table_end, f"'{full}|{shard}|1'\n" + table_end))
                 self.env['CONTROLS'] = json.dumps(CONTROLS + [name])
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
@@ -423,7 +427,7 @@ class PointerScriptTests(unittest.TestCase):
 
     def test_batches_cover_each_control_exactly_once(self):
         self.assertEqual(sorted(BATCH_CONTROLS), sorted(CONTROLS))
-        self.assertEqual(len(BATCH_CONTROLS), 37)
+        self.assertEqual(len(BATCH_CONTROLS), 39)
         self.assertEqual(list(BATCHES), [1, 2, 3, 4])
         for names in BATCHES.values():
             self.assertTrue(9 <= len(names) <= 10)
@@ -433,7 +437,7 @@ class PointerScriptTests(unittest.TestCase):
         for names in BATCHES.values():
             self.assertEqual(names, sorted(names, key=shard_of.get))
         out = self.invoke('verify-batches')
-        self.assertIn('37 reviewed controls in 4 batches', out)
+        self.assertIn('39 reviewed controls in 4 batches', out)
         self.assertEqual(self.recorded(), [])  # static: no Cargo
 
     def test_batch_tests_are_outside_the_probe_discovery_namespace(self):
@@ -442,7 +446,7 @@ class PointerScriptTests(unittest.TestCase):
         for number in BATCHES:
             self.assertNotRegex(f'pointer_provenance_tests::batches::batch_{number}', r'^pointer_provenance_tests::p')
         # The discovery guard still passes with batch tests present in the fake listing and metadata.
-        self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
+        self.assertIn('39 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
 
     def test_verify_batches_rejects_drift(self):
         original = SOURCE.read_text()

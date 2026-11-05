@@ -121,8 +121,8 @@ the variable is reassigned.
 - **Lifetime.** The frame owns a zeroed `RawBlock` (`FrameHomes`), allocated before the frame is
   pushed and released when the frame is reset for a new call, prepared for the pool, or dropped,
   like its `localloc` blocks. Zero bytes are the default value of every local; each homed
-  argument is copied from its evaluation-stack slot when the frame is entered, and only `jmp`
-  reads that slot again.
+  argument is copied from its evaluation-stack slot when the frame is entered. `jmp` forwards
+  the current home value before releasing the source frame.
 - **Access.** Every access goes through a raw pointer derived from the block base; no reference
   to the bytes is formed except the shared view used while tracing and the read-only views
   `ManagedPtr::with_frame_home_data` hands to span intrinsics. Loads and stores encode values as
@@ -134,7 +134,10 @@ the variable is reassigned.
   gives every block a serial that is never reused on its thread, so a byref cannot resolve into a
   later frame at the same depth. Every access resolves the byref through `frame_home_window`
   (`crates/dotnet-value/src/pointer/mod.rs`): `FrameStack::home_block` searches the live frames
-  from the current one down for that serial, and the accessed range must lie inside the block.
+  from the current one down, then filter-suspended frames, for that serial; the accessed range
+  must lie inside the block. Suspended homes stay allocated and traced across collection and
+  restoration. Return, unwind, tail-call replacement, `jmp`, suspension discard and teardown
+  release homes; pooled frames retain no home block.
   A byref whose frame has returned fails with `MemoryAccessError::InvalidOrigin`, which the
   instruction handlers report as a host error; an out-of-range access fails with
   `MemoryAccessError::BoundsCheck` and raises `System.AccessViolationException` like other

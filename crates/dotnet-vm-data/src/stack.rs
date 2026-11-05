@@ -980,11 +980,12 @@ impl<'gc> FrameStack<'gc> {
 
     /// The base and length of the home block of the live frame with `serial`. Searches from
     /// the current frame down, so a byref into the current or a nearby caller frame resolves
-    /// in a few steps; a returned frame's serial is found nowhere.
+    /// in a few steps. Filter-suspended frames remain live; pooled frames do not.
     pub fn home_block(&self, serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
         self.frames
             .iter()
             .rev()
+            .chain(self.suspended_frames.iter().rev())
             .find_map(|frame| frame.homes.block_for(serial))
     }
 

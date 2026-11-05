@@ -4,7 +4,7 @@ Evidence record. Not instructions; current work is in [docs/plans/](../plans/REA
 
 This file is the single place where the review's IDs are defined:
 
-- **Probe IDs** (`p00`…`p38`, `p_null…`, `p_wide…`) are the rows of the [probe catalog](#probe-catalog);
+- **Probe IDs** (`p00`…`p40`, `p_null…`, `p_wide…`) are the rows of the [probe catalog](#probe-catalog);
   each names an exact test in the [owning VM module](../../crates/dotnet-vm/src/pointer_provenance_tests.rs),
   run through the [catalog/runner](../../scripts/pointer_provenance.sh).
 - **Finding IDs** (`R01`–`R13`) are the rows of the [finding map](#finding-to-work-map).
@@ -74,18 +74,34 @@ Each name is an exact `pointer_provenance_tests::<name>` filter in the owning so
 | [`p28_stind_i_fresh_pointer_through_heap_memory_dereferences`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new (step 5.4) | R11 | C; Phase 6 control passed in both configurations; no step 0.1 probe baseline, see M1b outcomes below |
 | [`p29_localloc_blocks_survive_growth_and_are_16_byte_aligned`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; stable blocks survive later allocations and are 16-byte aligned |
 | [`p30_localloc_block_survives_nested_callee_localloc`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; caller block remains readable after nested callee allocation |
-| [`p31_localloc_blocks_released_on_return_and_pooling`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; frame blocks released on return and pooling |
-| [`p32_localloc_blocks_released_on_tail_call_replacement`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; replaced-frame blocks released on tail call |
-| [`p33_localloc_blocks_released_on_exception_unwind`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; unwound-frame blocks released before catch |
-| [`p34_localloc_blocks_released_on_executor_teardown`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; live blocks released on executor teardown |
+| [`p31_localloc_blocks_released_on_return_and_pooling`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; frame blocks and homes released on return and pooling |
+| [`p32_localloc_blocks_released_on_tail_call_replacement`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; replaced-frame blocks and homes released on tail call |
+| [`p33_localloc_blocks_released_on_exception_unwind`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; unwound-frame blocks and homes released before catch |
+| [`p34_localloc_blocks_released_on_executor_teardown`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R05 | C; VM-M control passed in both configurations; live blocks and homes released on executor teardown |
 | [`p35_ldflda_on_stack_value_type_then_ldind`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R03 | C; post-repair VM-M pass in both configurations; pre-repair exception resolution failure, not UB; throw site inferred only; snapshot read, not stack-home write-through |
 | [`p36_static_address_survives_forced_collection`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R03 | C; one-byte direct static access after forced collection passed VM-M in both configurations; refutes only the tested lifetime hypothesis |
 | [`p37_ldloca_value_type_survives_stloc`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R02 | C; VM-M control passed in both configurations with local frame homes (2026-11-04, singleton shard), and again with `FrameHome` byrefs; without homes the same probe was `miri-ub` (dangling 4-byte access after `stloc` replaced the value-type slot's buffer) |
 | [`p38_ldarga_value_type_survives_starg`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R02 | C; argument analogue of p37 (`ldarga`, `starg`, `conv.u`, `stind`); VM-M control passed in both configurations with argument homes (2026-11-04, singleton shard 37) |
+| [`p39_frame_homes_survive_filter_suspension`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R02 | C; VM-M passed in both configurations; filter acceptance/rejection, collection of an array rooted only in a suspended home, checked reads/writes and bounds rejection; retired serial rejected after unwind |
+| [`p40_jmp_forwards_modified_home_argument`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | new | R02 | C; VM-M passed in both configurations; scalar and value-type homes forward current arguments across `jmp`; replaced serial rejected and target serial fresh |
 | [`p_null_through_pointer_local_address`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | pass-2:168 | R05, R11 | C; step 0.1 and Phase 6 VM-M controls passed in both configurations; see M1b outcomes below |
 | [`p_wide_store_into_int_local`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | pass-2:179 | R11 | X; VM-M current outcome unknown. Natively, with frame homes the 8-byte `stind.i8` into the 4-byte homed local fails the frame-home bounds check and raises `System.AccessViolationException`, which the mock corlib cannot resolve (2026-11-04); the source assertion (`0x55`) is not reached |
 
 For an individual diagnostic-only probe, use e.g. `bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p01_ldloca_convu_stind_i4`; this is an opt-in diagnostic, not a CI gate. Do not run known-UB diagnostics natively. `bash scripts/pointer_provenance.sh list` lists the exact catalog; see the script for options. 
+
+## Plan 01 slice 3 verification (2026-11-04)
+
+The extended p31–p34 controls and new p39/p40 controls passed as guarded Miri singletons in
+both no-features and multithreading configurations, using the pinned nightly and Tree Borrows
+flags from `scripts/pointer_provenance.sh`. The final suspended-array version of p33/p39 was
+also rerun without features. The eight `frame_alloc::` library tests passed under Miri in both
+configurations, including home lookup across suspension/restoration and invalidation on discard.
+
+`./check.sh --fast` passed on the final test version: 614, 734 and 749 tests passed in its three
+configurations (7, 6 and 8 expected skips). The pointer manifest's 21 tests, batch membership
+verification and doc-drift checks passed. This completes lifecycle slice 3; block-operation
+validation and evaluation-stack fixup deletion remain in slice 4. The existing nested-filter
+suspension limitation below is not claimed resolved by these controls.
 
 ## M1d baseline and outcomes
 
@@ -356,7 +372,7 @@ current plan are listed under [Not yet planned](../plans/README.md#not-yet-plann
 | ID | Finding | Evidence | Scoped result |
 |---|---|---|---|
 | R01 | Oversized heap slice, shared-derived writable address, safe out-of-bounds formation | Baseline p10/p13/p14/p16/p20 each miri-ub at the oversized slice; after the M1a repair all five pass in both configurations; p11 is a passing control. Three LIB-M recreations also pass. | Heap access repaired for the tested paths. Stack and static targets are not covered. |
-| R02 | Assigning to a local invalidates an earlier byref; evaluation-stack growth invalidates an address held as a native integer | p01/p09/p37/p38 controls with p02/p03; LIB-M absent; models E12b/E13 distinct | Repaired for locals and arguments by [frame homes](../GC_AND_MEMORY_SAFETY.md#frame-owned-homes); byrefs to homes resolve through the frame check (`FrameHome`). Frame lifecycle edge cases, block operations and fixup removal remain under [plan 01](../plans/01-stable-frame-homes.md). |
+| R02 | Assigning to a local invalidates an earlier byref; evaluation-stack growth invalidates an address held as a native integer | p01/p09/p37/p38 controls with p02/p03; LIB-M absent; models E12b/E13 distinct | Repaired for locals and arguments by [frame homes](../GC_AND_MEMORY_SAFETY.md#frame-owned-homes); byrefs to homes resolve through the frame check (`FrameHome`). Block operations and fixup removal remain under [plan 01](../plans/01-stable-frame-homes.md). |
 | R03 | Transient owner destroyed while in use; expired static/arena guards | Pre-repair native liveness/clone failures and Miri dangling accesses in both configurations; repaired tests pass. Controlled cross-arena teardown gave Miri UAF before repair, rejection and in-flight lease passes after (multithreading only). p36 refutes the static allocation-lifetime hypothesis for its direct one-byte case; p12 panicked on alignment, not UB. | Owner/guard retention repaired for the tested paths. Fill reachability is source-inferred. |
 | R04 | Unmanaged serde exposure; integer GC transport | Historical LIB-M sources absent; p05 VM-M control refutes unconditional failure only. Retained-transport recreation and isolated strict-core experiment pass. | Retained GC transport implemented. Unmanaged serde not changed; p05 is not a general serde fix. |
 | R05 | Repeated localloc; pointer arithmetic, null, wrapping and comparison | Step 0.1 measured p06/p08 Miri UB and p17/p18 assertion failures, p_null passed; Phase 6 controls p06–p08, p17/p18, p21–p24 and p_null passed in both configurations. M1c p04 and p29–p34 passed in both configurations. | Arithmetic, comparison and null paths repaired; stable frame-local `localloc` storage and its tested lifecycle paths repaired. |

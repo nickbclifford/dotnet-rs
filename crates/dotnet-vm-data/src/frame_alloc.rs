@@ -363,6 +363,21 @@ mod tests {
                 Default::default(),
             );
         }
+        let serial = frames.issue_home_serial();
+        let layout = crate::frame_homes::FrameHomeLayout::new(
+            dotnet_value::layout::FieldLayoutManager {
+                fields: Default::default(),
+                total_size: 16,
+                alignment: 16,
+                gc_desc: Default::default(),
+                has_ref_fields: false,
+            },
+            Box::new([]),
+            Box::new([]),
+        );
+        frames.frames[1].homes =
+            crate::frame_homes::FrameHomes::allocate(std::sync::Arc::new(layout), serial).unwrap();
+        let home = frames.home_block(serial).unwrap();
         let pointer = frames.frames[1].state.allocations.allocate(1).unwrap();
         // SAFETY: F10.RawMemoryAccessValid — the frame owns this live one-byte block.
         unsafe { pointer.as_ptr().write(0x5a) };
@@ -371,7 +386,8 @@ mod tests {
         assert_eq!(frames.frames.len(), 1);
         assert_eq!(frames.suspended_frames.len(), 1);
         assert_eq!(frames.suspended_frames[0].state.allocations.len(), 1);
-        assert_eq!(live_blocks(), baseline + 1);
+        assert_eq!(live_blocks(), baseline + 2);
+        assert_eq!(frames.home_block(serial), Some(home));
         frames.frames[0].state.allocations.allocate(4096).unwrap();
         frames.restore_suspended();
         assert!(frames.suspended_frames.is_empty());
@@ -380,7 +396,11 @@ mod tests {
         // SAFETY: F10.RawMemoryAccessValid — the restored frame still owns the
         // initialized byte; moving frames did not move or release its allocation.
         assert_eq!(unsafe { pointer.as_ptr().read() }, 0x5a);
-        assert_eq!(live_blocks(), baseline + 2);
+        assert_eq!(live_blocks(), baseline + 3);
+        assert_eq!(frames.home_block(serial), Some(home));
+        frames.suspend_above(0);
+        frames.clear_suspended();
+        assert!(frames.home_block(serial).is_none());
         frames.clear();
         assert_eq!(live_blocks(), baseline);
         assert_eq!(bytes(), baseline_bytes);

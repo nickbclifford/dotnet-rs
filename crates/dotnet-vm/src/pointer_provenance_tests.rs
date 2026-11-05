@@ -2499,6 +2499,8 @@ fn p31_localloc_blocks_released_on_return_and_pooling() {
             Instruction::LoadConstantInt32(32),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Return,
         ],
         locals: vec![local(BaseType::IntPtr)],
@@ -2519,6 +2521,8 @@ fn p31_localloc_blocks_released_on_return_and_pooling() {
             Instruction::LoadConstantInt32(16),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Call {
                 tail_call: false,
                 param0: MethodSource::User(UserMethod::Definition(callee_idx)),
@@ -2562,7 +2566,27 @@ fn p31_localloc_blocks_released_on_return_and_pooling() {
     run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
         let frame_stack = &engine.stack.execution.frame_stack;
         let depth = frame_stack.len();
-        let blocks = dotnet_utils::raw_block::live_blocks();
+        let homes = frame_stack
+            .frames
+            .iter()
+            .chain(frame_stack.suspended_frames.iter())
+            .filter(|frame| !frame.homes.is_empty())
+            .count();
+        assert!(
+            frame_stack
+                .pooled_frames
+                .iter()
+                .all(|frame| frame.homes.is_empty())
+        );
+        for frame in &frame_stack.frames {
+            if !frame.state.allocations.is_empty() {
+                assert!(
+                    !frame.homes.is_empty(),
+                    "addressed local must have a live home"
+                );
+            }
+        }
+        let blocks = dotnet_utils::raw_block::live_blocks() - homes;
         assert!(depth <= 2, "unexpected frame depth: {depth}");
         match depth {
             0 => assert_eq!(blocks, baseline),
@@ -2648,6 +2672,8 @@ fn p32_localloc_blocks_released_on_tail_call_replacement() {
             Instruction::LoadConstantInt32(32),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Return,
         ],
         locals: vec![local(BaseType::IntPtr)],
@@ -2668,6 +2694,8 @@ fn p32_localloc_blocks_released_on_tail_call_replacement() {
             Instruction::LoadConstantInt32(16),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Call {
                 tail_call: true,
                 param0: MethodSource::User(UserMethod::Definition(callee_idx)),
@@ -2710,7 +2738,27 @@ fn p32_localloc_blocks_released_on_tail_call_replacement() {
     run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
         let frame_stack = &engine.stack.execution.frame_stack;
         let depth = frame_stack.len();
-        let blocks = dotnet_utils::raw_block::live_blocks();
+        let homes = frame_stack
+            .frames
+            .iter()
+            .chain(frame_stack.suspended_frames.iter())
+            .filter(|frame| !frame.homes.is_empty())
+            .count();
+        assert!(
+            frame_stack
+                .pooled_frames
+                .iter()
+                .all(|frame| frame.homes.is_empty())
+        );
+        for frame in &frame_stack.frames {
+            if !frame.state.allocations.is_empty() {
+                assert!(
+                    !frame.homes.is_empty(),
+                    "addressed local must have a live home"
+                );
+            }
+        }
+        let blocks = dotnet_utils::raw_block::live_blocks() - homes;
         max_blocks = max_blocks.max(blocks);
         assert!(
             blocks <= baseline + 1,
@@ -2778,6 +2826,16 @@ fn p32_localloc_blocks_released_on_tail_call_replacement() {
 
 #[test]
 fn p33_localloc_blocks_released_on_exception_unwind() {
+    frame_blocks_exception_lifecycle(None);
+}
+
+#[test]
+fn p39_frame_homes_survive_filter_suspension() {
+    frame_blocks_exception_lifecycle(Some(0));
+    frame_blocks_exception_lifecycle(Some(1));
+}
+
+fn frame_blocks_exception_lifecycle(filter_result: Option<i32>) {
     let baseline = dotnet_utils::raw_block::live_blocks();
     let loader = get_mock_loader();
     #[allow(clippy::arc_with_non_send_sync)]
@@ -2817,11 +2875,18 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
             Instruction::LoadConstantInt32(64),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
+            Instruction::LoadConstantInt32(4),
+            Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+            Instruction::StoreLocal(1),
+            Instruction::LoadLocalAddress(1),
+            Instruction::Pop,
             Instruction::NewObject(UserMethod::Reference(exception_ctor)),
             Instruction::Throw,
             Instruction::Return,
         ],
-        locals: vec![local(BaseType::IntPtr)],
+        locals: vec![local(BaseType::IntPtr), local(BaseType::Object)],
     );
     let thrower_idx = res.push_method(
         type_idx,
@@ -2839,6 +2904,8 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
             Instruction::LoadConstantInt32(32),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Call {
                 tail_call: false,
                 param0: MethodSource::User(UserMethod::Definition(thrower_idx)),
@@ -2857,12 +2924,14 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
         ),
     );
 
-    let caller_body = make_test_method!(
+    let mut caller_body = make_test_method!(
         max_stack: 2,
         instructions: vec![
             Instruction::LoadConstantInt32(16),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Call {
                 tail_call: false,
                 param0: MethodSource::User(UserMethod::Definition(callee_idx)),
@@ -2878,12 +2947,30 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
             kind: body::ExceptionKind::TypedException(MethodType::Base(Box::new(
                 BaseType::class(exception_type_ref),
             ))),
-            try_offset: 3,
+            try_offset: 5,
             try_length: 1,
-            handler_offset: 6,
+            handler_offset: 8,
             handler_length: 3,
         }])],
     );
+    if let Some(result) = filter_result {
+        caller_body.instructions.splice(
+            8..8,
+            [
+                Instruction::Pop,
+                Instruction::LoadConstantInt32(result),
+                Instruction::EndFilter,
+            ],
+        );
+        let body::DataSection::ExceptionHandlers(handlers) = &mut caller_body.data_sections[0]
+        else {
+            unreachable!()
+        };
+        handlers[0].handler_offset = 11;
+        let mut filter = handlers[0].clone();
+        filter.kind = body::ExceptionKind::Filter { offset: 8 };
+        handlers.insert(0, filter);
+    }
     let caller_idx = res.push_method(
         type_idx,
         Method::new(
@@ -2916,21 +3003,123 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
     let mut handler_started = false;
     let mut caller_returned = false;
     let mut max_suspended_frames = 0;
+    struct HomeResolver<'a, 'gc>(&'a dotnet_vm_data::FrameStack<'gc>);
+    impl<'gc> dotnet_value::pointer::ManagedPtrResolver<'gc> for HomeResolver<'_, 'gc> {
+        fn stack_slot_base(&self, _: crate::StackSlotIndex) -> Option<std::ptr::NonNull<u8>> {
+            None
+        }
+        fn static_storage_base(
+            &self,
+            _: &dotnet_value::pointer::StaticMetadata,
+        ) -> Option<std::ptr::NonNull<u8>> {
+            None
+        }
+        fn frame_home_block(
+            &self,
+            serial: dotnet_value::pointer::FrameHomeSerial,
+        ) -> Option<(std::ptr::NonNull<u8>, usize)> {
+            self.0.home_block(serial)
+        }
+    }
+    let mut suspended_home = None;
+    let mut collected_suspended = false;
     run_entrypoint_observed(shared, entrypoint, |engine, step_result| {
         let frame_stack = &engine.stack.execution.frame_stack;
         let depth = frame_stack.len();
-        let blocks = dotnet_utils::raw_block::live_blocks();
-        max_suspended_frames = max_suspended_frames.max(frame_stack.suspended_frames.len());
-        assert_eq!(
-            frame_stack.suspended_frames.len(),
-            0,
-            "ordinary catch handling unexpectedly suspended frames"
+        let homes = frame_stack
+            .frames
+            .iter()
+            .chain(frame_stack.suspended_frames.iter())
+            .filter(|frame| !frame.homes.is_empty())
+            .count();
+        assert!(
+            frame_stack
+                .pooled_frames
+                .iter()
+                .all(|frame| frame.homes.is_empty())
         );
+        for frame in &frame_stack.frames {
+            if !frame.state.allocations.is_empty() {
+                assert!(
+                    !frame.homes.is_empty(),
+                    "addressed local must have a live home"
+                );
+            }
+        }
+        let blocks = dotnet_utils::raw_block::live_blocks() - homes;
+        max_suspended_frames = max_suspended_frames.max(frame_stack.suspended_frames.len());
+        if filter_result.is_none() {
+            assert!(frame_stack.suspended_frames.is_empty());
+        }
+        for frame in &frame_stack.suspended_frames {
+            if let Some(slot) = frame.homes.local(1) {
+                let checked = dotnet_value::pointer::frame_home_window(
+                    &HomeResolver(frame_stack),
+                    slot.serial,
+                    slot.home.offset,
+                    ObjectRef::SIZE,
+                )
+                .unwrap();
+                // SAFETY: F10.FrameHomeChecked — checked covers the initialized object home.
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(checked.as_ptr(), ObjectRef::SIZE) };
+                // SAFETY: F1.GcHandleRooted — guest stloc serialized this same arena's array;
+                // the suspended frame is rooted and traces its home. The decoded handle stays
+                // in this observer and is dropped before collection resumes.
+                let object = unsafe { ObjectRef::read_unchecked(bytes) };
+                object.as_heap_storage(|storage| {
+                    let HeapStorage::Vec(vector) = storage else {
+                        panic!("expected suspended array")
+                    };
+                    assert_eq!(&*vector.dims, &[4]);
+                });
+            }
+            if let Some(slot) = frame.homes.local(0) {
+                let block = frame_stack
+                    .home_block(slot.serial)
+                    .expect("suspended home must resolve");
+                assert_eq!(block.0, slot.address);
+                // SAFETY: F10.FrameHomeChecked — lookup found this live suspended frame;
+                // its IntPtr home is initialized and pointer-sized.
+                let checked = dotnet_value::pointer::frame_home_window(
+                    &HomeResolver(frame_stack),
+                    slot.serial,
+                    slot.home.offset,
+                    std::mem::size_of::<usize>(),
+                )
+                .expect("suspended home must pass range and liveness checks");
+                // SAFETY: F10.FrameHomeChecked — the checked window covers the initialized IntPtr home.
+                let value = unsafe { checked.as_ptr().cast::<usize>().read_unaligned() };
+                // SAFETY: F10.FrameHomeChecked — the checked window is live and writable;
+                // instruction execution is paused during this observer.
+                unsafe { checked.as_ptr().cast::<usize>().write_unaligned(value) };
+                assert!(
+                    dotnet_value::pointer::frame_home_window(
+                        &HomeResolver(frame_stack),
+                        slot.serial,
+                        block.1,
+                        1,
+                    )
+                    .is_err()
+                );
+                assert_ne!(value, 0);
+                suspended_home = Some((slot.serial, block.0, value));
+            }
+        }
+        if let Some((serial, address, value)) = suspended_home
+            && let Some((base, _)) = frame_stack.home_block(serial)
+        {
+            assert_eq!(base, address);
+            // SAFETY: F10.FrameHomeChecked — the serial still resolves to a live initialized IntPtr home.
+            let actual = unsafe { base.as_ptr().cast::<usize>().read_unaligned() };
+            assert_eq!(actual, value);
+        }
         assert!(depth <= 4, "unexpected exception frame depth: {depth}");
 
         let active_allocations = frame_stack
             .frames
             .iter()
+            .chain(frame_stack.suspended_frames.iter())
             .map(|frame| frame.state.allocations.len())
             .sum::<usize>();
         assert_eq!(blocks, baseline + active_allocations);
@@ -2949,8 +3138,14 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
 
         if depth == 1
             && matches!(step_result, StepResult::Exception)
-            && frame_stack.frames[0].state.ip == 6
+            && frame_stack.frames[0].state.ip == if filter_result.is_some() { 11 } else { 8 }
         {
+            if let Some((serial, _, _)) = suspended_home {
+                assert!(
+                    frame_stack.home_block(serial).is_none(),
+                    "unwound home must stop resolving"
+                );
+            }
             assert!(caller_allocated, "handler began before caller localloc");
             assert!(callee_allocated, "handler began before callee localloc");
             assert!(thrower_allocated, "handler began before thrower localloc");
@@ -2978,6 +3173,9 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
 
         if caller_returned {
             Observe::Stop
+        } else if !frame_stack.suspended_frames.is_empty() && !collected_suspended {
+            collected_suspended = true;
+            Observe::Collect
         } else {
             Observe::Continue
         }
@@ -2988,7 +3186,13 @@ fn p33_localloc_blocks_released_on_exception_unwind() {
     assert!(thrower_allocated, "thrower localloc was not observed");
     assert!(handler_started, "catch handler was not observed");
     assert!(caller_returned, "caller return was not observed");
-    assert_eq!(max_suspended_frames, 0);
+    if filter_result.is_some() {
+        assert!(max_suspended_frames >= 2);
+        assert!(collected_suspended);
+        assert!(suspended_home.is_some());
+    } else {
+        assert_eq!(max_suspended_frames, 0);
+    }
     assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
 }
 
@@ -3010,6 +3214,8 @@ fn p34_localloc_blocks_released_on_executor_teardown() {
             Instruction::LoadConstantInt32(32),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Return,
         ],
         locals: vec![local(BaseType::IntPtr)],
@@ -3030,6 +3236,8 @@ fn p34_localloc_blocks_released_on_executor_teardown() {
             Instruction::LoadConstantInt32(16),
             Instruction::LocalMemoryAllocate,
             Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Pop,
             Instruction::Call {
                 tail_call: false,
                 param0: MethodSource::User(UserMethod::Definition(callee_idx)),
@@ -3068,7 +3276,27 @@ fn p34_localloc_blocks_released_on_executor_teardown() {
     let mut observed_two_live_blocks = false;
     run_entrypoint_observed(shared, entrypoint, |engine, _step_result| {
         let frame_stack = &engine.stack.execution.frame_stack;
-        let blocks = dotnet_utils::raw_block::live_blocks();
+        let homes = frame_stack
+            .frames
+            .iter()
+            .chain(frame_stack.suspended_frames.iter())
+            .filter(|frame| !frame.homes.is_empty())
+            .count();
+        assert!(
+            frame_stack
+                .pooled_frames
+                .iter()
+                .all(|frame| frame.homes.is_empty())
+        );
+        for frame in &frame_stack.frames {
+            if !frame.state.allocations.is_empty() {
+                assert!(
+                    !frame.homes.is_empty(),
+                    "addressed local must have a live home"
+                );
+            }
+        }
+        let blocks = dotnet_utils::raw_block::live_blocks() - homes;
         assert!(
             blocks <= baseline + 2,
             "unexpected localloc block count: {blocks}"
@@ -3098,6 +3326,105 @@ fn p34_localloc_blocks_released_on_executor_teardown() {
         "two active localloc blocks were not observed"
     );
     assert_eq!(dotnet_utils::raw_block::live_blocks(), baseline);
+}
+
+#[test]
+fn p40_jmp_forwards_modified_home_argument() {
+    for value_type in [false, true] {
+        let (shared, entrypoint) = build_program(
+            if value_type {
+                "JmpStructHome"
+            } else {
+                "JmpHome"
+            },
+            |res, type_idx| {
+                let (arg_type, field) = if value_type {
+                    let (_, ty, field) = push_test_value_type(res, "JmpStruct", false, false);
+                    (ty, Some(field))
+                } else {
+                    (BaseType::Int32, None)
+                };
+                let sig = MethodSignature {
+                    parameters: vec![Parameter(
+                        vec![],
+                        ParameterType::Value(MethodType::Base(Box::new(arg_type.clone()))),
+                    )],
+                    ..parameterless_i32_signature()
+                };
+                let mut target_instructions = vec![
+                    Instruction::LoadArgumentAddress(0),
+                    Instruction::Pop,
+                    Instruction::LoadArgument(0),
+                ];
+                if let Some(field) = field {
+                    target_instructions.push(Instruction::LoadField {
+                        param0: field,
+                        unaligned: None,
+                        volatile: false,
+                    });
+                }
+                target_instructions.push(Instruction::Return);
+                let target = res.push_method(
+                    type_idx,
+                    Method::new(
+                        Accessibility::Public,
+                        sig.clone(),
+                        "Target",
+                        Some(make_test_method!(max_stack: 1, instructions: target_instructions)),
+                    ),
+                );
+                let jumper = res.push_method(type_idx, Method::new(
+                Accessibility::Public, sig, "Jumper",
+                Some(make_test_method!(max_stack: 2, instructions: vec![
+                    Instruction::LoadLocalAddress(0), Instruction::LoadConstantInt32(50),
+                    stind(StoreType::Int32), Instruction::LoadLocal(0), Instruction::StoreArgument(0),
+                    Instruction::LoadArgumentAddress(0), Instruction::LoadConstantInt32(73),
+                    stind(StoreType::Int32),
+                    Instruction::Jump(MethodSource::User(UserMethod::Definition(target))),
+                ], locals: vec![local(arg_type.clone())])),
+            ));
+                (
+                    1,
+                    vec![local(arg_type)],
+                    vec![
+                        Instruction::LoadLocal(0),
+                        Instruction::Call {
+                            tail_call: false,
+                            param0: MethodSource::User(UserMethod::Definition(jumper)),
+                        },
+                        Instruction::Return,
+                    ],
+                )
+            },
+        );
+        let mut source_serial = None;
+        let mut saw_target = false;
+        let mut result = None;
+        run_entrypoint_observed(shared, entrypoint, |engine, step| {
+            let frames = &engine.stack.execution.frame_stack;
+            if let Some(frame) = frames.frames.last() {
+                match frame.state.info_handle.source.method().name.as_ref() {
+                    "Jumper" => source_serial = Some(frame.homes.argument(0).unwrap().serial),
+                    "Target" => {
+                        let old = source_serial.expect("jumper must run before target");
+                        assert!(frames.home_block(old).is_none());
+                        assert_ne!(frame.homes.argument(0).unwrap().serial, old);
+                        assert!(frames.pooled_frames.iter().all(|f| f.homes.is_empty()));
+                        saw_target = true;
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(step, StepResult::Return) {
+                result = Some(engine.stack.execution.evaluation_stack.pop().as_i32());
+                Observe::Stop
+            } else {
+                Observe::Continue
+            }
+        });
+        assert!(saw_target);
+        assert_eq!(result, Some(73));
+    }
 }
 
 // ---- Batched execution of the reviewed controls ------------------------------------------------
@@ -3161,6 +3488,7 @@ mod batches {
         p29_localloc_blocks_survive_growth_and_are_16_byte_aligned,
         p33_localloc_blocks_released_on_exception_unwind,
         p01_ldloca_convu_stind_i4,
+        p40_jmp_forwards_modified_home_argument,
     ]);
 
     control_batch!(batch_3: [
@@ -3185,5 +3513,6 @@ mod batches {
         p31_localloc_blocks_released_on_return_and_pooling,
         p35_ldflda_on_stack_value_type_then_ldind,
         p09_ldloca_convu_survives_callee_stack_growth,
+        p39_frame_homes_survive_filter_suspension,
     ]);
 }

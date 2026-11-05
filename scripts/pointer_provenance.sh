@@ -44,6 +44,8 @@ expected_controls=(
 'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|35|3'
 'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth|36|4'
 'pointer_provenance_tests::p38_ldarga_value_type_survives_starg|37|1'
+'pointer_provenance_tests::p39_frame_homes_survive_filter_suspension|38|4'
+'pointer_provenance_tests::p40_jmp_forwards_modified_home_argument|39|2'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -88,12 +90,14 @@ catalog=(
 'pointer_provenance_tests::p36_static_address_survives_forced_collection|control|no|33'
 'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|control|no|35'
 'pointer_provenance_tests::p38_ldarga_value_type_survives_starg|control|no|37'
+'pointer_provenance_tests::p39_frame_homes_survive_filter_suspension|control|no|38'
+'pointer_provenance_tests::p40_jmp_forwards_modified_home_argument|control|no|39'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=37
+reviewed_count=39
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -246,12 +250,12 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 37:
+    if len(controls) != 39:
         raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 37 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; 39 singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"

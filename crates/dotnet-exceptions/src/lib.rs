@@ -419,8 +419,12 @@ impl ExceptionHandlingSystem {
                                 section_index,
                                 handler_index,
                             };
-                            let original_ip = ctx.original_ip();
-                            let original_stack_height = ctx.original_stack_height();
+                            // Save the frame that owns the filter, not the throwing frame.
+                            // Restoration expects an absolute evaluation-stack height.
+                            let filter_frame = &ctx.frame_stack().frames[frame_index];
+                            let original_ip = filter_frame.state.ip;
+                            let original_stack_height =
+                                filter_frame.base.stack + filter_frame.stack_height;
 
                             *ctx.exception_mode_mut() = ExceptionState::Filtering(FilterState {
                                 exception,

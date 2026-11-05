@@ -112,12 +112,12 @@ Do not build a later slice's support in an earlier slice.
    locals to it, and add a regression that a byref to a returned frame's home is rejected
    rather than accessed. Then home arguments: `ldarga`, `starg`, `ldarg`, copying arguments
    into the block at frame entry. Enable `p09`.
-3. **Frame lifecycle.** Return, unwind, `tail.`/`jmp`, pooling and filter suspension release
-   or retain homes correctly. Extend the localloc lifecycle tests that already exist for these
-   paths to cover homes. Known gaps: `jmp` copies the argument slots, so a homed argument
-   changed by `starg` reaches the target with its entry value; and `FrameStack::home_block`
-   does not search suspended frames, so a home byref into a filter-suspended frame is
-   rejected.
+3. **Frame lifecycle (done).** Return, unwind, `tail.`/`jmp`, pooling and filter suspension
+   release or retain homes correctly. The p31–p34 lifecycle controls now include homes;
+   p39 covers filter acceptance/rejection, checked suspended-home access and collection;
+   p40 covers modified scalar/value-type arguments and fresh serials across `jmp`.
+   `jmp` reads current argument homes, and home lookup includes suspended frames. Filter
+   restoration saves the filter-owning frame's instruction pointer and absolute stack height.
 4. **Block ops and fixup deletion.** Route `cpblk`/`initblk`, `Buffer.Memmove` and
    `Unsafe.CopyBlock`/`InitBlock` on a `FrameHome` byref through `frame_home_window`; today
    they use its cached address unchecked. Enable `p15`. Then step 6. The remaining
