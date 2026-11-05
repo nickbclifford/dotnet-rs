@@ -91,7 +91,7 @@ pub fn ldelem<
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(load_type));
     let offset = layout.size() * index;
 
-    // SAFETY: F4.WidthAligned — read_unaligned handles GC-safe reading from the heap with bounds checking.
+    // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin reads bounds-check `offset` and check `layout` against the array's element layout, so a bad index or element type returns `Err` (thrown below) without reading.
     let value = match unsafe {
         ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type))
     } {
@@ -140,7 +140,7 @@ pub fn ldelem_primitive<
     let layout = LayoutManager::Scalar(layout);
     let offset = layout.size() * index;
 
-    // SAFETY: F4.WidthAligned — read_unaligned handles GC-safe reading from the heap with bounds checking.
+    // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin reads bounds-check `offset` and check `layout` against the array's element layout, so a bad index or element type returns `Err` (thrown below) without reading.
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
     {
         Ok(v) => v,
@@ -280,7 +280,7 @@ pub fn stelem<
     let layout = dotnet_vm_ops::vm_try!(type_layout(store_type, &res_ctx));
     let offset = layout.size() * index;
 
-    // SAFETY: F4.WidthAligned — write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin writes bounds-check `offset`, check reference slots against the array's layout and apply write barriers, so a bad index returns `Err` (thrown below) without writing.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx
@@ -320,7 +320,7 @@ pub fn stelem_primitive<
     let layout = LayoutManager::Scalar(layout);
     let offset = layout.size() * index;
 
-    // SAFETY: F4.WidthAligned — write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    // SAFETY: F10.RawMemoryAccessValid — the origin is the array `obj` itself; heap-origin writes bounds-check `offset`, check reference slots against the array's layout and apply write barriers, so a bad index returns `Err` (thrown below) without writing.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx

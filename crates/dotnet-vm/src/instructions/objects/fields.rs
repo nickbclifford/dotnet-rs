@@ -133,7 +133,7 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     let offset = base_offset + field_layout.position;
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(t));
 
-    // SAFETY: F1.GcHandleRooted — `get_ptr_info` identifies the live parent storage, and the resolved field layout
+    // SAFETY: F1.GcHandleRooted; F10.RawMemoryAccessValid — `get_ptr_info` identifies the live parent storage, and the resolved field layout
     // supplies an in-bounds field offset and the representation read here.
     let value = match unsafe {
         ctx.read_unaligned(origin, offset, &field_layout.layout, Some(target_type))
@@ -194,7 +194,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         base_offset + field_layout.position
     };
 
-    // SAFETY: F1.GcHandleRooted — `get_ptr_info` identifies the live parent storage, and the resolved field layout
+    // SAFETY: F1.GcHandleRooted; F10.RawMemoryAccessValid — `get_ptr_info` identifies the live parent storage, and the resolved field layout
     // supplies an in-bounds field offset; `write_unaligned` also applies the required write barrier.
     match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
         Ok(_) => {}
@@ -485,7 +485,7 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     let name = &field.field().name;
 
     let storage = ctx.statics().get(field.parent.clone(), &static_lookup);
-    // SAFETY: F1.GcHandleRooted — Initialized static storage owns a fixed backing allocation that remains live through
+    // SAFETY: F10.RawMemoryAccessValid — Initialized static storage owns a fixed backing allocation that remains live through
     // the returned Arc; this captures its base for an owner-described static ManagedPtr.
     let base_ptr = unsafe { storage.storage.raw_data_ptr() };
 
@@ -493,7 +493,7 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     let field_layout = layout
         .get_field(field.parent.clone(), name.as_ref())
         .expect("field was resolved from field.parent by locate_field, so it exists in that type's layout");
-    // SAFETY: F1.GcHandleRooted — `field_layout.position` was resolved from this static storage's own layout, so the
+    // SAFETY: F10.RawMemoryAccessValid — `field_layout.position` was resolved from this static storage's own layout, so the
     // derived field address remains within its fixed backing allocation.
     let field_ptr = unsafe { base_ptr.add(field_layout.position.as_usize()) };
 
