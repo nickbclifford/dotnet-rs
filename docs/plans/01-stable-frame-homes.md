@@ -1,6 +1,6 @@
 # Stable homes for addressable locals and arguments
 
-**Status:** In progress
+**Status:** Complete (measured primitive cost accepted)
 **Outcome:** A byref or native-int address taken from a local or argument keeps reading and
 writing that variable across assignment, evaluation-stack growth and nested calls, and Miri
 reports no UB. The evaluation-stack pointer fixup is deleted.
@@ -142,7 +142,12 @@ Do not build a later slice's support in an earlier slice.
    The [slice-5 preflight](../perf-evidence/2026-11-05-stable-frame-homes.md) found
    a reproducible candidate-only EF Core argument-home initialization failure before
    timing. The [enum-home repair](02-frame-home-enum-representation.md) addresses
-   that failure; performance measurement remains incomplete.
+   that failure. The [measurement record](../perf-evidence/2026-11-05-stable-frame-homes-measurement.md)
+   reports no-home control slowdowns. The [control investigation](../perf-evidence/2026-11-05-frame-homes-control-investigation.md)
+   isolates a generated stack-copy cost and launch/placement-sensitive vector results.
+   The [performance closure](../perf-evidence/2026-11-05-frame-homes-performance-closure.md)
+   records three bounded source experiments. None met the repair bar in both feature
+   configurations; the maintainer accepted the documented primitive cost. Slice 5 is complete.
 
 ## Done when
 
