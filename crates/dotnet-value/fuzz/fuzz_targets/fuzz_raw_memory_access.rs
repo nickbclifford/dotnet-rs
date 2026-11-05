@@ -21,7 +21,7 @@ fuzz_target!(|data: (u16, u8, u64, u8)| {
     let mut buffer = [0u64; 128];
     let offset_val = ((offset as usize) % (1024 - 8)) & !(size - 1);
 
-    // SAFETY: F3.InteriorPointerRebased — The rounded offset stays in bounds and preserves alignment for `size`.
+    // SAFETY: F10.RawMemoryAccessValid — The rounded offset stays in bounds and preserves alignment for `size`.
     let ptr = unsafe { buffer.as_mut_ptr().cast::<u8>().add(offset_val) };
 
     // Skip load-incompatible orderings so fuzzing targets memory access rather than invariant panics.

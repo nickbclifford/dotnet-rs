@@ -13,7 +13,7 @@ use dotnet_macros::dotnet_instruction;
 use dotnet_types::{WellKnown, comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
     CLRString, StackValue,
-    layout::{HasLayout, LayoutManager, Scalar},
+    layout::HasLayout,
     object::{HeapStorage, ObjectRef, Vector},
     pointer::{PointerOrigin, UnmanagedPtr},
 };
@@ -282,22 +282,13 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let res_ctx = ctx.current_context();
     let layout = dotnet_vm_ops::vm_try!(type_layout(load_type.clone(), &res_ctx));
 
-    if matches!(&*layout, LayoutManager::Scalar(Scalar::ObjectRef))
-        && offset == dotnet_utils::ByteOffset::new(0)
-        && let PointerOrigin::Stack(idx) = origin.clone()
-        && let StackValue::ObjectRef(slot_ref) = ctx.get_slot_ref(idx).clone()
-    {
-        ctx.push(StackValue::ObjectRef(slot_ref));
-        return StepResult::Continue;
-    }
-
     let mut inline_buffer = [0u8; OBJECT_IO_INLINE_BUFFER_SIZE];
     let mut heap_buffer = Vec::new();
     let size = layout.size().as_usize();
 
     let source_bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
 
-    // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the source origin and offset, while `source_bytes` is
+    // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the source origin and offset, while `source_bytes` is
     // exactly the resolved type layout's size; `read_bytes` performs the storage bounds check.
     if let Err(error) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
         if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
@@ -337,7 +328,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let layout = dotnet_vm_ops::vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     if layout.is_or_contains_refs() {
-        // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and the resolved
+        // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and the resolved
         // reference-bearing layout matches `value`; the callee checks bounds and records barriers.
         if let Err(e) = unsafe { ctx.write_unaligned(origin.clone(), offset, value, &layout) } {
             if let Some(step) = crate::instructions::stale_frame_home(&origin, &e) {
@@ -356,7 +347,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
         let bytes = object_io_bytes_mut(&mut inline_buffer, &mut heap_buffer, size);
         dotnet_vm_ops::vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(bytes);
 
-        // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `bytes` is
+        // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and `bytes` is
         // exactly the resolved non-reference layout's size; the callee performs bounds checks.
         if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {
             if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
@@ -398,7 +389,7 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
         heap_zeros.as_slice()
     };
 
-    // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
+    // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
     // exactly the resolved layout's size; the callee performs the storage bounds check.
     if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {
         if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {

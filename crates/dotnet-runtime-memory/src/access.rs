@@ -1582,8 +1582,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         ) {
                             Ok(info) => Ok(info),
                             Err(
-                                PointerDeserializationError::UnresolvedStackSlot(_)
-                                | PointerDeserializationError::UnresolvedStaticStorage
+                                PointerDeserializationError::UnresolvedStaticStorage
                                 | PointerDeserializationError::UnresolvedFrameHome(_),
                             ) => ManagedPtr::read_metadata_branded(bytes, &gc),
                             Err(error) => Err(error),

@@ -1,8 +1,7 @@
 use crate::{MonitorLockResult, ThreadingIntrinsicHost};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::{ArenaId, StackSlotIndex};
-use dotnet_value::{ManagedPtr, StackValue, pointer::PointerOrigin};
+use dotnet_utils::ArenaId;
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::NULL_REF_MSG;
 use std::{
@@ -77,13 +76,6 @@ pub fn intrinsic_monitor_exit<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-fn find_success_flag_index(success_ptr: &ManagedPtr) -> Option<usize> {
-    if let PointerOrigin::Stack(idx) = &success_ptr.origin() {
-        return Some(idx.as_usize());
-    }
-    None
-}
-
 /// System.Threading.Monitor::Enter(object)
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub fn intrinsic_monitor_enter_obj<'gc, T: ThreadingIntrinsicHost<'gc>>(
@@ -130,8 +122,6 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
-    let success_flag_index = find_success_flag_index(&success_ptr);
-
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
@@ -150,19 +140,15 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
             MonitorLockResult::Timeout => unreachable!(),
         }
 
-        if let Some(index) = success_flag_index {
-            ctx.threading_set_stack_slot(StackSlotIndex::new(index), StackValue::Int32(1));
-        } else {
-            // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
-            // the native `lockTaken` out parameter, which is one byte wide.
-            unsafe {
-                ctx.write_bytes(
-                    success_ptr.origin().clone(),
-                    success_ptr.byte_offset(),
-                    &[1u8],
-                )
-                .expect("Failed to write success flag");
-            }
+        // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
+        // the native `lockTaken` out parameter, which is one byte wide.
+        unsafe {
+            ctx.write_bytes(
+                success_ptr.origin().clone(),
+                success_ptr.byte_offset(),
+                &[1u8],
+            )
+            .expect("Failed to write success flag");
         };
 
         // Pop success_ptr, then obj_ref after all work that may yield or trigger GC.
@@ -215,8 +201,6 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
     let timeout_ms = ctx.peek_stack_at(1).as_i32();
     let obj_ref = ctx.peek_stack_at(2).as_object_ref();
 
-    let success_flag_index = find_success_flag_index(&success_ptr);
-
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
@@ -240,22 +224,15 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
             MonitorLockResult::Yield => return StepResult::Yield,
         };
 
-        if let Some(index) = success_flag_index {
-            ctx.threading_set_stack_slot(
-                StackSlotIndex::new(index),
-                StackValue::Int32(if success { 1 } else { 0 }),
-            );
-        } else {
-            // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
-            // the native `lockTaken` out parameter, which is one byte wide.
-            unsafe {
-                ctx.write_bytes(
-                    success_ptr.origin().clone(),
-                    success_ptr.byte_offset(),
-                    &[if success { 1u8 } else { 0u8 }],
-                )
-                .expect("Failed to write success flag");
-            }
+        // SAFETY: F10.RawMemoryAccessValid — `success_ptr` was validated as writable before monitor entry and denotes
+        // the native `lockTaken` out parameter, which is one byte wide.
+        unsafe {
+            ctx.write_bytes(
+                success_ptr.origin().clone(),
+                success_ptr.byte_offset(),
+                &[if success { 1u8 } else { 0u8 }],
+            )
+            .expect("Failed to write success flag");
         };
 
         // Pop success_ptr, timeout_ms, then obj_ref after all work that may yield or trigger GC.

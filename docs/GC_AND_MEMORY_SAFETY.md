@@ -111,8 +111,11 @@ the variable is reassigned.
 - **Selection.** `build_frame_homes` (`crates/dotnet-vm/src/frame_homes.rs`) scans the method
   body once per method instantiation and homes every local named by an `ldloca` and every
   argument named by an `ldarga`, including byref-typed variables and value-type `this`.
-  `TypedReference` variables still use specialized stack slots. Methods without such a variable get no block and keep the
-  slot-only path.
+  `TypedReference` variables retain specialized stack slots; taking their address raises
+  `InvalidProgramException` under the selected strict ECMA boundary (I.8.6.1.3 and II.7.1 prohibit
+  typedref-byref signatures); CoreCLR-compatible unsafe typedref address-taking is not supported.
+  Methods without supported address-taken variables get no home block.
+  Evaluation-stack growth and suspension/restoration require no pointer fixup.
 - **Layout.** The homes are fields of one block layout built by
   `LayoutFactory::create_field_layout`. Each home has its type's layout; a value-type variable
   uses its instance field layout, so a load rebuilds the value that was stored. The block is

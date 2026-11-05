@@ -44,16 +44,11 @@ pub struct VesContext<'a, 'gc> {
 }
 
 struct VesManagedPtrResolver<'a, 'gc> {
-    evaluation_stack: &'a EvaluationStack<'gc>,
     frame_stack: &'a FrameStack<'gc>,
     statics: &'a StaticStorageManager,
 }
 
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver<'a, 'gc> {
-    fn stack_slot_base(&self, slot: crate::StackSlotIndex) -> Option<NonNull<u8>> {
-        Some(self.evaluation_stack.get_slot_address(slot))
-    }
-
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
         let storage = self
             .statics
@@ -78,11 +73,10 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
         gc: &Mutation<'gc>,
     ) -> Result<ManagedPtrInfo<'gc>, dotnet_types::error::PointerDeserializationError> {
         let resolver = VesManagedPtrResolver {
-            evaluation_stack: &*self.evaluation_stack,
             frame_stack: &*self.frame_stack,
             statics: &self.shared.statics,
         };
-        // SAFETY: F3.InteriorPointerRebased — The field reader supplies one complete ManagedPtr encoding
+        // SAFETY: F10.RawMemoryAccessValid — The field reader supplies one complete ManagedPtr encoding
         // from live managed storage. The cache is rooted by this CallStack and
         // GCArena::finish_cycle invalidates its serialized-handle keys after
         // each collection epoch.
@@ -174,11 +168,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         Ok(())
     }
 
-    pub fn top_of_stack_address(&self) -> NonNull<u8> {
-        self.evaluation_stack
-            .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1usize))
-    }
-
     pub(crate) fn init_locals(
         &mut self,
         method: &MethodDescription,
@@ -233,7 +222,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                         Object | String | Array(_, _) | Vector(_, _) => StackValue::null(),
                         Type { .. } => {
                             let desc = self.loader().find_concrete_type(concrete_local.clone())?;
-                            if desc.is_value_type(&ctx)? {
+                            if desc.type_name() == "System.TypedReference" {
+                                StackValue::UninitializedTypedRef
+                            } else if desc.is_value_type(&ctx)? {
                                 let mut new_lookup = concrete_local.make_lookup();
                                 new_lookup.set_method_generics(generics.method_generics.clone());
                                 let new_ctx = ctx.with_generics(&new_lookup);

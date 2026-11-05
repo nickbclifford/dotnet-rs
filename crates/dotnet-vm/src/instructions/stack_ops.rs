@@ -1,6 +1,6 @@
 use crate::{
     ArgumentIndex, LocalIndex, StepResult,
-    stack::ops::{ArgumentOps, EvalStackOps, LocalOps, VmStackOps},
+    stack::ops::{ArgumentOps, EvalStackOps, ExceptionOps, LocalOps, VmStackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
@@ -67,8 +67,20 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
-pub fn ldarga<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
-    let pointer = dotnet_vm_ops::vm_try!(ctx.argument_address(ArgumentIndex::new(index as usize)));
+pub fn ldarga<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    index: u16,
+) -> StepResult {
+    let pointer = match ctx.argument_address(ArgumentIndex::new(index as usize)) {
+        Ok(pointer) => pointer,
+        Err(crate::error::TypeResolutionError::InvalidLayout(_)) => {
+            return ctx.throw_by_name_with_message(
+                "System.InvalidProgramException",
+                "Common Language Runtime detected an invalid program.",
+            );
+        }
+        Err(error) => return StepResult::Error(error.into()),
+    };
     ctx.push(pointer);
     StepResult::Continue
 }
@@ -89,8 +101,20 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
-pub fn ldloca<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
-    let pointer = dotnet_vm_ops::vm_try!(ctx.local_address(LocalIndex::new(index as usize)));
+pub fn ldloca<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
+    index: u16,
+) -> StepResult {
+    let pointer = match ctx.local_address(LocalIndex::new(index as usize)) {
+        Ok(pointer) => pointer,
+        Err(crate::error::TypeResolutionError::InvalidLayout(_)) => {
+            return ctx.throw_by_name_with_message(
+                "System.InvalidProgramException",
+                "Common Language Runtime detected an invalid program.",
+            );
+        }
+        Err(error) => return StepResult::Error(error.into()),
+    };
     ctx.push(pointer);
     StepResult::Continue
 }

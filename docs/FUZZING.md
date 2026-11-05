@@ -9,7 +9,7 @@ The project uses [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (backed b
 | Suite            | Location                    | Targets                                                                           | Focus                                                              |
 |------------------|-----------------------------|-----------------------------------------------------------------------------------|--------------------------------------------------------------------|
 | **dotnet-vm**    | `crates/dotnet-vm/fuzz/`    | `fuzz_executor`                                                                   | CIL instruction execution, control flow, memory, exceptions        |
-| **dotnet-value** | `crates/dotnet-value/fuzz/` | `fuzz_managed_ptr_offset`, `fuzz_managed_ptr_roundtrip`, `fuzz_raw_memory_access`, `fuzz_managed_ptr_rebase` | Pointer arithmetic, serialization roundtrips, atomic memory access |
+| **dotnet-value** | `crates/dotnet-value/fuzz/` | `fuzz_managed_ptr_offset`, `fuzz_managed_ptr_roundtrip`, `fuzz_raw_memory_access` | Pointer arithmetic, serialization roundtrips, atomic memory access |
 
 Additionally, the `fuzzing.rs` module in `dotnet-vm` contains unit tests that exercise the same `FuzzProgram` harness without requiring the fuzzing toolchain (see [Harness unit tests](#harness-unit-tests)).
 
@@ -123,7 +123,7 @@ Fuzzes `AtomicAccess::store_atomic` / `load_atomic` with arbitrary offsets, size
 ## Blocking Corpus Regression
 
 The replay gate covers the targets in `fuzz_matrix` from `scripts/ci_select.py`; each has a
-committed, nonempty corpus. `fuzz_managed_ptr_rebase` has no committed corpus and is not gated.
+committed, nonempty corpus.
 To replay locally, from the indicated working directories:
 
 ```bash

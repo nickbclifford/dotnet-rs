@@ -441,7 +441,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         use dotnet_value::pointer::ManagedPtr as MP;
 
         let mut ptr_bytes = MP::serialization_buffer();
-        // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the live parent origin, and `field_offset` and
+        // SAFETY: F10.RawMemoryAccessValid — `get_ptr_context` decoded the live parent origin, and `field_offset` and
         // `ptr_bytes` come from the resolved ManagedPtr field layout and serialization width.
         dotnet_vm_ops::vm_try!(unsafe {
             ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes)

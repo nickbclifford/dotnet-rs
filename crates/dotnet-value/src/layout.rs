@@ -419,7 +419,7 @@ impl FieldLayoutManager {
             self.visit_managed_ptrs(crate::ByteOffset::new(0), &mut |offset| {
                 let off = offset.as_usize();
                 if off + ManagedPtr::SIZE <= storage.len() {
-                    // SAFETY: F9.MetadataArenaOutlivesDescriptors; F3.InteriorPointerRebased — layout creation ensures these offsets contain valid ManagedPtrs.
+                    // SAFETY: F9.MetadataArenaOutlivesDescriptors; F10.RawMemoryAccessValid — layout creation ensures these offsets contain valid ManagedPtrs.
                     // Metadata decoding is tag-aware and cannot manufacture executable pointers during GC tracing.
                     let info = unsafe { ManagedPtr::read_metadata_unchecked(&storage[off..]) }
                         .expect("FieldLayoutManager::trace: failed to read ManagedPtr");

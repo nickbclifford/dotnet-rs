@@ -14,7 +14,7 @@ use dotnet_utils::{
 };
 use dotnet_value::pointer::{ManagedPtrInfo, ManagedPtrResolver, StaticMetadata};
 use dotnet_value::{
-    CLRString, HeapStorage, ManagedPtr, Object, ObjectRef, StackSlotIndex,
+    CLRString, HeapStorage, ManagedPtr, Object, ObjectRef,
     layout::{FieldLayoutManager, GcDesc},
     storage::FieldStorage,
 };
@@ -98,8 +98,11 @@ struct BenchmarkManagedPtrResolver {
 }
 
 impl<'gc> ManagedPtrResolver<'gc> for BenchmarkManagedPtrResolver {
-    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
-        Some(self.base)
+    fn frame_home_block(
+        &self,
+        _: dotnet_value::pointer::FrameHomeSerial,
+    ) -> Option<(NonNull<u8>, usize)> {
+        Some((self.base, usize::MAX))
     }
 
     fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
@@ -115,7 +118,7 @@ fn read_cached_heap_handle<'gc>(
     resolver: &BenchmarkManagedPtrResolver,
     cache: &mut HeapManagedPtrDecodeCache<'gc>,
 ) -> Option<ManagedPtrInfo<'gc>> {
-    // SAFETY: F3.InteriorPointerRebased — The source was produced from a live Heap ManagedPtr and the VM
+    // SAFETY: F10.RawMemoryAccessValid — The source was produced from a live Heap ManagedPtr and the VM
     // cache type models the traced, collection-epoch-invalidated production owner.
     unsafe { ManagedPtr::read_resolved_with_heap_cache_unchecked(source, resolver, cache).ok() }
 }
@@ -183,7 +186,7 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
                 ),
             ),
             (
-                "stack",
+                "frame_home",
                 ManagedPtr::new(
                     Some(stack_ptr),
                     TypeDescription::NULL,
@@ -191,7 +194,9 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
                     false,
                     Some(ByteOffset::new(8)),
                 )
-                .with_stack_origin(StackSlotIndex::new(7)),
+                .with_origin(dotnet_value::pointer::PointerOrigin::FrameHome(
+                    dotnet_value::pointer::FrameHomeSerial::FIRST,
+                )),
             ),
             (
                 "heap",
@@ -253,9 +258,9 @@ fn bench_managed_ptr_serde(c: &mut Criterion) {
             ptr.write(&mut source);
             read_group.bench_function(*origin, |b| {
                 b.iter(|| {
-                    // SAFETY: F3.InteriorPointerRebased — `source` was produced by `ManagedPtr::write` from a live benchmark
+                    // SAFETY: F10.RawMemoryAccessValid — `source` was produced by `ManagedPtr::write` from a live benchmark
                     // case and remains unchanged for the duration of this benchmark iteration; the
-                    // resolver supplies the live Stack and Static bases.
+                    // resolver supplies the live FrameHome and Static bases.
                     black_box(unsafe {
                         ManagedPtr::read_resolved_unchecked(black_box(&source), &resolver)
                     })

@@ -101,6 +101,10 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
     invalid_program.namespace = Some("System".into());
     invalid_program.extends = Some(exception_idx.into());
     res.push_type_definition(invalid_program);
+    let mut invalid_cast = TypeDefinition::new(None, "InvalidCastException");
+    invalid_cast.namespace = Some("System".into());
+    invalid_cast.extends = Some(exception_idx.into());
+    res.push_type_definition(invalid_cast);
     let mut vt = TypeDefinition::new(None, "ValueType");
     vt.namespace = Some("System".into());
     vt.extends = Some(obj_idx.into());
@@ -3004,9 +3008,6 @@ fn frame_blocks_exception_lifecycle(filter_result: Option<i32>) {
     let mut max_suspended_frames = 0;
     struct HomeResolver<'a, 'gc>(&'a dotnet_vm_data::FrameStack<'gc>);
     impl<'gc> dotnet_value::pointer::ManagedPtrResolver<'gc> for HomeResolver<'_, 'gc> {
-        fn stack_slot_base(&self, _: crate::StackSlotIndex) -> Option<std::ptr::NonNull<u8>> {
-            None
-        }
         fn static_storage_base(
             &self,
             _: &dotnet_value::pointer::StaticMetadata,
@@ -3476,6 +3477,7 @@ mod batches {
         p36_static_address_survives_forced_collection,
         p38_ldarga_value_type_survives_starg,
         p41_constructor_receiver_survives_nested_growth,
+        p42_typed_reference_address_policy,
     ]);
 
     control_batch!(batch_2: [
@@ -3665,5 +3667,180 @@ fn p41_constructor_receiver_survives_nested_growth() {
         });
         assert!(collected, "constructor collection point was not reached");
         assert_eq!(result, Some(77));
+    }
+}
+
+#[test]
+fn p42_typed_reference_address_policy() {
+    for named in [false, true] {
+        for argument in [false, true] {
+            for initialized in [false, true] {
+                let (shared, entrypoint) = build_program("TypedReferenceAddress", |res, ty| {
+                    let i32_type = MethodType::Base(Box::new(BaseType::Int32));
+                    let assembly = res.push_assembly_reference(
+                        dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
+                    );
+                    let tr = res.push_type_reference(
+                        dotnetdll::resolved::types::ExternalTypeReference::new(
+                            Some("System".into()),
+                            "TypedReference",
+                            dotnetdll::resolved::types::ResolutionScope::Assembly(assembly),
+                        ),
+                    );
+                    let tr_type = BaseType::Type {
+                        value_kind: Some(ValueKind::ValueType),
+                        source: TypeSource::User(tr.into()),
+                    };
+                    let tr_local = if named {
+                        local(tr_type.clone())
+                    } else {
+                        LocalVariable::TypedReference
+                    };
+                    let tr_parameter = if named {
+                        ParameterType::Value(MethodType::Base(Box::new(tr_type)))
+                    } else {
+                        ParameterType::TypedReference
+                    };
+                    let mut instructions = vec![];
+                    if initialized {
+                        instructions.extend([
+                            Instruction::LoadLocalAddress(0),
+                            Instruction::MakeTypedReference(i32_type.clone()),
+                            Instruction::StoreLocal(1),
+                        ]);
+                    }
+                    if argument {
+                        let callee = res.push_method(
+                            ty,
+                            Method::new(
+                                Accessibility::Public,
+                                MethodSignature {
+                                    parameters: vec![Parameter(vec![], tr_parameter)],
+                                    ..parameterless_i32_signature()
+                                },
+                                "AddressArgument",
+                                Some(make_test_method!(max_stack: 1, instructions: vec![
+                            Instruction::LoadArgumentAddress(0), Instruction::Pop,
+                            Instruction::LoadConstantInt32(1), Instruction::Return,
+                        ], locals: vec![])),
+                            ),
+                        );
+                        instructions.extend([
+                            Instruction::LoadLocal(1),
+                            Instruction::Call {
+                                tail_call: false,
+                                param0: MethodSource::User(UserMethod::Definition(callee)),
+                            },
+                            Instruction::Return,
+                        ]);
+                    } else {
+                        instructions.extend([
+                            Instruction::LoadLocalAddress(1),
+                            Instruction::Pop,
+                            Instruction::LoadConstantInt32(1),
+                            Instruction::Return,
+                        ]);
+                    }
+                    (2, vec![local(BaseType::Int32), tr_local], instructions)
+                });
+                let mut exception_name = None;
+                run_entrypoint_observed(shared, entrypoint, |_, step| match step {
+                    StepResult::MethodThrew(exception) => {
+                        exception_name = Some(exception.type_name.clone());
+                        Observe::Stop
+                    }
+                    StepResult::Return => panic!("TypedReference address-taking succeeded"),
+                    _ => Observe::Continue,
+                });
+                assert_eq!(
+                    exception_name.as_deref(),
+                    Some("System.InvalidProgramException")
+                );
+            }
+        }
+    }
+    assert_eq!(
+        run_program_with_collection(
+            "TypedReferenceCopy",
+            |_, _| {
+                let i32_type = MethodType::Base(Box::new(BaseType::Int32));
+                (
+                    2,
+                    vec![local(BaseType::Int32), LocalVariable::TypedReference],
+                    vec![
+                        Instruction::LoadConstantInt32(42),
+                        Instruction::StoreLocal(0),
+                        Instruction::LoadLocalAddress(0),
+                        Instruction::MakeTypedReference(i32_type.clone()),
+                        Instruction::StoreLocal(1),
+                        Instruction::LoadLocal(1),
+                        Instruction::ReadTypedReferenceType,
+                        Instruction::Pop,
+                        Instruction::LoadLocal(1),
+                        Instruction::ReadTypedReferenceValue(i32_type),
+                        ldind(LoadType::Int32),
+                        Instruction::Return,
+                    ],
+                )
+            },
+            true
+        ),
+        42
+    );
+    // After stloc, the typed reference is the array's only GC root.
+    for wrong_type in [false, true] {
+        let (shared, entrypoint) = build_program("TypedReferenceHeapRoot", |_, _| {
+            let i32_type = MethodType::Base(Box::new(BaseType::Int32));
+            let target = if wrong_type {
+                MethodType::Base(Box::new(BaseType::Int64))
+            } else {
+                i32_type.clone()
+            };
+            (
+                3,
+                vec![LocalVariable::TypedReference],
+                vec![
+                    Instruction::LoadConstantInt32(1),
+                    Instruction::NewArray(i32_type.clone()),
+                    Instruction::LoadConstantInt32(0),
+                    ldelema_i4(),
+                    Instruction::MakeTypedReference(i32_type),
+                    Instruction::StoreLocal(0),
+                    Instruction::LoadLocal(0),
+                    Instruction::ReadTypedReferenceValue(target),
+                    Instruction::Duplicate,
+                    Instruction::LoadConstantInt32(77),
+                    stind(StoreType::Int32),
+                    ldind(LoadType::Int32),
+                    Instruction::Return,
+                ],
+            )
+        });
+        let mut collected = false;
+        let mut result = None;
+        let mut exception = None;
+        run_entrypoint_observed(shared, entrypoint, |engine, step| {
+            if !collected && engine.stack.execution.frame_stack.current_frame().state.ip == 6 {
+                collected = true;
+                return Observe::Collect;
+            }
+            match step {
+                StepResult::Return => {
+                    result = Some(engine.stack.execution.evaluation_stack.pop().as_i32());
+                    Observe::Stop
+                }
+                StepResult::MethodThrew(error) => {
+                    exception = Some(error.type_name.clone());
+                    Observe::Stop
+                }
+                _ => Observe::Continue,
+            }
+        });
+        assert!(collected);
+        if wrong_type {
+            assert_eq!(exception.as_deref(), Some("System.InvalidCastException"));
+        } else {
+            assert_eq!(result, Some(77));
+        }
     }
 }

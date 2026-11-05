@@ -356,11 +356,6 @@ impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
     #[inline]
-    fn stack_slot_base(&self, slot: crate::StackSlotIndex) -> Option<NonNull<u8>> {
-        Some(self.evaluation_stack.get_slot_address(slot))
-    }
-
-    #[inline]
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
         let storage = self
             .statics()

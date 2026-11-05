@@ -1,5 +1,4 @@
 use crate::{
-    StackSlotIndex,
     object::{Object, ObjectRef},
     pointer::StaticMetadata,
 };
@@ -112,7 +111,6 @@ impl FrameHomeSerial {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
-    Stack(StackSlotIndex),
     Static(Arc<StaticMetadata>),
     Unmanaged,
     /// A variable or temporary in a frame-owned block with this serial. Every access
@@ -131,7 +129,7 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
         let variant = u.int_in_range(0..=6)?;
         match variant {
             0 => Ok(Self::Heap(u.arbitrary()?)),
-            1 => Ok(Self::Stack(u.arbitrary()?)),
+            1 => Ok(Self::Unmanaged),
             2 => Ok(Self::Static(Arc::new(StaticMetadata {
                 type_desc: u.arbitrary()?,
                 generics: u.arbitrary()?,
@@ -206,7 +204,6 @@ impl<'gc> PointerOrigin<'gc> {
     pub fn discriminant(&self) -> u8 {
         match self {
             Self::Heap(_) => 0,
-            Self::Stack(_) => 1,
             Self::Static(_) => 2,
             Self::Unmanaged => 3,
             #[cfg(feature = "multithreading")]

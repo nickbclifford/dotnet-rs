@@ -12,7 +12,7 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 
 The `// SAFETY:` predicates for layout, evaluation-stack, raw-memory and P/Invoke code are stated
 in the [invariant registry](INVARIANT_REGISTRY.md): `F2.DescriptorMatchesEcmaLayout`,
-`F3.StackSlotMatchesView`, `F3.InteriorPointerRebased`, `F10.RawMemoryAccessValid`,
+`F3.StackSlotMatchesView`, `F3.StableFrameHomes`, `F10.RawMemoryAccessValid`,
 `F10.RawAllocationOwnership`, `F10.BorrowedStorageStable`, `F10.ArchIntrinsicPrecondition`,
 `F11.CliLoadKindMatchesStorage`, `F11.PInvokeAbiAgreement` and `F11.NativeLibraryLoadTrusted`.
 
@@ -133,28 +133,20 @@ home block (`MethodInfo::homes`); each frame owns one block (`StackFrame::homes`
 that is unique on its thread. `ldloc`, `stloc` and `ldloca` on a homed local, and `ldarg`,
 `starg` and `ldarga` on a homed argument, read, write and address the home bytes. A homed
 local's evaluation-stack slot holds a null placeholder that nothing reads; a homed argument's
-slot keeps the value passed in, which only `jmp` reads. `ldloca` and `ldarga` on a homed
+slot keeps the original value passed in; `jmp` forwards the current home value. `ldloca` and `ldarga` on a homed
 variable push a `PointerOrigin::FrameHome` byref naming the frame's serial and the home's offset.
-Every access finds the live frame with that serial and checks the range against its block before
+`frame_home_window` finds the live frame with that serial and checks the range against its block before
 using the address, so the block never needs rebasing and a byref to a returned frame is rejected.
 
-`ldloca` and `ldarga` on a `TypedReference` variable push a
-`PointerOrigin::Stack` managed pointer naming the absolute slot index and caching that slot's
-`StackValue::data_location`. For a scalar slot that address is inside the `Vec` element; for a
-value-type slot it is the value's own storage buffer.
+`ldloca` and `ldarga` on a `TypedReference` variable are rejected with
+`InvalidProgramException` under the runtime's strict ECMA policy. Ordinary typed-reference
+values retain their specialized stack representation and descriptor ownership.
 
-When the `Vec` reallocates on growth, `apply_reallocation_fixup` calls `update_stack_pointers`,
-which recomputes every slot's data location and rebases each Stack-origin pointer it can find:
-in slots, in typed references, and serialized inside value-type slots (`ref` fields of byref-like
-values). `suspend_above` and `restore_suspended` call `update_stack_pointers` directly. This is the
-mechanism behind `F3.InteriorPointerRebased`.
-
-Stack-origin byrefs that remain are to `TypedReference` variables. Value-type constructor
-receivers use additional caller-owned frame homes allocated at runtime, including reflection
-and intrinsic construction. Each temporary block has a fresh serial and remains live until its
-caller exits; constructor completion copies out the result before reflection return processing. The plan
-[Stable homes for addressable locals and arguments](plans/01-stable-frame-homes.md) removes the
-fixup once nothing needs it.
+Every supported frame-variable address uses a stable home (`F3.StableFrameHomes`). Evaluation-stack
+growth and filter suspension/restoration move values without scanning or rebasing pointers.
+Value-type constructor receivers use additional caller-owned homes, including reflection and
+intrinsic construction. Each temporary block has a fresh serial and remains live until its
+caller exits; constructor completion copies out the result before reflection return processing.
 
 ### Frame-local `localloc` storage
 

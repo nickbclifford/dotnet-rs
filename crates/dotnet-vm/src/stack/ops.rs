@@ -58,15 +58,14 @@ pub trait VmStackOps<'gc>: StackOps<'gc> {
     fn get_slot(&self, index: StackSlotIndex) -> StackValue<'gc>;
     fn get_slot_ref(&self, index: StackSlotIndex) -> &StackValue<'gc>;
     fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>);
-    fn get_slot_address(&self, index: StackSlotIndex) -> std::ptr::NonNull<u8>;
-    /// A byref to local `index`: into its frame home when it has one, otherwise into its
-    /// evaluation-stack slot.
+    /// A byref to local `index`: into its stable frame home. Unsupported address-taking
+    /// returns an error.
     fn local_address(
         &self,
         index: crate::LocalIndex,
     ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
-    /// A byref to argument `index`: into its frame home when it has one, otherwise into its
-    /// evaluation-stack slot.
+    /// A byref to argument `index`: into its stable frame home. Unsupported address-taking
+    /// returns an error.
     fn argument_address(
         &self,
         index: crate::ArgumentIndex,
@@ -90,7 +89,7 @@ pub trait VmManagedPtrDecodeCacheOps<'gc> {
     /// Reads one complete serialized pointer using a caller-owned, traced cache.
     ///
     /// The mutation token brands decoded Heap handles with the active arena
-    /// lifetime. Stack and Static bases are still resolved by the VM context.
+    /// lifetime. FrameHome and Static bases are still resolved by the VM context.
     fn read_managed_ptr_with_heap_cache(
         &mut self,
         source: &[u8],

@@ -155,7 +155,7 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     for i in 0..len {
         let offset = base_offset + i * elem_size;
         if let Err(e) =
-            // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` returned the managed origin and offset for `destination`; the
+            // SAFETY: F10.RawMemoryAccessValid — `ptr_info` returned the managed origin and offset for `destination`; the
             // layout was resolved for the generic element type before the write.
             unsafe { ctx.write_unaligned(origin.clone(), offset, value.clone(), &layout) }
         {

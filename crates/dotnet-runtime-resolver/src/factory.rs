@@ -544,7 +544,7 @@ where
                 let inner_type = self.resolve_pointer_inner_type(inner)?;
 
                 if data.len() >= ManagedPtr::SIZE {
-                    // SAFETY: F3.InteriorPointerRebased; F6.NoEscapeAcrossArena —
+                    // SAFETY: F10.RawMemoryAccessValid; F6.NoEscapeAcrossArena —
                     // `data.len() >= ManagedPtr::SIZE` is checked above, and VM-managed storage
                     // supplies a complete ManagedPtr encoding whose recorded origin and offset
                     // are resolved under `gc`'s arena brand.

@@ -320,9 +320,6 @@ pub struct RuntimeMetricsSnapshot {
 #[cfg(feature = "bench-instrumentation")]
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchInstrumentationSnapshot {
-    pub eval_stack_reallocations: u64,
-    pub eval_stack_pointer_fixup_count: u64,
-    pub eval_stack_pointer_fixup_total_ns: u64,
     pub frame_pool_hit_count: u64,
     pub frame_pool_miss_count: u64,
     pub frame_pool_recycle_count: u64,
@@ -392,12 +389,6 @@ pub struct RuntimeMetrics {
     arena_gc_pressure_by_arena: Mutex<BTreeMap<String, ArenaGcPressureSnapshot>>,
     /// Cache hit/miss counters indexed by [`CacheKind`].
     cache_counters: [CacheCounters; CacheKind::COUNT],
-    #[cfg(feature = "bench-instrumentation")]
-    eval_stack_reallocations: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    eval_stack_pointer_fixup_count: AtomicU64,
-    #[cfg(feature = "bench-instrumentation")]
-    eval_stack_pointer_fixup_total_ns: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     frame_pool_hit_count: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
@@ -516,21 +507,6 @@ impl RuntimeMetrics {
             counters.misses.load(Ordering::Relaxed),
         )
     }
-
-    #[cfg(feature = "bench-instrumentation")]
-    #[inline]
-    pub fn record_eval_stack_reallocation(&self, pointer_fixup_duration: Duration) {
-        self.eval_stack_reallocations
-            .fetch_add(1, Ordering::Relaxed);
-        self.eval_stack_pointer_fixup_count
-            .fetch_add(1, Ordering::Relaxed);
-        self.eval_stack_pointer_fixup_total_ns
-            .fetch_add(pointer_fixup_duration.as_nanos() as u64, Ordering::Relaxed);
-    }
-
-    #[cfg(not(feature = "bench-instrumentation"))]
-    #[inline]
-    pub fn record_eval_stack_reallocation(&self, _pointer_fixup_duration: Duration) {}
 
     #[cfg(feature = "bench-instrumentation")]
     #[inline]
@@ -908,13 +884,6 @@ impl RuntimeMetrics {
         let cache_memory_bytes_total = cache_memory_bytes_by_cache.values().copied().sum();
 
         BenchInstrumentationSnapshot {
-            eval_stack_reallocations: self.eval_stack_reallocations.load(Ordering::Relaxed),
-            eval_stack_pointer_fixup_count: self
-                .eval_stack_pointer_fixup_count
-                .load(Ordering::Relaxed),
-            eval_stack_pointer_fixup_total_ns: self
-                .eval_stack_pointer_fixup_total_ns
-                .load(Ordering::Relaxed),
             frame_pool_hit_count: self.frame_pool_hit_count.load(Ordering::Relaxed),
             frame_pool_miss_count: self.frame_pool_miss_count.load(Ordering::Relaxed),
             frame_pool_recycle_count: self.frame_pool_recycle_count.load(Ordering::Relaxed),
@@ -1078,13 +1047,6 @@ impl Drop for ActiveRuntimeMetricsGuard {
             state.borrow_mut().leave(self.scope_id);
         });
     }
-}
-
-#[cfg(feature = "bench-instrumentation")]
-pub fn record_active_eval_stack_reallocation(pointer_fixup_duration: Duration) {
-    with_active_runtime_metrics(|metrics| {
-        metrics.record_eval_stack_reallocation(pointer_fixup_duration)
-    });
 }
 
 #[cfg(feature = "bench-instrumentation")]
@@ -1365,26 +1327,26 @@ mod tests {
 
         {
             let _outer_scope = ActiveRuntimeMetricsGuard::enter(&outer_metrics);
-            record_active_eval_stack_reallocation(Duration::ZERO);
+            record_active_frame_pool_hit();
             {
                 let _inner_scope = ActiveRuntimeMetricsGuard::enter(&inner_metrics);
-                record_active_eval_stack_reallocation(Duration::ZERO);
+                record_active_frame_pool_hit();
             }
-            record_active_eval_stack_reallocation(Duration::ZERO);
+            record_active_frame_pool_hit();
         }
         assert!(ACTIVE_RUNTIME_METRICS.with(|state| state.borrow().current_metrics().is_none()));
-        record_active_eval_stack_reallocation(Duration::ZERO);
+        record_active_frame_pool_hit();
 
         assert_eq!(
             outer_metrics
                 .bench_snapshot(empty_cache_sizes())
-                .eval_stack_reallocations,
+                .frame_pool_hit_count,
             2
         );
         assert_eq!(
             inner_metrics
                 .bench_snapshot(empty_cache_sizes())
-                .eval_stack_reallocations,
+                .frame_pool_hit_count,
             1
         );
     }
@@ -1408,11 +1370,11 @@ mod tests {
             ACTIVE_RUNTIME_METRICS.with(|state| { state.borrow().current_metrics().is_none() })
         );
 
-        record_active_eval_stack_reallocation(Duration::ZERO);
+        record_active_frame_pool_hit();
         assert_eq!(
             inner_metrics
                 .bench_snapshot(empty_cache_sizes())
-                .eval_stack_reallocations,
+                .frame_pool_hit_count,
             0
         );
     }
@@ -1426,11 +1388,11 @@ mod tests {
         let observer = Arc::clone(&metrics);
         std::mem::forget(ActiveRuntimeMetricsGuard::enter(&metrics));
         drop(metrics);
-        record_active_eval_stack_reallocation(Duration::ZERO);
+        record_active_frame_pool_hit();
         assert_eq!(
             observer
                 .bench_snapshot(empty_cache_sizes())
-                .eval_stack_reallocations,
+                .frame_pool_hit_count,
             1
         );
         // The leaked scope is still registered on this test thread; clear it.

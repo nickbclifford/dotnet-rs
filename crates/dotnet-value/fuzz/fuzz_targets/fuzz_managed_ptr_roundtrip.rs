@@ -6,7 +6,7 @@ use dotnet_utils::{
     sync::{Arc, AtomicBool, MANAGED_THREAD_ID},
 };
 use dotnet_value::{
-    CLRString, HeapStorage, ObjectRef, StackSlotIndex,
+    CLRString, HeapStorage, ObjectRef,
     pointer::{FrameHomeSerial, ManagedPtr, ManagedPtrResolver, PointerOrigin, StaticMetadata},
 };
 use gc_arena::{Arena, Rootable};
@@ -54,17 +54,13 @@ impl Drop for ManagedThreadIdGuard {
     }
 }
 
-/// Resolves the target-local Stack and Static origins from their live backing
+/// Resolves the target-local FrameHome and Static origins from their live backing
 /// storage so the roundtrip assertion can exercise executable deserialization.
 struct FuzzResolver {
     storage_base: NonNull<u8>,
 }
 
 impl<'gc> ManagedPtrResolver<'gc> for FuzzResolver {
-    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
-        Some(self.storage_base)
-    }
-
     fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
         Some(self.storage_base)
     }
@@ -107,13 +103,29 @@ enum RoundtripInput {
     /// Exercises recovery from a self-consistent but unsupported serialized
     /// origin. This must be an ordinary deserialization error, not a target
     /// crash.
-    InvalidSerializedSubtag { subtag: u8 },
-    Unmanaged { address: usize },
-    Stack { slot: u16, offset: u8 },
-    Static { offset: u8 },
-    FrameHome { serial: u64, offset: u8 },
-    Heap { offset: u8 },
-    CrossArena { offset: u8 },
+    InvalidSerializedSubtag {
+        subtag: u8,
+    },
+    Unmanaged {
+        address: usize,
+    },
+    FrameHomeShortSerial {
+        slot: u16,
+        offset: u8,
+    },
+    Static {
+        offset: u8,
+    },
+    FrameHome {
+        serial: u64,
+        offset: u8,
+    },
+    Heap {
+        offset: u8,
+    },
+    CrossArena {
+        offset: u8,
+    },
 }
 
 fuzz_target!(|input: RoundtripInput| {
@@ -172,7 +184,7 @@ fuzz_target!(|input: RoundtripInput| {
                 false,
                 None,
             ),
-            RoundtripInput::Stack { slot, offset } => {
+            RoundtripInput::FrameHomeShortSerial { slot, offset } => {
                 let offset = usize::from(offset);
                 let address = NonNull::new(storage_base.as_ptr().wrapping_add(offset))
                     .expect("in-bounds array offset is non-null");
@@ -183,7 +195,9 @@ fuzz_target!(|input: RoundtripInput| {
                     false,
                     Some(ByteOffset::new(offset)),
                 )
-                .with_stack_origin(StackSlotIndex::new(usize::from(slot)))
+                .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(
+                    u64::from(slot) + 1,
+                )))
             }
             RoundtripInput::Static { offset } => {
                 let offset = usize::from(offset);
@@ -262,7 +276,7 @@ fuzz_target!(|input: RoundtripInput| {
 
         let expected_tag = match &info.origin {
             PointerOrigin::Heap(_) | PointerOrigin::Unmanaged => 0,
-            PointerOrigin::Stack(_) => 1,
+
             PointerOrigin::Static(_)
             | PointerOrigin::Transient(_)
             | PointerOrigin::FrameHome(_) => 7,
@@ -271,7 +285,7 @@ fuzz_target!(|input: RoundtripInput| {
         assert_eq!(word0 & 7, expected_tag, "Serialized origin tag mismatch");
 
         // Now read it back.
-        // SAFETY: F3.InteriorPointerRebased — `buf` was just populated with a complete ManagedPtr encoding.
+        // SAFETY: F10.RawMemoryAccessValid — `buf` was just populated with a complete ManagedPtr encoding.
         let read_info =
             unsafe { ManagedPtr::read_metadata_unchecked(&buf) }.expect("Roundtrip read failed");
 
@@ -293,7 +307,7 @@ fuzz_target!(|input: RoundtripInput| {
 
         if !matches!(info_norm, PointerOrigin::Unmanaged) {
             let resolver = FuzzResolver { storage_base };
-            // SAFETY: F3.InteriorPointerRebased — `buf` was just populated with a complete ManagedPtr
+            // SAFETY: F10.RawMemoryAccessValid — `buf` was just populated with a complete ManagedPtr
             // encoding, and the resolver supplies the live target-local bases.
             let resolved_info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &resolver) }
                 .expect("Resolved roundtrip read failed");
@@ -303,7 +317,10 @@ fuzz_target!(|input: RoundtripInput| {
                 false,
             );
             assert_eq!(
-                resolved_ptr.into_info().address.map(|address| address.as_ptr().addr()),
+                resolved_ptr
+                    .into_info()
+                    .address
+                    .map(|address| address.as_ptr().addr()),
                 info.address.map(|address| address.as_ptr().addr()),
                 "Resolved address must remain derived from the live provenance-carrying base"
             );

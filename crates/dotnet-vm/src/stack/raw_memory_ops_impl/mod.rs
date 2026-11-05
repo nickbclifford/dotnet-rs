@@ -147,30 +147,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), MemoryAccessError> {
-        if let PointerOrigin::Stack(idx) = origin.clone()
-            && offset == ByteOffset::new(0)
-            && matches!(layout, LayoutManager::Scalar(Scalar::ObjectRef))
-            && matches!(
-                self.evaluation_stack.get_slot_ref(idx),
-                StackValue::ObjectRef(_)
-            )
-        {
-            if !matches!(value, StackValue::ObjectRef(_)) {
-                return Err(MemoryAccessError::TypeMismatch("Expected ObjectRef".into()));
-            }
-            self.evaluation_stack.set_slot(idx, value);
-            return Ok(());
-        }
-
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
-            }
             PointerOrigin::FrameHome(serial) => {
                 // ldind.i/stind.i on a byref variable transfer the full managed-pointer
                 // encoding, preserving its origin rather than copying only a native word.
@@ -267,27 +245,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
-        if let PointerOrigin::Stack(idx) = &origin
-            && offset == ByteOffset::ZERO
-            && matches!(layout, LayoutManager::Scalar(Scalar::ObjectRef))
-            && matches!(
-                self.evaluation_stack.get_slot_ref(*idx),
-                StackValue::ObjectRef(_)
-            )
-        {
-            return Ok(self.evaluation_stack.get_slot(*idx));
-        }
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe {
-                    memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
-                }
-            }
             PointerOrigin::FrameHome(serial) => {
                 // ldind.i/stind.i on a byref variable transfer the full managed-pointer
                 // encoding, preserving its origin rather than copying only a native word.
@@ -378,13 +337,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<(), MemoryAccessError> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.write_bytes_ptr(ptr, data) }
-            }
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), data.len())?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -446,13 +398,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<(), MemoryAccessError> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.read_bytes_ptr(ptr, dest) }
-            }
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), dest.len())?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -553,66 +498,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     unsafe { memory.object_atomic_ptr(slot, op) }
                 })
             }
-            PointerOrigin::Stack(idx)
-                if offset == ByteOffset::ZERO
-                    && matches!(
-                        self.evaluation_stack.get_slot_ref(idx),
-                        StackValue::ObjectRef(_)
-                    ) =>
-            {
-                // Stack slots hold actual Rust `ObjectRef` values (whose Gc pointer
-                // names the allocation header), not the tagged serialized value.
-                // They are thread-local, so update the typed slot rather than
-                // writing a serialized pointer over the Gc representation.
-                use dotnet_utils::atomic::PointerAtomicOp;
-                use dotnet_utils::sync::Ordering;
-                let StackValue::ObjectRef(old) = self.evaluation_stack.get_slot(idx) else {
-                    unreachable!()
-                };
-                let previous = old.to_storage_ptr();
-                let (replacement, order) = match op {
-                    PointerAtomicOp::Load(order) => (None, order),
-                    PointerAtomicOp::Store(value, order)
-                    | PointerAtomicOp::Exchange(value, order) => (Some(value), order),
-                    PointerAtomicOp::CompareExchange(expected, value, success, failure) => {
-                        if previous.addr() == expected.addr() {
-                            (Some(value), success)
-                        } else {
-                            (None, failure)
-                        }
-                    }
-                };
-                if matches!(
-                    order,
-                    Ordering::Release | Ordering::AcqRel | Ordering::SeqCst
-                ) {
-                    dotnet_utils::sync::fence(order);
-                }
-                let replacement = replacement.map(|value| {
-                    // SAFETY: F1.GcHandleRooted — The caller supplies a live encoded reference in the active GC scope.
-                    unsafe { dotnet_value::object::ObjectRef::from_storage_ptr(value) }
-                });
-                // Replacing a stack slot cannot invoke a safepoint; end the
-                // borrow scope so the typed evaluation stack can be updated.
-                drop(_gc_scope);
-                if let Some(object) = replacement {
-                    self.evaluation_stack
-                        .set_slot(idx, StackValue::ObjectRef(object));
-                }
-                if matches!(
-                    order,
-                    Ordering::Acquire | Ordering::AcqRel | Ordering::SeqCst
-                ) {
-                    dotnet_utils::sync::fence(order);
-                }
-                Ok(previous)
-            }
-            PointerOrigin::Stack(_) => {
-                let slot = self.resolve_address(&origin, offset)?;
-                let mut memory = RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — The caller guarantees the resolved stack slot is valid.
-                unsafe { memory.object_atomic_ptr(slot, op) }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let slot = frame_home_window(
                     self,
@@ -700,17 +586,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                         .compare_exchange_atomic_ptr(abs_ptr, expected, new, size, success, failure)
                 }
             }
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self
-                    .resolve_address(&origin, offset)
-                    .map_err(CompareExchangeError::Bounds)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe {
-                    memory.compare_exchange_atomic_ptr(ptr, expected, new, size, success, failure)
-                }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), size)
                     .map_err(CompareExchangeError::Bounds)?;
@@ -813,13 +689,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // atomic operation synchronizes the access.
                 unsafe { memory.exchange_atomic_ptr(abs_ptr, value, size, ordering) }
             }
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.exchange_atomic_ptr(ptr, value, size, ordering) }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -910,13 +780,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // atomic operation synchronizes the access.
                 unsafe { memory.exchange_add_atomic_ptr(abs_ptr, value, size, ordering) }
             }
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.exchange_add_atomic_ptr(ptr, value, size, ordering) }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -996,13 +860,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     unsafe { memory.load_atomic_ptr(abs_ptr, size, ordering) }
                 })
             }
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.load_atomic_ptr(ptr, size, ordering) }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -1088,13 +946,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     unsafe { memory.store_atomic_ptr(abs_ptr, value, size, ordering) }
                 })
             }
-            PointerOrigin::Stack(_idx) => {
-                let ptr = self.resolve_address(&origin, offset)?;
-                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
-                // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
-                // guarantees `offset` (and width) stay within the slot's storage.
-                unsafe { memory.store_atomic_ptr(ptr, value, size, ordering) }
-            }
+
             PointerOrigin::FrameHome(serial) => {
                 let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -1162,16 +1014,7 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
         offset: ByteOffset,
     ) -> Result<NonNull<u8>, MemoryAccessError> {
         Ok(match origin {
-            PointerOrigin::Stack(idx) => {
-                let slot = self.evaluation_stack.get_slot_ref(*idx);
-                let base_ptr = slot.data_location().as_ptr();
-                #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the offset raw address and wrapping the proven non-null result share one stack-address proof")]
-                // SAFETY: F10.RawMemoryAccessValid — Stack origins use the unchecked path:
-                // the caller supplies an in-bounds offset into the slot's storage, so `.add`
-                // stays in the allocation and the result is non-null. Forming the address
-                // grants no later read/write/copy right.
-                unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
-            }
+
             PointerOrigin::Static(metadata) => {
                 let storage = self
                     .statics()

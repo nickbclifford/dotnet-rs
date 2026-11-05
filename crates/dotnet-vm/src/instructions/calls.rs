@@ -202,7 +202,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 &ctx.current_context()
             ));
 
-            // SAFETY: F3.InteriorPointerRebased — `m` is a non-null managed pointer, and its origin/offset identify storage
+            // SAFETY: F10.RawMemoryAccessValid — `m` is a non-null managed pointer, and its origin/offset identify storage
             // for the resolved constrained type layout; `read_unaligned` verifies that range.
             let value = match unsafe {
                 ctx.read_unaligned(
@@ -274,17 +274,7 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                             }
                         }
                     }
-                    (PointerOrigin::Stack(idx), off) if off.as_usize() == 0 => {
-                        match ctx.get_slot_ref(*idx).clone() {
-                            StackValue::ObjectRef(o) => o,
-                            rest => {
-                                return StepResult::type_error(
-                                    "ObjectRef at argument/local slot",
-                                    format!("{:?}", rest),
-                                );
-                            }
-                        }
-                    }
+
                     _ => {
                         #[expect(
                             clippy::multiple_unsafe_ops_per_block,

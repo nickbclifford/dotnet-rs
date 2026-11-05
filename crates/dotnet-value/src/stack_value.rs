@@ -6,7 +6,7 @@ use crate::{
 };
 use dotnet_types::{TypeDescription, error::ExecutionError};
 use dotnet_utils::{
-    ByteOffset, StackSlotIndex,
+    ByteOffset,
     atomic::{StandardAtomicAccess, validate_atomic_access},
     gc::GCHandle,
     is_ptr_aligned_to_field,
@@ -115,10 +115,6 @@ impl<'gc> TypedReferenceSlot<'gc> {
 
     pub fn value(&self) -> &StackManagedPtr<'gc> {
         &self.value
-    }
-
-    pub fn value_mut(&mut self) -> &mut StackManagedPtr<'gc> {
-        &mut self.value
     }
 
     pub fn type_desc(&self) -> &Arc<TypeDescription> {
@@ -499,17 +495,7 @@ impl<'gc> StackValue<'gc> {
             offset,
         )))
     }
-    pub fn managed_stack_ptr(
-        index: StackSlotIndex,
-        offset: ByteOffset,
-        ptr: *mut u8,
-        target_type: TypeDescription,
-        pinned: bool,
-    ) -> Self {
-        let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned, Some(offset));
-        m.origin = PointerOrigin::Stack(index);
-        Self::ManagedPtr(StackManagedPtr::new(m))
-    }
+
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
     }
@@ -523,31 +509,6 @@ impl<'gc> StackValue<'gc> {
 
     pub fn string(gc: GCHandle<'gc>, s: CLRString) -> Self {
         Self::ObjectRef(ObjectRef::new(gc, HeapStorage::Str(s)))
-    }
-
-    pub fn data_location(&self) -> NonNull<u8> {
-        fn ref_to_ptr<T>(r: &T) -> NonNull<u8> {
-            NonNull::from(r).cast()
-        }
-
-        match self {
-            Self::Int32(i) => ref_to_ptr(i),
-            Self::Int64(i) => ref_to_ptr(i),
-            Self::NativeInt(i) => ref_to_ptr(i),
-            Self::NativeFloat(f) => ref_to_ptr(f),
-            Self::ObjectRef(o) => ref_to_ptr(o),
-            Self::UnmanagedPtr(u) => ref_to_ptr(u),
-            Self::ManagedPtr(m) => ref_to_ptr(m.deref()),
-            Self::TypedRef(slot) => ref_to_ptr(slot.value().deref()),
-            Self::UninitializedTypedRef => ref_to_ptr(self),
-            Self::ValueType(o) => {
-                // SAFETY: F10.RawMemoryAccessValid — Returning a pointer to the internal buffer.
-                // This is used by ldloca/ldarga to get a byref to the value type.
-                let ptr =
-                    unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
-                NonNull::new(ptr).expect("slice::as_ptr is never null, even for empty slices")
-            }
-        }
     }
 
     pub fn as_ptr(&self) -> *mut u8 {
@@ -1224,7 +1185,9 @@ mod tests {
             false,
             Some(ByteOffset::new(3)),
         )
-        .with_origin(PointerOrigin::Stack(StackSlotIndex::new(1)));
+        .with_origin(PointerOrigin::FrameHome(
+            crate::pointer::FrameHomeSerial::new(1),
+        ));
         let managed = StackValue::ManagedPtr(ptr.into());
         let numeric = StackValue::NativeInt(address.as_ptr().addr() as isize);
 
@@ -1238,7 +1201,7 @@ mod tests {
     #[test]
     fn typed_reference_slot_copy_retains_type_lifetime_and_pointer_origin() {
         let type_desc = Arc::new(TypeDescription::NULL);
-        let origin = PointerOrigin::Stack(StackSlotIndex::new(7));
+        let origin = PointerOrigin::FrameHome(crate::pointer::FrameHomeSerial::new(7));
         let ptr = ManagedPtr::new(
             Some(NonNull::dangling()),
             TypeDescription::NULL,

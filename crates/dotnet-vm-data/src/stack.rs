@@ -17,9 +17,6 @@ use gc_arena::{Collect, collect::Trace};
 use smallvec::SmallVec;
 use std::ptr::NonNull;
 
-#[cfg(feature = "bench-instrumentation")]
-use std::time::Instant;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Collect, Default)]
 #[collect(require_static)]
 pub struct BasePointer {
@@ -146,12 +143,9 @@ unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
 pub struct EvaluationStack<'gc> {
     pub stack: Vec<StackValue<'gc>>,
     pub suspended_stack: Vec<StackValue<'gc>>,
-    slot_locations_scratch: Vec<NonNull<u8>>,
-    suspended_locations_scratch: Vec<NonNull<u8>>,
 }
 
 // SAFETY: F5.TracesEveryGcRef — `EvaluationStack` traces all GC-managed fields (`stack` and `suspended_stack`).
-// Scratch pointer caches are raw addresses derived from stack values and contain no GC references.
 unsafe impl<'gc> Collect<'gc> for EvaluationStack<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.stack.trace(cc);
@@ -170,107 +164,22 @@ impl<'gc> EvaluationStack<'gc> {
         Self {
             stack: vec![],
             suspended_stack: vec![],
-            slot_locations_scratch: vec![],
-            suspended_locations_scratch: vec![],
         }
     }
 
-    #[inline]
-    fn apply_reallocation_fixup(&mut self) {
-        #[cfg(feature = "bench-instrumentation")]
-        let fixup_start = Instant::now();
-        self.update_stack_pointers();
-        #[cfg(feature = "bench-instrumentation")]
-        dotnet_metrics::record_active_eval_stack_reallocation(fixup_start.elapsed());
-    }
-
-    #[inline]
-    fn normalize_reserve_target(required_slots: usize) -> usize {
-        required_slots
-    }
-
     /// Ensures the active evaluation stack has capacity for `total_slots` entries.
-    /// If the underlying `Vec` reallocates, stack-origin managed pointers are fixed up.
+    /// Frame-home addresses are independent of this vector's allocation.
     pub fn reserve_slots(&mut self, total_slots: usize) {
         if total_slots <= self.stack.capacity() {
             return;
         }
 
-        let old_capacity = self.stack.capacity();
-        let reserve_target = Self::normalize_reserve_target(total_slots).max(total_slots);
-        let additional = reserve_target.saturating_sub(self.stack.len());
+        let additional = total_slots.saturating_sub(self.stack.len());
         self.stack.reserve(additional);
-
-        if self.stack.capacity() > old_capacity {
-            self.apply_reallocation_fixup();
-        }
     }
 
     pub fn push(&mut self, value: StackValue<'gc>) {
-        let old_capacity = self.stack.capacity();
         self.stack.push(value);
-        if self.stack.capacity() > old_capacity {
-            self.apply_reallocation_fixup();
-        }
-    }
-
-    fn update_stack_pointers(&mut self) {
-        self.slot_locations_scratch.clear();
-        self.slot_locations_scratch
-            .extend(self.stack.iter().map(|v| v.data_location()));
-        self.suspended_locations_scratch.clear();
-        self.suspended_locations_scratch
-            .extend(self.suspended_stack.iter().map(|v| v.data_location()));
-
-        let stack_len = self.slot_locations_scratch.len();
-        let slot_locations = self.slot_locations_scratch.as_slice();
-        let suspended_locations = self.suspended_locations_scratch.as_slice();
-
-        let resolve_slot_ptr = |idx: StackSlotIndex| {
-            let idx = idx.as_usize();
-            if idx < stack_len {
-                slot_locations.get(idx).copied()
-            } else {
-                suspended_locations.get(idx - stack_len).copied()
-            }
-        };
-
-        let update_managed_ptr = |m: &mut dotnet_value::StackManagedPtr<'gc>| {
-            m.rebase_cached_stack_pointer(resolve_slot_ptr)
-                .expect("Stack managed pointer must resolve to a live evaluation-stack slot");
-        };
-
-        let update_val = |val: &mut StackValue<'gc>| match val {
-            StackValue::ManagedPtr(m) => {
-                update_managed_ptr(m);
-            }
-            StackValue::TypedRef(slot) => {
-                update_managed_ptr(slot.value_mut());
-            }
-            StackValue::ValueType(obj) => {
-                let layout = obj.instance_storage.layout().clone();
-                obj.instance_storage.with_data_mut(|data| {
-                    layout.visit_managed_ptrs(ByteOffset::new(0), &mut |offset: ByteOffset| {
-                        if offset.as_usize() + ManagedPtr::SIZE <= data.len() {
-                            let offset_val = offset.as_usize();
-                            let slice = &mut data[offset_val..offset_val + ManagedPtr::SIZE];
-                            ManagedPtr::rebase_stack_pointer(slice, resolve_slot_ptr).expect(
-                                "Serialized Stack managed pointer must resolve to a live evaluation-stack slot",
-                            );
-                        }
-                    });
-                });
-            }
-            _ => {}
-        };
-
-        for val in self.stack.iter_mut() {
-            update_val(val);
-        }
-
-        for val in self.suspended_stack.iter_mut() {
-            update_val(val);
-        }
     }
 
     pub fn pop(&mut self) -> StackValue<'gc> {
@@ -410,10 +319,6 @@ impl<'gc> EvaluationStack<'gc> {
         &self.stack[index.as_usize()]
     }
 
-    pub fn get_slot_address(&self, index: StackSlotIndex) -> NonNull<u8> {
-        self.stack[index.as_usize()].data_location()
-    }
-
     pub fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>) {
         self.stack[index.as_usize()] = value;
     }
@@ -445,19 +350,10 @@ impl<'gc> EvaluationStack<'gc> {
 
     pub fn suspend_above(&mut self, index: StackSlotIndex) {
         self.suspended_stack = self.stack.split_off(index.as_usize());
-        self.update_stack_pointers();
     }
 
     pub fn restore_suspended(&mut self) {
         self.stack.append(&mut self.suspended_stack);
-        self.update_stack_pointers();
-    }
-
-    pub fn top_of_stack_address(&self) -> NonNull<u8> {
-        self.stack
-            .last()
-            .expect("Evaluation stack is empty")
-            .data_location()
     }
 }
 
@@ -648,54 +544,6 @@ mod tests {
         values.iter().map(StackValue::as_i32).collect()
     }
 
-    fn value_type_with_managed_ptr(
-        pointer_bytes: [u8; ManagedPtr::SIZE],
-    ) -> ObjectInstance<'static> {
-        use dotnet_types::generics::GenericLookup;
-        use dotnet_utils::sync::Arc;
-        use dotnet_value::{
-            layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager, Scalar},
-            storage::FieldStorage,
-        };
-        use hashbrown::HashMap;
-
-        let layout = Arc::new(FieldLayoutManager {
-            fields: {
-                let mut fields = HashMap::new();
-                fields.insert(
-                    FieldKey {
-                        owner: TypeDescription::NULL,
-                        name: "byref".to_owned(),
-                    },
-                    FieldLayout {
-                        position: ByteOffset::new(0),
-                        layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
-                    },
-                );
-                fields
-            },
-            total_size: ManagedPtr::SIZE,
-            alignment: std::mem::align_of::<usize>(),
-            gc_desc: GcDesc::default(),
-            has_ref_fields: true,
-        });
-
-        ObjectInstance::new(
-            TypeDescription::NULL,
-            GenericLookup::default(),
-            FieldStorage::new(layout, pointer_bytes.to_vec()),
-        )
-    }
-
-    fn value_type_managed_ptr_bytes(value: &StackValue<'static>) -> [u8; ManagedPtr::SIZE] {
-        let StackValue::ValueType(value_type) = value else {
-            panic!("expected a ValueType stack value");
-        };
-        value_type
-            .instance_storage
-            .with_data(|data| data[..ManagedPtr::SIZE].try_into().unwrap())
-    }
-
     #[test]
     fn copy_slots_into_copies_requested_slice() {
         let stack = int_stack(&[10, 20, 30, 40, 50]);
@@ -704,227 +552,6 @@ mod tests {
         stack.copy_slots_into(StackSlotIndex::new(1), 3, &mut out);
 
         assert_eq!(as_i32_values(&out), vec![20, 30, 40]);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_updates_cached_ptr_on_reallocation() {
-        let mut stack = int_stack(&[11, 22]);
-        let interior_offset = ByteOffset::new(1);
-        let slot0_before = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
-        let expected_before = slot0_before.wrapping_add(interior_offset.as_usize());
-        stack.push(StackValue::managed_stack_ptr(
-            StackSlotIndex::new(0),
-            interior_offset,
-            expected_before,
-            TypeDescription::NULL,
-            false,
-        ));
-
-        assert_eq!(stack.peek_stack().as_ptr(), expected_before);
-
-        stack.reserve_slots(512);
-
-        let slot0_after = stack.get_slot_address(StackSlotIndex::new(0)).as_ptr();
-        let expected_after = slot0_after.wrapping_add(interior_offset.as_usize());
-        assert_eq!(stack.peek_stack().as_ptr(), expected_after);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_rebases_serialized_value_type_pointer_on_reserve() {
-        let target_slot = StackSlotIndex::new(0);
-        let mut stack = int_stack(&[11, 22]);
-        let target_base = stack.get_slot_address(target_slot);
-        let pointer = ManagedPtr::new(
-            Some(target_base),
-            TypeDescription::NULL,
-            None,
-            false,
-            Some(ByteOffset::new(0)),
-        )
-        .with_stack_origin(target_slot);
-        let mut canonical_bytes = ManagedPtr::serialization_buffer();
-        pointer.write(&mut canonical_bytes);
-
-        stack.push_value_type(value_type_with_managed_ptr(canonical_bytes));
-        assert_eq!(
-            value_type_managed_ptr_bytes(&stack.peek_stack()),
-            canonical_bytes,
-            "the embedded pointer starts in the canonical Stack representation"
-        );
-
-        let capacity_before = stack.stack.capacity();
-        stack.reserve_slots(capacity_before + 1);
-        assert!(stack.stack.capacity() > capacity_before);
-
-        let embedded_bytes = value_type_managed_ptr_bytes(&stack.peek_stack());
-        assert_eq!(
-            embedded_bytes, canonical_bytes,
-            "the reallocation fixup must preserve the canonical serialized representation"
-        );
-
-        let current_target_base = stack.get_slot_address(target_slot);
-        let mut resolved_bytes = embedded_bytes;
-        assert_eq!(
-            ManagedPtr::rebase_stack_pointer(&mut resolved_bytes, |slot| {
-                (slot == target_slot).then_some(current_target_base)
-            }),
-            Ok(true),
-            "the embedded Stack pointer must resolve against the post-reserve slot base"
-        );
-        assert_eq!(resolved_bytes, canonical_bytes);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_preserves_unresolved_static_pointer() {
-        let static_offset = ByteOffset::new(7);
-        let static_pointer = ManagedPtr::new_static(
-            None,
-            TypeDescription::NULL,
-            TypeDescription::NULL,
-            GenericLookup::default(),
-            false,
-            static_offset,
-        );
-        let expected_origin = static_pointer.origin().clone();
-        let mut stack = int_stack(&[11, 22]);
-        stack.push_managed_ptr(static_pointer);
-
-        stack.update_stack_pointers();
-
-        let StackValue::ManagedPtr(pointer) = stack.peek_stack() else {
-            panic!("expected a managed pointer stack value");
-        };
-        let info = pointer.into_inner().into_info();
-        assert_eq!(info.origin, expected_origin);
-        assert_eq!(info.offset, static_offset);
-        assert_eq!(info.address, None);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_preserves_serialized_non_stack_value_type_bytes() {
-        let static_offset = ByteOffset::new(3);
-        let mut static_storage = [0u8; 8];
-        let static_base = NonNull::new(static_storage.as_mut_ptr()).unwrap();
-        let static_pointer = ManagedPtr::new_static(
-            NonNull::new(static_base.as_ptr().wrapping_add(static_offset.as_usize())),
-            TypeDescription::NULL,
-            TypeDescription::NULL,
-            GenericLookup::default(),
-            false,
-            static_offset,
-        );
-        let mut serialized_static = ManagedPtr::serialization_buffer();
-        static_pointer.write(&mut serialized_static);
-
-        let mut stack = int_stack(&[11, 22]);
-        stack.push_value_type(value_type_with_managed_ptr(serialized_static));
-        stack.update_stack_pointers();
-
-        assert_eq!(
-            value_type_managed_ptr_bytes(&stack.peek_stack()),
-            serialized_static,
-            "a valid serialized non-Stack field must pass through fixup unchanged"
-        );
-    }
-
-    #[test]
-    fn stack_pointer_fixup_rebases_serialized_value_type_pointer_to_suspended_slot() {
-        let target_slot = StackSlotIndex::new(1);
-        let mut stack = int_stack(&[11, 22]);
-        let target_base = stack.get_slot_address(target_slot);
-        let pointer = ManagedPtr::new(
-            Some(target_base),
-            TypeDescription::NULL,
-            None,
-            false,
-            Some(ByteOffset::new(0)),
-        )
-        .with_stack_origin(target_slot);
-        let mut canonical_bytes = ManagedPtr::serialization_buffer();
-        pointer.write(&mut canonical_bytes);
-
-        stack.push_value_type(value_type_with_managed_ptr(canonical_bytes));
-
-        // The target (logical slot 1) and the ValueType containing its
-        // serialized pointer (logical slot 2) both move to the suspended
-        // stack. The active slot at logical index 0 ensures this requires the
-        // resolver to subtract the active-stack length before indexing the
-        // suspended locations.
-        stack.suspend_above(target_slot);
-        assert_eq!(stack.stack.len(), 1);
-        assert_eq!(stack.suspended_stack.len(), 2);
-        let suspended_target_base = stack.suspended_stack[0].data_location();
-        let suspended_bytes = value_type_managed_ptr_bytes(&stack.suspended_stack[1]);
-        assert_eq!(suspended_bytes, canonical_bytes);
-
-        let mut resolved_suspended_bytes = suspended_bytes;
-        assert_eq!(
-            ManagedPtr::rebase_stack_pointer(&mut resolved_suspended_bytes, |slot| {
-                (slot == target_slot).then_some(suspended_target_base)
-            }),
-            Ok(true),
-            "the embedded pointer must resolve through the suspended portion of the concatenated slots"
-        );
-        assert_eq!(resolved_suspended_bytes, canonical_bytes);
-
-        stack.restore_suspended();
-        assert_eq!(stack.stack.len(), 3);
-        assert!(stack.suspended_stack.is_empty());
-        let restored_target_base = stack.get_slot_address(target_slot);
-        let restored_bytes = value_type_managed_ptr_bytes(&stack.stack[2]);
-        assert_eq!(restored_bytes, canonical_bytes);
-
-        let mut resolved_restored_bytes = restored_bytes;
-        assert_eq!(
-            ManagedPtr::rebase_stack_pointer(&mut resolved_restored_bytes, |slot| {
-                (slot == target_slot).then_some(restored_target_base)
-            }),
-            Ok(true),
-            "the embedded pointer must resolve through the active portion after restoration"
-        );
-        assert_eq!(resolved_restored_bytes, canonical_bytes);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_tracks_suspended_slots() {
-        let mut stack = int_stack(&[1, 2]);
-        let slot1_ptr = stack.get_slot_address(StackSlotIndex::new(1)).as_ptr();
-        stack.push(StackValue::managed_stack_ptr(
-            StackSlotIndex::new(1),
-            ByteOffset::new(0),
-            slot1_ptr,
-            TypeDescription::NULL,
-            false,
-        ));
-
-        stack.suspend_above(StackSlotIndex::new(1));
-        let expected_suspended_ptr = stack.suspended_stack[0].data_location().as_ptr();
-        let actual_suspended_ptr = stack.suspended_stack[1].as_ptr();
-        assert_eq!(actual_suspended_ptr, expected_suspended_ptr);
-
-        stack.restore_suspended();
-        let expected_restored_ptr = stack.get_slot_address(StackSlotIndex::new(1)).as_ptr();
-        let actual_restored_ptr = stack.peek_stack().as_ptr();
-        assert_eq!(actual_restored_ptr, expected_restored_ptr);
-    }
-
-    #[test]
-    fn stack_pointer_fixup_reuses_scratch_buffers() {
-        let mut stack = int_stack(&[3, 4, 5]);
-        stack.update_stack_pointers();
-        let initial_slot_capacity = stack.slot_locations_scratch.capacity();
-        let initial_suspended_capacity = stack.suspended_locations_scratch.capacity();
-
-        stack.update_stack_pointers();
-
-        assert_eq!(
-            stack.slot_locations_scratch.capacity(),
-            initial_slot_capacity
-        );
-        assert_eq!(
-            stack.suspended_locations_scratch.capacity(),
-            initial_suspended_capacity
-        );
     }
 }
 

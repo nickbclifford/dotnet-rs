@@ -119,7 +119,7 @@ Do not build a later slice's support in an earlier slice.
    p40 covers modified scalar/value-type arguments and fresh serials across `jmp`.
    `jmp` reads current argument homes, and home lookup includes suspended frames. Filter
    restoration saves the filter-owning frame's instruction pointer and absolute stack height.
-4. **Block ops and fixup deletion.** Route `cpblk`/`initblk`, `Buffer.Memmove` and
+4. **Block ops and fixup deletion (done).** Route `cpblk`/`initblk`, `Buffer.Memmove` and
    `Unsafe.CopyBlock`/`InitBlock` on a `FrameHome` byref now resolve their complete
    ranges through `RetainedPtr::checked_range` and `frame_home_window`; the adjacent
    clear and byte-fill paths do too. `p15` is enabled in the native and Miri control
@@ -127,11 +127,16 @@ Do not build a later slice's support in an earlier slice.
    ordinary, intrinsic and reflection construction. A callee-owned completion record copies the
    result before reflection return processing and transfers across `jmp`; p41 covers native
    receiver access across nested stack growth and collection, with and without `jmp`.
-   Remaining: `TypedReference` address-taking and step 6. Address-taken
-   byref-typed locals and arguments (including value-type `this`) now use homes;
-   `ldind.i`/`stind.i` on those homes preserve their complete managed-pointer encoding.
-   Home the remaining producers and delete the Stack origin with the fixup if nothing
-   else needs it.
+   `TypedReference` address-taking is rejected with `InvalidProgramException` under the
+   chosen strict ECMA boundary; ordinary typed-reference values retain their specialized
+   stack representation, type ownership and tracing. Address-taken byref-typed locals and
+   arguments (including value-type `this`) use homes; `ldind.i`/`stind.i` on those homes
+   preserve their complete managed-pointer encoding. p42 covers the rejection policy and
+   ordinary typed-reference copying, heap-owner tracing and wrong-type rejection. The Stack origin, serialized and cached rebasing,
+   evaluation-stack fixup, scratch caches and fixup metrics have been deleted. Retired
+   Stack encodings are rejected without changing the surviving encodings or the 24-byte size.
+   Native fast checks and all 42 pointer controls under Miri pass in both configurations;
+   see [slice-4 evidence](../ci-evidence/2026-11-05-stable-frame-homes-slice4.md).
 5. **Measure.** Compare `runtime_primitives` and `end_to_end` against `main` before slice 1. A
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
 

@@ -317,11 +317,6 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
         self.evaluation_stack.set_slot(index, value)
     }
 
-    #[inline]
-    fn get_slot_address(&self, index: crate::StackSlotIndex) -> std::ptr::NonNull<u8> {
-        self.evaluation_stack.get_slot_address(index)
-    }
-
     fn local_address(
         &self,
         index: crate::LocalIndex,
@@ -335,15 +330,9 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
         if let Some(slot) = frame.homes.local(index.as_usize()) {
             return self.home_address(slot, is_pinned);
         }
-        let slot = frame.base.locals + index;
-        let live_type =
-            ResolutionOps::stack_value_type(self, self.evaluation_stack.get_slot_ref(slot))?;
-        Ok(StackValue::managed_stack_ptr(
-            slot,
-            ByteOffset::new(0),
-            self.evaluation_stack.get_slot_address(slot).as_ptr(),
-            live_type,
-            is_pinned,
+        Err(crate::error::TypeResolutionError::InvalidLayout(
+            "address-taking requires a supported frame home; TypedReference addresses are not supported"
+                .into(),
         ))
     }
 
@@ -355,15 +344,9 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
         if let Some(slot) = frame.homes.argument(index.as_usize()) {
             return self.home_address(slot, true);
         }
-        let slot = frame.base.arguments + index;
-        let live_type =
-            ResolutionOps::stack_value_type(self, self.evaluation_stack.get_slot_ref(slot))?;
-        Ok(StackValue::managed_stack_ptr(
-            slot,
-            ByteOffset::new(0),
-            self.evaluation_stack.get_slot_address(slot).as_ptr(),
-            live_type,
-            true,
+        Err(crate::error::TypeResolutionError::InvalidLayout(
+            "address-taking requires a supported frame home; TypedReference addresses are not supported"
+                .into(),
         ))
     }
 }

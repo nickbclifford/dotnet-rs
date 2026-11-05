@@ -243,8 +243,6 @@ pub enum PointerDeserializationError {
     ChecksumMismatch,
     #[error("serialized offset does not match its packed mirror")]
     OffsetMismatch,
-    #[error("no live stack-slot base is available for serialized slot {0}")]
-    UnresolvedStackSlot(usize),
     #[error("no live static-storage base is available for serialized static pointer")]
     UnresolvedStaticStorage,
     #[error("serialized cross-arena registration token {0} is not live")]
@@ -267,9 +265,7 @@ impl Arbitrary<'_> for PointerDeserializationError {
             3 => Ok(PointerDeserializationError::InvalidStaticId(u.arbitrary()?)),
             4 => Ok(PointerDeserializationError::ChecksumMismatch),
             5 => Ok(PointerDeserializationError::OffsetMismatch),
-            6 => Ok(PointerDeserializationError::UnresolvedStackSlot(
-                u.arbitrary()?,
-            )),
+            6 => Ok(PointerDeserializationError::UnknownTag(1)),
             7 => Ok(PointerDeserializationError::UnresolvedStaticStorage),
             8 => Ok(PointerDeserializationError::UnresolvedFrameHome(
                 u.arbitrary()?,

@@ -25,7 +25,7 @@ pub fn read_span_reference<'gc, R: ManagedPtrResolver<'gc> + ?Sized>(
         .span_or_readonly_span_reference_layout(span.instance_storage.layout())
         .ok_or(IntrinsicError::Static("Span must have _reference field"))?;
     span.instance_storage.with_data(|data| {
-        // SAFETY: F3.InteriorPointerRebased — The field layout identifies one complete ManagedPtr representation in `data`.
+        // SAFETY: F10.RawMemoryAccessValid — The field layout identifies one complete ManagedPtr representation in `data`.
         unsafe { ManagedPtr::read_resolved_unchecked(&data[field.position.as_usize()..], resolver) }
             .map_err(|e| {
                 IntrinsicError::Message(
@@ -77,9 +77,9 @@ where
     })?;
 
     // Deserialize the ManagedPtrInfo from bytes
-    // SAFETY: F3.InteriorPointerRebased — `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
+    // SAFETY: F10.RawMemoryAccessValid — `ptr_bytes` was just read from managed memory using `ManagedPtr` serialization size,
     // we pass the current branded GC token for lifetime validation, and `ctx`
-    // resolves live Stack and Static bases for executable pointer recovery.
+    // resolves live FrameHome and Static bases for executable pointer recovery.
     let info = unsafe {
         ManagedPtr::read_resolved_branded(
             &ptr_bytes,

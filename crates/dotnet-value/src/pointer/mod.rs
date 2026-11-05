@@ -20,7 +20,7 @@
 //! returns `None` without calling `f` for a rejected heap range; it does not catch
 //! callback panics.
 //!
-//! `Stack` and `Static` origins use the cached address unchecked: the caller supplies
+//! `Static` origins use the cached address unchecked: the caller supplies
 //! range and lifetime. Not yet handled: giving them owner-checked access like the heap
 //! (see docs/plans/README.md). `Transient` origins
 //! share ownership, but raw observations do not retain that owner or grant access;
@@ -33,7 +33,7 @@
 //! uses accounting `size_bytes()` as a debug trap, not as an access guard.
 
 use crate::{
-    ByteOffset, StackSlotIndex, ValidationTag,
+    ByteOffset, ValidationTag,
     object::{Object, ObjectRef},
     ptr_common::PointerLike,
 };
@@ -108,14 +108,11 @@ pub(crate) static NEXT_STATIC_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Resolves live storage bases for executable managed-pointer deserialization.
 ///
-/// Serialized Stack and Static origins retain only a stable slot or metadata
+/// Serialized FrameHome and Static origins retain only a block serial or metadata
 /// handle plus an offset. Implementors must return a currently live base for
 /// that handle; [`ManagedPtr::read_resolved_unchecked`] derives the resulting
 /// pointer from that provenance-carrying base and the encoded offset.
 pub trait ManagedPtrResolver<'gc> {
-    /// Returns the live start address of an evaluation-stack slot.
-    fn stack_slot_base(&self, slot: StackSlotIndex) -> Option<NonNull<u8>>;
-
     /// Returns the live start address of static storage for `metadata`.
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>>;
 
@@ -145,7 +142,7 @@ pub fn frame_home_window<'r, R: ManagedPtrResolver<'r> + ?Sized>(
     if offset.checked_add(size).is_none_or(|end| end > len) {
         return Err(MemoryAccessError::BoundsCheck { offset, size, len });
     }
-    // INVARIANT: F10.FrameHomeChecked — the frame is live and `offset + size <= len`, so the
+    // INVARIANT: F3.StableFrameHomes; F10.FrameHomeChecked — the frame is live and `offset + size <= len`, so the
     // result stays inside the block allocation (one past its end only when `size` is zero).
     Ok(NonNull::new(base.as_ptr().wrapping_add(offset)).expect("a live home block is not at null"))
 }
@@ -158,7 +155,7 @@ pub fn frame_home_window<'r, R: ManagedPtrResolver<'r> + ?Sized>(
 /// guard, or CrossArena lease: a cache hit only avoids decoding the serialized
 /// Heap handle and still resolves current object storage.
 ///
-/// This trait deliberately covers Heap handles only. Stack and Static storage
+/// This trait deliberately covers Heap handles only. FrameHome and Static storage
 /// remains resolver-owned, while CrossArena decoding must acquire a fresh arena
 /// lease for every traversal.
 pub trait HeapManagedPtrDecodeCache<'gc> {
@@ -169,19 +166,15 @@ pub trait HeapManagedPtrDecodeCache<'gc> {
     fn insert_heap_handle(&mut self, serialized_handle: usize, owner: ObjectRef<'gc>);
 }
 
-/// A resolver for contexts that deliberately cannot deserialize Stack or Static
+/// A resolver for contexts that deliberately cannot deserialize FrameHome or Static
 /// pointers into executable addresses.
 ///
 /// This is suitable only when a caller accepts Heap, CrossArena, and Unmanaged
-/// origins and wants Stack/Static origins rejected with a contextual error.
+/// origins and wants FrameHome/Static origins rejected with a contextual error.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct NoManagedPtrResolver;
 
 impl<'gc> ManagedPtrResolver<'gc> for NoManagedPtrResolver {
-    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
-        None
-    }
-
     fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
         None
     }
@@ -225,7 +218,7 @@ pub struct ManagedPtrInfo<'gc> {
     /// The actual memory address being pointed to.
     pub address: Option<NonNull<u8>>,
     pub origin: PointerOrigin<'gc>,
-    /// The offset from the base of the owner (either an object on the heap or a stack slot).
+    /// The offset from the base of the owner (an object, static storage, or a frame-home block).
     pub offset: ByteOffset,
 }
 
@@ -470,14 +463,6 @@ impl<'gc> ManagedPtr<'gc> {
         match &self.origin {
             PointerOrigin::Heap(o) => Some(*o),
             _ => None,
-        }
-    }
-
-    pub fn stack_slot_origin(&self) -> Option<(StackSlotIndex, ByteOffset)> {
-        if let PointerOrigin::Stack(idx) = self.origin {
-            Some((idx, self.byte_offset()))
-        } else {
-            None
         }
     }
 
@@ -740,16 +725,9 @@ impl<'gc> ManagedPtr<'gc> {
                 f(&data[offset..offset + to_access])
             }),
             _ => {
-                // Stack, Static and Unmanaged origins: no owner to check against, so the
+                // Static and Unmanaged origins: no owner to check against, so the
                 // cached address is used directly.
-                let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
-                    // Stack pointer - use cached value
-                    self._value
-                        .expect("ManagedPtr::with_data: null stack pointer")
-                } else {
-                    // Static data pointer or absolute pointer - use cached value
-                    self._value.expect("ManagedPtr::with_data: null pointer")
-                };
+                let ptr = self._value.expect("ManagedPtr::with_data: null pointer");
                 // SAFETY: F10.RawMemoryAccessValid — the origin has no owner to check, so
                 // this relies on the `# Safety` contract: the caller guarantees `ptr` is
                 // valid for `size` bytes for the duration of `f`.
@@ -783,15 +761,6 @@ impl<'gc> ManagedPtr<'gc> {
         // contract excludes writes to the block while the slice lives.
         let slice = unsafe { NonNull::slice_from_raw_parts(address, size).as_ref() };
         Ok(f(slice))
-    }
-
-    pub fn update_cached_ptr(&mut self, ptr: NonNull<u8>) {
-        self.validate_magic();
-        self._value = Some(ptr);
-        if let PointerOrigin::Unmanaged = self.origin {
-            self.offset = ManagedByteOffset::ZERO;
-            self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, false);
-        }
     }
 
     /// A byref to `offset` in the home block of the frame with `serial`; `address` is that
@@ -954,17 +923,8 @@ impl<'gc> ManagedPtr<'gc> {
         })
     }
 
-    pub fn with_stack_origin(mut self, slot_index: StackSlotIndex) -> Self {
-        self.validate_magic();
-        let byte_offset = self.byte_offset();
-        self.origin = PointerOrigin::Stack(slot_index);
-        self.offset = Self::pack_offset(&self.origin, self._value, byte_offset);
-        self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, false);
-        self
-    }
-
     /// Returns true if this ManagedPtr represents a null pointer.
-    /// A null pointer has no owner, no stack origin, and zero offset.
+    /// A null pointer has no owner, no frame-home origin, and zero offset.
     pub fn is_null(&self) -> bool {
         self.validate_magic();
         // A canonical null ManagedPtr MUST have origin Unmanaged, offset 0, AND no cached address.

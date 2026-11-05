@@ -1,7 +1,8 @@
 #![no_main]
 use arbitrary::Arbitrary;
-use dotnet_utils::{ByteOffset, StackSlotIndex};
+use dotnet_utils::ByteOffset;
 use dotnet_value::pointer::ManagedPtr;
+use dotnet_value::pointer::{FrameHomeSerial, PointerOrigin};
 use libfuzzer_sys::fuzz_target;
 use std::ptr::NonNull;
 
@@ -24,7 +25,7 @@ struct OffsetInput {
 #[derive(Arbitrary, Debug)]
 enum OffsetOrigin {
     Unmanaged,
-    Stack { slot: u16 },
+    FrameHome { slot: u16 },
     Static,
 }
 
@@ -52,14 +53,16 @@ fuzz_target!(|input: OffsetInput| {
             false,
             Some(ByteOffset::new(initial_offset)),
         ),
-        OffsetOrigin::Stack { slot } => ManagedPtr::new(
+        OffsetOrigin::FrameHome { slot } => ManagedPtr::new(
             Some(address),
             dotnet_types::TypeDescription::NULL,
             None,
             false,
             Some(ByteOffset::new(initial_offset)),
         )
-        .with_stack_origin(StackSlotIndex::new(usize::from(slot))),
+        .with_origin(PointerOrigin::FrameHome(FrameHomeSerial::new(
+            u64::from(slot) + 1,
+        ))),
         OffsetOrigin::Static => ManagedPtr::new_static(
             Some(address),
             dotnet_types::TypeDescription::NULL,
@@ -71,7 +74,7 @@ fuzz_target!(|input: OffsetInput| {
     };
 
     let original_ptr = ptr.clone();
-    // SAFETY: F3.InteriorPointerRebased — `ptr` was derived from `storage`, and
+    // SAFETY: F10.RawMemoryAccessValid — `ptr` was derived from `storage`, and
     // the checked result remains within that allocation for this target.
     let new_ptr = unsafe { ptr.offset(offset_delta) };
 

@@ -63,9 +63,7 @@ pub fn intrinsic_unsafe_as_pointer<
             };
             match m.origin() {
                 // Origins without an owner to observe: return the cached address.
-                PointerOrigin::Stack(_) | PointerOrigin::Static(_) | PointerOrigin::Unmanaged => {
-                    managed_ptr_address(&m)
-                }
+                PointerOrigin::Static(_) | PointerOrigin::Unmanaged => managed_ptr_address(&m),
                 // Heap and cross-arena observation was already performed above.
                 _ => observed.map_or(ptr::null_mut(), NonNull::as_ptr),
             }
@@ -684,7 +682,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
-    // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` validates the source pointer's origin and offset, and `layout` and
+    // SAFETY: F10.RawMemoryAccessValid, F10.RawMemoryAccessValid — `ptr_info` validates the source pointer's origin and offset, and `layout` and
     // `target_type` were resolved for the requested generic type.
     match unsafe { ctx.read_unaligned(origin, offset, &layout, Some(target_type)) } {
         Ok(v) => {
@@ -734,7 +732,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, T: UnsafeIntrinsicHost<'gc>>(
         Err(e) => return e,
     };
 
-    // SAFETY: F3.InteriorPointerRebased, F10.RawMemoryAccessValid — `ptr_info` validates the destination pointer's origin and offset, while `layout`
+    // SAFETY: F10.RawMemoryAccessValid, F10.RawMemoryAccessValid — `ptr_info` validates the destination pointer's origin and offset, while `layout`
     // was resolved for the requested generic type before this write.
     match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}

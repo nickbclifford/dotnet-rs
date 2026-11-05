@@ -89,7 +89,7 @@ CHECKS=(
 
   # --- ARCHITECTURE.md ---
   "ARCHITECTURE.md|EvaluationStack|*.rs"
-  "ARCHITECTURE.md|update_stack_pointers|*.rs"
+  "ARCHITECTURE.md|frame_home_window|*.rs"
 
   # --- BUILD_TIME_CODE_GENERATION.md ---
   "BUILD_TIME_CODE_GENERATION.md|generate_instruction_table|*.rs"
