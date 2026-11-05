@@ -44,7 +44,7 @@ Each name is an exact `pointer_provenance_tests::<name>` filter in the owning so
 | Exact probe (owning source) | Original | Finding | Status, evidence and outcome |
 |---|---|---|---|
 | [`p00_smoke`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:191 | R13 | C; VM-M control passed in both configurations (final shard lane) |
-| [`p01_ldloca_convu_stind_i4`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:210 | R02 | U; suspected UB, exact current outcome unknown |
+| [`p01_ldloca_convu_stind_i4`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:210 | R02 | U; 2026-11-04 diagnostic on 525ed3c4: `miri-ub` in both configurations, write through `<wildcard>` forbidden at `dotnet-runtime-memory/src/access.rs:1175` (the address was derived from a shared borrow of the `Vec` slot) |
 | [`p02_ldloca_stind_i4_control`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:229 | R02 | C; VM-M control passed in both configurations (final shard lane) |
 | [`p03_ldloca_convu_ldind_i4`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:247 | R02 | C; VM-M read control passed in both configurations (final shard lane) |
 | [`p04_double_localloc_write_first`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:266 | R05 | C; M1c repair passed in both configurations; pre-repair VM-M `miri-ub` at `dotnet-runtime-memory/src/access.rs:1172:25` |
@@ -52,13 +52,13 @@ Each name is an exact `pointer_provenance_tests::<name>` filter in the owning so
 | [`p06_localloc_minus_one_then_plus_one`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:313 | R05 | C; Phase 6 control passed in both configurations; pre-repair VM-M `miri-ub`, see M1b outcomes below |
 | [`p07_localloc_one_past_end`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:340 | R05 | C; VM-M formation-only control passed in both configurations |
 | [`p08_localloc_overshoot`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:360 | R05 | C; Phase 6 control passed in both configurations; pre-repair VM-M `miri-ub`, see M1b outcomes below |
-| [`p09_ldloca_convu_survives_callee_stack_growth`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:464 | R02 | U; VM-M/N was historically reported; exact current outcome unknown |
+| [`p09_ldloca_convu_survives_callee_stack_growth`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:464 | R02 | U; 2026-11-04 diagnostic on 525ed3c4: `miri-ub` in both configurations, 4-byte access through a dangling address with no provenance at `dotnet-runtime-memory/src/access.rs:1175` after the `Vec` reallocated |
 | [`p10_ldelema_convu_stind_heap_array`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:498 | R01 | C; M1a VM-M control passed in both configurations after repair; baseline miri-ub below |
 | [`p11_ldelema_stind_heap_array_control`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:534 | R01 | C; VM-M control passed in both configurations (final shard lane) |
 | [`p12_ldsflda_convu_stind_static`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:569 | R03 | U; pinned Miri alignment `debug_assert` panic in both configurations, not UB and not a teardown proof; see M1d below |
 | [`p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:596 | R01 | C; M1a VM-M control passed in both configurations; validation-all conditionally ignored |
 | [`p14_initblk_heap_array_via_managed_ptr`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:798 | R01, R10 | C; M1a VM-M control passed in both configurations for its short valid block |
-| [`p15_initblk_stack_local_via_managed_ptr`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:829 | R10 | U; suspected UB, exact current outcome unknown |
+| [`p15_initblk_stack_local_via_managed_ptr`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:829 | R10 | U; 2026-11-04 diagnostic on 525ed3c4: `miri-ub` in both configurations, write through a shared-borrow-derived tag forbidden at `dotnet-vm/src/instructions/memory.rs:91` (`initblk`) |
 | [`p16_cpblk_heap_arrays_via_managed_ptr`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:849 | R01, R10 | C; M1a VM-M control passed in both configurations for its short valid block |
 | [`p17_localloc_ptr_ceq_self`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:894 | R05 | C; Phase 6 control passed in both configurations; pre-repair native and VM-M assertions failed, see M1b outcomes below |
 | [`p18_localloc_ptr_clt`](../../crates/dotnet-vm/src/pointer_provenance_tests.rs) | 3:914 | R05 | C; Phase 6 control passed in both configurations; pre-repair native and VM-M assertions failed, see M1b outcomes below |
