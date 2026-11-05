@@ -782,8 +782,8 @@ impl<'gc> ManagedPtr<'gc> {
 
         // A frame-home pointer decoded without its frame's resolver has no address to recover.
         #[cfg(debug_assertions)]
-        if !matches!(self.origin, PointerOrigin::Transient(_))
-            && !(matches!(self.origin, PointerOrigin::FrameHome(_)) && self._value.is_none())
+        if !(matches!(self.origin, PointerOrigin::Transient(_))
+            || (matches!(self.origin, PointerOrigin::FrameHome(_)) && self._value.is_none()))
         {
             let expected_address = self._value.map(|address| address.as_ptr().addr());
             let base = self._value.and_then(|address| {
