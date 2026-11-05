@@ -58,6 +58,7 @@ macro_rules! define_lock_order_dag {
     };
 }
 
+// INVARIANT: F8.LockOrderRespected — these roots and edges generate the only `AcquireAfter` impls, so an ordered lock can be taken only from `Unlocked` (roots) or after a level it is declared to follow.
 define_lock_order_dag! {
     levels {
         Unlocked => "Unlocked",
@@ -336,7 +337,7 @@ impl<L: LockLevel, T> OrderedRwLock<L, T> {
         }
         #[cfg(not(all(not(loom), feature = "multithreading")))]
         {
-            // SAFETY: F8.LockOrderRespected — Forwarding contract to underlying lock implementation.
+            // SAFETY: F10.BorrowedStorageStable — this function's `# Safety` contract (use the pointer only within the lock's aliasing rules) is the inner lock's `data_ptr` contract.
             unsafe { self.inner.data_ptr() }
         }
     }

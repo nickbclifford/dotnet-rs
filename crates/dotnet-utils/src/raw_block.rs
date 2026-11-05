@@ -67,8 +67,7 @@ impl RawBlock {
         }
         let layout = Layout::from_size_align(payload_len.max(1), align.max(16))
             .map_err(|_| RawBlockError::LayoutOverflow)?;
-        // SAFETY: F10.RawMemoryAccessValid — the layout is valid and nonzero;
-        // the caller guarantees the allocation function's contract.
+        // SAFETY: F10.RawAllocationOwnership — `Layout::from_size_align` validated `layout` and its size is at least 1; this function's `# Safety` contract makes `alloc_fn` return null or a uniquely owned zeroed allocation freeable with `dealloc` and that layout.
         let base = unsafe { alloc_fn(layout) };
         let base = NonNull::new(base).ok_or(RawBlockError::AllocationFailed)?;
         LIVE_BLOCKS.with(|count| count.set(count.get() + 1));

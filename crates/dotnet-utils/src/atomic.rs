@@ -127,6 +127,13 @@ impl_atomic_width!(W4, u32, 4);
 impl_atomic_width!(W8, u64, 8);
 
 /// Internal primitive operations selected by a sealed [`AtomicWidth`].
+///
+/// # Safety
+///
+/// Every unsafe method requires `ptr` to be valid for a `size_of::<Self>()`-byte
+/// access aligned to `size_of::<Self>()`, readable for `load`, writable for
+/// `store`, and readable and writable for the read-modify-write methods, with no
+/// conflicting non-atomic access to those bytes.
 #[doc(hidden)]
 pub trait AtomicRepr: sealed::Sealed + Copy {
     fn from_u64(value: u64) -> Self;
@@ -174,13 +181,13 @@ macro_rules! impl_atomic_repr {
             unsafe fn load(ptr: *const u8, ordering: Ordering) -> Self {
                 #[cfg(feature = "multithreading")]
                 {
-                    // SAFETY: F4.WidthAligned — `AtomicWidth` fixes this representation's width; the caller proves `ptr` is valid and aligned for it.
+                    // SAFETY: F4.WidthAligned — per this trait's `# Safety` contract `ptr` is valid and aligned for `Self`, which is the atomic's own size and alignment.
                     unsafe { <$atomic>::from_ptr(ptr.cast_mut().cast::<Self>()) }.load(ordering)
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
                     let _ = ordering;
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid readable storage; unaligned access preserves the single-threaded fallback behavior.
+                    // SAFETY: F10.RawMemoryAccessValid — per this trait's `# Safety` contract `ptr` is readable for `size_of::<Self>()` bytes; `read_unaligned` needs no alignment.
                     unsafe { ptr.cast::<Self>().read_unaligned() }
                 }
             }
@@ -188,13 +195,13 @@ macro_rules! impl_atomic_repr {
             unsafe fn store(ptr: *mut u8, value: Self, ordering: Ordering) {
                 #[cfg(feature = "multithreading")]
                 {
-                    // SAFETY: F4.WidthAligned — `AtomicWidth` fixes this representation's width; the caller proves `ptr` is valid and aligned for it.
+                    // SAFETY: F4.WidthAligned — per this trait's `# Safety` contract `ptr` is valid and aligned for `Self`, which is the atomic's own size and alignment.
                     unsafe { <$atomic>::from_ptr(ptr.cast::<Self>()) }.store(value, ordering);
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
                     let _ = ordering;
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid writable storage; unaligned access preserves the single-threaded fallback behavior.
+                    // SAFETY: F10.RawMemoryAccessValid — per this trait's `# Safety` contract `ptr` is writable for `size_of::<Self>()` bytes; `write_unaligned` needs no alignment.
                     unsafe { ptr.cast::<Self>().write_unaligned(value) };
                 }
             }
@@ -208,17 +215,17 @@ macro_rules! impl_atomic_repr {
             ) -> Result<Self, Self> {
                 #[cfg(feature = "multithreading")]
                 {
-                    // SAFETY: F4.WidthAligned — `AtomicWidth` fixes this representation's width; the caller proves `ptr` is valid and aligned for it.
+                    // SAFETY: F4.WidthAligned — per this trait's `# Safety` contract `ptr` is valid and aligned for `Self`, which is the atomic's own size and alignment.
                     unsafe { <$atomic>::from_ptr(ptr.cast::<Self>()) }
                         .compare_exchange(expected, new, success, failure)
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
                     let _ = (success, failure);
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid readable storage for this sealed representation.
+                    // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `load`'s.
                     let current = unsafe { Self::load(ptr, Ordering::Relaxed) };
                     if current == expected {
-                        // SAFETY: F10.RawMemoryAccessValid — The caller also proves valid writable storage for this sealed representation.
+                        // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `store`'s.
                         unsafe { Self::store(ptr, new, Ordering::Relaxed) };
                         Ok(current)
                     } else {
@@ -230,14 +237,14 @@ macro_rules! impl_atomic_repr {
             unsafe fn exchange(ptr: *mut u8, new: Self, ordering: Ordering) -> Self {
                 #[cfg(feature = "multithreading")]
                 {
-                    // SAFETY: F4.WidthAligned — `AtomicWidth` fixes this representation's width; the caller proves `ptr` is valid and aligned for it.
+                    // SAFETY: F4.WidthAligned — per this trait's `# Safety` contract `ptr` is valid and aligned for `Self`, which is the atomic's own size and alignment.
                     unsafe { <$atomic>::from_ptr(ptr.cast::<Self>()) }.swap(new, ordering)
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid readable storage for this sealed representation.
+                    // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `load`'s.
                     let current = unsafe { Self::load(ptr, ordering) };
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid writable storage for this sealed representation.
+                    // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `store`'s.
                     unsafe { Self::store(ptr, new, ordering) };
                     current
                 }
@@ -246,14 +253,14 @@ macro_rules! impl_atomic_repr {
             unsafe fn exchange_add(ptr: *mut u8, value: Self, ordering: Ordering) -> Self {
                 #[cfg(feature = "multithreading")]
                 {
-                    // SAFETY: F4.WidthAligned — `AtomicWidth` fixes this representation's width; the caller proves `ptr` is valid and aligned for it.
+                    // SAFETY: F4.WidthAligned — per this trait's `# Safety` contract `ptr` is valid and aligned for `Self`, which is the atomic's own size and alignment.
                     unsafe { <$atomic>::from_ptr(ptr.cast::<Self>()) }.fetch_add(value, ordering)
                 }
                 #[cfg(not(feature = "multithreading"))]
                 {
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid readable storage for this sealed representation.
+                    // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `load`'s.
                     let current = unsafe { Self::load(ptr, ordering) };
-                    // SAFETY: F10.RawMemoryAccessValid — The caller proves valid writable storage for this sealed representation.
+                    // SAFETY: F10.RawMemoryAccessValid — this method's contract (readable and writable `ptr`) covers `store`'s.
                     unsafe { Self::store(ptr, current.wrapping_add(value), ordering) };
                     current
                 }
@@ -331,11 +338,11 @@ impl PointerAtomicOp {
             validate_atomic_access(slot, false);
             return match self {
                 Self::Load(_) => {
-                    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees initialized storage and synchronization.
+                    // SAFETY: F10.RawMemoryAccessValid — `slot` is a valid, initialized, synchronized pointer slot per this function's `# Safety` contract; `read_unaligned` needs no alignment.
                     Some((unsafe { slot.cast::<*mut u8>().read_unaligned() }, false))
                 }
                 Self::Store(value, _) => {
-                    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees writable storage and synchronization.
+                    // SAFETY: F10.RawMemoryAccessValid — `slot` is a valid, synchronized pointer slot per this function's `# Safety` contract; `write_unaligned` needs no alignment.
                     unsafe { slot.cast::<*mut u8>().write_unaligned(value) };
                     Some((std::ptr::null_mut(), true))
                 }
@@ -343,7 +350,7 @@ impl PointerAtomicOp {
             };
         }
         validate_atomic_access(slot, true);
-        // SAFETY: F4.WidthAligned — The caller guarantees a valid initialized slot and alignment was checked.
+        // SAFETY: F4.WidthAligned — `slot` is a valid, initialized pointer slot per this function's `# Safety` contract, and the `aligned` check above returned early otherwise.
         let atomic = unsafe { AtomicPtr::from_ptr(slot.cast::<*mut u8>()) };
         Some(match self {
             Self::Load(order) => (atomic.load(order), false),
@@ -448,7 +455,7 @@ impl AtomicAccess for StandardAtomicAccess {
         validate_atomic_access(ptr, true);
         #[cfg(feature = "multithreading")]
         validate_ordering(ordering, true);
-        // SAFETY: F4.WidthAligned — `W` selects the representation and the caller proves `ptr` valid and aligned for that exact representation.
+        // SAFETY: F4.WidthAligned — `load_atomic`'s contract (valid, readable, aligned for `W::Repr`) is `AtomicRepr::load`'s for that representation.
         unsafe { W::Repr::load(ptr, ordering) }
     }
 
@@ -456,7 +463,7 @@ impl AtomicAccess for StandardAtomicAccess {
         validate_atomic_access(ptr.cast_const(), true);
         #[cfg(feature = "multithreading")]
         validate_ordering(ordering, false);
-        // SAFETY: F4.WidthAligned — `W` selects the representation and the caller proves `ptr` valid and aligned for that exact representation.
+        // SAFETY: F4.WidthAligned — `store_atomic`'s contract (valid, writable, aligned for `W::Repr`) is `AtomicRepr::store`'s for that representation.
         unsafe { W::Repr::store(ptr, value, ordering) };
     }
 
@@ -467,7 +474,7 @@ impl AtomicAccess for StandardAtomicAccess {
         success: Ordering,
         failure: Ordering,
     ) -> Result<W::Repr, W::Repr> {
-        // SAFETY: F4.WidthAligned — `W` selects the representation and the caller proves `ptr` valid and aligned for that exact representation.
+        // SAFETY: F4.WidthAligned — this method's contract (readable, writable, aligned for `W::Repr`) is `AtomicRepr::compare_exchange`'s for that representation.
         unsafe { W::Repr::compare_exchange(ptr, expected, new, success, failure) }
     }
 
@@ -476,7 +483,7 @@ impl AtomicAccess for StandardAtomicAccess {
         new: W::Repr,
         ordering: Ordering,
     ) -> W::Repr {
-        // SAFETY: F4.WidthAligned — `W` selects the representation and the caller proves `ptr` valid and aligned for that exact representation.
+        // SAFETY: F4.WidthAligned — this method's contract (readable, writable, aligned for `W::Repr`) is `AtomicRepr::exchange`'s for that representation.
         unsafe { W::Repr::exchange(ptr, new, ordering) }
     }
 
@@ -485,7 +492,7 @@ impl AtomicAccess for StandardAtomicAccess {
         value: W::Repr,
         ordering: Ordering,
     ) -> W::Repr {
-        // SAFETY: F4.WidthAligned — `W` selects the representation and the caller proves `ptr` valid and aligned for that exact representation.
+        // SAFETY: F4.WidthAligned — this method's contract (readable, writable, aligned for `W::Repr`) is `AtomicRepr::exchange_add`'s for that representation.
         unsafe { W::Repr::exchange_add(ptr, value, ordering) }
     }
 }
@@ -493,6 +500,10 @@ impl AtomicAccess for StandardAtomicAccess {
 trait AtomicOperation {
     type Output;
 
+    /// # Safety
+    ///
+    /// `ptr` must be valid and aligned for `W::Repr`, readable and writable as the
+    /// operation requires, with no conflicting non-atomic access.
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output;
 }
 
@@ -508,7 +519,7 @@ impl AtomicOperation for LoadBytesOperation {
     type Output = Vec<u8>;
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `load_atomic::<W>`'s.
         unsafe { <StandardAtomicAccess as AtomicAccess>::load_atomic::<W>(ptr, self.ordering) }
             .to_ne_bytes()
     }
@@ -518,7 +529,7 @@ impl AtomicOperation for LoadOperation {
     type Output = u64;
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `load_atomic::<W>`'s.
         unsafe { <StandardAtomicAccess as AtomicAccess>::load_atomic::<W>(ptr, self.ordering) }
             .into_u64()
     }
@@ -533,7 +544,7 @@ impl AtomicOperation for StoreOperation {
     type Output = ();
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `store_atomic::<W>`'s; `from_u64` truncates the value to that width.
         unsafe {
             <StandardAtomicAccess as AtomicAccess>::store_atomic::<W>(
                 ptr,
@@ -553,7 +564,7 @@ impl AtomicOperation for StoreBytesOperation<'_> {
     type Output = ();
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `store_atomic::<W>`'s; the dispatcher chose `W` from `value.len()`, so `from_ne_bytes` gets exactly `W`'s width.
         unsafe {
             <StandardAtomicAccess as AtomicAccess>::store_atomic::<W>(
                 ptr,
@@ -575,7 +586,7 @@ impl AtomicOperation for CompareExchangeOperation {
     type Output = Result<u64, u64>;
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `compare_exchange_atomic::<W>`'s.
         unsafe {
             <StandardAtomicAccess as AtomicAccess>::compare_exchange_atomic::<W>(
                 ptr,
@@ -599,7 +610,7 @@ impl AtomicOperation for ExchangeOperation {
     type Output = u64;
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `exchange_atomic::<W>`'s.
         unsafe {
             <StandardAtomicAccess as AtomicAccess>::exchange_atomic::<W>(
                 ptr,
@@ -620,7 +631,7 @@ impl AtomicOperation for ExchangeAddOperation {
     type Output = u64;
 
     unsafe fn execute<W: AtomicWidth>(self, ptr: *mut u8) -> Self::Output {
-        // SAFETY: F4.WidthAligned — The width dispatcher selects `W` from the requested supported size, and its caller proves `ptr` valid and aligned for that size.
+        // SAFETY: F4.WidthAligned — `execute`'s contract (valid and aligned for `W::Repr`) is `exchange_add_atomic::<W>`'s.
         unsafe {
             <StandardAtomicAccess as AtomicAccess>::exchange_add_atomic::<W>(
                 ptr,
@@ -632,19 +643,25 @@ impl AtomicOperation for ExchangeAddOperation {
     }
 }
 
+/// Runs `operation` at the marker width equal to `size`; panics for any other size.
+///
+/// # Safety
+///
+/// `ptr` must be valid and aligned for a `size`-byte access, readable and writable as
+/// `operation` requires, with no conflicting non-atomic access.
 unsafe fn dispatch_atomic_width<O: AtomicOperation>(
     ptr: *mut u8,
     size: usize,
     operation: O,
 ) -> O::Output {
     match size {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; this arm binds that size to its only marker representation.
+        // SAFETY: F4.WidthAligned — `size == 1` is `W1`'s width, so the contract for `size` bytes is `execute::<W1>`'s.
         1 => unsafe { operation.execute::<W1>(ptr) },
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; this arm binds that size to its only marker representation.
+        // SAFETY: F4.WidthAligned — `size == 2` is `W2`'s width, so the contract for `size` bytes is `execute::<W2>`'s.
         2 => unsafe { operation.execute::<W2>(ptr) },
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; this arm binds that size to its only marker representation.
+        // SAFETY: F4.WidthAligned — `size == 4` is `W4`'s width, so the contract for `size` bytes is `execute::<W4>`'s.
         4 => unsafe { operation.execute::<W4>(ptr) },
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; this arm binds that size to its only marker representation.
+        // SAFETY: F4.WidthAligned — `size == 8` is `W8`'s width, so the contract for `size` bytes is `execute::<W8>`'s.
         8 => unsafe { operation.execute::<W8>(ptr) },
         _ => panic!("Unsupported atomic size: {size}"),
     }
@@ -657,7 +674,7 @@ impl StandardAtomicAccess {
     /// # Safety
     /// `ptr` must be valid, readable, and aligned for the supported `size`.
     pub unsafe fn load_atomic_sized(ptr: *const u8, size: usize, ordering: Ordering) -> u64 {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (readable and aligned for `size`) is `dispatch_atomic_width`'s; a load only reads through the `*mut` cast.
         unsafe { dispatch_atomic_width(ptr.cast_mut(), size, LoadOperation { ordering }) }
     }
 
@@ -668,21 +685,21 @@ impl StandardAtomicAccess {
         size: usize,
         ordering: Ordering,
     ) -> Vec<u8> {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (readable and aligned for `size`) is `dispatch_atomic_width`'s; a load only reads through the `*mut` cast.
         unsafe { dispatch_atomic_width(ptr.cast_mut(), size, LoadBytesOperation { ordering }) }
     }
 
     /// # Safety
     /// `ptr` must be valid, writable, and aligned for the supported `size`.
     pub unsafe fn store_atomic_sized(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (writable and aligned for `size`) is `dispatch_atomic_width`'s.
         unsafe { dispatch_atomic_width(ptr, size, StoreOperation { value, ordering }) }
     }
 
     /// # Safety
     /// `ptr` must be valid, writable, and aligned for the supported `value.len()`.
     pub unsafe fn store_atomic_sized_bytes(ptr: *mut u8, value: &[u8], ordering: Ordering) {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `value.len()`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (writable and aligned for `value.len()`) is `dispatch_atomic_width`'s with `size = value.len()`.
         unsafe { dispatch_atomic_width(ptr, value.len(), StoreBytesOperation { value, ordering }) }
     }
 
@@ -696,7 +713,7 @@ impl StandardAtomicAccess {
         success: Ordering,
         failure: Ordering,
     ) -> Result<u64, u64> {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (readable, writable and aligned for `size`) is `dispatch_atomic_width`'s.
         unsafe {
             dispatch_atomic_width(
                 ptr,
@@ -719,7 +736,7 @@ impl StandardAtomicAccess {
         new: u64,
         ordering: Ordering,
     ) -> u64 {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (readable, writable and aligned for `size`) is `dispatch_atomic_width`'s.
         unsafe { dispatch_atomic_width(ptr, size, ExchangeOperation { new, ordering }) }
     }
 
@@ -731,7 +748,7 @@ impl StandardAtomicAccess {
         value: u64,
         ordering: Ordering,
     ) -> u64 {
-        // SAFETY: F4.WidthAligned — The caller proves `ptr` valid and aligned for `size`; the dispatcher binds it to the matching marker.
+        // SAFETY: F4.WidthAligned — this function's contract (readable, writable and aligned for `size`) is `dispatch_atomic_width`'s.
         unsafe { dispatch_atomic_width(ptr, size, ExchangeAddOperation { value, ordering }) }
     }
 }
@@ -750,12 +767,12 @@ impl Atomic {
     /// this falls back to a non-atomic memcpy guarded by that lock.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
         if Self::is_atomic_field_access_supported(ptr, size) {
-            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F4.WidthAligned — `is_atomic_field_access_supported` checked that `size` is 1, 2, 4 or 8 and `ptr` is aligned to it; `ptr` is readable for `size` bytes per this function's `# Safety` contract.
             unsafe { StandardAtomicAccess::load_atomic_sized_bytes(ptr, size, ordering) }
         } else {
             validate_atomic_access(ptr, false);
             let mut buf = vec![0u8; size];
-            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is readable for `size` bytes per this function's `# Safety` contract, which also requires the external lock for this non-atomic path; `buf` is a fresh `size`-byte buffer, so the ranges do not overlap.
             unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
             buf
         }
@@ -768,11 +785,11 @@ impl Atomic {
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
         if Self::is_atomic_field_access_supported(ptr as *const u8, size) {
-            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F4.WidthAligned — `is_atomic_field_access_supported` checked that `value.len()` is 1, 2, 4 or 8 and `ptr` is aligned to it; `ptr` is writable for that many bytes per this function's `# Safety` contract.
             unsafe { StandardAtomicAccess::store_atomic_sized_bytes(ptr, value, ordering) };
         } else {
             validate_atomic_access(ptr as *const u8, false);
-            // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is writable for `size` bytes per this function's `# Safety` contract, which also requires the external lock for this non-atomic path; `value` is a shared borrow, so it cannot overlap the destination.
             unsafe { ptr::copy_nonoverlapping(value.as_ptr(), ptr, size) };
         }
     }
@@ -980,9 +997,9 @@ mod tests {
         let mut data = [0u8; 16];
         data[1..9].copy_from_slice(&0x0102030405060708u64.to_ne_bytes());
         let ptr = data.as_ptr();
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — offset 1 is within the 16-byte `data` array.
         let misaligned_ptr = unsafe { ptr.add(1) };
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — bytes 1..9 lie within `data`, and this thread is its only user.
         let loaded = unsafe { Atomic::load_field(misaligned_ptr, 8, Ordering::SeqCst) };
         assert_eq!(loaded, 0x0102030405060708u64.to_ne_bytes());
     }
@@ -993,7 +1010,7 @@ mod tests {
         // 3-byte store: not atomically expressible, falls back to memcpy.
         // Caller must hold an external lock; here we just verify the bytes are written.
         let mut data = [0u8; 8];
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — `data` has 8 writable bytes, more than the 3 stored, and this thread is its only user.
         unsafe {
             Atomic::store_field(data.as_mut_ptr(), &[1, 2, 3], Ordering::SeqCst);
         }
@@ -1006,9 +1023,9 @@ mod tests {
         let mut data = [0u8; 8];
         data[1..5].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         let ptr = data.as_ptr();
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — offset 1 is within the 8-byte `data` array.
         let misaligned_ptr = unsafe { ptr.add(1) };
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — bytes 1..5 lie within `data`, and this thread is its only user.
         let loaded = unsafe { Atomic::load_field(misaligned_ptr, 4, Ordering::SeqCst) };
         assert_eq!(loaded, vec![0x11, 0x22, 0x33, 0x44]);
     }
@@ -1017,7 +1034,7 @@ mod tests {
     #[cfg(not(feature = "multithreading"))]
     fn test_store_field_unsupported_size_falls_back_non_mt() {
         let mut data = [0u8; 8];
-        // SAFETY: F10.RawMemoryAccessValid — The valid backing storage and this API's documented unsafe contract satisfy the pointer operation's preconditions.
+        // SAFETY: F10.RawMemoryAccessValid — `data` has 8 writable bytes, more than the 3 stored, and this thread is its only user.
         unsafe {
             Atomic::store_field(data.as_mut_ptr(), &[0xAA, 0xBB, 0xCC], Ordering::SeqCst);
         }

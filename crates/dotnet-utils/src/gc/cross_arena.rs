@@ -1691,9 +1691,9 @@ mod tests {
         let allocation = Box::into_raw(Box::new(0xA5u8));
 
         set_currently_tracing(Some(ArenaId::new(10_102)));
-        // SAFETY: F10.RawAllocationOwnership — `allocation` is a live allocation belonging to `id`'s current registration.
+        // SAFETY: F11.ObjectPointerThreadSafe — `allocation` is a non-null `Box` pointer standing in for an object allocation; the erased wrapper is inert and is only compared and dereferenced below on this thread while the box is live.
         let opaque = unsafe { OpaqueObjectPtr::from_raw(allocation.cast()) };
-        // SAFETY: F10.RawAllocationOwnership — as above.
+        // SAFETY: F1.ArenaGenerationMatch — `id` was registered above and is not unregistered until the end of the test, and `allocation` stays live until then.
         assert!(unsafe { record_cross_arena_object(id, opaque) });
         set_currently_tracing(None);
         let found = take_found_cross_arena_refs();
