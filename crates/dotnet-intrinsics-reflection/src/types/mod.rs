@@ -334,8 +334,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let val = StackValue::NativeInt(0);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
-            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
-            // call frame; their origins, offsets, and scalar layouts match the values written.
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — `pfn_allocator` is the bound signature's first `IntPtr&` argument, so its target is one `nint`, exactly this `NativeInt` write.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     pfn_allocator.origin().clone(),
@@ -346,8 +345,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             let val = StackValue::NativeInt(0);
-            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
-            // call frame; their origins, offsets, and scalar layouts match the values written.
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — `allocator_first_arg` is the bound signature's second `IntPtr&` argument, so its target is one `nint`, exactly this `NativeInt` write.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     allocator_first_arg.origin().clone(),
@@ -381,8 +379,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let method_val = StackValue::NativeInt(method_idx as isize);
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
-            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
-            // call frame; their origins, offsets, and scalar layouts match the values written.
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — `pfn_ctor` is the bound signature's third `IntPtr&` argument, so its target is one `nint`, exactly this `NativeInt` write.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     pfn_ctor.origin().clone(),
@@ -394,8 +391,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             let public_val = StackValue::Int32(1);
             let byte_layout = LayoutManager::Scalar(Scalar::Int8);
-            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — The intrinsic decoded these managed-pointer out parameters from the CLR
-            // call frame; their origins, offsets, and scalar layouts match the values written.
+            // SAFETY: F2.DescriptorMatchesEcmaLayout; F10.RawMemoryAccessValid — `ctor_is_public` is the bound signature's `bool&` argument, so its target is one byte, exactly this `Int8` write.
             unsafe {
                 dotnet_vm_ops::vm_try!(ctx.write_unaligned(
                     ctor_is_public.origin().clone(),
