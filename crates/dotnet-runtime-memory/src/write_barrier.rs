@@ -205,7 +205,7 @@ impl<'gc> MemoryOwner<'gc> {
             Self::CrossArena(origin, _) => {
                 let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
-                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `_lease` is held for the origin's exact identity across `f`; rooting rests on the contract `CrossArenaOrigin::new` imposed when the origin was built, which this method cannot recheck.
                 let p = unsafe { origin.object_ptr() };
                 Ok(p.with_data(f))
             }
@@ -224,7 +224,7 @@ impl<'gc> MemoryOwner<'gc> {
             Self::CrossArena(origin, _) => {
                 let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
-                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `_lease` is held for the origin's exact identity across `f`; rooting rests on the `CrossArenaOrigin::new` contract, as in `with_data`.
                 let p = unsafe { origin.object_ptr() };
                 Ok(p.with_data_mut(gc, f))
             }
@@ -242,7 +242,7 @@ impl<'gc> MemoryOwner<'gc> {
             Self::CrossArena(origin, _) => {
                 let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(MemoryAccessError::CrossArenaViolation)?;
-                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the exact lease is held and the origin's caller guarantees the object remains rooted for this access.
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `_lease` is held for the origin's exact identity across `f`; rooting rests on the `CrossArenaOrigin::new` contract, as in `with_data`.
                 let p = unsafe { origin.object_ptr() };
                 Ok(p.as_heap_storage(f))
             }

@@ -54,6 +54,12 @@ fn check_bounds(
     Ok(())
 }
 
+/// Loads `size` bytes atomically when `ptr` is aligned for them, else by copying.
+///
+/// # Safety
+///
+/// `ptr` must be valid for reads of `size` initialized bytes. If it is not aligned for
+/// `size`, no other thread may access those bytes during the call.
 unsafe fn load_atomic_with_unaligned_fallback(
     ptr: *const u8,
     size: usize,
@@ -64,13 +70,13 @@ unsafe fn load_atomic_with_unaligned_fallback(
     }
 
     if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
-        // SAFETY: F4.WidthAligned — The caller guarantees validity, and the branch proves alignment for `size`.
+        // SAFETY: F4.WidthAligned — `size` is 1, 2, 4 or 8 (checked above) and `is_ptr_aligned_to_field` just proved `ptr` aligned for it; this function's `# Safety` contract makes it readable for `size` bytes.
         return unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, ordering) };
     }
 
     validate_atomic_access(ptr, false);
     let mut buf = [0u8; 8];
-    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid storage and synchronization for the memcpy fallback.
+    // SAFETY: F10.RawMemoryAccessValid — `ptr` is readable for `size` ≤ 8 bytes per this function's `# Safety` contract, which also excludes racing access on this unaligned path; `buf` is a distinct 8-byte local.
     unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
     match size {
         1 => buf[0] as u64,
@@ -81,6 +87,12 @@ unsafe fn load_atomic_with_unaligned_fallback(
     }
 }
 
+/// Stores `size` bytes atomically when `ptr` is aligned for them, else by copying.
+///
+/// # Safety
+///
+/// `ptr` must be valid for writes of `size` bytes. If it is not aligned for `size`, no
+/// other thread may access those bytes during the call.
 unsafe fn store_atomic_with_unaligned_fallback(
     ptr: *mut u8,
     size: usize,
@@ -92,26 +104,26 @@ unsafe fn store_atomic_with_unaligned_fallback(
     }
 
     if dotnet_utils::is_ptr_aligned_to_field(ptr, size) {
-        // SAFETY: F4.WidthAligned — The caller guarantees validity, and the branch proves alignment for `size`.
+        // SAFETY: F4.WidthAligned — `size` is 1, 2, 4 or 8 (checked above) and `is_ptr_aligned_to_field` just proved `ptr` aligned for it; this function's `# Safety` contract makes it writable for `size` bytes.
         unsafe { StandardAtomicAccess::store_atomic_sized(ptr, size, value, ordering) };
         return;
     }
 
     match size {
         1 => {
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid storage and synchronization for the memcpy fallback.
+            // SAFETY: F10.RawMemoryAccessValid — this arm writes 1 byte, `size`, which this function's `# Safety` contract makes writable and race-free.
             unsafe { Atomic::store_field(ptr, &(value as u8).to_ne_bytes(), ordering) };
         }
         2 => {
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid storage and synchronization for the memcpy fallback.
+            // SAFETY: F10.RawMemoryAccessValid — this arm writes 2 bytes, `size`, which this function's `# Safety` contract makes writable and race-free.
             unsafe { Atomic::store_field(ptr, &(value as u16).to_ne_bytes(), ordering) };
         }
         4 => {
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid storage and synchronization for the memcpy fallback.
+            // SAFETY: F10.RawMemoryAccessValid — this arm writes 4 bytes, `size`, which this function's `# Safety` contract makes writable and race-free.
             unsafe { Atomic::store_field(ptr, &(value as u32).to_ne_bytes(), ordering) };
         }
         8 => {
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid storage and synchronization for the memcpy fallback.
+            // SAFETY: F10.RawMemoryAccessValid — this arm writes 8 bytes, `size`, which this function's `# Safety` contract makes writable and race-free.
             unsafe { Atomic::store_field(ptr, &value.to_ne_bytes(), ordering) };
         }
         _ => unreachable!(),
@@ -139,6 +151,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// # Safety
     /// The slot must contain an initialized object-reference representation;
     /// the caller must retain its GC lifetime and synchronize unaligned access.
+    /// With no `owner`, `offset` is the slot's address and must carry its provenance.
+    /// A pointer written by `op` must be null or the storage encoding of an object
+    /// reference that stays live for `'gc`.
     pub unsafe fn object_atomic(
         &mut self,
         gc: GCHandle<'gc>,
@@ -152,7 +167,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 let len = data.len();
                 let ptr = base.wrapping_add(offset.as_usize());
                 self.check_bounds_internal(ptr, base, len, std::mem::size_of::<*mut u8>())?;
-                // SAFETY: F10.RawMemoryAccessValid — Bounds and the owner guard establish a live synchronized slot.
+                // SAFETY: F10.RawMemoryAccessValid — `check_bounds_internal` proved a pointer-sized slot inside `data`, `with_data_mut` holds the owner's write guard, and this function's `# Safety` contract says the slot holds an initialized object reference.
                 unsafe { op.execute(ptr) }.ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
             })??;
             if written {
@@ -165,7 +180,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         | PointerAtomicOp::CompareExchange(_, value, _, _) => value,
                         PointerAtomicOp::Load(_) => unreachable!(),
                     };
-                    // SAFETY: F1.GcHandleRooted — The caller guarantees the stored value is a live object encoding.
+                    // SAFETY: F1.GcHandleRooted — `value` is the pointer `op` just wrote into the slot, and this function's `# Safety` contract requires a written pointer to be null or a live object reference of this arena.
                     let object = unsafe { ObjectRef::from_storage_ptr(value) };
                     let _flush_guard = WriteBarrierPanicFlushGuard;
                     WB_LOCAL_BUF.with(|buf| {
@@ -177,14 +192,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             Ok(previous)
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The caller owns this unmanaged address and its synchronization.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, `offset` is the slot's own address, and this function's `# Safety` contract supplies the slot validity `unmanaged_ptr_from_addr` defers to later accesses; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "object atomic operation on null pointer",
                 ));
             }
-            // SAFETY: F10.RawMemoryAccessValid — The caller supplies a valid initialized pointer slot.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and names the initialized, synchronized slot this function's `# Safety` contract requires.
             unsafe { op.execute(ptr) }
                 .map(|(previous, _)| previous)
                 .ok_or(MemoryAccessError::UnalignedAccess(ptr.addr()))
@@ -201,7 +216,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         slot: NonNull<u8>,
         op: PointerAtomicOp,
     ) -> Result<*mut u8, MemoryAccessError> {
-        // SAFETY: F10.RawMemoryAccessValid — The caller guarantees slot validity and synchronization.
+        // SAFETY: F10.RawMemoryAccessValid — `slot` is the valid, synchronized, initialized pointer slot this function's `# Safety` contract requires.
         unsafe { op.execute(slot.as_ptr()) }
             .map(|(previous, _)| previous)
             .ok_or(MemoryAccessError::UnalignedAccess(slot.as_ptr().addr()))
@@ -210,7 +225,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Writes a value to a memory location (owner + offset), performing necessary checks.
     ///
     /// # Safety
-    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a write of `layout.size()` bytes.
     pub unsafe fn write_unaligned(
         &mut self,
         gc: GCHandle<'gc>,
@@ -229,8 +245,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             // exclusive access for the duration of the closure.
             self.write_heap_value_with_barrier(gc, owner, offset, value, layout, dest_layout)
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
-            // valid unmanaged address for this write.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` an address valid for the write; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -238,7 +253,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             validate_atomic_access(ptr as *const u8, false);
-            // SAFETY: F10.RawMemoryAccessValid — Caller ensures ptr is valid.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and writable for `layout`'s size by this function's `# Safety` contract.
             unsafe {
                 self.write_value_internal(gc, ptr, None, value, layout)?;
             }
@@ -249,7 +264,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Reads a value from a memory location.
     ///
     /// # Safety
-    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a read of `layout.size()` initialized bytes.
     pub unsafe fn read_unaligned(
         &self,
         gc: GCHandle<'gc>,
@@ -285,8 +301,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })?
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
-            // valid unmanaged address for this read.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` an address valid for the read; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -294,7 +309,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             validate_atomic_access(ptr, false);
-            // SAFETY: F10.RawMemoryAccessValid — Caller ensures ptr is valid.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and readable and initialized for `layout`'s size by this function's `# Safety` contract.
             unsafe { self.read_value_internal(gc, ptr, None, layout, type_desc) }
         }
     }
@@ -303,7 +318,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a write of `data.len()` bytes that does not overlap `data`.
     /// If `owner` is provided, it must be the object that contains the memory to ensure GC safety.
     pub unsafe fn write_bytes(
         &mut self,
@@ -347,13 +363,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     #[cfg(feature = "multithreading")]
                     {
                         if let Some(layout) = layout {
-                            // SAFETY: F10.RawMemoryAccessValid — `base` is the start of the object's backing
-                            // storage (held mutably for the duration of this closure).
-                            // The range `[offset, offset+data.len())` was just
-                            // bounds-checked above; `ptr.add` within that range is valid.
                             #[cfg(feature = "bench-instrumentation")]
                             let layout_scan_start = Instant::now();
-                            // SAFETY: F10.RawMemoryAccessValid — The layout scan uses the same live, bounds-checked object range.
+                            // SAFETY: F10.RawMemoryAccessValid — `base` is the start of `obj_data` and `[offset, offset + data.len())` was bounds-checked above; the `with_data_mut` guard excludes concurrent writers for the scan.
                             unsafe {
                                 self.record_refs_in_range_with_recorder(
                                     gc,
@@ -375,8 +387,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 })?
             })
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
-            // valid unmanaged address for this byte write.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` an address valid for the byte write; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -384,10 +395,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             validate_atomic_access(ptr as *const u8, false);
-            // SAFETY: F10.RawMemoryAccessValid — `ptr` is a non-null unmanaged pointer whose validity is
-            // guaranteed by the caller (unsafe fn contract).  `data` is a
-            // distinct slice, so there is no aliasing.  Both pointers are
-            // valid for `data.len()` bytes.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and writable for `data.len()` bytes by this function's `# Safety` contract, which rules out overlap with the shared `data` borrow.
             unsafe {
                 ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
             }
@@ -421,7 +429,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a read of `dest.len()` initialized bytes.
     /// If `owner` is provided, it must be the object that contains the memory to ensure GC safety.
     pub unsafe fn read_bytes(
         &self,
@@ -444,8 +453,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(())
             })?
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless API contract requires `offset` to be a
-            // valid unmanaged address for this byte read.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` an address valid for the byte read; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -453,7 +461,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             validate_atomic_access(ptr, false);
-            // SAFETY: F10.RawMemoryAccessValid — Caller ensures ptr is valid.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and readable for `dest.len()` bytes by this function's `# Safety` contract; `dest` is an exclusive borrow, so it cannot overlap the source.
             unsafe {
                 ptr::copy_nonoverlapping(ptr, dest.as_mut_ptr(), dest.len());
             }
@@ -486,6 +494,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// If `owner` is `None`, `offset` must be the non-null address of storage valid and
+    /// synchronized for a `size`-byte read and write.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn compare_exchange_atomic(
         &mut self,
@@ -519,7 +529,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         ));
                     }
 
-                    // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
+                    // SAFETY: F4.WidthAligned — `check_bounds_internal` and `is_ptr_aligned_to_field` above proved `ptr` lies within `data` and is aligned for `size`; `with_data_mut` holds the owner's write guard.
                     unsafe {
                         StandardAtomicAccess::compare_exchange_atomic_sized(
                             ptr, size, expected, new, success, failure,
@@ -537,15 +547,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
-            // be a valid synchronized unmanaged address for this operation.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` a valid, synchronized address for the `size`-byte operation.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                 return Err(CompareExchangeError::Bounds(
                     MemoryAccessError::UnalignedAccess(ptr.addr()),
                 ));
             }
-            // SAFETY: F4.WidthAligned — The caller guarantees validity, and the preceding check proves alignment.
+            // SAFETY: F4.WidthAligned — alignment for `size` was checked above, and with no owner this function's `# Safety` contract makes `ptr` valid and synchronized for a `size`-byte read and write.
             unsafe {
                 StandardAtomicAccess::compare_exchange_atomic_sized(
                     ptr, size, expected, new, success, failure,
@@ -593,6 +602,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a `size`-byte read and write.
     pub unsafe fn exchange_atomic(
         &mut self,
         gc: GCHandle<'gc>,
@@ -616,7 +627,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
                 }
 
-                // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
+                // SAFETY: F4.WidthAligned — `check_bounds_internal` and `is_ptr_aligned_to_field` above proved `ptr` lies within `data` and is aligned for `size`; `with_data_mut` holds the owner's write guard.
                 Ok(unsafe {
                     StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering)
                 })
@@ -628,8 +639,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
-            // be a valid synchronized unmanaged address for this operation.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` a valid, synchronized address for the `size`-byte operation; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -639,7 +649,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                 return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
             }
-            // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
+            // SAFETY: F4.WidthAligned — non-null and alignment for `size` were checked above, and with no owner this function's `# Safety` contract makes `ptr` valid and synchronized for a `size`-byte read and write.
             Ok(unsafe { StandardAtomicAccess::exchange_atomic_sized(ptr, size, value, ordering) })
         }
     }
@@ -672,6 +682,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// If `owner` is `None`, `offset` must be the address of storage valid and synchronized
+    /// for a `size`-byte read and write.
     pub unsafe fn exchange_add_atomic(
         &mut self,
         gc: GCHandle<'gc>,
@@ -696,15 +708,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
 
                 Ok(
-                    // SAFETY: F4.WidthAligned — The preceding checks prove `ptr` is in bounds and aligned for `size`.
+                    // SAFETY: F4.WidthAligned — `check_bounds_internal` and `is_ptr_aligned_to_field` above proved `ptr` lies within `data` and is aligned for `size`; `with_data_mut` holds the owner's write guard.
                     unsafe {
                         StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering)
                     },
                 )
             })?
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
-            // be a valid synchronized unmanaged address for this operation.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` a valid, synchronized address for the `size`-byte operation; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -714,7 +725,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             if !dotnet_utils::is_ptr_aligned_to_field(ptr as *const u8, size) {
                 return Err(MemoryAccessError::UnalignedAccess(ptr.addr()));
             }
-            // SAFETY: F4.WidthAligned — The caller guarantees validity; preceding checks prove `ptr` is non-null and aligned.
+            // SAFETY: F4.WidthAligned — non-null and alignment for `size` were checked above, and with no owner this function's `# Safety` contract makes `ptr` valid and synchronized for a `size`-byte read and write.
             Ok(unsafe {
                 StandardAtomicAccess::exchange_add_atomic_sized(ptr, size, value, ordering)
             })
@@ -749,6 +760,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// If `owner` is `None`, `offset` must be the address of storage valid for a `size`-byte read.
     /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn load_atomic(
         &self,
@@ -769,15 +781,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
             })?
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
-            // be a valid synchronized unmanaged address for this load.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` a valid, synchronized address for the `size`-byte load; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: load_atomic from unmanaged null pointer",
                 ));
             }
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized unmanaged access.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above), and with no owner this function's `# Safety` contract makes it readable for `size` bytes and race-free if unaligned.
             Ok(unsafe { load_atomic_with_unaligned_fallback(ptr, size, ordering) })
         }
     }
@@ -805,6 +816,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// Caller must ensure the offset and size are valid for the owner object.
+    /// If `owner` is `None`, `offset` must be the address of storage valid for a `size`-byte write.
     /// A misaligned unmanaged access must not race with another access to the same bytes.
     pub unsafe fn store_atomic(
         &mut self,
@@ -834,15 +846,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             result
         } else {
-            // SAFETY: F10.RawMemoryAccessValid — The ownerless atomic API contract requires `offset` to
-            // be a valid synchronized unmanaged address for this store.
+            // SAFETY: F10.RawMemoryAccessValid — with no owner, this function's `# Safety` contract makes `offset` a valid, synchronized address for the `size`-byte store; null is rejected below.
             let ptr = unsafe { unmanaged_ptr_from_addr(offset.as_usize()) };
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: store_atomic to unmanaged null pointer",
                 ));
             }
-            // SAFETY: F10.RawMemoryAccessValid — The caller guarantees valid synchronized unmanaged access.
+            // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above), and with no owner this function's `# Safety` contract makes it writable for `size` bytes and race-free if unaligned.
             unsafe { store_atomic_with_unaligned_fallback(ptr, size, value, ordering) };
             Ok(())
         }
@@ -1019,8 +1030,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             ));
         }
         validate_atomic_access(ptr as *const u8, false);
-        // SAFETY: F10.RawMemoryAccessValid — This unsafe function's documented precondition supplies a non-null writable
-        // range for `ptr`; the callee performs the layout-specific write within that range.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked above) and writable for `layout`'s size by this function's `# Safety` contract, which is `write_value_internal`'s with no owner.
         unsafe { self.write_value_internal(gc, ptr, None, value, layout) }
     }
 
@@ -1034,6 +1044,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         recorder.record_ref(r);
     }
 
+    /// Records the object reference stored at `ptr` with the cross-arena recorder.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be readable for `ObjectRef::SIZE` bytes holding an initialized object
+    /// reference of `gc`'s arena, with no concurrent writer.
     #[cfg(feature = "multithreading")]
     pub(crate) unsafe fn record_objref_at_ptr_with_recorder(
         &self,
@@ -1043,8 +1059,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
         let mut buf = [0u8; ObjectRef::SIZE];
-        // SAFETY: F10.RawMemoryAccessValid — The caller guarantees `ptr` points to `ObjectRef::SIZE` readable bytes in a
-        // live object. `buf` is a distinct stack allocation of exactly that size.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` is readable for `ObjectRef::SIZE` bytes per this function's `# Safety` contract; `buf` is a distinct local of that size.
         unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE) };
         // SAFETY: F6.NoEscapeAcrossArena — `buf` now holds one complete branded ObjectRef serialization copied above.
         let r = unsafe { ObjectRef::read_branded(&buf, &gc) };
@@ -1061,6 +1076,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         recorder.record_managed_ptr(m);
     }
 
+    /// Records the owner of the managed pointer stored at `ptr` with the cross-arena recorder.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be readable for `ManagedPtr::SIZE` bytes holding an initialized managed
+    /// pointer of `gc`'s arena, with no concurrent writer.
     #[cfg(feature = "multithreading")]
     pub(crate) unsafe fn record_managedptr_at_ptr_with_recorder(
         &self,
@@ -1073,8 +1094,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             return;
         }
 
-        // SAFETY: F10.RawMemoryAccessValid — The caller guarantees `ptr` points to `ManagedPtr::SIZE` readable bytes in a
-        // live object; the resulting slice uses exactly that serialization width.
+        // SAFETY: F10.RawMemoryAccessValid — `ptr` is readable for `ManagedPtr::SIZE` bytes with no concurrent writer per this function's `# Safety` contract, so this shared slice is valid for the call.
         let bytes = unsafe { std::slice::from_raw_parts(ptr, ManagedPtr::SIZE) };
         // SAFETY: F10.RawMemoryAccessValid — `bytes` is the complete live ManagedPtr representation validated above.
         let info = unsafe { ManagedPtr::read_resolved_branded(bytes, &gc, &NoManagedPtrResolver) }
@@ -1093,6 +1113,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
+    /// Writes `value` with `layout` at `ptr`, recording write barriers for `owner`.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Self::write_value_internal_with_recorder`].
     pub(crate) unsafe fn write_value_internal(
         &mut self,
         gc: GCHandle<'gc>,
@@ -1111,9 +1136,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 owner.map(|o| o.owner_id()).unwrap_or(ArenaId::INVALID),
                 &mut b,
             );
-            // SAFETY: F10.RawMemoryAccessValid — `ptr` is a valid, non-null pointer that was verified by
-            // the outer unsafe fn's contract.  The `WB_LOCAL_BUF` borrow lives
-            // only inside this closure so there is no re-entrant borrow conflict.
+            // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract is `write_value_internal_with_recorder`'s, and `ptr`, `owner` and `layout` are passed through unchanged.
             unsafe {
                 self.write_value_internal_with_recorder(
                     gc,
@@ -1127,6 +1150,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         })
     }
 
+    /// Writes `value` with `layout` at `ptr` using an existing write-barrier recorder.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be null or valid and synchronized for a write of `layout.size()` bytes.
+    /// If `owner` is `Some`, `ptr` must lie within that owner's storage. A `ValueType` value
+    /// written with a `Field` layout must have at least `layout.size()` bytes of storage.
     pub(crate) unsafe fn write_value_internal_with_recorder(
         &mut self,
         gc: GCHandle<'gc>,
@@ -1140,9 +1170,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             clippy::multiple_unsafe_ops_per_block,
             reason = "the layout-dispatched writes share the caller-validated raw storage range"
         )]
-        // SAFETY: F10.RawMemoryAccessValid — `ptr` is non-null (checked immediately below) and has been validated by the
-        // caller (`write_unaligned` / `write_to_heap` paths perform bounds and integrity checks).
-        // All layout-dispatched unaligned writes stay within that valid range.
+        // SAFETY: F10.RawMemoryAccessValid — null is rejected first; otherwise this function's `# Safety` contract makes `ptr` writable for `layout.size()` bytes (and a `ValueType` source readable for them), and each arm accesses at most that many bytes, unaligned.
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -1336,9 +1364,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
         let owner_tid = recorder.arena_id;
         match layout {
-            // SAFETY: F10.RawMemoryAccessValid — For each scalar variant, the caller guarantees `ptr`
-            // points to a valid, readable slot of the appropriate size within
-            // a live object's backing storage.
+            // SAFETY: F10.RawMemoryAccessValid — `layout` is `ObjectRef`, so this function's `# Safety` contract makes `ptr` an initialized, readable object-reference slot.
             LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
                 self.record_objref_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
@@ -1371,8 +1397,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 // Use visit_managed_ptrs for recursive ManagedPtr recording
                 if flm.has_ref_fields {
-                    // SAFETY: F10.RawMemoryAccessValid — `visit_managed_ptrs` yields offsets that are within
-                    // the field struct's backing storage; `ptr.add(offset)` is valid.
                     flm.visit_managed_ptrs(ByteOffset::new(0), &mut |offset| {
                         // SAFETY: F10.RawMemoryAccessValid — The layout visitor yields offsets within this live field range.
                         let child = unsafe { ptr.add(offset.as_usize()) };
@@ -1433,9 +1457,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             | LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // If the scalar overlaps at all with the written range, we should re-record it
                 // because it might have been partially or fully overwritten.
-                // SAFETY: F10.RawMemoryAccessValid — `ptr` is the base of this scalar slot (passed in from
-                // the parent call), which is valid for the scalar's size within
-                // the enclosing object's backing storage.
+                // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract makes `ptr` the base of a live, initialized allocation for this scalar `layout`, which is the recursive scan's contract.
                 unsafe { self.record_refs_recursive_with_recorder(gc, ptr, layout, recorder) };
             }
             LayoutManager::Field(flm) => {
@@ -1513,8 +1535,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             clippy::multiple_unsafe_ops_per_block,
             reason = "the layout-dispatched reads share the caller-validated raw storage range"
         )]
-        // SAFETY: F10.RawMemoryAccessValid — The caller ensures `ptr` is valid for reads and within bounds, as verified by
-        // `read_unaligned` before reaching this layout-dispatched operation.
+        // SAFETY: F10.RawMemoryAccessValid — null is rejected first; otherwise this function's `# Safety` contract makes `ptr` readable and initialized for `layout.size()` bytes, and each arm reads at most that many bytes, unaligned.
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -1796,7 +1817,7 @@ mod tests {
         // a pointer unaligned for four-byte atomic operations.
         let unaligned = std::ptr::NonNull::new(unsafe { ptr.as_ptr().add(1) })
             .expect("derived pointer is non-null");
-        // SAFETY: F4.WidthAligned — `unaligned` has four writable bytes in live, exclusively owned backing storage.
+        // SAFETY: F10.RawMemoryAccessValid — `unaligned` has four writable bytes in `backing`, which only this test accesses, so the unaligned fallback needs no lock.
         unsafe {
             memory
                 .store_atomic_ptr(
@@ -1807,14 +1828,14 @@ mod tests {
                 )
                 .expect("unaligned pointer store uses fallback");
         }
-        // SAFETY: F4.WidthAligned — `unaligned` has four initialized readable bytes in exclusively owned backing storage.
+        // SAFETY: F10.RawMemoryAccessValid — `unaligned` has four initialized bytes in `backing`, which only this test accesses, so the unaligned fallback needs no lock.
         let loaded = unsafe {
             memory
                 .load_atomic_ptr(unaligned, 4, dotnet_utils::sync::Ordering::SeqCst)
                 .expect("unaligned pointer load uses fallback")
         };
         assert_eq!(loaded, 0xDEAD_BEEF);
-        // SAFETY: F4.WidthAligned — The method checks alignment before dereferencing `unaligned`.
+        // SAFETY: F10.RawMemoryAccessValid — `unaligned` is valid for a four-byte read and write in `backing`; the method returns `UnalignedAccess` before accessing it.
         let compare_exchange = unsafe {
             memory.compare_exchange_atomic_ptr(
                 unaligned,
@@ -1831,7 +1852,7 @@ mod tests {
                 MemoryAccessError::UnalignedAccess(_)
             ))
         ));
-        // SAFETY: F4.WidthAligned — The method checks alignment before dereferencing `unaligned`.
+        // SAFETY: F10.RawMemoryAccessValid — `unaligned` is valid for a four-byte read and write in `backing`; the method returns `UnalignedAccess` before accessing it.
         let exchange = unsafe {
             memory.exchange_atomic_ptr(unaligned, 1, 4, dotnet_utils::sync::Ordering::SeqCst)
         };
@@ -1839,7 +1860,7 @@ mod tests {
             exchange,
             Err(MemoryAccessError::UnalignedAccess(_))
         ));
-        // SAFETY: F4.WidthAligned — The method checks alignment before dereferencing `unaligned`.
+        // SAFETY: F10.RawMemoryAccessValid — `unaligned` is valid for a four-byte read and write in `backing`; the method returns `UnalignedAccess` before accessing it.
         let exchange_add = unsafe {
             memory.exchange_add_atomic_ptr(unaligned, 1, 4, dotnet_utils::sync::Ordering::SeqCst)
         };
