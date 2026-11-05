@@ -26,7 +26,7 @@ fuzz_any, fuzz_matrix (JSON, the include entries ci.yml used to hold statically)
 reason_cross_arena, reason_pointer_controls, reason_fuzz.
 
 pointer_mode chooses how the selected pointer-control lane runs: "singleton" in
-every full sweep (the 33 controls as one Miri process each, per configuration) and
+every full sweep (the 35 controls as one Miri process each, per configuration) and
 "batched" for a selected push/PR run (a few batches per configuration, with the
 singleton jobs re-run only to attribute a batch failure). Whenever mode is "full",
 including every fail-safe fallback, pointer_mode is "singleton".

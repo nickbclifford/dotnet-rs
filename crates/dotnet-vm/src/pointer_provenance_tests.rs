@@ -325,7 +325,6 @@ fn p00_smoke() {
 
 // ---- Claim 1: ldloca; conv.u; stind (write through a stack-slot address laundered via an int) ---
 #[test]
-#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p01_ldloca_convu_stind_i4() {
     let r = run_il(
         "P01",
@@ -845,7 +844,7 @@ fn push_test_value_type(
     name: &str,
     byref_like: bool,
     ref_field: bool,
-) -> (TypeIndex, BaseType<MethodType>) {
+) -> (TypeIndex, BaseType<MethodType>, FieldSource) {
     let corlib = res.push_assembly_reference(
         dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
     );
@@ -883,7 +882,7 @@ fn push_test_value_type(
         ));
     }
     let struct_idx = res.push_type_definition(struct_def);
-    res.push_field(
+    let field = res.push_field(
         struct_idx,
         Field {
             static_member: false,
@@ -895,7 +894,7 @@ fn push_test_value_type(
         source: TypeSource::User(UserType::Definition(struct_idx)),
         value_kind: Some(ValueKind::ValueType),
     };
-    (struct_idx, struct_ty)
+    (struct_idx, struct_ty, FieldSource::Definition(field))
 }
 
 fn instance_layout_of_test_value_type(
@@ -942,7 +941,7 @@ fn box_test_value_type(byref_like: bool) -> Result<i32, String> {
         "BoxPlain"
     };
     let (shared, entrypoint) = build_program(asm, |res, _| {
-        let (_, struct_ty) = push_test_value_type(res, "S", byref_like, false);
+        let (_, struct_ty, _) = push_test_value_type(res, "S", byref_like, false);
         (
             1,
             vec![local(struct_ty.clone())],
@@ -978,6 +977,62 @@ fn box_of_byref_like_value_throws_invalid_program() {
         box_test_value_type(true),
         Err("System.InvalidProgramException".to_string())
     );
+}
+
+// A byref to a value-type local must keep addressing that local after `stloc` assigns it a new
+// value: its address, taken after the store, writes the local seen by the next `ldloc`.
+#[test]
+fn p37_ldloca_value_type_survives_stloc() {
+    let r = run_program("P37", |res, _type_idx| {
+        let (_, struct_ty, field) = push_test_value_type(res, "P37Struct", false, false);
+        (
+            3,
+            vec![local(struct_ty.clone()), local(struct_ty)],
+            vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::LoadLocal(1),
+                Instruction::StoreLocal(0),
+                conv_u(),
+                Instruction::LoadConstantInt32(7),
+                stind(StoreType::Int32),
+                Instruction::LoadLocal(0),
+                Instruction::LoadField {
+                    param0: field,
+                    unaligned: None,
+                    volatile: false,
+                },
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 7);
+}
+
+// An object stored in an addressed local lives in the frame's home block; the frame must trace
+// it across a full collection.
+#[test]
+fn homed_object_local_survives_collection() {
+    let r = run_program_with_collection(
+        "HomedObjectLocal",
+        |_res, _type_idx| {
+            (
+                2,
+                vec![local(BaseType::Object)],
+                vec![
+                    Instruction::LoadConstantInt32(4),
+                    Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                    Instruction::StoreLocal(0),
+                    Instruction::LoadLocalAddress(0),
+                    ldind(LoadType::Object),
+                    Instruction::LoadLength,
+                    Instruction::Convert(ConversionType::Int32),
+                    Instruction::Return,
+                ],
+            )
+        },
+        true,
+    );
+    assert_eq!(r, 4);
 }
 
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):
@@ -2880,6 +2935,7 @@ mod batches {
         p26_native_int_boundary_store_load_roundtrip,
         p29_localloc_blocks_survive_growth_and_are_16_byte_aligned,
         p33_localloc_blocks_released_on_exception_unwind,
+        p01_ldloca_convu_stind_i4,
     ]);
 
     control_batch!(batch_3: [
@@ -2891,6 +2947,7 @@ mod batches {
         p27_stind_i_fresh_pointer_through_local_slot_dereferences,
         p30_localloc_block_survives_nested_callee_localloc,
         p34_localloc_blocks_released_on_executor_teardown,
+        p37_ldloca_value_type_survives_stloc,
     ]);
 
     control_batch!(batch_4: [

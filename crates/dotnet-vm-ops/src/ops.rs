@@ -189,7 +189,8 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
 
 pub trait LocalOps<'gc> {
     fn get_local(&self, index: LocalIndex) -> StackValue<'gc>;
-    fn set_local(&mut self, index: LocalIndex, value: StackValue<'gc>);
+    /// Fails when `value` cannot be stored in the local's home encoding (invalid IL).
+    fn set_local(&mut self, index: LocalIndex, value: StackValue<'gc>) -> Result<(), VmError>;
 }
 
 pub trait ArgumentOps<'gc> {

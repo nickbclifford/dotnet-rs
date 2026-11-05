@@ -1,11 +1,21 @@
-use crate::stack::{
-    context::VesContext,
-    ops::{ArgumentOps, EvalStackOps, LocalOps, TypedStackOps, VmStackOps},
+use crate::{
+    error::MemoryAccessError,
+    stack::{
+        context::VesContext,
+        ops::{ArgumentOps, EvalStackOps, LocalOps, ResolutionOps, TypedStackOps, VmStackOps},
+    },
 };
+use dotnet_runtime_memory::RawMemoryAccess;
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
     CLRString, StackValue,
-    object::{HeapStorage, ObjectRef},
+    layout::{LayoutManager, Scalar},
+    object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+    pointer::ManagedPtr,
+    storage::FieldStorage,
 };
+use dotnet_vm_data::frame_homes::LocalHome;
+use std::ptr::NonNull;
 
 impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
@@ -77,11 +87,23 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
+        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
+            return self.load_home(address, home);
+        }
         self.evaluation_stack.get_slot(frame.base.locals + index)
     }
 
     #[inline]
-    fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>) {
+    fn set_local(
+        &mut self,
+        index: crate::LocalIndex,
+        value: StackValue<'gc>,
+    ) -> Result<(), crate::error::VmError> {
+        let frame = self.frame_stack.current_frame();
+        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
+            let layout = home.layout.clone();
+            return self.store_home(address, &layout, value);
+        }
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
             #[cfg(feature = "bench-instrumentation")]
@@ -93,6 +115,76 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
         }
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.locals + index, value);
+        Ok(())
+    }
+}
+
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// Decodes the value of a homed local from its home bytes.
+    fn load_home(&self, address: NonNull<u8>, home: &LocalHome) -> StackValue<'gc> {
+        if let Some(value_type) = &home.value_type {
+            let size = value_type.fields.total_size;
+            let mut data = vec![0u8; size];
+            // SAFETY: F10.RawMemoryAccessValid — `address` starts this local's `size`-byte home in
+            // the current frame's live block, which `data` does not overlap.
+            unsafe { std::ptr::copy_nonoverlapping(address.as_ptr(), data.as_mut_ptr(), size) };
+            return StackValue::ValueType(ObjectInstance::new(
+                value_type.description.clone(),
+                value_type.generics.clone(),
+                FieldStorage::new(value_type.fields.clone(), data),
+            ));
+        }
+        let memory = RawMemoryAccess::new(&self.local.heap);
+        // SAFETY: F10.RawMemoryAccessValid — `address` starts this local's home in the current
+        // frame's live block; the home is `home.layout` bytes long, aligned for it, and holds
+        // that layout's encoding (zeroed at allocation, written only by `store_home` and by
+        // stores through its address).
+        unsafe { memory.read_value_internal(self.gc, address.as_ptr(), None, &home.layout, None) }
+            .expect("a local home holds a value of its layout")
+    }
+
+    /// Encodes `value` into a homed local, applying the implicit conversions ECMA-335 §III.1.6
+    /// allows when storing to a local.
+    fn store_home(
+        &mut self,
+        address: NonNull<u8>,
+        layout: &LayoutManager,
+        value: StackValue<'gc>,
+    ) -> Result<(), crate::error::VmError> {
+        let value = match (layout, value) {
+            (LayoutManager::Scalar(Scalar::NativeInt), StackValue::Int32(value)) => {
+                StackValue::NativeInt(value as isize)
+            }
+            (LayoutManager::Scalar(Scalar::NativeInt), StackValue::ManagedPtr(pointer)) => {
+                let address = pointer
+                    .try_observe_address()
+                    .map_err(|_| MemoryAccessError::InvalidOrigin)?;
+                StackValue::NativeInt(
+                    address.map_or(0, |address| address.as_ptr().expose_provenance()) as isize,
+                )
+            }
+            (
+                LayoutManager::Scalar(
+                    Scalar::Int8 | Scalar::UInt8 | Scalar::Int16 | Scalar::UInt16 | Scalar::Int32,
+                ),
+                StackValue::NativeInt(value),
+            ) => StackValue::Int32(value as i32),
+            (LayoutManager::Field(fields), StackValue::ValueType(value))
+                if value.instance_storage.layout().total_size != fields.total_size =>
+            {
+                return Err(MemoryAccessError::TypeMismatch(
+                    "stored value type does not match the local's layout".into(),
+                )
+                .into());
+            }
+            (_, value) => value,
+        };
+        let mut memory = RawMemoryAccess::new(&self.local.heap);
+        // SAFETY: F10.RawMemoryAccessValid — `address` starts this local's home in the current
+        // frame's live block, which is `layout` bytes long and aligned for it; the write encodes
+        // a value of that layout (value-type sizes are checked above).
+        unsafe { memory.write_to_unmanaged(self.gc, address.as_ptr(), value, layout) }
+            .map_err(Into::into)
     }
 }
 
@@ -159,21 +251,37 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
         self.evaluation_stack.get_slot_address(index)
     }
 
-    #[inline]
-    fn get_local_info_for_managed_ptr(
+    fn local_address(
         &self,
         index: crate::LocalIndex,
-    ) -> (std::ptr::NonNull<u8>, bool) {
+    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError> {
         let frame = self.frame_stack.current_frame();
-        let addr = self
-            .evaluation_stack
-            .get_slot_address(frame.base.locals + index);
         let is_pinned = frame
             .pinned_locals
             .get(index.as_usize())
             .copied()
             .unwrap_or(false);
-        (addr, is_pinned)
+        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
+            let live_type = match &home.value_type {
+                Some(value_type) => value_type.description.clone(),
+                None => ResolutionOps::stack_value_type(self, &self.load_home(address, home))?,
+            };
+            // The home never moves while its frame is live, so the byref carries the address
+            // itself; an `Unmanaged` origin exposes it for later native-int round trips.
+            return Ok(StackValue::ManagedPtr(
+                ManagedPtr::new(Some(address), live_type, None, is_pinned, None).into(),
+            ));
+        }
+        let slot = frame.base.locals + index;
+        let live_type =
+            ResolutionOps::stack_value_type(self, self.evaluation_stack.get_slot_ref(slot))?;
+        Ok(StackValue::managed_stack_ptr(
+            slot,
+            ByteOffset::new(0),
+            self.evaluation_stack.get_slot_address(slot).as_ptr(),
+            live_type,
+            is_pinned,
+        ))
     }
 
     #[inline]

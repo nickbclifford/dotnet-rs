@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 pub mod exceptions;
 pub mod frame_alloc;
+pub mod frame_homes;
 pub mod stack;
 
 pub use exceptions::{
@@ -102,6 +103,8 @@ pub struct MethodInfo<'a> {
     pub source: MethodDescription,
     /// Whether the method is a static type initializer (`.cctor`).
     pub is_cctor: bool,
+    /// Home block layout for the locals this method addresses with `ldloca`, if any.
+    pub local_homes: Option<Arc<frame_homes::LocalHomeLayout>>,
 }
 
 // SAFETY: F5.TracesEveryGcRef — MethodInfo<'static> contains only 'static metadata borrows, ordinary

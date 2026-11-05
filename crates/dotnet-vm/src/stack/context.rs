@@ -20,7 +20,7 @@ use dotnet_value::{
     pointer::{ManagedPtrInfo, ManagedPtrResolver, StaticMetadata},
     storage::FieldStorage,
 };
-use dotnet_vm_data::FrameReturnAction;
+use dotnet_vm_data::{FrameReturnAction, frame_homes::LocalHomeLayout};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Mutation};
 use std::ptr::NonNull;
@@ -174,6 +174,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         &mut self,
         method: &MethodDescription,
         locals: &[LocalVariable],
+        homes: Option<&LocalHomeLayout>,
         generics: &GenericLookup,
         locals_base: crate::StackSlotIndex,
     ) -> Result<PinnedLocals, TypeResolutionError> {
@@ -197,6 +198,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 TypedReference => {
                     pinned_locals.push(false);
                     StackValue::UninitializedTypedRef
+                }
+                Variable { pinned, .. } if homes.is_some_and(|h| h.home(i).is_some()) => {
+                    // The value lives in the frame's home block; this slot is never read.
+                    pinned_locals.push(*pinned);
+                    StackValue::null()
                 }
                 Variable {
                     by_ref: _,

@@ -33,13 +33,14 @@ where a byref value may be *stored*.
 | `Heap(ObjectRef)` | a field or element of a GC heap object (object, array, box, string) in this arena |
 | `CrossArenaObjectRef(CrossArenaOrigin)` | the same, for an object owned by another thread's arena (`multithreading` only) |
 | `Static(Arc<StaticMetadata>)` | static field storage |
-| `Stack(StackSlotIndex)` | a local, argument or evaluation-stack slot of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
+| `Stack(StackSlotIndex)` | an argument, an evaluation-stack slot, or a local without a home, of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
 | `Transient(Arc<Object>)` | a value-type value that has no slot of its own, such as the result of `ldflda` on a value type on the evaluation stack |
-| `Unmanaged` | unmanaged memory, including `localloc` blocks and addresses reconstructed from native integers |
+| `Unmanaged` | unmanaged memory, including `localloc` blocks, [local homes](#frame-owned-local-homes) and addresses reconstructed from native integers |
 
 **Storage.** A byref value may be stored only in:
 
-- evaluation-stack slots, locals and arguments (all `StackValue` slots of the evaluation stack);
+- evaluation-stack slots, locals and arguments (`StackValue` slots of the evaluation stack, and
+  [local homes](#frame-owned-local-homes));
 - fields of byref-like (`ref struct`) value types, which are themselves stored only in those
   slots. The layout factory gives a `by_ref` field the `Scalar::ManagedPtr` layout
   (`LayoutFactory::collect_fields` in `crates/dotnet-runtime-resolver/src/layout.rs`), as it does
@@ -99,6 +100,40 @@ Limits of this contract:
 - Suspending frames while a nested exception filter runs has not been shown to preserve the
   suspended frames' blocks; source inspection suggests a possible overwrite, which has not been
   reproduced.
+
+## Frame-Owned Local Homes
+
+A local whose address is taken lives in a non-moving block owned by its frame, so a byref or
+native-int address taken from it stays valid while the evaluation stack grows and while the
+local is reassigned.
+
+- **Selection.** `build_local_homes` (`crates/dotnet-vm/src/local_homes.rs`) scans the method
+  body once per method instantiation and homes every local named by an `ldloca`, except byref-typed
+  and `TypedReference` locals. Methods without such a local get no block and keep the
+  slot-only path.
+- **Layout.** The homes are fields of one block layout built by
+  `LayoutFactory::create_field_layout`. Each home has its type's layout; a value-type local uses
+  the instance field layout that its default value has, so a load rebuilds the same value. The
+  block is aligned to the larger of 16 and its largest home alignment (`LocalHomeLayout` in
+  `crates/dotnet-vm-data/src/frame_homes.rs`).
+- **Lifetime.** The frame owns a zeroed `RawBlock` (`FrameHomes`), allocated before the frame is
+  pushed and released when the frame is reset for a new call, prepared for the pool, or dropped,
+  like its `localloc` blocks. Zero bytes are the default value of every local.
+- **Access.** Every access goes through a raw pointer derived from the block base; no reference
+  to the bytes is formed except the shared view used while tracing. Loads and stores encode
+  values as value-type fields do: scalars in their CTS width, object references and managed
+  pointers in their serialized forms. A store applies the ECMA-335 §III.1.6 conversions to
+  native-int and small-integer locals.
+- **Byrefs.** `ldloca` on a homed local pushes an `Unmanaged`-origin byref to the home. Its
+  address is exposed, so a native integer formed from it (`conv.u`) can be dereferenced.
+- **Tracing.** `StackFrame`'s `Collect` implementation traces the object references and
+  managed-pointer origins serialized in the block through its field layout.
+
+Limits of this contract:
+
+- Arguments (`ldarga`) still use evaluation-stack slots and `PointerOrigin::Stack`.
+- Like `localloc` blocks, a home's address is trusted after its frame returns; using it then is
+  not detected.
 
 ## Pointer Ownership and Access
 

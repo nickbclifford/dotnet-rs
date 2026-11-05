@@ -59,10 +59,12 @@ pub trait VmStackOps<'gc>: StackOps<'gc> {
     fn get_slot_ref(&self, index: StackSlotIndex) -> &StackValue<'gc>;
     fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>);
     fn get_slot_address(&self, index: StackSlotIndex) -> std::ptr::NonNull<u8>;
-    fn get_local_info_for_managed_ptr(
+    /// A byref to local `index`: into its frame home when it has one, otherwise into its
+    /// evaluation-stack slot.
+    fn local_address(
         &self,
         index: crate::LocalIndex,
-    ) -> (std::ptr::NonNull<u8>, bool);
+    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
     fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 

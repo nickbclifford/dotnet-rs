@@ -40,12 +40,14 @@ expected_controls=(
 'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|31|3'
 'pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind|32|4'
 'pointer_provenance_tests::p36_static_address_survives_forced_collection|33|1'
+'pointer_provenance_tests::p01_ldloca_convu_stind_i4|34|2'
+'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|35|3'
 )
 
 # full name | classification | native diagnostic permission | control shard
 catalog=(
 'pointer_provenance_tests::p00_smoke|control|no|1'
-'pointer_provenance_tests::p01_ldloca_convu_stind_i4|suspected-ub|no|-'
+'pointer_provenance_tests::p01_ldloca_convu_stind_i4|control|no|34'
 'pointer_provenance_tests::p02_ldloca_stind_i4_control|control|no|2'
 'pointer_provenance_tests::p03_ldloca_convu_ldind_i4|control|no|3'
 'pointer_provenance_tests::p04_double_localloc_write_first|control|no|25'
@@ -82,12 +84,13 @@ catalog=(
 'pointer_provenance_tests::p34_localloc_blocks_released_on_executor_teardown|control|no|31'
 'pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind|control|no|32'
 'pointer_provenance_tests::p36_static_address_survives_forced_collection|control|no|33'
+'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|control|no|35'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=33
+reviewed_count=35
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -240,12 +243,12 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 33:
+    if len(controls) != 35:
         raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 33 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; 35 singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"

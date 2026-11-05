@@ -1,4 +1,4 @@
-use crate::{MethodInfo, MethodState};
+use crate::{MethodInfo, MethodState, frame_homes::FrameHomes};
 use dotnet_types::{
     TypeDescription,
     error::{ExecutionError, VmError},
@@ -63,6 +63,8 @@ pub struct StackFrame<'gc> {
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
     pub frame_continuation: Option<FrameReturnAction>,
+    /// Homes of the locals this frame's method addresses with `ldloca`.
+    pub homes: FrameHomes,
 }
 
 impl<'gc> StackFrame<'gc> {
@@ -83,6 +85,7 @@ impl<'gc> StackFrame<'gc> {
             is_finalizer: false,
             multicast_state: None,
             frame_continuation: None,
+            homes: FrameHomes::default(),
         }
     }
 
@@ -103,10 +106,12 @@ impl<'gc> StackFrame<'gc> {
         self.is_finalizer = false;
         self.multicast_state = None;
         self.frame_continuation = None;
+        self.homes.release();
     }
 
     pub fn prepare_for_pool(&mut self) {
         self.state.allocations.release_all();
+        self.homes.release();
         self.stack_height = StackSlotIndex::new(0);
         self.base = BasePointer::default();
         self.exception_stack.clear();
@@ -118,14 +123,16 @@ impl<'gc> StackFrame<'gc> {
 }
 
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
-// `exception_stack` entries and optional `multicast_state`.
-// `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has no GC references.
+// `exception_stack` entries, optional `multicast_state`, and the references serialized in its
+// local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
+// no GC references.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for exception in &self.exception_stack {
             exception.trace(cc);
         }
         self.multicast_state.trace(cc);
+        self.homes.trace(cc);
     }
 }
 

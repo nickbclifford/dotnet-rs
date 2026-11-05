@@ -103,30 +103,17 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
-pub fn ldloca<'gc, T: VmStackOps<'gc> + LocalOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
-    ctx: &mut T,
-    index: u16,
-) -> StepResult {
-    let frame = ctx.current_frame();
-    let abs_idx = frame.base.locals + index as usize;
-    let local = ctx.get_local(LocalIndex::new(index as usize));
-    let live_type = dotnet_vm_ops::vm_try!(ctx.stack_value_type(&local));
-
-    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(LocalIndex::new(index as usize));
-
-    ctx.push(StackValue::managed_stack_ptr(
-        abs_idx,
-        ByteOffset::new(0),
-        ptr.as_ptr() as *mut _,
-        live_type,
-        pinned,
-    ));
+pub fn ldloca<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
+    let pointer = dotnet_vm_ops::vm_try!(ctx.local_address(LocalIndex::new(index as usize)));
+    ctx.push(pointer);
     StepResult::Continue
 }
 
-store_var!(
-    #[dotnet_instruction(StoreLocal(index))]
-    stloc,
-    set_local,
-    LocalIndex
-);
+#[dotnet_instruction(StoreLocal(index))]
+pub fn stloc<'gc, T: LocalOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
+    let value = vm_pop!(ctx);
+    match ctx.set_local(LocalIndex::new(index as usize), value) {
+        Ok(()) => StepResult::Continue,
+        Err(error) => StepResult::Error(error),
+    }
+}

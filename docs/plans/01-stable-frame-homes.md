@@ -1,6 +1,6 @@
 # Stable homes for addressable locals and arguments
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** A byref or native-int address taken from a local or argument keeps reading and
 writing that variable across assignment, evaluation-stack growth and nested calls, and Miri
 reports no UB. The evaluation-stack pointer fixup is deleted.
@@ -26,9 +26,7 @@ does not cover:
   to the `Vec` element (p01 under Tree Borrows).
 - block operations on a local's address (`p15_initblk_stack_local_via_managed_ptr`).
 
-The p-tests' current outcomes are recorded as unconfirmed in the
-[inventory](../pointer-provenance/INVENTORY.md). Slice 1 starts by running them with
-`scripts/pointer_provenance.sh diagnostic` and recording the result in the inventory.
+The p-tests' outcomes are recorded in the [inventory](../pointer-provenance/INVENTORY.md).
 
 Localloc had the same defect and was fixed by giving each frame non-moving `RawBlock` storage
 (`FrameAllocations`, `crates/dotnet-vm-data/src/frame_alloc.rs`). This plan does the same for
