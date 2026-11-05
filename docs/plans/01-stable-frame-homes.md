@@ -108,7 +108,7 @@ Do not build a later slice's support in an earlier slice.
    that. Enable `p01` and
    `p03`, and add a regression for a byref to a value-type local that survives `stloc`. `p02`,
    `p35` and the existing local and value-type tests keep passing.
-2. **Checked home byrefs and homed arguments.** Step 4: add `FrameHome`, move `ldloca` on homed
+2. **Checked home byrefs and homed arguments (done).** Step 4: add `FrameHome`, move `ldloca` on homed
    locals to it, and add a regression that a byref to a returned frame's home is rejected
    rather than accessed. Then home arguments: `ldarga`, `starg`, `ldarg`, copying arguments
    into the block at frame entry. Enable `p09`.

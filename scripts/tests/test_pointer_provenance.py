@@ -48,10 +48,11 @@ CONTROLS_BY_SHARD = {
     33: ["p36_static_address_survives_forced_collection"],
     34: ["p01_ldloca_convu_stind_i4"],
     35: ["p37_ldloca_value_type_survives_stloc"],
+    36: ["p09_ldloca_convu_survives_callee_stack_growth"],
+    37: ["p38_ldarga_value_type_survives_starg"],
 }
 CONTROLS = [name for names in CONTROLS_BY_SHARD.values() for name in names]
-DIAGNOSTICS = ['p09_ldloca_convu_survives_callee_stack_growth',
-               'p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
+DIAGNOSTICS = ['p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
                'p19_ldelem_negative_index', 'p_wide_store_into_int_local']
 # Edit alongside the runner table's batch column and the control_batch! invocations.
 BATCHES = {
@@ -65,6 +66,7 @@ BATCHES = {
         'p04_double_localloc_write_first',
         'p32_localloc_blocks_released_on_tail_call_replacement',
         'p36_static_address_survives_forced_collection',
+        'p38_ldarga_value_type_survives_starg',
     ],
     2: [
         'p02_ldloca_stind_i4_control',
@@ -97,6 +99,7 @@ BATCHES = {
         'p28_stind_i_fresh_pointer_through_heap_memory_dereferences',
         'p31_localloc_blocks_released_on_return_and_pooling',
         'p35_ldflda_on_stack_value_type_then_ldind',
+        'p09_ldloca_convu_survives_callee_stack_growth',
     ],
 }
 BATCH_CONTROLS = [name for names in BATCHES.values() for name in names]
@@ -142,7 +145,7 @@ else:
         print('test ' + name + ' ... ', end='')
         done = members
         if mode == 'batch-missing-line': done = members[:2] + members[3:]
-        if mode == 'batch-extra-line': done = members + ['pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth']
+        if mode == 'batch-extra-line': done = members + ['pointer_provenance_tests::p12_ldsflda_convu_stind_static']
         if mode == 'batch-reordered': done = [members[1], members[0]] + members[2:]
         stop_at = 3 if mode in ('batch-fail-mid', 'batch-ub-mid', 'batch-timeout') else None
         for i, n in enumerate(done):
@@ -158,13 +161,13 @@ else:
         print('ok')
         print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out')
         sys.exit(0)
-    if mode == 'fail-first' and name.endswith('p09_ldloca_convu_survives_callee_stack_growth'):
+    if mode == 'fail-first' and name.endswith('p12_ldsflda_convu_stind_static'):
         print('error: Undefined Behavior: fake'); sys.exit(1)
-    if mode == 'setup-first' and name.endswith('p09_ldloca_convu_survives_callee_stack_growth'):
+    if mode == 'setup-first' and name.endswith('p12_ldsflda_convu_stind_static'):
         print('error: could not compile fake'); sys.exit(101)
-    if mode == 'panic-first' and name.endswith('p09_ldloca_convu_survives_callee_stack_growth'):
+    if mode == 'panic-first' and name.endswith('p12_ldsflda_convu_stind_static'):
         print('thread panicked at fake assertion'); sys.exit(101)
-    if mode == 'timeout-first' and name.endswith('p09_ldloca_convu_survives_callee_stack_growth'):
+    if mode == 'timeout-first' and name.endswith('p12_ldsflda_convu_stind_static'):
         sys.exit(124)
     if mode == 'zero':
         print('test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'); sys.exit(0)
@@ -192,8 +195,7 @@ class PointerScriptTests(unittest.TestCase):
         self.script = SCRIPT
         self.env = dict(os.environ, PATH=str(self.path) + os.pathsep + os.environ['PATH'],
                         CALLS=str(self.calls), CONTROLS=json.dumps(CONTROLS), BATCHES=json.dumps(BATCHES),
-                        DIAGNOSTICS=json.dumps(['p09_ldloca_convu_survives_callee_stack_growth',
-                                                'p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
+                        DIAGNOSTICS=json.dumps(['p12_ldsflda_convu_stind_static', 'p15_initblk_stack_local_via_managed_ptr',
                                                 'p19_ldelem_negative_index', 'p_wide_store_into_int_local']), TMPDIR=str(self.path))
 
     def invoke(self, *args, mode='', ok=True):
@@ -253,19 +255,19 @@ class PointerScriptTests(unittest.TestCase):
 
     def test_singleton_partition_is_one_control_per_shard(self):
         self.assertTrue(all(len(names) == 1 for names in CONTROLS_BY_SHARD.values()))
-        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 36)))
-        self.assertEqual(len(set(CONTROLS)), 35)
+        self.assertEqual(list(CONTROLS_BY_SHARD), list(range(1, 38)))
+        self.assertEqual(len(set(CONTROLS)), 37)
         for config in ('no-features', 'multithreading'):
-            for invalid in ('0', '36'):
+            for invalid in ('0', '38'):
                 self.invoke('controls', '--configuration', config, '--shard', invalid, '--dry-run', ok=False)
         self.assertEqual(self.recorded(), [])
 
     def test_guard_good_and_stale_or_ignored(self):
         for config in ('no-features', 'multithreading'):
-            self.assertIn('35 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
+            self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', config))
             for mode in ('missing', 'typo', 'duplicate', 'ignored', 'filter-mismatch', 'not-listed', 'new-enabled'):
                 self.assertIn('guard failed', self.invoke('verify-controls', '--configuration', config, mode=mode, ok=False))
-        self.assertIn('35 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
+        self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features', mode='new-ignored'))
         for call in self.recorded():
             self.assertNotIn('--ignored', call['args'])
 
@@ -313,9 +315,9 @@ class PointerScriptTests(unittest.TestCase):
                     self.assertEqual('--features' in call['args'], config == 'multithreading')
 
     def test_reject_unknown_and_native_before_cargo(self):
-        for args in [('--probe', 'p00_smok'), ('--probe', ''), ('--probe', 'p09_ldloca_convu_survives_callee_stack_growth', '--lane', 'native'),
+        for args in [('--probe', 'p00_smok'), ('--probe', ''), ('--probe', 'p12_ldsflda_convu_stind_static', '--lane', 'native'),
                      ('--probe', 'p00_smoke'),
-                     ('--all', '--lane', 'native'), ('--probe', 'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth')]:
+                     ('--all', '--lane', 'native'), ('--probe', 'pointer_provenance_tests::p12_ldsflda_convu_stind_static')]:
             self.invoke('diagnostic', '--configuration', 'no-features', *args, ok=False)
         for name in CONTROLS:
             self.invoke('diagnostic', '--configuration', 'no-features', '--probe', name, ok=False)
@@ -346,18 +348,18 @@ class PointerScriptTests(unittest.TestCase):
                 self.assertIn('--test-threads=1', call['args'])
                 self.assertEqual(call['flags'], '-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks')
                 self.assertIn('+nightly-2026-05-27', call['args'])
-        output = self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p09_ldloca_convu_survives_callee_stack_growth', mode='zero', ok=False)
+        output = self.invoke('diagnostic', '--configuration', 'no-features', '--probe', 'p12_ldsflda_convu_stind_static', mode='zero', ok=False)
         self.assertIn('zero-ignored-or-unverified-count', output)
 
     def test_diagnostic_recognizes_inline_warning_success(self):
         output = self.invoke('diagnostic', '--configuration', 'no-features',
-                             '--probe', 'p09_ldloca_convu_survives_callee_stack_growth', mode='inline-warning')
+                             '--probe', 'p12_ldsflda_convu_stind_static', mode='inline-warning')
         self.assertIn('total: 1 passed, 0 failed', output)
         calls = self.recorded()
         self.assertEqual(len(calls), 1)
         self.assertIn('--ignored', calls[0]['args'])
         self.assertEqual(calls[0]['args'][calls[0]['args'].index('--exact') + 1],
-                         'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth')
+                         'pointer_provenance_tests::p12_ldsflda_convu_stind_static')
 
     def test_ci_shards_match_catalog(self):
         # Parse the specific inline matrix list without a PyYAML dependency. Fail
@@ -413,7 +415,7 @@ class PointerScriptTests(unittest.TestCase):
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
                 self.assertEqual(self.recorded(), [])
                 # Even changing both catalogs cannot silently grow or pair the
-                # reviewed 35 singleton controls; a promotion needs a review.
+                # reviewed 37 singleton controls; a promotion needs a review.
                 self.script.write_text(catalog_only.replace(table_end, f"'{full}|{shard}|1'\n" + table_end))
                 self.env['CONTROLS'] = json.dumps(CONTROLS + [name])
                 self.invoke('controls', '--configuration', 'no-features', '--shard', str(shard), ok=False)
@@ -421,17 +423,17 @@ class PointerScriptTests(unittest.TestCase):
 
     def test_batches_cover_each_control_exactly_once(self):
         self.assertEqual(sorted(BATCH_CONTROLS), sorted(CONTROLS))
-        self.assertEqual(len(BATCH_CONTROLS), 35)
+        self.assertEqual(len(BATCH_CONTROLS), 37)
         self.assertEqual(list(BATCHES), [1, 2, 3, 4])
         for names in BATCHES.values():
-            self.assertTrue(8 <= len(names) <= 9)
+            self.assertTrue(9 <= len(names) <= 10)
             self.assertTrue(set(names).isdisjoint(DIAGNOSTICS))
         # Execution order inside a batch is shard order (the order of the runner table).
         shard_of = {n: s for s, names in CONTROLS_BY_SHARD.items() for n in names}
         for names in BATCHES.values():
             self.assertEqual(names, sorted(names, key=shard_of.get))
         out = self.invoke('verify-batches')
-        self.assertIn('35 reviewed controls in 4 batches', out)
+        self.assertIn('37 reviewed controls in 4 batches', out)
         self.assertEqual(self.recorded(), [])  # static: no Cargo
 
     def test_batch_tests_are_outside_the_probe_discovery_namespace(self):
@@ -440,7 +442,7 @@ class PointerScriptTests(unittest.TestCase):
         for number in BATCHES:
             self.assertNotRegex(f'pointer_provenance_tests::batches::batch_{number}', r'^pointer_provenance_tests::p')
         # The discovery guard still passes with batch tests present in the fake listing and metadata.
-        self.assertIn('35 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
+        self.assertIn('37 exact non-ignored controls', self.invoke('verify-controls', '--configuration', 'no-features'))
 
     def test_verify_batches_rejects_drift(self):
         original = SOURCE.read_text()
@@ -512,7 +514,7 @@ class PointerScriptTests(unittest.TestCase):
             'batch-ub-mid': ('miri-ub', names[3]),
             'batch-timeout': ('timeout-or-killed', names[3]),
             'batch-missing-line': ('zero-ignored-or-unverified-count', names[2]),
-            'batch-extra-line': ('zero-ignored-or-unverified-count', 'p09_ldloca_convu_survives_callee_stack_growth'),
+            'batch-extra-line': ('zero-ignored-or-unverified-count', 'p12_ldsflda_convu_stind_static'),
             'batch-reordered': ('zero-ignored-or-unverified-count', 'order differs'),
             'batch-zero': ('zero-ignored-or-unverified-count', "'1 passed; 0 failed; 0 ignored'"),
             'batch-ignored': ('zero-ignored-or-unverified-count', "'1 passed; 0 failed; 0 ignored'"),
@@ -563,7 +565,7 @@ class PointerScriptTests(unittest.TestCase):
                 self.assertIn(f'batches::batch_{number}', out)
                 self.assertNotIn('--ignored', out)
                 self.assertIn('3000s', out)  # batches get a larger per-process budget than singletons
-            out = self.invoke('diagnostic', '--configuration', config, '--probe', 'p09_ldloca_convu_survives_callee_stack_growth', '--dry-run')
+            out = self.invoke('diagnostic', '--configuration', config, '--probe', 'p12_ldsflda_convu_stind_static', '--dry-run')
             self.assertIn('--ignored', out)
         self.assertEqual(self.recorded(), [])
 

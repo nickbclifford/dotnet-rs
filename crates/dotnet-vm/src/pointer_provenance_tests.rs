@@ -628,7 +628,6 @@ fn build_program(
 // Stale-address probe: `ldloca; conv.u` then a callee needing a big evaluation stack forces the
 // shared Vec<StackValue> to reallocate; the integer address held by the caller dangles.
 #[test]
-#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p09_ldloca_convu_survives_callee_stack_growth() {
     let r = run_program("P09", |res, type_idx| {
         let helper_body = make_test_method!(
@@ -1033,6 +1032,63 @@ fn homed_object_local_survives_collection() {
         true,
     );
     assert_eq!(r, 4);
+}
+
+// A byref to a value-type argument must keep addressing that argument after `starg` assigns it a
+// new value: its address, converted after the store, writes the argument seen by the next `ldarg`.
+#[test]
+fn p38_ldarga_value_type_survives_starg() {
+    let r = run_program("P38", |res, type_idx| {
+        let (_, struct_ty, field) = push_test_value_type(res, "P38Struct", false, false);
+        let callee_body = make_test_method!(
+            max_stack: 3,
+            instructions: vec![
+                Instruction::LoadArgumentAddress(0),
+                Instruction::LoadLocal(0),
+                Instruction::StoreArgument(0),
+                conv_u(),
+                Instruction::LoadConstantInt32(7),
+                stind(StoreType::Int32),
+                Instruction::LoadArgument(0),
+                Instruction::LoadField {
+                    param0: field,
+                    unaligned: None,
+                    volatile: false,
+                },
+                Instruction::Return,
+            ],
+            locals: vec![local(struct_ty.clone())],
+        );
+        let callee_sig = MethodSignature {
+            parameters: vec![Parameter(
+                vec![],
+                ParameterType::Value(MethodType::Base(Box::new(struct_ty.clone()))),
+            )],
+            ..parameterless_i32_signature()
+        };
+        let callee = res.push_method(
+            type_idx,
+            Method::new(
+                Accessibility::Public,
+                callee_sig,
+                "Callee",
+                Some(callee_body),
+            ),
+        );
+        (
+            2,
+            vec![local(struct_ty)],
+            vec![
+                Instruction::LoadLocal(0),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(callee)),
+                },
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 7);
 }
 
 /// Pushes `Leak`, a method that stores 5 in its homed local and returns a byref to it
@@ -3092,6 +3148,7 @@ mod batches {
         p04_double_localloc_write_first,
         p32_localloc_blocks_released_on_tail_call_replacement,
         p36_static_address_survives_forced_collection,
+        p38_ldarga_value_type_survives_starg,
     ]);
 
     control_batch!(batch_2: [
@@ -3127,5 +3184,6 @@ mod batches {
         p28_stind_i_fresh_pointer_through_heap_memory_dereferences,
         p31_localloc_blocks_released_on_return_and_pooling,
         p35_ldflda_on_stack_value_type_then_ldind,
+        p09_ldloca_convu_survives_callee_stack_growth,
     ]);
 }

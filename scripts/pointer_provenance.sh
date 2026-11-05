@@ -42,6 +42,8 @@ expected_controls=(
 'pointer_provenance_tests::p36_static_address_survives_forced_collection|33|1'
 'pointer_provenance_tests::p01_ldloca_convu_stind_i4|34|2'
 'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|35|3'
+'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth|36|4'
+'pointer_provenance_tests::p38_ldarga_value_type_survives_starg|37|1'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -55,7 +57,7 @@ catalog=(
 'pointer_provenance_tests::p06_localloc_minus_one_then_plus_one|control|no|13'
 'pointer_provenance_tests::p07_localloc_one_past_end|control|no|5'
 'pointer_provenance_tests::p08_localloc_overshoot|control|no|14'
-'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth|reported-ub|no|-'
+'pointer_provenance_tests::p09_ldloca_convu_survives_callee_stack_growth|control|no|36'
 'pointer_provenance_tests::p10_ldelema_convu_stind_heap_array|control|no|7'
 'pointer_provenance_tests::p11_ldelema_stind_heap_array_control|control|no|6'
 'pointer_provenance_tests::p12_ldsflda_convu_stind_static|suspected-ub|no|-'
@@ -85,12 +87,13 @@ catalog=(
 'pointer_provenance_tests::p35_ldflda_on_stack_value_type_then_ldind|control|no|32'
 'pointer_provenance_tests::p36_static_address_survives_forced_collection|control|no|33'
 'pointer_provenance_tests::p37_ldloca_value_type_survives_stloc|control|no|35'
+'pointer_provenance_tests::p38_ldarga_value_type_survives_starg|control|no|37'
 'pointer_provenance_tests::p_wide_store_into_int_local|unverified|no|-'
 )
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=35
+reviewed_count=37
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -243,12 +246,12 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 35:
+    if len(controls) != 37:
         raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 35 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; 37 singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"
@@ -402,7 +405,7 @@ if ((!dry)); then
     fi
     echo "output directory: $logdir"
 fi
-# Per-process budget in seconds. A batch runs 8-9 controls (about 540 s locally),
+# Per-process budget in seconds. A batch runs 9-10 controls (about 600 s locally),
 # so it gets more than a singleton; ci.yml wraps each in a matching ci_diagnostics.py timeout.
 proc_timeout=2700
 [[ $command != batch ]] || proc_timeout=3000
