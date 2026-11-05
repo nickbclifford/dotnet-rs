@@ -426,7 +426,7 @@ impl FieldStorage {
         visited: &mut HashSet<usize>,
         depth: usize,
     ) {
-        // SAFETY: F1.StwParked — resurrection runs while every mutator is parked, so nothing writes or reallocates these bytes while `data` is live; skipping the field guard avoids blocking on a guard a parked thread may hold.
+        // SAFETY: F1.StwParked — resurrection runs while every mutator is parked, so nothing writes or reallocates these bytes while `data` is live. No parked thread can be inside a field write guard: a mutator polls a safepoint only between instructions or copy chunks, never inside `with_data(_mut)`, and a `ThreadSafeLock` writer refuses to park (`has_active_thread_safe_write_guard`). Skipping the field guard therefore avoids no real contention; it only avoids a lock that cannot be held.
         let data = unsafe { self.raw_data_unsynchronized() };
 
         self.layout.resurrect(data, fc, visited, depth);
