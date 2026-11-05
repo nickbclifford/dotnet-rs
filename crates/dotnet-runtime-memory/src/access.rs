@@ -1726,7 +1726,7 @@ mod tests {
 
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_| ());
-        let _arena_id = ArenaId::new(4051);
+        let _arena_id = dotnet_utils::sync::get_current_thread_id();
         #[cfg(feature = "multithreading")]
         let arena_handle = Box::into_raw(Box::new(ArenaHandle::new(_arena_id)));
 
