@@ -27,6 +27,29 @@ use std::ptr::NonNull;
 
 pub use dotnet_vm_data::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
 
+/// Traced progress for a substring copy suspended between executor turns.
+#[derive(Collect)]
+#[collect(no_drop, gc_lifetime = 'gc)]
+pub struct NativeSubstringActivation<'gc> {
+    pub source: ObjectRef<'gc>,
+    pub start: usize,
+    pub length: usize,
+    pub buffer: Vec<u16>,
+    pub offset: usize,
+    pub caller_depth: usize,
+    pub caller_ip: usize,
+    /// Evaluation stack height after consuming the call operands.
+    pub stack_height: crate::StackSlotIndex,
+}
+
+#[derive(Collect, Default)]
+#[collect(no_drop, gc_lifetime = 'gc)]
+pub struct CallState<'gc> {
+    pub arguments: Vec<StackValue<'gc>>,
+    pub substring: Option<Box<NativeSubstringActivation<'gc>>>,
+    pub substring_eligible: bool,
+}
+
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
@@ -39,7 +62,7 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
     pub(crate) continuation: &'a mut dotnet_vm_data::VmContinuation<'gc>,
-    pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
+    pub(crate) call_state: &'a mut CallState<'gc>,
     pub(crate) heap_managed_ptr_decode_cache: &'a mut super::HeapManagedPtrDecodeCache<'gc>,
 }
 
@@ -244,13 +267,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     #[inline]
     pub(crate) fn pop_call_args_into_buffer(&mut self, count: usize) {
-        self.call_args_buffer.clear();
-        self.call_args_buffer.reserve(count);
+        self.call_state.arguments.clear();
+        self.call_state.arguments.reserve(count);
         for _ in 0..count {
             let value = self.pop();
-            self.call_args_buffer.push(value);
+            self.call_state.arguments.push(value);
         }
-        self.call_args_buffer.reverse();
+        self.call_state.arguments.reverse();
     }
 
     #[inline]
@@ -260,7 +283,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         count: usize,
     ) {
         self.evaluation_stack
-            .copy_slots_into(start, count, self.call_args_buffer);
+            .copy_slots_into(start, count, &mut self.call_state.arguments);
     }
 
     pub(crate) fn handle_return(&mut self) -> StepResult {
@@ -551,7 +574,7 @@ pub struct ThreadContext<'gc> {
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
     pub continuation: dotnet_vm_data::VmContinuation<'gc>,
-    pub call_args_buffer: Vec<StackValue<'gc>>,
+    pub call_state: CallState<'gc>,
 }
 
 #[cfg(test)]

@@ -3509,6 +3509,11 @@ fn p40_jmp_forwards_modified_home_argument() {
     }
 }
 
+#[test]
+fn p44_native_substring_gc_resume() {
+    crate::executor::native_substring_tests::native_substring_gc_control();
+}
+
 // ---- Batched execution of the reviewed controls ------------------------------------------------
 // CI runs the controls under Miri either as one process per control (nightly full sweep, and the
 // attribution re-run after a failed batch) or as a few batches that call the same control
@@ -3587,6 +3592,7 @@ mod batches {
         p34_localloc_blocks_released_on_executor_teardown,
         p37_ldloca_value_type_survives_stloc,
         p15_initblk_stack_local_via_managed_ptr,
+        p44_native_substring_gc_resume,
     ]);
 
     control_batch!(batch_4: [

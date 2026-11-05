@@ -489,7 +489,7 @@ impl Executor {
             #[cfg(feature = "fuzzing")]
             if let Some(budget) = self.instruction_budget.as_mut() {
                 if *budget == 0 {
-                    return ExecutorResult::Error(VmError::Execution(
+                    break ExecutorResult::Error(VmError::Execution(
                         ExecutionError::FuzzBudgetExceeded,
                     ));
                 }
@@ -555,7 +555,10 @@ impl Executor {
             let thread_id = self.thread_id;
             if let Err(e) = self.with_arena(|arena| {
                 // Optimization: Only mutate the root to process finalizers if there are actually pending finalizers
-                let has_pending = arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers());
+                let has_pending = arena.mutate(|_, c| {
+                    c.stack.execution.call_state.substring.is_none()
+                        && c.stack.local.heap.has_pending_finalizers()
+                });
                 if has_pending {
                     let _ = arena.mutate_root(|gc, c| {
                         let gc_handle = GCHandle::new(
@@ -645,6 +648,14 @@ impl Executor {
             }
         };
 
+        if let Err(error) = self.with_arena(|arena| {
+            arena.mutate_root(|_, c| {
+                c.stack.execution.call_state.substring = None;
+                c.stack.execution.call_state.substring_eligible = false;
+            });
+        }) {
+            return ExecutorResult::Error(error);
+        }
         // Thread unregistration is handled by `Executor`'s `Drop` impl,
         // which runs when the Executor is dropped after this function returns.
         self.shared.tracer.flush();
@@ -904,3 +915,7 @@ mod tests {
         assert_eq!(executor.complete_entrypoint_return().unwrap(), Some(0));
     }
 }
+
+#[cfg(test)]
+#[path = "native_substring_tests.rs"]
+pub(crate) mod native_substring_tests;

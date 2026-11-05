@@ -49,6 +49,10 @@ name = "end_to_end"
 harness = false
 
 [[bench]]
+name = "substring"
+harness = false
+
+[[bench]]
 name = "metadata_load"
 harness = false
 

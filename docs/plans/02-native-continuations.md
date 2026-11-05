@@ -1,33 +1,120 @@
-# Native continuations (Rust async as VM effects)
+# Native continuations: resumable Substring
 
-**Status:** Parked — redesign not started
-**Outcome (when resumed):** One named native operation keeps its progress across a VM
-safepoint instead of restarting on `Yield`.
+**Status:** Complete (explicit Substring continuation proof)
+**Outcome:** Both `System.String.Substring` overloads retain copy progress across real
+single-threaded GC safepoints, consume operands once and copy each requested UTF-16
+code unit once.
 
-This is about long-running host operations inside the VM (for example, a large `Substring`
-copy that currently restarts when a GC is requested). It is not .NET `Task` scheduling and
-not an OS async runtime.
+## Direction
 
-## What exists
+Start with an explicit continuation to prove scheduling, rooting and completion.
+The intended destination remains an async/await-compatible effects system that makes
+instructions and intrinsics simpler to implement and reduces unnecessary data shuffling.
+The explicit continuation is the first proof, not a permanent general effects API.
 
-- The archived experiment at tag `archive/async-effects-2026-10` (`experiments/async-effects/`;
-  start with `git show archive/async-effects-2026-10:experiments/async-effects/DESIGN.md`): a design,
-  layered prototype and gallery built on
-  `VmEffects`, `fx.vm().await?`, rooted access loans and per-activation roots. It is not wired
-  into the VM. Treat its API as a candidate, not a decision.
-- An earlier integration attempt was abandoned unmerged. Its lessons are below.
+The archived experiment at `archive/async-effects-2026-10` contains candidate APIs,
+not an implementation to restore wholesale. Its design starts at
+`experiments/async-effects/DESIGN.md` in that tag. This work does not implement .NET
+Task scheduling or an OS async runtime.
 
-## To resume
+## Problem
 
-Pick one real operation whose progress is lost on `Yield`, name the observable improvement,
-and plan one enabled slice: adapter, scheduler hook, result handling and cleanup for that
-operation only, single-threaded, with a fallback to the current path for every other call.
-Multithreading, managed re-entry, exception boundaries and waits are separate later outcomes.
+`intrinsic_string_substring` in `dotnet-intrinsics-string/src/search.rs` peeks its
+operands, allocates a vector and copies in 64K-character chunks. On `Yield` it drops
+that vector and offset, so retry repeats the work. The single-threaded stop predicate
+does not observe `needs_full_collect`; tests must request real executor collection,
+rather than substitute a boolean for collection.
 
-Done when, for that operation: output is exact under a real collection request after each
-chunk, each element is processed once, polling is bounded so abort/budget/collection checks
-still run, roots survive collection, cancellation releases futures and roots, and the cost
-compared to the direct path is measured.
+## Scope and entry
+
+Enable the continuation without `multithreading`, for ordinary non-tail `call` and
+`callvirt`, when the requested result exceeds 64K UTF-16 code units. Empty and
+single-chunk results stay synchronous. Indirect calls, reflection, delegates, tail
+calls, engine API calls and multithreaded execution retain the existing path.
+
+Keep both registered signatures and one annotated handler. Add a narrow string-host
+hook offering validated work to the VM. Declining the offer leaves operands intact.
+Set eligibility explicitly in ordinary instruction-call dispatch; the resolved method
+alone is insufficient to establish the return contract. Do not depend on the scanner
+understanding feature gates or register duplicate handlers.
+
+Validate receiver and signed ranges before installing state or consuming operands.
+Use subtraction-based bounds checks; preserve exception types and parameter names,
+with CLR comparisons. Share validation and bounded-copy helpers between paths.
+
+## Retained state and execution
+
+- Add one optional, traced native activation to thread execution state, separate from
+  `VmContinuation::HandlerUnwinds`. This finite operation performs no managed re-entry.
+- Retain the source `ObjectRef`, start, length, owned `Vec<u16>`, copied offset and
+  originating caller/call-site identity. Derive tracing. Retain no heap slices,
+  borrow guards or raw pointers.
+- Allocate the buffer once. After validation, commit the activation and consume the
+  receiver and arguments once, before copying.
+- Copy at most 64K UTF-16 code units per executor turn, including the initial turn.
+  If incomplete, return `Yield` unconditionally to bound abort and budget latency.
+- Resume pending native work at engine entry before further IL. Leave the caller IP
+  at the call instruction while pending; never restore its operand snapshot or use
+  the instruction-retry marker. Poll outside the ordinary batched instruction loop.
+- On completion, move the buffer into the result string, push one result, advance
+  the caller IP once and clear the activation. Caller/call-site mismatch clears the
+  activation and produces an internal error.
+- End every source borrow before yielding. Observe the real single-threaded full-GC
+  request without consuming it; acknowledgment belongs to executor collection.
+- Retain queued finalizers while native work is pending, but defer starting their
+  frames. Resume finalizer processing after completion and before the next guest
+  instruction. Preserve ambient handler/filter and suspended handler-unwind state.
+- Clear the activation on terminal abort, budget exhaustion, VM failure and executor
+  teardown, including early returns from `Executor::run`. Add no lifetime erasure,
+  poll-local context slot or new unsafe code.
+
+## Slice and validation
+
+Deliver one enabled vertical slice containing entry, retained state, executor
+resumption, cleanup and tests. Do not merge preparatory infrastructure on its own.
+
+- Compare both overloads with CLR: empty/full/partial ranges, null receiver, negative
+  and overflowing arguments, chunk boundaries, surrogate pairs and unpaired surrogates.
+- Use a deterministic test hook to request actual collection after every incomplete
+  chunk. Assert collection before resumption, exact output, monotonic progress, one
+  buffer allocation and exactly the requested number of copied code units.
+- Root the source only through the activation and collect repeatedly. Use a weak
+  witness to verify collection eligibility after completion and cancellation.
+- Without GC pressure, verify every incomplete chunk returns to the executor. Abort
+  or exhaust the budget between chunks; assert no further copying and state cleanup.
+- Cover pending finalizers, catch/finally/filter contexts, teardown while suspended,
+  back-to-back calls and result-stack shape. Preserve handler-unwind state.
+- Test fallback call shapes and multithreaded execution: neither installs an activation.
+- Run focused tests, then `./check.sh --fast` once for the coherent implementation.
+  Register the rooting/resumption control in the existing pinned Miri manifests and
+  run Tree Borrows, including the fallback configuration. Run doc drift checks.
+
+## Performance and done conditions
+
+Record a pre-implementation baseline. Run paired release comparisons for empty/small
+and multi-chunk Substring, ordinary dispatch and the existing string workload. Report
+time, copied units, buffer allocations and peak retained bytes. Measure forced
+collection separately from ordinary throughput.
+
+Investigate repeatable regressions above 1% in unaffected dispatch and direct-path
+controls. Report scheduling overhead alongside progress preservation. Ask the
+maintainer to accept any unresolved regression.
+
+Done when correctness, rooting, cancellation and fallback checks pass; performance
+evidence is recorded; and eligible calls use the continuation by default. The later
+async/await effects redesign remains a separate outcome using this scheduler contract
+and its behavior tests.
+
+Validation and measured costs are recorded in the
+[implementation evidence](../ci-evidence/2026-11-05-substring-continuation.md) and
+[performance evidence](../perf-evidence/2026-11-05-substring-continuation.md).
+
+## Ask the maintainer only if
+
+- A supported call needs managed re-entry or multithreaded continuation support.
+- The slice requires new unsafe lifetime erasure or a weaker rooting guarantee.
+- Performance investigation leaves a repeatable regression requiring acceptance.
+- Integration expands into multiple preparatory modules rather than one enabled slice.
 
 ## Lessons from the abandoned attempt
 

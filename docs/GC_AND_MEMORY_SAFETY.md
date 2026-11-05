@@ -371,7 +371,10 @@ must live in `Collect`-traced storage reachable from the root (`ExecutionEngine<
 1. **Re-run/resume interpreter control flow in-place**
    - Uses `VmContinuation<'gc>` on `ThreadContext<'gc>`.
    - Covers retrying the current instruction and preserving nested handler-unwind queues.
-2. **Resume with return-value post-processing after a managed call returns**
+2. **Retain progress for a finite native operation**
+   - Uses `ThreadContext::call_state.substring`, separate from handler-unwind state.
+   - Retains a traced source and an owned UTF-16 buffer across executor turns.
+3. **Resume with return-value post-processing after a managed call returns**
    - Uses per-frame `FrameReturnAction` on `StackFrame<'gc>`.
    - Covers reflection-driven call flows that must box/coerce the return value after callee return.
 
@@ -411,14 +414,28 @@ new GC references to trace.
 - `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
   `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
 
-### Async/await prohibition
+### Finite native copies
 
-Rust `async`/`await` is prohibited in this layer. `gc-arena` brands `Gc<'gc, T>` handles with an
-invariant `'gc` lifetime scoped to `mutate_root` closures, while compiler-generated futures cannot
-provide custom `Collect<'gc>` tracing for locals captured across `.await`. Holding `Gc` handles in
-an untraced future across safe points would permit collection of still-referenced objects.
-Continuation state that must survive a safe point therefore lives in the traced
-`VmContinuation`/`FrameReturnAction` storage described above.
+Single-threaded ordinary, non-tail `call` and `callvirt` instructions can retain large
+`Substring` copies in `NativeSubstringActivation`. The source is a traced `ObjectRef`;
+the destination buffer contains UTF-16 code units and no GC references. Arguments are
+consumed once before copying. Each executor turn copies at most 64K code units, then
+yields if incomplete. Source storage guards end before yielding. The executor services
+collection requests and abort/budget checks between turns.
+
+The caller remains at the call instruction until completion publishes one result and
+advances its IP once. Resumption checks caller depth, IP and operand-stack height.
+Queued finalizers stay rooted and start after the finite copy completes. Terminal
+executor results clear retained native work. Reflection, delegates, indirect and tail
+calls and multithreaded builds use the synchronous intrinsic path.
+
+### GC handles and Rust futures
+
+The current execution layer uses explicit traced continuation state. `gc-arena` brands
+`Gc<'gc, T>` handles with an invariant lifetime scoped to mutation closures. An untraced
+Rust future must not retain those handles across `.await`, because collection cannot
+trace compiler-generated future locals. Any future effects API must keep GC references
+in separately traced roots and confine heap access to each poll's mutation.
 
 ## Panic-Safety Guarantees During STW
 

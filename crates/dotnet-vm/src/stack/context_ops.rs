@@ -25,6 +25,43 @@ use dotnetdll::prelude::{MethodMemberIndex, MethodType};
 use std::ptr::NonNull;
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// Advances a bounded copy without retaining a heap borrow across a yield.
+    pub(crate) fn advance_native_substring(&mut self) -> StepResult {
+        let Some(mut work) = self.call_state.substring.take() else {
+            return StepResult::internal_error("missing native substring activation");
+        };
+        if self.frame_stack.len() != work.caller_depth
+            || self.frame_stack.is_empty()
+            || self.state().ip != work.caller_ip
+            || self.evaluation_stack.top_of_stack() != work.stack_height
+        {
+            return StepResult::internal_error("native substring caller changed");
+        }
+        {
+            let Some(handle) = work.source.0 else {
+                return StepResult::internal_error("native substring source is null");
+            };
+            let inner = handle.borrow();
+            let HeapStorage::Str(source) = &inner.storage else {
+                return StepResult::internal_error("native substring source changed type");
+            };
+            work.offset += dotnet_intrinsics_string::search::copy_substring_chunk(
+                source,
+                work.start,
+                work.length,
+                work.offset,
+                &mut work.buffer,
+            );
+        }
+        if work.offset < work.length {
+            self.call_state.substring = Some(work);
+            StepResult::Yield
+        } else {
+            self.push_string(dotnet_value::string::CLRString::new(work.buffer));
+            StepResult::Continue
+        }
+    }
+
     /// Yield to a GC safe point and retry the current instruction on resume.
     /// Marks `VmContinuation::RetryInstruction` when no traced continuation state is already
     /// queued, then restores the IP/stack snapshot. Existing handler-unwind state is preserved;
@@ -321,6 +358,44 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
 }
 
 impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<'a, 'gc> {
+    fn offer_substring_continuation(
+        &mut self,
+        source: ObjectRef<'gc>,
+        start: usize,
+        length: usize,
+        operand_count: usize,
+    ) -> Option<StepResult> {
+        #[cfg(feature = "multithreading")]
+        {
+            let _ = (source, start, length, operand_count);
+            None
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            if !self.call_state.substring_eligible || self.frame_stack.is_empty() {
+                return None;
+            }
+            if self.call_state.substring.is_some() {
+                return Some(StepResult::internal_error(
+                    "native substring already active",
+                ));
+            }
+            let buffer = Vec::with_capacity(length);
+            self.drop_top(operand_count);
+            self.call_state.substring = Some(Box::new(super::context::NativeSubstringActivation {
+                source,
+                start,
+                length,
+                buffer,
+                offset: 0,
+                caller_depth: self.frame_stack.len(),
+                caller_ip: self.state().ip,
+                stack_height: self.evaluation_stack.top_of_stack(),
+            }));
+            Some(self.advance_native_substring())
+        }
+    }
+
     #[inline]
     fn string_intrinsic_as_span(
         &mut self,
@@ -1067,6 +1142,10 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn process_pending_finalizers(&mut self) -> StepResult {
+        // A finite native copy owns the caller's stack until it publishes its result.
+        if self.call_state.substring.is_some() {
+            return StepResult::Continue;
+        }
         let _gc = self.gc;
         if self.local.heap.processing_finalizer.get() {
             return StepResult::Continue;

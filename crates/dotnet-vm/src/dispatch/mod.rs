@@ -99,7 +99,18 @@ impl<'gc> ExecutionEngine<'gc> {
         self.stack.ves_context(gc)
     }
 
+    pub(crate) fn resume_native_substring(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        let result = self.ves_context(gc).advance_native_substring();
+        if result == StepResult::Continue {
+            self.stack.increment_ip();
+        }
+        result
+    }
+
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.stack.execution.call_state.substring.is_some() {
+            return self.resume_native_substring(gc);
+        }
         match self.stack.execution.exception_mode {
             ExceptionState::None
             | ExceptionState::ExecutingHandler(_)
@@ -197,6 +208,9 @@ impl<'gc> ExecutionEngine<'gc> {
 
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.stack.execution.call_state.substring.is_some() {
+            return self.resume_native_substring(gc);
+        }
         // `RetryInstruction` records the reason for the previous safe-point yield. The actual
         // retry is already encoded in the restored IP/stack snapshot, so clear the marker once the
         // executor re-enters the VM. Do this outside the batched instruction loop to keep the hot

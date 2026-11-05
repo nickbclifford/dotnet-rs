@@ -232,6 +232,16 @@ pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
 
+    /// Dispatch from an ordinary call instruction with a resumable return contract.
+    fn unified_dispatch_direct(
+        &mut self,
+        target: UnifiedDispatchTarget<'_>,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult {
+        self.unified_dispatch(target, this_type, ctx)
+    }
+
     fn unified_dispatch_tail(
         &mut self,
         target: UnifiedDispatchTarget<'_>,

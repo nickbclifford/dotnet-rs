@@ -275,7 +275,7 @@ impl<'a, 'gc> CallArgumentBufferOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn call_args_buffer_mut(&mut self) -> &mut Vec<StackValue<'gc>> {
-        self.call_args_buffer
+        &mut self.call_state.arguments
     }
 }
 
@@ -411,7 +411,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let is_value_type = desc.is_value_type(&self.current_context())?;
         let num_params = method.signature.parameters.len();
         self.pop_call_args_into_buffer(num_params);
-        let mut args = std::mem::take(self.call_args_buffer);
+        let mut args = std::mem::take(&mut self.call_state.arguments);
         let completion = if is_value_type {
             let (result, pointer) = self.prepare_constructor_receiver(instance)?;
             self.push(pointer);
@@ -425,7 +425,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         for arg in args.drain(..) {
             self.push(arg);
         }
-        *self.call_args_buffer = args;
+        self.call_state.arguments = args;
         self.call_frame(method, generic_inst)?;
         if let Some(result) = completion {
             self.defer_constructor_receiver(result);
@@ -601,6 +601,22 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    fn unified_dispatch_direct(
+        &mut self,
+        target: UnifiedDispatchTarget<'_>,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult {
+        #[cfg(not(feature = "multithreading"))]
+        {
+            self.call_state.substring_eligible = true;
+        }
+        let result = self.unified_dispatch(target, this_type, ctx);
+        self.call_state.substring_eligible = false;
+        result
+    }
+
+    #[inline]
     fn unified_dispatch_tail(
         &mut self,
         target: UnifiedDispatchTarget<'_>,
@@ -712,6 +728,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         );
         // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
         if vm_unlikely!(intrinsic_metadata.is_some()) {
+            // Reflection and delegate intrinsics can dispatch other methods internally.
+            self.call_state.substring_eligible = self.call_state.substring_eligible
+                && mode == ResolvedMethodDispatchMode::VmContext
+                && intrinsic_metadata
+                    .as_ref()
+                    .expect("intrinsic metadata exists")
+                    .handler
+                    .is_substring();
             return match mode {
                 ResolvedMethodDispatchMode::VmContext => {
                     let metadata = intrinsic_metadata.expect("intrinsic metadata must exist");
@@ -727,6 +751,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 }
             };
         }
+
+        self.call_state.substring_eligible = false;
 
         if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
@@ -1087,7 +1113,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             )
         };
         self.copy_slots_into_call_args_buffer(args_base, arg_count);
-        let mut args = std::mem::take(self.call_args_buffer);
+        let mut args = std::mem::take(&mut self.call_state.arguments);
 
         // Pop/discard the current frame and clear its stack slots.
         if !self.pop_and_recycle_frame_with_trace() {
@@ -1111,7 +1137,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 self.evaluation_stack.push(a);
             }
         }
-        *self.call_args_buffer = args;
+        self.call_state.arguments = args;
 
         if let Some(err) = self.managed_frame_abort_error(&info) {
             return StepResult::Error(err);
@@ -1188,12 +1214,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         };
 
         // Argument homes are authoritative after starg or an indirect write.
-        self.call_args_buffer.clear();
+        self.call_state.arguments.clear();
         for index in 0..arg_count {
             let value = self.get_argument(crate::ArgumentIndex::new(index));
-            self.call_args_buffer.push(value);
+            self.call_state.arguments.push(value);
         }
-        let mut args = std::mem::take(self.call_args_buffer);
+        let mut args = std::mem::take(&mut self.call_state.arguments);
 
         let constructor_result = self
             .frame_stack
@@ -1218,7 +1244,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         for a in args.drain(..) {
             self.push(a);
         }
-        *self.call_args_buffer = args;
+        self.call_state.arguments = args;
 
         // Push new frame
         let info = dotnet_vm_ops::vm_try!(self.method_info_for_dispatch(method, &lookup));

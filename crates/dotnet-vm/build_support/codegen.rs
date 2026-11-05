@@ -98,6 +98,27 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
     }
     dispatch_code.push_str("}\n\n");
 
+    // Select the retained operation by generated ID, avoiding allocating a type name per call.
+    let mut substring_variants: Vec<_> = sorted_entries
+        .iter()
+        .filter(|entry| {
+            !entry.is_field
+                && entry.original_handler_path
+                    == "dotnet_intrinsics_string::search::intrinsic_string_substring"
+        })
+        .map(|entry| format!("Self::{}", entry.variant_name))
+        .collect();
+    substring_variants.sort();
+    substring_variants.dedup();
+    assert_eq!(
+        substring_variants.len(),
+        2,
+        "both Substring overloads must be registered"
+    );
+    dispatch_code.push_str(&format!(
+        "impl MethodIntrinsicId {{ pub(crate) fn is_substring(self) -> bool {{ matches!(self, {}) }} }}\n\n",
+        substring_variants.join(" | ")));
+
     dispatch_code.push_str("#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]\n");
     dispatch_code.push_str("#[allow(non_camel_case_types)]\n");
     dispatch_code.push_str("pub enum FieldIntrinsicId {\n");

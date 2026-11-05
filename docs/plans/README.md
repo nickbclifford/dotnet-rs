@@ -10,9 +10,9 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 01 | [Stable homes for addressable locals and arguments](01-stable-frame-homes.md) | Next |
-| 04 | [Safe APIs whose soundness rests on unchecked caller premises](04-safe-api-premises.md) | Queued |
-| 02 | [Native continuations](02-native-continuations.md) | Parked until a specific operation is chosen |
+| 04 | [Safe APIs whose soundness rests on unchecked caller premises](04-safe-api-premises.md) | Next |
+| 02 | [Native continuations: Substring proof](02-native-continuations.md) | Done; async/await effects remain a separate follow-up |
+| 01 | [Stable homes for addressable locals and arguments](01-stable-frame-homes.md) | Done; measured primitive cost accepted |
 | 03 | [Executor teardown ownership](03-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
 
 ## Not yet planned
@@ -21,6 +21,10 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Async/await effects:** build on the completed [Substring continuation proof](02-native-continuations.md)
+  with an effects API that simplifies instruction and intrinsic implementations and reduces data
+  shuffling. The explicit continuation establishes the scheduling and rooting contract; the
+  Rust future driver and rooted access API still need a design.
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
   so byref arithmetic that goes below the base or past the compact range (for example
   `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
