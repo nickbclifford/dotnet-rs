@@ -351,7 +351,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // VM invariant: `return_frame` is only reached while executing a method body, so the
         // dispatch loop must have an active frame. An empty stack here indicates a bug in frame
         // lifecycle management, not a recoverable runtime condition.
-        let frame = self
+        let mut frame = self
             .frame_stack
             .pop()
             .expect("return_frame called with empty frame stack (ret/dispatch invariant violated)");
@@ -387,6 +387,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             // Note: self.push() calls on_push() which increments stack_height,
             // so we must NOT manually increment stack_height here.
             self.push(return_value);
+        }
+
+        if let Some(result) = frame.constructor_result.take()
+            && let Err(error) = self.complete_constructor_receiver(*result)
+        {
+            self.frame_stack.recycle_frame(frame);
+            return StepResult::Error(error.into());
         }
 
         let frame_continuation = self

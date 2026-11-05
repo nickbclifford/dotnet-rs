@@ -183,6 +183,27 @@ pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
 pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
     fn return_frame(&mut self) -> StepResult;
 
+    fn prepare_constructor_receiver(
+        &mut self,
+        instance: ObjectInstance<'gc>,
+    ) -> Result<
+        (
+            dotnet_vm_data::frame_homes::ConstructorResult,
+            StackValue<'gc>,
+        ),
+        TypeResolutionError,
+    >;
+
+    fn complete_constructor_receiver(
+        &mut self,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    ) -> Result<(), TypeResolutionError>;
+
+    fn defer_constructor_receiver(
+        &mut self,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    );
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,

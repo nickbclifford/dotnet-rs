@@ -138,7 +138,7 @@ variable push a `PointerOrigin::FrameHome` byref naming the frame's serial and t
 Every access finds the live frame with that serial and checks the range against its block before
 using the address, so the block never needs rebasing and a byref to a returned frame is rejected.
 
-`ldloca` and `ldarga` on a byref-typed or `TypedReference` variable push a
+`ldloca` and `ldarga` on a `TypedReference` variable push a
 `PointerOrigin::Stack` managed pointer naming the absolute slot index and caching that slot's
 `StackValue::data_location`. For a scalar slot that address is inside the `Vec` element; for a
 value-type slot it is the value's own storage buffer.
@@ -149,8 +149,10 @@ in slots, in typed references, and serialized inside value-type slots (`ref` fie
 values). `suspend_above` and `restore_suspended` call `update_stack_pointers` directly. This is the
 mechanism behind `F3.InteriorPointerRebased`.
 
-Stack-origin byrefs that remain are to evaluation-stack temporaries (such as the receiver of a
-value-type constructor) and to byref-typed and `TypedReference` variables. The plan
+Stack-origin byrefs that remain are to `TypedReference` variables. Value-type constructor
+receivers use additional caller-owned frame homes allocated at runtime, including reflection
+and intrinsic construction. Each temporary block has a fresh serial and remains live until its
+caller exits; constructor completion copies out the result before reflection return processing. The plan
 [Stable homes for addressable locals and arguments](plans/01-stable-frame-homes.md) removes the
 fixup once nothing needs it.
 

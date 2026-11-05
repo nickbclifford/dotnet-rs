@@ -562,13 +562,22 @@ jobs:
       - name: Miri frame allocations (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case frame-alloc-no-features --features no-features --timeout 900 \
-            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            --require 'test result: ok. 9 passed; 0 failed; 0 ignored;' -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1
       - name: Miri frame allocations (multithreading)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case frame-alloc-multithreading --features multithreading --timeout 900 \
-            --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
+            --require 'test result: ok. 9 passed; 0 failed; 0 ignored;' -- \
             cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading frame_alloc:: -- --test-threads=1
+      - name: Miri temporary homes
+        run: |
+          for configuration in no-features multithreading; do
+            features=()
+            if [ "$configuration" = multithreading ]; then features=(--features multithreading); fi
+            python3 scripts/ci_diagnostics.py run --phase execute --case "frame-homes-$configuration" --features "$configuration" --timeout 900 \
+              --require 'test result: ok. 2 passed; 0 failed; 0 ignored;' -- \
+              cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features "${features[@]}" frame_homes:: -- --test-threads=1
+          done
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -936,7 +945,7 @@ jobs:
       fail-fast: false
       matrix:
         configuration: [no-features, multithreading]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
     steps:
       - name: Start diagnostics budget
         run: |

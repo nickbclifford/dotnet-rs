@@ -3475,6 +3475,7 @@ mod batches {
         p32_localloc_blocks_released_on_tail_call_replacement,
         p36_static_address_survives_forced_collection,
         p38_ldarga_value_type_survives_starg,
+        p41_constructor_receiver_survives_nested_growth,
     ]);
 
     control_batch!(batch_2: [
@@ -3555,4 +3556,114 @@ fn addressed_byref_local_preserves_origin_through_indirect_access() {
         )
     });
     assert_eq!(result, 42);
+}
+
+#[test]
+fn p41_constructor_receiver_survives_nested_growth() {
+    for jump in [false, true] {
+        let (shared, entrypoint) = build_program(
+            if jump {
+                "ConstructorJmpHome"
+            } else {
+                "ConstructorHome"
+            },
+            |res, type_idx| {
+                let (struct_idx, struct_ty, field) =
+                    push_test_value_type(res, "ConstructorHomeStruct", false, false);
+                let reference = FieldSource::Definition(res.push_field(
+                    struct_idx,
+                    Field {
+                        static_member: false,
+                        ..new_static_field("Root", BaseType::<MemberType>::Object)
+                    },
+                ));
+                let grow = res.push_method(type_idx, Method::new(
+                    Accessibility::Public, void_sig(), "Grow",
+                    Some(make_test_method!(max_stack: 4096, instructions: vec![Instruction::Return])),
+                ));
+                let signature = MethodSignature {
+                    instance: true,
+                    ..void_sig()
+                };
+                let body = vec![
+                    Instruction::LoadArgument(0),
+                    Instruction::LoadConstantInt32(4),
+                    Instruction::NewArray(MethodType::Base(Box::new(BaseType::Int32))),
+                    Instruction::StoreField {
+                        param0: reference,
+                        unaligned: None,
+                        volatile: false,
+                    },
+                    Instruction::LoadArgument(0),
+                    Instruction::LoadFieldAddress(field),
+                    conv_u(),
+                    Instruction::StoreLocal(0),
+                    Instruction::Call {
+                        tail_call: false,
+                        param0: MethodSource::User(UserMethod::Definition(grow)),
+                    },
+                    Instruction::LoadLocal(0),
+                    Instruction::LoadConstantInt32(73),
+                    stind(StoreType::Int32),
+                    Instruction::Return,
+                ];
+                let target = res.push_method(struct_idx, Method::new(
+                    Accessibility::Public, signature.clone(), if jump { "Target" } else { ".ctor" },
+                    Some(make_test_method!(max_stack: 2, instructions: body, locals: vec![local(BaseType::IntPtr)])),
+                ));
+                let ctor = if jump {
+                    res.push_method(struct_idx, Method::new(
+                        Accessibility::Public, signature, ".ctor",
+                        Some(make_test_method!(max_stack: 0, instructions: vec![
+                            Instruction::Jump(MethodSource::User(UserMethod::Definition(target))),
+                        ])),
+                    ))
+                } else {
+                    target
+                };
+                (
+                    2,
+                    vec![local(struct_ty)],
+                    vec![
+                        Instruction::NewObject(UserMethod::Definition(ctor)),
+                        Instruction::StoreLocal(0),
+                        Instruction::LoadLocal(0),
+                        Instruction::LoadField {
+                            param0: field,
+                            unaligned: None,
+                            volatile: false,
+                        },
+                        Instruction::LoadLocal(0),
+                        Instruction::LoadField {
+                            param0: reference,
+                            unaligned: None,
+                            volatile: false,
+                        },
+                        Instruction::LoadLength,
+                        Instruction::Convert(ConversionType::Int32),
+                        Instruction::Add,
+                        Instruction::Return,
+                    ],
+                )
+            },
+        );
+        let mut collected = false;
+        let mut result = None;
+        run_entrypoint_observed(shared, entrypoint, |engine, step| {
+            if matches!(step, StepResult::Return) {
+                let StackValue::Int32(value) = engine.stack.execution.evaluation_stack.pop() else {
+                    panic!("constructor result was not Int32");
+                };
+                result = Some(value);
+            }
+            let frames = &engine.stack.execution.frame_stack;
+            if !collected && frames.len() == 2 && frames.frames[1].state.ip == 9 {
+                collected = true;
+                return Observe::Collect;
+            }
+            Observe::Continue
+        });
+        assert!(collected, "constructor collection point was not reached");
+        assert_eq!(result, Some(77));
+    }
 }

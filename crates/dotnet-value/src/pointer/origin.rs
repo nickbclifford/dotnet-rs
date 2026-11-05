@@ -78,10 +78,10 @@ impl CrossArenaOrigin {
     }
 }
 
-/// Identity of one frame's home block.
+/// Identity of one frame-owned home block.
 ///
 /// Serials come from a per-thread counter that only increases, so a serial names at most one
-/// frame for the thread's lifetime: a byref kept past its frame's return cannot resolve into a
+/// allocation for the thread's lifetime: a byref kept past its frame's return cannot resolve into a
 /// later frame, even one at the same depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
@@ -115,8 +115,8 @@ pub enum PointerOrigin<'gc> {
     Stack(StackSlotIndex),
     Static(Arc<StaticMetadata>),
     Unmanaged,
-    /// A local or argument in the home block of the frame with this serial. Every access
-    /// resolves the frame through a [`super::ManagedPtrResolver`], which rejects a frame
+    /// A variable or temporary in a frame-owned block with this serial. Every access
+    /// resolves its live owning frame through a [`super::ManagedPtrResolver`], which rejects a frame
     /// that has returned and a range outside its block.
     FrameHome(FrameHomeSerial),
     #[cfg(feature = "multithreading")]

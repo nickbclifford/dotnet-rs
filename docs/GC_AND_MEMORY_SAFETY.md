@@ -110,8 +110,8 @@ the variable is reassigned.
 
 - **Selection.** `build_frame_homes` (`crates/dotnet-vm/src/frame_homes.rs`) scans the method
   body once per method instantiation and homes every local named by an `ldloca` and every
-  argument named by an `ldarga`, except byref-typed and `TypedReference` variables and the `this`
-  byref of a value-type method. Methods without such a variable get no block and keep the
+  argument named by an `ldarga`, including byref-typed variables and value-type `this`.
+  `TypedReference` variables still use specialized stack slots. Methods without such a variable get no block and keep the
   slot-only path.
 - **Layout.** The homes are fields of one block layout built by
   `LayoutFactory::create_field_layout`. Each home has its type's layout; a value-type variable
@@ -123,6 +123,12 @@ the variable is reassigned.
   like its `localloc` blocks. Zero bytes are the default value of every local; each homed
   argument is copied from its evaluation-stack slot when the frame is entered. `jmp` forwards
   the current home value before releasing the source frame.
+- **Constructor receivers.** Ordinary, intrinsic and reflection value-type construction
+  allocates a layout-described temporary home in the caller. Each block gets its own serial,
+  shares the caller's localloc allocation limits, and remains live until the caller exits.
+  Constructor completion copies its current contents into the reserved result slot before
+  reflection return processing. `jmp` transfers completion to its target; exceptional completion
+  discards the pending result. Temporary blocks are traced alongside variable homes.
 - **Access.** Every access goes through a raw pointer derived from the block base; no reference
   to the bytes is formed except the shared view used while tracing and the read-only views
   `ManagedPtr::with_frame_home_data` hands to span intrinsics. Loads and stores encode values as
@@ -130,7 +136,7 @@ the variable is reassigned.
   their serialized forms. A store applies the ECMA-335 §III.1.6 conversions to native-int and
   small-integer variables.
 - **Byrefs.** `ldloca` and `ldarga` on a homed variable push a `PointerOrigin::FrameHome` byref
-  naming the frame's serial and the home's offset in the block. `FrameStack::issue_home_serial`
+  naming the home block's serial and the home's offset in the block. `FrameStack::issue_home_serial`
   gives every block a serial that is never reused on its thread, so a byref cannot resolve into a
   later frame at the same depth. Every access resolves the byref through `frame_home_window`
   (`crates/dotnet-value/src/pointer/mod.rs`): `FrameStack::home_block` searches the live frames
@@ -155,11 +161,6 @@ Limits of this contract:
 
 - Like `localloc` blocks, a native-int address into a home is trusted after its frame returns;
   using it then is not detected.
-- Block operations that take raw addresses from byrefs (`cpblk`, `initblk`, `Buffer.Memmove`,
-  `Unsafe.CopyBlock` and `Unsafe.InitBlock`) use a frame-home byref's cached address without
-  the frame check.
-- `jmp` copies arguments from their evaluation-stack slots, so a homed argument changed by
-  `starg` before `jmp` reaches the target with its value on entry.
 
 ## Pointer Ownership and Access
 

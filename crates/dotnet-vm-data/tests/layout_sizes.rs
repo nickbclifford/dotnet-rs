@@ -28,9 +28,10 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Memoized descriptor hashes add 24 bytes through frame lookup/method state.
     // FrameAllocations adds an 8-byte usage counter to the previous Vec storage.
     // Frame homes add a 48-byte FrameHomes and an 8-byte MethodInfo layout handle.
+    // Runtime temporary homes add a 24-byte Vec and an 8-byte completion handle.
     // (multithreading, expected_size)
-    (false, 584),
-    (true, 584),
+    (false, 616),
+    (true, 616),
 ];
 
 #[cfg(target_pointer_width = "64")]

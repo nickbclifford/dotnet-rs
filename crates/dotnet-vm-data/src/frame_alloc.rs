@@ -76,8 +76,24 @@ impl FrameAllocations {
         size: usize,
         budget: &FrameBudget,
     ) -> Result<NonNull<u8>, FrameAllocationError> {
+        self.blocks.try_reserve(1).map_err(|_| {
+            FrameAllocationError::HostAllocationFailed(RawBlockError::AllocationFailed)
+        })?;
+        let block = self.allocate_external(size, 16, budget)?;
+        let base = block.base();
+        self.blocks.push(block);
+        Ok(base)
+    }
+
+    /// Allocate a block owned by another component of this same frame. Its charge remains
+    /// in this ledger until frame teardown, even if that component drops the block earlier.
+    pub(crate) fn allocate_external(
+        &mut self,
+        size: usize,
+        alignment: usize,
+        budget: &FrameBudget,
+    ) -> Result<RawBlock, FrameAllocationError> {
         budget.check_request(size)?;
-        // RawBlock's layout size is max(size, 1), without alignment padding.
         let charge = size.max(64);
         let frame_bytes = self
             .used
@@ -91,20 +107,12 @@ impl FrameAllocations {
                 .filter(|&total| total <= budget.per_thread)
                 .ok_or(FrameAllocationError::ThreadBudgetExceeded)
         })?;
-
-        let block =
-            RawBlock::zeroed(size, 16).map_err(FrameAllocationError::HostAllocationFailed)?;
+        let block = RawBlock::zeroed(size, alignment)
+            .map_err(FrameAllocationError::HostAllocationFailed)?;
         debug_assert_eq!(charge, block.accounted_bytes());
-        // Reserve before updating either gauge so even metadata allocation failure
-        // drops the newly created block and leaves the logical state unchanged.
-        self.blocks.try_reserve(1).map_err(|_| {
-            FrameAllocationError::HostAllocationFailed(RawBlockError::AllocationFailed)
-        })?;
-        let base = block.base();
-        self.blocks.push(block);
         self.used = frame_bytes;
         THREAD_BYTES.with(|bytes| bytes.set(thread_bytes));
-        Ok(base)
+        Ok(block)
     }
 
     /// Release all blocks and return their charges to the current thread.
@@ -196,6 +204,36 @@ mod tests {
         assert_eq!(allocations.used, 129);
         assert_eq!(bytes(), baseline + 129);
         assert_eq!(live_blocks(), blocks + 2);
+    }
+
+    #[test]
+    fn external_home_blocks_share_localloc_budget_and_rollback() {
+        let baseline = bytes();
+        let mut ledger = FrameAllocations::default();
+        let limits = budget(128, 128, baseline + 128);
+        let block = ledger.allocate_external(32, 64, &limits).unwrap();
+        assert_eq!(block.base().as_ptr().addr() % 64, 0);
+        ledger.allocate_within(1, &limits).unwrap();
+        assert_eq!(bytes(), baseline + 128);
+        assert_eq!(
+            ledger.allocate_within(1, &limits),
+            Err(Error::FrameBudgetExceeded)
+        );
+        assert!(matches!(
+            ledger.allocate_external(1, 64, &limits),
+            Err(Error::FrameBudgetExceeded)
+        ));
+        drop(block);
+        // Early drop does not make the frame's budget reusable.
+        assert_eq!(bytes(), baseline + 128);
+        ledger.release_all();
+        assert_eq!(bytes(), baseline);
+        assert!(matches!(
+            ledger.allocate_external(1, 3, &limits),
+            Err(Error::HostAllocationFailed(_))
+        ));
+        assert_eq!(bytes(), baseline);
+        assert_eq!(ledger.used, 0);
     }
 
     #[test]
@@ -375,8 +413,15 @@ mod tests {
             Box::new([]),
             Box::new([]),
         );
+        let layout = std::sync::Arc::new(layout);
         frames.frames[1].homes =
-            crate::frame_homes::FrameHomes::allocate(std::sync::Arc::new(layout), serial).unwrap();
+            crate::frame_homes::FrameHomes::allocate(layout.clone(), serial).unwrap();
+        let temporary_serial = frames.issue_home_serial();
+        let frame = &mut frames.frames[1];
+        let temporary = frame
+            .homes
+            .allocate_temporary(layout, temporary_serial, &mut frame.state.allocations)
+            .unwrap();
         let home = frames.home_block(serial).unwrap();
         let pointer = frames.frames[1].state.allocations.allocate(1).unwrap();
         // SAFETY: F10.RawMemoryAccessValid — the frame owns this live one-byte block.
@@ -386,8 +431,9 @@ mod tests {
         assert_eq!(frames.frames.len(), 1);
         assert_eq!(frames.suspended_frames.len(), 1);
         assert_eq!(frames.suspended_frames[0].state.allocations.len(), 1);
-        assert_eq!(live_blocks(), baseline + 2);
+        assert_eq!(live_blocks(), baseline + 3);
         assert_eq!(frames.home_block(serial), Some(home));
+        assert_eq!(frames.home_block(temporary_serial), Some((temporary, 16)));
         frames.frames[0].state.allocations.allocate(4096).unwrap();
         frames.restore_suspended();
         assert!(frames.suspended_frames.is_empty());
@@ -396,11 +442,13 @@ mod tests {
         // SAFETY: F10.RawMemoryAccessValid — the restored frame still owns the
         // initialized byte; moving frames did not move or release its allocation.
         assert_eq!(unsafe { pointer.as_ptr().read() }, 0x5a);
-        assert_eq!(live_blocks(), baseline + 3);
+        assert_eq!(live_blocks(), baseline + 4);
         assert_eq!(frames.home_block(serial), Some(home));
+        assert_eq!(frames.home_block(temporary_serial), Some((temporary, 16)));
         frames.suspend_above(0);
         frames.clear_suspended();
         assert!(frames.home_block(serial).is_none());
+        assert!(frames.home_block(temporary_serial).is_none());
         frames.clear();
         assert_eq!(live_blocks(), baseline);
         assert_eq!(bytes(), baseline_bytes);

@@ -72,20 +72,21 @@ the fixup.
 1. **Which variables get a home.** Scan each method's IL once for `ldloca`/`ldarga` (cache
    it with the method's other per-method info). Only those variables get a home. All others stay
    ordinary evaluation-stack slots, so the hot path for most methods does not change.
-2. **Storage.** Each frame owns one non-moving, zeroed `RawBlock` holding its homes, laid out
+2. **Storage.** Each frame owns a non-moving, zeroed `RawBlock` holding its variable homes, laid out
    with the runtime's existing field-layout machinery and aligned to max(16, largest home
    alignment). Allocate it at frame entry and copy addressable arguments into it from the
    caller's evaluation-stack slots. Release it with the frame, exactly as `FrameAllocations`
    is released today. Access is only through raw pointers derived from the block base, never
-   through `&mut` to the bytes.
+   through `&mut` to the bytes. Constructor receivers use additional layout-described blocks,
+   allocated at runtime in the caller and retained until that caller exits. Their charges share
+   the caller's localloc frame/thread limits.
 3. **Loads and stores.** `ldloc`/`stloc`/`ldarg`/`starg` on a homed variable read and write the
    home bytes through the same layout-driven read/write the VM uses for value-type fields.
 4. **Byref representation.** A byref to a home is a managed pointer with its own checked
-   origin, `PointerOrigin::FrameHome`, carrying a frame identity and the home offset, plus a
+   origin, `PointerOrigin::FrameHome`, carrying a home-block identity and the home offset, plus a
    cached pointer that never needs rebasing because the block does not move. The frame
-   identity is a per-frame serial number, not a depth, so a stale byref cannot resolve into a
-   newer frame at the same depth. Resolution checks that the frame with that serial is still
-   live and that the range lies inside its home block; a stale or out-of-range byref is an
+   identity is a per-allocation serial number, not a depth, so a stale byref cannot resolve into a
+   newer frame at the same depth. Resolution checks that a live frame still owns the block with that serial and that the range lies inside its home block; a stale or out-of-range byref is an
    error, never an access. Home byrefs never use the `Unmanaged` origin, which is for addresses
    the VM cannot check. Encode the origin within the existing 24 bytes (tag 7 has free
    sub-tags; follow the Stack and static encodings in `crates/dotnet-value/src/pointer/serde.rs`).
@@ -122,9 +123,11 @@ Do not build a later slice's support in an earlier slice.
    `Unsafe.CopyBlock`/`InitBlock` on a `FrameHome` byref now resolve their complete
    ranges through `RetainedPtr::checked_range` and `frame_home_window`; the adjacent
    clear and byte-fill paths do too. `p15` is enabled in the native and Miri control
-   manifests. Remaining: step 6 and the storage migrations below. The remaining
-   Stack-origin producers are evaluation-stack temporaries (`constructor_frame`, the
-   value-type `newobj` intrinsic) and `TypedReference` variables. Address-taken
+   manifests. Constructor receivers now use runtime temporary homes in the caller, including
+   ordinary, intrinsic and reflection construction. A callee-owned completion record copies the
+   result before reflection return processing and transfers across `jmp`; p41 covers native
+   receiver access across nested stack growth and collection, with and without `jmp`.
+   Remaining: `TypedReference` address-taking and step 6. Address-taken
    byref-typed locals and arguments (including value-type `this`) now use homes;
    `ldind.i`/`stind.i` on those homes preserve their complete managed-pointer encoding.
    Home the remaining producers and delete the Stack origin with the fixup if nothing

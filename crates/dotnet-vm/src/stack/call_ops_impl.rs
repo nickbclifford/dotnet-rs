@@ -306,6 +306,99 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         VesContext::return_frame(self)
     }
 
+    fn prepare_constructor_receiver(
+        &mut self,
+        instance: ObjectInstance<'gc>,
+    ) -> Result<
+        (
+            dotnet_vm_data::frame_homes::ConstructorResult,
+            StackValue<'gc>,
+        ),
+        TypeResolutionError,
+    > {
+        use dotnet_vm_data::frame_homes::{ConstructorResult, FrameHomeLayout};
+        let fields = instance.instance_storage.layout().clone();
+        let layout = std::sync::Arc::new(FrameHomeLayout::new(
+            (*fields).clone(),
+            Box::new([]),
+            Box::new([]),
+        ));
+        let serial = self.frame_stack.issue_home_serial();
+        let frame = self.frame_stack.current_frame_mut();
+        let address = frame
+            .homes
+            .allocate_temporary(layout, serial, &mut frame.state.allocations)
+            .map_err(|error| {
+                TypeResolutionError::MassiveAllocation(
+                    format!("constructor receiver allocation failed: {error:?}").into(),
+                )
+            })?;
+        instance.instance_storage.with_data(|bytes| {
+            // SAFETY: F10.RawMemoryAccessValid — the new home has precisely this instance's
+            // layout and size and does not overlap the source instance storage.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), address.as_ptr(), bytes.len()) };
+        });
+        let result_slot = self.evaluation_stack.top_of_stack();
+        let pointer = ManagedPtr::new_frame_home(
+            address,
+            instance.description.clone(),
+            serial,
+            ByteOffset::new(0),
+            false,
+        );
+        let result = ConstructorResult {
+            result_slot,
+            serial,
+            description: instance.description,
+            generics: instance.generics,
+            fields,
+        };
+        self.push(StackValue::null());
+        Ok((result, StackValue::ManagedPtr(pointer.into())))
+    }
+
+    fn complete_constructor_receiver(
+        &mut self,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    ) -> Result<(), TypeResolutionError> {
+        use dotnet_value::storage::FieldStorage;
+        let address = dotnet_value::pointer::frame_home_window(
+            self,
+            result.serial,
+            0,
+            result.fields.total_size,
+        )
+        .map_err(|error| {
+            TypeResolutionError::InvalidLayout(
+                format!("constructor receiver is no longer live: {error:?}").into(),
+            )
+        })?;
+        let mut bytes = vec![0; result.fields.total_size];
+        // SAFETY: F10.FrameHomeChecked — frame_home_window checked this complete range;
+        // the fresh destination does not overlap the receiver and copying cannot safepoint.
+        unsafe { std::ptr::copy_nonoverlapping(address.as_ptr(), bytes.as_mut_ptr(), bytes.len()) };
+        let instance = ObjectInstance::new(
+            result.description,
+            result.generics,
+            FieldStorage::new(result.fields, bytes),
+        );
+        self.evaluation_stack
+            .set_slot(result.result_slot, StackValue::ValueType(instance));
+        Ok(())
+    }
+
+    fn defer_constructor_receiver(
+        &mut self,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    ) {
+        let frame = self.frame_stack.current_frame_mut();
+        assert!(
+            frame.constructor_result.is_none(),
+            "constructor completion already installed"
+        );
+        frame.constructor_result = Some(Box::new(result));
+    }
+
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
@@ -315,41 +408,29 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let gc = self.gc;
         let desc = instance.description.clone();
 
-        let value = if desc.is_value_type(&self.current_context())? {
-            StackValue::ValueType(instance)
-        } else {
-            let in_heap = self.alloc_obj_ref(gc, instance);
-            StackValue::ObjectRef(in_heap)
-        };
-
+        let is_value_type = desc.is_value_type(&self.current_context())?;
         let num_params = method.signature.parameters.len();
         self.pop_call_args_into_buffer(num_params);
         let mut args = std::mem::take(self.call_args_buffer);
-
-        if desc.is_value_type(&self.current_context())? {
-            self.push(value);
-            let index =
-                self.evaluation_stack.top_of_stack().checked_sub(1).expect(
-                    "value-type constructor receiver was not pushed: VM invariant violated",
-                );
-            let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
-            self.push(StackValue::managed_stack_ptr(
-                index,
-                ByteOffset::new(0),
-                ptr,
-                desc,
-                false,
-            ));
+        let completion = if is_value_type {
+            let (result, pointer) = self.prepare_constructor_receiver(instance)?;
+            self.push(pointer);
+            Some(result)
         } else {
-            self.push(value.clone());
-            self.push(value);
-        }
-
+            let in_heap = self.alloc_obj_ref(gc, instance);
+            self.push(StackValue::ObjectRef(in_heap));
+            self.push(StackValue::ObjectRef(in_heap));
+            None
+        };
         for arg in args.drain(..) {
             self.push(arg);
         }
         *self.call_args_buffer = args;
-        self.call_frame(method, generic_inst)
+        self.call_frame(method, generic_inst)?;
+        if let Some(result) = completion {
+            self.defer_constructor_receiver(result);
+        }
+        Ok(())
     }
 
     #[inline]
@@ -921,6 +1002,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             || frame.is_finalizer
             || frame.multicast_state.is_some()
             || frame.frame_continuation.is_some()
+            || frame.constructor_result.is_some()
         {
             return false;
         }
@@ -1113,6 +1195,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         let mut args = std::mem::take(self.call_args_buffer);
 
+        let constructor_result = self
+            .frame_stack
+            .current_frame_mut()
+            .constructor_result
+            .take();
+
         // Discard the current frame and its locals/eval stack
         let old_top = self.evaluation_stack.top_of_stack();
 
@@ -1139,6 +1227,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return StepResult::Error(err);
         }
         dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
+        self.frame_stack.current_frame_mut().constructor_result = constructor_result;
         StepResult::FramePushed
     }
 }

@@ -15,7 +15,7 @@ use dotnet_value::{
     CLRString, StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef, Vector},
-    pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
+    pointer::{PointerOrigin, UnmanagedPtr},
 };
 use dotnetdll::prelude::*;
 use tracing::error;
@@ -217,41 +217,23 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                     .for_type_with_generics(method.parent.clone(), &lookup);
                 let instance = dotnet_vm_ops::vm_try!(res_ctx.new_object(method.parent.clone()));
 
-                ctx.push_value_type(instance);
-                let this_slot = ctx.top_of_stack().checked_sub(1).expect(
-                    "value-type constructor receiver was not pushed: VM invariant violated",
-                );
-                let this_ptr_slot = this_slot + 1;
-
-                // Push placeholder ManagedPtr
-                ctx.push_managed_ptr(ManagedPtr::new(
-                    None,
-                    method.parent.clone(),
-                    None,
-                    false,
-                    None,
-                ));
-
+                let (completion, pointer) =
+                    dotnet_vm_ops::vm_try!(ctx.prepare_constructor_receiver(instance));
+                ctx.push(pointer);
                 for arg in args {
                     ctx.push(arg);
                 }
 
-                // Update ManagedPtr with the now-stable address
-                let real_addr = ctx.get_slot_address(this_slot);
-                let this_ptr_val = match ctx.get_slot(this_ptr_slot) {
-                    StackValue::ManagedPtr(p) => p,
-                    _ => unreachable!(),
-                };
-                // IMPORTANT: Set the stack origin BEFORE updating the cached ptr,
-                // otherwise update_cached_ptr will set offset to the absolute address
-                // thinking it's an Unmanaged pointer.
-                let mut this_ptr_val = this_ptr_val.into_inner().with_stack_origin(this_slot);
-                this_ptr_val.update_cached_ptr(real_addr);
-                ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val.into()));
-
                 let res = ctx.execute_intrinsic_call(method, &lookup);
-                if res != StepResult::Continue {
-                    return res;
+                match res {
+                    StepResult::Continue => {
+                        dotnet_vm_ops::vm_try!(ctx.complete_constructor_receiver(completion));
+                    }
+                    StepResult::FramePushed => {
+                        ctx.defer_constructor_receiver(completion);
+                        return res;
+                    }
+                    _ => return res,
                 }
 
                 return StepResult::Continue;

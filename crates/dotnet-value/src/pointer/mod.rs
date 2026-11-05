@@ -119,15 +119,15 @@ pub trait ManagedPtrResolver<'gc> {
     /// Returns the live start address of static storage for `metadata`.
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>>;
 
-    /// Returns the base address and length of the home block of the live frame with
-    /// `serial`, or `None` when no live frame has that serial. Resolvers without frames
+    /// Returns the base address and length of the block with `serial` owned by a live
+    /// frame, or `None` when no live frame owns that block. Resolvers without frames
     /// reject every frame-home pointer.
     fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
         None
     }
 }
 
-/// The address of `size` bytes at `offset` in the home block of the live frame with `serial`.
+/// The address of `size` bytes at `offset` in the live frame-owned block with `serial`.
 ///
 /// This is the only way a frame-home byref becomes an accessible address: it fails with
 /// [`MemoryAccessError::InvalidOrigin`] when `resolver` has no live frame with that serial (the

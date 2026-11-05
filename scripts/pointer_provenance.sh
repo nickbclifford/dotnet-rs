@@ -47,11 +47,13 @@ expected_controls=(
 'pointer_provenance_tests::p39_frame_homes_survive_filter_suspension|38|4'
 'pointer_provenance_tests::p40_jmp_forwards_modified_home_argument|39|2'
 'pointer_provenance_tests::p15_initblk_stack_local_via_managed_ptr|40|3'
+'pointer_provenance_tests::p41_constructor_receiver_survives_nested_growth|41|1'
 )
 
 # full name | classification | native diagnostic permission | control shard
 catalog=(
 'pointer_provenance_tests::p00_smoke|control|no|1'
+'pointer_provenance_tests::p41_constructor_receiver_survives_nested_growth|control|no|41'
 'pointer_provenance_tests::p01_ldloca_convu_stind_i4|control|no|34'
 'pointer_provenance_tests::p02_ldloca_stind_i4_control|control|no|2'
 'pointer_provenance_tests::p03_ldloca_convu_ldind_i4|control|no|3'
@@ -98,7 +100,7 @@ catalog=(
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=40
+reviewed_count=41
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -251,12 +253,12 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 40:
+    if len(controls) != 41:
         raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 40 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; 41 singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"

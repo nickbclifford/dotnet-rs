@@ -86,7 +86,7 @@ diagnostics can still upload. Dated measurements are in [ci-evidence/](ci-eviden
 | `provenance-lints`, `test` | 30 min | Whole-workspace builds per configuration |
 | `miri-cross-arena` | 30 min library, 45 min VM | One VM Miri process per job, 1800 s per invocation |
 | `miri-pointer-controls` | 45 min | One VM Miri process per control |
-| `miri-pointer-batches` | 60 min | One support-library parse plus 9–10 controls in sequence |
+| `miri-pointer-batches` | 60 min | One support-library parse plus 10–11 controls in sequence |
 | `miri.yml` advisory shards | 70 min | Cold-cache assembly and VM singletons |
 
 ## Blocking `miri-pointer-controls` lane

@@ -67,6 +67,7 @@ pub struct StackFrame<'gc> {
     /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
     /// `ldarga`.
     pub homes: FrameHomes,
+    pub constructor_result: Option<Box<crate::frame_homes::ConstructorResult>>,
 }
 
 impl<'gc> StackFrame<'gc> {
@@ -88,6 +89,7 @@ impl<'gc> StackFrame<'gc> {
             multicast_state: None,
             frame_continuation: None,
             homes: FrameHomes::default(),
+            constructor_result: None,
         }
     }
 
@@ -108,6 +110,7 @@ impl<'gc> StackFrame<'gc> {
         self.is_finalizer = false;
         self.multicast_state = None;
         self.frame_continuation = None;
+        self.constructor_result = None;
         self.homes.release();
     }
 
@@ -121,13 +124,15 @@ impl<'gc> StackFrame<'gc> {
         self.is_finalizer = false;
         self.multicast_state = None;
         self.frame_continuation = None;
+        self.constructor_result = None;
     }
 }
 
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
 // `exception_stack` entries, optional `multicast_state`, and the references serialized in its
 // local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
-// no GC references.
+// no GC references. Constructor completion also carries only static metadata; its
+// receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for exception in &self.exception_stack {
