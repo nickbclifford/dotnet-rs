@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verify that check_doc_drift.sh rejects both a missing SAFETY citation and an
-# otherwise parseable citation whose predicate is absent from the registry.
+# Verify that check_doc_drift.sh rejects SAFETY and INVARIANT markers that lack a registry
+# citation or cite a predicate absent from the registry.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -65,6 +65,8 @@ output_file="$(mktemp "${TMPDIR:-/tmp}/dotnet-rs-check-doc-drift-negative.XXXXXX
 cat >"$probe_file" <<'EOF'
 // SAFETY: This deliberate regression probe omits its registry citation.
 // SAFETY: F99.DeliberatelyUndefined This deliberate regression probe uses a parseable undefined predicate.
+// INVARIANT: This deliberate regression probe omits its registry citation.
+// INVARIANT: F98.DeliberatelyUndefined This deliberate regression probe uses a parseable undefined predicate.
 EOF
 
 if DOC_DRIFT_NEGATIVE_PROBE="$probe_file" bash "$REPO_ROOT/scripts/check_doc_drift.sh" >"$output_file" 2>&1; then
@@ -85,4 +87,14 @@ grep -Fq \
   "$output_file" \
   || fail "undefined-predicate diagnostic was not emitted for the temporary probe"
 
-echo "doc-drift negative regression: both expected diagnostics observed."
+grep -Fq \
+  "[INVARIANT] INVARIANT comment lacks a registry citation: $probe_file:" \
+  "$output_file" \
+  || fail "missing INVARIANT citation diagnostic was not emitted for the temporary probe"
+
+grep -Fq \
+  "[INVARIANT] source cites 'F98.DeliberatelyUndefined', but it is absent from docs/INVARIANT_REGISTRY.md" \
+  "$output_file" \
+  || fail "undefined INVARIANT predicate diagnostic was not emitted for the temporary probe"
+
+echo "doc-drift negative regression: all expected diagnostics observed."

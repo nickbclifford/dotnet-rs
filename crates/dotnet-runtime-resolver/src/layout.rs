@@ -353,7 +353,7 @@ impl LayoutFactory {
                 .loader
                 .support_slot_id_for_field(&td, f.name.as_ref())
             {
-                // SAFETY: F2.HandleValueOverride — only these three generated semantic IDs
+                // INVARIANT: F2.HandleValueOverride — only these three generated semantic IDs
                 // select the GC-traced ObjectRef representation for `nint` metadata fields.
                 // The registry maps field metadata only after exact declaring-descriptor
                 // equality, so a same-named field in another assembly cannot enter this arm.

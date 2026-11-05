@@ -209,10 +209,12 @@ done
 # ---------------------------------------------------------------------------
 # Invariant-citation checks
 #
-# Registry rows use `F<n>.<PredicateName>` identifiers.  Source citations are
-# deliberately constrained to `// SAFETY: F<n>.<PredicateName> ...` so a
-# reviewer can see the predicate at the exact unsafe site, while the rest of
-# the comment retains the local justification.
+# Registry rows use `F<n>.<PredicateName>` identifiers. Source cites them with
+# `// SAFETY: F<n>.<Name> ...` above an unsafe operation, or
+# `// INVARIANT: F<n>.<Name> ...` where safe code relies on or maintains the
+# invariant. Every marker must cite an existing predicate, and every predicate
+# must be cited by at least one marker, so the registry is a complete
+# inventory of the non-obvious facts the code relies on.
 # ---------------------------------------------------------------------------
 if [[ ! -f "$REGISTRY_PATH" ]]; then
   echo "[INVARIANT] missing docs/INVARIANT_REGISTRY.md"
@@ -228,16 +230,20 @@ if [[ ${#REGISTRY_PREDICATES[@]} -eq 0 ]]; then
   exit 1
 fi
 
-while IFS= read -r safety_site; do
-  citation="${safety_site#*// SAFETY:}"
+MARKER_RE='^[[:space:]]*// (SAFETY|INVARIANT):'
+
+while IFS= read -r marker_site; do
+  marker="SAFETY"
+  [[ "$marker_site" == *"// INVARIANT:"* ]] && marker="INVARIANT"
+  citation="${marker_site#*// $marker:}"
   if [[ ! "$citation" =~ F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]* ]]; then
     FAIL=$((FAIL + 1))
-    echo "[INVARIANT] SAFETY comment lacks a registry citation: $safety_site"
+    echo "[INVARIANT] $marker comment lacks a registry citation: $marker_site"
   fi
-done < <(grep -rnE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null || true)
+done < <(grep -rnE --include='*.rs' --exclude-dir=target "$MARKER_RE" "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null || true)
 
 mapfile -t CITED_PREDICATES < <(
-  grep -rhE --include='*.rs' --exclude-dir=target '^[[:space:]]*// SAFETY:' "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null \
+  grep -rhE --include='*.rs' --exclude-dir=target "$MARKER_RE" "${SAFETY_CRATE_ROOTS[@]}" 2>/dev/null \
     | grep -oE 'F[1-9][0-9]*\.[A-Za-z][A-Za-z0-9]*' \
     | sort -u
 )
@@ -254,7 +260,7 @@ done
 for predicate in "${REGISTRY_PREDICATES[@]}"; do
   if ! printf '%s\n' "${CITED_PREDICATES[@]}" | grep -qxF "$predicate"; then
     FAIL=$((FAIL + 1))
-    echo "[INVARIANT] registry predicate '$predicate' has no source citation"
+    echo "[INVARIANT] registry predicate '$predicate' has no SAFETY or INVARIANT citation"
   fi
 done
 

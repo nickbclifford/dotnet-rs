@@ -1,9 +1,11 @@
 # Invariant Registry
 
-This is the authoritative index of named predicates cited by `// SAFETY:`
-comments.  A citation identifies the invariant; the co-located prose explains
-why it holds at that site.  `scripts/check_doc_drift.sh` verifies that every
-source citation names a row below and that every row has a source citation.
+The inventory of every non-obvious fact the code relies on for soundness. Code cites a
+predicate with `// SAFETY:` above an unsafe operation or `// INVARIANT:` where safe code relies
+on or maintains it (see [CONTRIBUTING](../CONTRIBUTING.md#invariants-and-unsafe-code)). The
+citation names the fact; the comment's prose explains why it holds at that site.
+`scripts/check_doc_drift.sh` verifies that every citation names a row below and that every row
+is cited.
 
 | Name | Family | Statement | What establishes it | Defined in | Falsifier |
 | --- | --- | --- | --- | --- | --- |

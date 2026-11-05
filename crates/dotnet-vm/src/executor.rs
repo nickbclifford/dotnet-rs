@@ -771,7 +771,7 @@ impl RetainedArena {
     }
 
     fn drain(self, registration: Option<dotnet_utils::gc::ArenaRegistration>) {
-        // SAFETY: F1.ExecutorArenaRetained. Only an exact, completed drain
+        // INVARIANT: F1.ExecutorArenaRetained — only an exact, completed drain
         // disarms retention. Missing handles and interrupted drains leak.
         if let Some(registration) = registration {
             #[cfg(test)]

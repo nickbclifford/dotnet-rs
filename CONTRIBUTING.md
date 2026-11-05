@@ -66,18 +66,28 @@ through function bodies. Use the lock and atomic types from `dotnet_utils::sync`
 stand-ins without `multithreading`, and participate in lock ordering. `Arc`, `OnceLock`,
 `LazyLock` and test-only `std::sync` types are fine.
 
-## Unsafe code policy
+## Invariants and unsafe code
 
-Unsafe code must make the invariant that justifies it reviewable at the point
-where it is relied on. Follow these rules when adding or changing unsafe code:
+[`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md) is the inventory of every
+non-obvious fact the code relies on for soundness. Each fact is a named predicate such as
+`F4.WidthAligned`. Code cites it at the point of reliance with one of two markers:
+
+- `// SAFETY: F<n>.<Name> — <why it holds here>` immediately above an `unsafe` operation or
+  `unsafe impl`.
+- `// INVARIANT: F<n>.<Name> — <why it holds here>` where safe code relies on or maintains a
+  registered invariant (for example, the code that retains an arena until its drain completes,
+  or the layout arm that grants the runtime-handle override). Never use `SAFETY:` on safe code.
+
+`scripts/check_doc_drift.sh` requires both directions: every marker cites an existing predicate,
+and every predicate is cited somewhere. When you rely on a new kind of fact, add its registry
+row in the same commit.
+
+Rules for unsafe code:
 
 - Put a `// SAFETY:` comment immediately above every `unsafe { ... }` block.
   The comment must explain the invariant that makes the operation valid; it
-  must not merely restate the operation. It must also cite at least one named
-  predicate from [`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md),
-  for example `F4.WidthAligned`; retain the local prose explaining why that
-  predicate holds at this site. Adding a predicate requires adding its registry
-  row in the same commit.
+  must not merely restate the operation, and it cites the matching registry
+  predicate.
 - Do not use a `where` clause as proof for `unsafe impl Send` or `unsafe impl
   Sync`: a bound only makes the implementation conditional. Use an
   unconditional implementation when it is valid (retaining any required
@@ -98,9 +108,8 @@ The workspace enforces this policy through `[workspace.lints.clippy]` in the
 root `Cargo.toml`: `undocumented_unsafe_blocks = "deny"` and
 `multiple_unsafe_ops_per_block = "deny"`. Member crates inherit these lints;
 keep unsafe operations individually proved rather than weakening the workspace
-configuration.
-
-`scripts/check_doc_drift.sh` checks that every cited predicate exists in the registry.
+configuration. Clippy lints the debug build, so unsafe code inside
+`#[cfg(not(debug_assertions))]` needs the same care without the lint's help.
 
 A SAFETY comment states the local premise: what was checked and where, or which type or guard
 guarantees it. "The caller guarantees" belongs only inside an `unsafe fn` whose `# Safety`
