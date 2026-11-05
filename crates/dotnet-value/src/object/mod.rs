@@ -509,17 +509,19 @@ impl<'gc> ObjectRef<'gc> {
     /// - The stored pointer must satisfy the live-allocation, provenance and lifetime
     ///   requirements of [`ObjectRef::from_storage_ptr`]. An arena lease alone does not root it.
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        // SAFETY: F10.RawMemoryAccessValid — The caller supplies initialized pointer storage; the checked
-        // helper validates its length before reading.
+        // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract is `try_read_unchecked`'s, which additionally reports a short `source` as an error.
         unsafe { Self::try_read_unchecked(source) }.unwrap_or_else(|error| codec_invariant(error))
     }
 
+    /// # Safety
+    ///
+    /// Same as [`Self::read_unchecked`], except that a `source` shorter than
+    /// [`ObjectRef::SIZE`] is reported as an error instead of being read.
     unsafe fn try_read_unchecked(source: &[u8]) -> Result<Self, ObjectCodecError> {
         check_object_storage(source.len())?;
-        // SAFETY: F10.RawMemoryAccessValid — Length was checked and the caller guarantees an
-        // initialized pointer value; read_unaligned permits arbitrary byte alignment.
+        // SAFETY: F10.RawMemoryAccessValid — `check_object_storage` proved `source` holds at least a pointer's bytes, which this function's `# Safety` contract says are an initialized pointer; `read_unaligned` needs no alignment.
         let ptr = unsafe { source.as_ptr().cast::<*mut u8>().read_unaligned() };
-        // SAFETY: F1.GcHandleRooted — The caller supplies the live allocation contract for decoding.
+        // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract says the stored pointer meets `from_storage_ptr`'s requirements, which are `try_from_storage_ptr`'s.
         unsafe { Self::try_from_storage_ptr(ptr) }
     }
 
@@ -581,10 +583,14 @@ impl<'gc> ObjectRef<'gc> {
     ///   cross-arena references, or an odd non-object tag. Other odd tags are ignored without
     ///   dereferencing the pointer.
     pub unsafe fn from_storage_ptr(ptr: *mut u8) -> Self {
-        // SAFETY: F1.GcHandleRooted — The caller supplies the documented live allocation contract.
+        // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract is `try_from_storage_ptr`'s.
         unsafe { Self::try_from_storage_ptr(ptr) }.unwrap_or_else(|error| codec_invariant(error))
     }
 
+    /// # Safety
+    ///
+    /// Same as [`Self::from_storage_ptr`]; a malformed compact address or unavailable owner
+    /// is reported as an error before any pointee read.
     #[cfg_attr(
         any(
             feature = "multithreading",
@@ -631,11 +637,10 @@ impl<'gc> ObjectRef<'gc> {
                         real_ptr.addr()
                     );
                 }
-                // SAFETY: F6.NoEscapeAcrossArena — The caller guarantees a live allocation and the lease pins its owner;
-                // alignment was checked above.
+                // SAFETY: F1.GcHandleRooted — for Tag 5 this function's `# Safety` contract makes `real_ptr` the original live object allocation, `_lease` keeps its arena from tearing down, and alignment was checked above.
                 unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
             }
-            // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation for `'gc`.
+            // SAFETY: F1.GcHandleRooted — for Tag 5 this function's `# Safety` contract makes `lock_ptr` the original live `Gc` allocation and keeps its owner arena valid for `'gc`.
             return Ok(ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) })));
         }
 
@@ -650,11 +655,10 @@ impl<'gc> ObjectRef<'gc> {
             if !addr.is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>()) {
                 panic!("ObjectRef::read: Pointer {:#x} is not aligned", addr);
             }
-            // SAFETY: F1.GcHandleRooted — The caller guarantees `ptr` retains provenance from a live ObjectInner
-            // allocation for the duration of this call.
+            // SAFETY: F1.GcHandleRooted — `ptr` is untagged and non-null, so this function's `# Safety` contract makes it a live `ThreadSafeLock<ObjectInner>` allocation; alignment was checked above.
             unsafe { (*(*lock_ptr).as_ptr()).validate_magic() };
         }
-        // SAFETY: F1.GcHandleRooted — The caller guarantees the pointer is a live Gc allocation with lifetime `'gc`.
+        // SAFETY: F1.GcHandleRooted — `ptr` is untagged and non-null, so this function's `# Safety` contract makes it a live `Gc` allocation that stays live for `'gc`.
         Ok(ObjectRef(Some(unsafe { Gc::from_ptr(lock_ptr) })))
     }
 
@@ -664,16 +668,14 @@ impl<'gc> ObjectRef<'gc> {
     /// - `source` must contain a valid `Gc` pointer.
     /// - The pointer must belong to the arena associated with `gc`.
     pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> Self {
-        // SAFETY: F1.GcHandleRooted — The caller guarantees that `source` contains a live handle from `_gc`'s arena;
-        // the mutation token brands the reconstructed reference with that arena lifetime.
+        // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract (a live `Gc` pointer of `_gc`'s arena) meets `read_unchecked`'s, and `_gc` brands the result with that arena's lifetime.
         unsafe { Self::read_unchecked(source) }
     }
 
     pub fn write(&self, dest: &mut [u8]) {
         check_object_storage(dest.len()).unwrap_or_else(|error| codec_invariant(error));
         let ptr = self.to_storage_ptr();
-        // SAFETY: F10.RawMemoryAccessValid — `write_unaligned` supports byte storage with arbitrary alignment. The caller
-        // provides at least ObjectRef::SIZE writable bytes and is responsible for synchronization.
+        // SAFETY: F10.RawMemoryAccessValid — `check_object_storage` proved `dest` holds at least a pointer's bytes, `&mut` makes them exclusive, and `write_unaligned` needs no alignment.
         unsafe { dest.as_mut_ptr().cast::<*mut u8>().write_unaligned(ptr) };
     }
 
@@ -1190,8 +1192,7 @@ mod tests {
             assert_eq!((tagged_ptr.addr() >> 48) as u16, arena_id.as_u64() as u16);
 
             let mut source = [0u8; 8];
-            // SAFETY: F10.RawMemoryAccessValid — Store the pointer as a pointer-typed value to preserve provenance through
-            // the serialization wrapper.
+            // SAFETY: F10.RawMemoryAccessValid — `source` is an 8-byte local, a pointer's width on the 64-bit targets the compact format requires; `write_unaligned` needs no alignment.
             unsafe {
                 source
                     .as_mut_ptr()
@@ -1199,7 +1200,7 @@ mod tests {
                     .write_unaligned(tagged_ptr)
             };
 
-            // SAFETY: F1.GcHandleRooted — lock is a valid GC pointer.
+            // SAFETY: F1.GcHandleRooted — `source` holds `tagged_ptr`, encoded from `lock`, which `mc`'s arena keeps live through this mutation, and `arena_id` is still registered.
             let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
 
             assert!(

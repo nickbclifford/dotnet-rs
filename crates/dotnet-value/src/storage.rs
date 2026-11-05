@@ -387,10 +387,15 @@ impl FieldStorage {
         unused_unsafe,
         reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
     )]
+    /// Returns the field bytes without taking the field access guard.
+    ///
+    /// # Safety
+    ///
+    /// No thread may write or reallocate this storage's data while the returned slice is
+    /// live, for example because the world is stopped.
     pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
         self.validate_magic();
-        // SAFETY: F10.BorrowedStorageStable — Caller guarantees data stability per this method's contract and the pointer
-        // does not outlive the lock.
+        // SAFETY: F10.BorrowedStorageStable — this function's `# Safety` contract excludes writers and reallocation while the returned slice is live, which the unguarded `data_ptr` read requires.
         let data_ptr = unsafe { self.data.data_ptr() };
         // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the storage protected by `self.data`.
         unsafe { &*data_ptr }
@@ -409,9 +414,7 @@ impl FieldStorage {
         reason = "compat::RwLock::data_ptr is unsafe while parking_lot::RwLock::data_ptr is safe"
     )]
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
-        // SAFETY: F10.BorrowedStorageStable — The caller supplies the synchronization
-        // required by this unsafe API. This descriptor pointer is used only for the
-        // immediate base lookup; the returned allocation address retains no guard.
+        // SAFETY: F10.BorrowedStorageStable — this function's `# Safety` contract excludes writers and reallocation while the pointer is used; here it is dereferenced only for the base lookup below.
         let data_ptr = unsafe { self.data.data_ptr() };
         // SAFETY: F10.RawMemoryAccessValid — `data_ptr` points to the storage protected by `self.data`.
         unsafe { (*data_ptr).as_mut_ptr() }
@@ -423,11 +426,7 @@ impl FieldStorage {
         visited: &mut HashSet<usize>,
         depth: usize,
     ) {
-        // SAFETY: F10.BorrowedStorageStable — Resurrection happens during a stop-the-world pause, so no other
-        // threads are running. We can safely access the inner value without
-        // acquiring the normal field access guard. This avoids deadlock (or panic)
-        // if a thread was already holding exclusive field access when it reached
-        // a safe point.
+        // SAFETY: F1.StwParked — resurrection runs while every mutator is parked, so nothing writes or reallocates these bytes while `data` is live; skipping the field guard avoids blocking on a guard a parked thread may hold.
         let data = unsafe { self.raw_data_unsynchronized() };
 
         self.layout.resurrect(data, fc, visited, depth);
@@ -438,7 +437,7 @@ impl FieldStorage {
 // immutable layout. Tracing runs during STW, so `raw_data_unsynchronized` observes stable bytes.
 unsafe impl<'gc> Collect<'gc> for FieldStorage {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
-        // SAFETY: F5.TracesEveryGcRef — Tracing also happens during a stop-the-world pause, same reasoning as above
+        // SAFETY: F1.StwParked — `trace` runs only while every mutator is parked, so nothing writes or reallocates these bytes while `data` is live.
         let data = unsafe { self.raw_data_unsynchronized() };
 
         if *TRACE_GC_PTR_READ {

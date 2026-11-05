@@ -813,7 +813,7 @@ impl<'gc> StackValue<'gc> {
     /// When `t` is `LoadType::Object`, the atomic object-storage precondition
     /// documented by [`Self::load_atomic`] also applies.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
-        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F4.WidthAligned — this function's `# Safety` contract (valid and aligned for `t`, plus the object-storage rule) is `load_atomic`'s.
         unsafe { Self::load_atomic(ptr, t, AtomicOrdering::Relaxed) }
     }
 
@@ -844,16 +844,13 @@ impl<'gc> StackValue<'gc> {
             // Object storage carries GC-pointer provenance and may use the
             // tagged cross-arena form, so use pointer atomics instead of
             // converting it through an integer-sized atomic.
-            // SAFETY: F4.WidthAligned — The method contract guarantees valid, aligned object
-            // pointer storage, and the debug assertion checks its alignment.
             validate_atomic_access(ptr, true);
-            // SAFETY: F4.WidthAligned — The caller supplies an initialized and aligned pointer slot.
+            // SAFETY: F4.WidthAligned — `t` is `Object`, so this function's `# Safety` contract makes `ptr` an initialized pointer slot aligned for `AtomicPtr`; the debug assertion above checks the alignment.
             let stored_ptr = unsafe {
                 dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast_mut().cast::<*mut u8>())
                     .load(ordering)
             };
-            // SAFETY: F11.CliLoadKindMatchesStorage — The caller guarantees that object storage
-            // contains either null or a live, provenance-preserving VM object reference.
+            // SAFETY: F11.CliLoadKindMatchesStorage — `t` is `Object`, so this function's `# Safety` contract makes `stored_ptr` zero or a live object reference in storage form, as `from_storage_ptr` requires.
             let object = unsafe { ObjectRef::from_storage_ptr(stored_ptr) };
             return Self::ObjectRef(object);
         }
@@ -867,11 +864,10 @@ impl<'gc> StackValue<'gc> {
             LoadType::Object => unreachable!("object loads preserve pointer provenance"),
         };
 
-        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F4.WidthAligned — `size` is the width of `t`, and this function's `# Safety` contract makes `ptr` valid and aligned for it.
         let val = unsafe { StandardAtomicAccess::load_atomic_sized(ptr, size, ordering) };
 
-        // SAFETY: F4.WidthAligned — `val` was atomically loaded from the valid, aligned storage
-        // required by this method's safety contract.
+        // SAFETY: F11.CliLoadKindMatchesStorage — `t` is not `Object` (handled above), and `val` was loaded at `t`'s width, so it is decoded with the matching kind.
         unsafe { CtsToCli::widen_load_atomic_raw(t, val) }
     }
 
@@ -881,7 +877,7 @@ impl<'gc> StackValue<'gc> {
     /// live for the destination VM storage's lifetime; the caller must ensure
     /// the synchronization and GC rooting required by that storage.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
-        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F4.WidthAligned — this function's `# Safety` contract (valid and aligned for `t`, plus the object-storage rule) is `store_atomic`'s.
         unsafe {
             self.store_atomic(ptr, t, AtomicOrdering::Relaxed);
         }
@@ -909,10 +905,8 @@ impl<'gc> StackValue<'gc> {
 
         if t == StoreType::Object {
             let object_ptr = self.as_object_ref().to_storage_ptr();
-            // SAFETY: F4.WidthAligned — The method contract guarantees valid, aligned object
-            // pointer storage, and the debug assertion checks its alignment.
             validate_atomic_access(ptr.cast_const(), true);
-            // SAFETY: F4.WidthAligned — The caller supplies an initialized and aligned pointer slot.
+            // SAFETY: F4.WidthAligned — `t` is `Object`, so this function's `# Safety` contract makes `ptr` a valid pointer slot aligned for `AtomicPtr`; the debug assertion above checks the alignment.
             unsafe {
                 dotnet_utils::sync::AtomicPtr::<u8>::from_ptr(ptr.cast::<*mut u8>())
                     .store(object_ptr, ordering);
@@ -931,7 +925,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Object => unreachable!("object stores preserve pointer provenance"),
         };
 
-        // SAFETY: F3.StackSlotMatchesView — This StackValue variant carries a valid value whose representation satisfies the called operation's contract.
+        // SAFETY: F4.WidthAligned — `size` is the width of `t`, and this function's `# Safety` contract makes `ptr` valid and aligned for it.
         unsafe {
             StandardAtomicAccess::store_atomic_sized(ptr, size, val, ordering);
         }

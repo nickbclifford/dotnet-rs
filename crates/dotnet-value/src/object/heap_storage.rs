@@ -75,14 +75,12 @@ impl<'gc> HeapStorage<'gc> {
         match self {
             HeapStorage::Vec(v) => v.storage.as_ptr(),
             HeapStorage::Obj(o) => {
-                // SAFETY: F10.RawMemoryAccessValid — The caller upholds this helper's owner and
-                // synchronization contract for the field-storage base pointer.
+                // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract (owner alive, no writer or reallocation while the pointer is used) is the field storage's `raw_data_ptr` contract.
                 unsafe { o.instance_storage.raw_data_ptr().cast_const() }
             }
             HeapStorage::Str(s) => s.raw_data_ptr(),
             HeapStorage::Boxed(o) => {
-                // SAFETY: F10.RawMemoryAccessValid — The caller upholds this helper's owner and
-                // synchronization contract for the field-storage base pointer.
+                // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract (owner alive, no writer or reallocation while the pointer is used) is the field storage's `raw_data_ptr` contract.
                 unsafe { o.instance_storage.raw_data_ptr().cast_const() }
             }
         }
@@ -205,7 +203,7 @@ impl<'gc> HeapStorage<'gc> {
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
         match self {
             HeapStorage::Vec(v) => f(&v.storage),
-            // SAFETY: F10.RawMemoryAccessValid — The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
+            // SAFETY: F10.RawMemoryAccessValid — `s` holds `s.len()` initialized `u16` code units, `s.len() * 2` bytes, borrowed through `&self` for the call; `u8` needs no alignment.
             HeapStorage::Str(s) => unsafe {
                 let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
                 f(bytes)
@@ -237,13 +235,13 @@ impl<'gc> HeapStorage<'gc> {
     /// valid access rights and range.
     pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         match self {
-            // SAFETY: F10.RawMemoryAccessValid — The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
+            // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract is the vector's `raw_data_ptr` contract.
             HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
             // The mutable pointer type does not grant write access to interned strings.
             HeapStorage::Str(s) => s.raw_data_ptr().cast_mut(),
-            // SAFETY: F10.RawMemoryAccessValid — The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
+            // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract is the object field storage's `raw_data_ptr` contract.
             HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
-            // SAFETY: F10.RawMemoryAccessValid — The matched storage variant owns valid backing bytes, and delegated raw-pointer calls preserve the caller contract.
+            // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract is the boxed field storage's `raw_data_ptr` contract.
             HeapStorage::Boxed(o) => unsafe { o.instance_storage.raw_data_ptr() },
         }
     }

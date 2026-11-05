@@ -847,7 +847,7 @@ fn test_managed_ptr_offset_valid() {
         let ptr = managed_ptr_to_heap_object_start(obj);
 
         // Offset by 4 bytes (end of object) should be valid
-        // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+        // SAFETY: F10.RawMemoryAccessValid — the 4-byte offset stays within the live 8-byte UTF-16 payload of `obj`, and the result is never dereferenced.
         unsafe {
             ptr.offset(4);
         }
@@ -1085,7 +1085,7 @@ fn test_managed_ptr_serialization_roundtrip() {
             // only to validate serialization/deserialization.
             let ptr_lock = Gc::as_ptr(obj.0.unwrap())
                 .cast::<dotnet_utils::gc::ThreadSafeLock<crate::object::ObjectInner<'static>>>();
-            // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+            // SAFETY: F1.GcHandleRooted — `ptr_lock` is `Gc::as_ptr` of `obj`, which stays live for this test closure.
             let ptr = unsafe { ObjectPtr::from_raw(ptr_lock).unwrap() };
             let arena_id = ptr.owner_id();
             let cross_offset = 12;
@@ -1158,7 +1158,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
         );
 
         ptr_transient.write(&mut buf);
-        // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+        // SAFETY: F1.GcHandleRooted — `buf` holds a complete Transient encoding just written by `write`; decoding rejects it before reconstructing any handle.
         let result = unsafe { ManagedPtr::read_metadata_unchecked(&buf) };
         assert!(result.is_err(), "Transient recovery should fail for safety");
 
@@ -1556,7 +1556,7 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
     );
 
     ptr.write(&mut buf);
-    // SAFETY: F1.GcHandleRooted — This test constructs valid backing storage and uses the pointer only within that storage's lifetime.
+    // SAFETY: F10.RawMemoryAccessValid — `buf` holds a complete Unmanaged encoding just written by `write`; decoding forms the address without accessing it.
     let info = unsafe { ManagedPtr::read_resolved_unchecked(&buf, &NO_MANAGED_BASES) }.unwrap();
     assert_eq!(
         info.address,

@@ -380,18 +380,14 @@ impl<'gc> ManagedPtr<'gc> {
                     let token = dotnet_utils::gc::RegistrationToken::from_raw(raw_token).ok_or(
                         PointerDeserializationError::UnresolvedCrossArenaToken(raw_token),
                     )?;
-                    // SAFETY: F1.GcHandleRooted — Valid CrossArena serialization contains a live lock
-                    // address owned by the registration its token names. The helper resolves the
-                    // token and holds that exact registration's lease while it reconstructs the
-                    // origin handle; the callback deliberately does not access object storage.
                     #[expect(
                         clippy::multiple_unsafe_ops_per_block,
                         reason = "reconstructing the pointer and association share the decoder's original-registration contract"
                     )]
-                    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the decoder caller guarantees the original registration and object remain live.
+                    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — this function's `# Safety` contract makes `source` a valid encoding, so `word0` is a live lock address owned by the registration `token` names; the helper holds that registration's lease while the callback runs, and the callback does not access object storage.
                     let origin = unsafe {
                         cross_arena_ptr_from_ptr(word0, token, |ptr, lease| {
-                            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `lease` is the exact original registration named by the serialized token, and the caller guarantees its allocation remains live.
+                            // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `lease` is the exact original registration named by the serialized token, and `ptr` is the live object the valid encoding pairs with it.
                             CrossArenaOrigin::new(ptr, lease)
                         })
                     }
@@ -433,8 +429,7 @@ impl<'gc> ManagedPtr<'gc> {
                 // The untagged encoding is either a Heap ObjectRef or an
                 // Unmanaged absolute address. Metadata decoding retains no
                 // executable address in either case.
-                // SAFETY: F3.InteriorPointerRebased — `source` is a full ManagedPtr representation; its
-                // initial word is the ObjectRef encoding expected by this helper.
+                // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract makes `source` a valid encoding, so the untagged `word0` is null (Unmanaged) or a live object's storage pointer, as `from_storage_ptr` requires.
                 let owner = unsafe { ObjectRef::from_storage_ptr(word0) };
                 Ok(ManagedPtrInfo {
                     address: None,
@@ -460,7 +455,7 @@ impl<'gc> ManagedPtr<'gc> {
         source: &[u8],
         _gc: &Mutation<'gc>,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F6.NoEscapeAcrossArena — this function's `# Safety` contract (valid `ManagedPtr` bytes) is `read_metadata_unchecked`'s, and `_gc` brands the decoded handles with this arena's lifetime.
         unsafe { Self::read_metadata_unchecked(source) }
     }
 
@@ -484,12 +479,18 @@ impl<'gc> ManagedPtr<'gc> {
         source: &[u8],
         resolver: &R,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
-        // SAFETY: F3.InteriorPointerRebased — The caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract (valid `ManagedPtr` bytes) is `read_metadata_unchecked`'s.
         let info = unsafe { Self::read_metadata_unchecked(source) }?;
-        // SAFETY: F10.RawMemoryAccessValid — The metadata came from the complete encoded source above.
+        // SAFETY: F1.GcHandleRooted — `info` was just decoded from `source`, which this function's `# Safety` contract makes a valid encoding.
         unsafe { Self::resolve_metadata_unchecked(source, resolver, info) }
     }
 
+    /// Resolves the executable address for metadata decoded from `_source`.
+    ///
+    /// # Safety
+    ///
+    /// `info` must have been decoded from a valid `ManagedPtr` encoding, so its Heap and
+    /// CrossArena origins name live objects.
     unsafe fn resolve_metadata_unchecked<R: ManagedPtrResolver<'gc> + ?Sized>(
         _source: &[u8],
         resolver: &R,
@@ -525,16 +526,14 @@ impl<'gc> ManagedPtr<'gc> {
                 None => None,
             },
             PointerOrigin::Unmanaged => {
-                // SAFETY: F10.RawMemoryAccessValid — This branch is exclusively the address-only Unmanaged
-                // wire representation; the caller owns its validity contract.
+                // SAFETY: F10.RawMemoryAccessValid — `unmanaged_ptr_from_addr` only forms the address; its validity obligation moves to whoever later accesses through it.
                 NonNull::new(unsafe { unmanaged_ptr_from_addr(offset) })
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(origin) => {
                 let _lease = dotnet_utils::gc::try_acquire_lease_for_identity(origin.identity())
                     .ok_or(PointerDeserializationError::UnknownTag(5))?;
-                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the decoder caller
-                // guarantees the original allocation is live and this exact lease covers the read.
+                // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — `_lease` holds the origin's exact identity across the base read, and this function's `# Safety` contract (`info` decoded from a valid encoding) makes the object live.
                 let ptr = unsafe { origin.object_ptr() };
                 let base = cross_arena_storage_base_with_lease(ptr);
                 NonNull::new(base.wrapping_add(offset))
@@ -612,7 +611,7 @@ impl<'gc> ManagedPtr<'gc> {
             return unsafe { Self::resolve_metadata_unchecked(source, resolver, info) };
         }
 
-        // SAFETY: F1.GcHandleRooted — Non-Heap encodings keep their established decoding behavior.
+        // SAFETY: F1.GcHandleRooted — this function's `# Safety` contract (valid `ManagedPtr` bytes) is `read_resolved_unchecked`'s; the cache is not used for this encoding.
         unsafe { Self::read_resolved_unchecked(source, resolver) }
     }
 
@@ -627,7 +626,7 @@ impl<'gc> ManagedPtr<'gc> {
         resolver: &R,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         let _ = gc;
-        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding.
+        // SAFETY: F6.NoEscapeAcrossArena — this function's `# Safety` contract (valid `ManagedPtr` bytes) is `read_resolved_unchecked`'s, and `gc` brands the decoded handles with this arena's lifetime.
         unsafe { Self::read_resolved_unchecked(source, resolver) }
     }
 
@@ -648,8 +647,7 @@ impl<'gc> ManagedPtr<'gc> {
         cache: &mut C,
     ) -> Result<ManagedPtrInfo<'gc>, PointerDeserializationError> {
         let _ = gc;
-        // SAFETY: F6.NoEscapeAcrossArena — The branded caller supplies one complete ManagedPtr encoding
-        // and a cache satisfying its documented contract.
+        // SAFETY: F6.NoEscapeAcrossArena — this function's `# Safety` contract (valid bytes and a traced, epoch-invalidated cache) is `read_resolved_with_heap_cache_unchecked`'s, and `gc` brands the decoded handles.
         unsafe { Self::read_resolved_with_heap_cache_unchecked(source, resolver, cache) }
     }
 

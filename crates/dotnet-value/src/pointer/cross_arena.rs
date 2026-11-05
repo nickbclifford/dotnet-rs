@@ -79,10 +79,7 @@ pub(crate) unsafe fn cross_arena_ptr_from_ptr<T>(
         .map_addr(|addr| addr & !7)
         .cast::<ThreadSafeLock<ObjectInner<'static>>>();
 
-    // SAFETY: F4.WidthAligned; F1.ArenaGenerationMatch — the token resolved to its
-    // original registration, and the caller guarantees the lock serialized with that
-    // token is live and aligned; `lease` prevents arena teardown during the callback,
-    // while rooting is the caller's obligation.
+    // SAFETY: F1.ArenaGenerationMatch — `token` resolved to its original registration, so this function's `# Safety` contract makes `lock_ptr` (tag masked, provenance kept) a live, aligned `ThreadSafeLock<ObjectInner>` of that registration; `lease` prevents arena teardown during `f`, and rooting stays with the caller.
     let ptr = unsafe { ObjectPtr::from_raw(lock_ptr) }?;
     Some(f(ptr, &lease))
 }
@@ -122,7 +119,7 @@ impl<'gc> ManagedPtr<'gc> {
         lease: &ArenaLease,
         offset: ByteOffset,
     ) -> Self {
-        // SAFETY: F1.ArenaGenerationMatch — the caller supplies the original registration's lease and live object.
+        // SAFETY: F1.ArenaGenerationMatch — this function's `# Safety` contract (a live, rooted object of the registration pinned by `lease`) is `CrossArenaOrigin::new`'s.
         let origin =
             PointerOrigin::CrossArenaObjectRef(unsafe { CrossArenaOrigin::new(ptr, lease) });
         Self {

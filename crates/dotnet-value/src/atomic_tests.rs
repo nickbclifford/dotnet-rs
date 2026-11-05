@@ -102,7 +102,7 @@ mod tests {
             // preserved by the object storage encoding across atomic access.
             let mut stored_object_ptr: *mut u8 = std::ptr::null_mut();
             let ptr = (&mut stored_object_ptr as *mut *mut u8).cast::<u8>();
-            // SAFETY: F4.WidthAligned — The test owns valid backing storage for every atomic operation performed here.
+            // SAFETY: F4.WidthAligned — `ptr` is the address of the local `stored_object_ptr`, an initialized, aligned pointer slot only this test accesses, and `obj` stays live for the closure.
             unsafe {
                 StackValue::ObjectRef(obj).store_atomic(
                     ptr,

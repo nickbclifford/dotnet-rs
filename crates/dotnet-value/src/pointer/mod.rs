@@ -620,8 +620,7 @@ impl<'gc> ManagedPtr<'gc> {
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(_) => self.try_with_heap_data(size, false, f),
             _ => {
-                // SAFETY: F10.RawMemoryAccessValid — non-heap origins delegate to `with_data`,
-                // whose `# Safety` contract this function's caller upholds.
+                // SAFETY: F10.RawMemoryAccessValid — the origin is not heap-backed, so this function's `# Safety` contract supplies `with_data`'s: the cached pointer is valid for `size` bytes.
                 Some(unsafe { self.with_data(size, f) })
             }
         }
@@ -659,8 +658,7 @@ impl<'gc> ManagedPtr<'gc> {
                     )
                 }),
             _ => {
-                // SAFETY: F10.RawMemoryAccessValid — non-heap origins delegate to `with_data`,
-                // whose `# Safety` contract this function's caller upholds.
+                // SAFETY: F10.RawMemoryAccessValid — the origin is not heap-backed, so this function's `# Safety` contract supplies `with_data`'s: the cached pointer is valid for `max_size` bytes.
                 unsafe { self.with_data(max_size, f) }
             }
         }
@@ -894,7 +892,7 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
-// SAFETY: F3.InteriorPointerRebased — The ManagedPtr representation invariant established by its constructors satisfies this operation's preconditions.
+// SAFETY: F5.TracesEveryGcRef — `origin` is the only field that can hold a GC reference, and `trace` visits it; the cached address, type and offset fields hold none.
 unsafe impl<'gc> Collect<'gc> for ManagedPtr<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.origin.trace(cc);
