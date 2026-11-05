@@ -1,4 +1,6 @@
 //! Runtime and cache metric counters used across the VM.
+#[cfg(feature = "bench-instrumentation")]
+use dotnet_utils::sync::Arc;
 use dotnet_utils::sync::Mutex;
 use serde::Serialize;
 use std::{
@@ -984,7 +986,9 @@ std::thread_local! {
 #[cfg(feature = "bench-instrumentation")]
 struct ActiveRuntimeMetricsScope {
     id: usize,
-    metrics: *const RuntimeMetrics,
+    // Owned: the TLS slot keeps the metrics alive, so no pointer can dangle even if the
+    // guard that registered this scope is leaked.
+    metrics: Arc<RuntimeMetrics>,
     active: bool,
 }
 
@@ -1003,7 +1007,7 @@ impl ActiveRuntimeMetricsState {
         }
     }
 
-    fn enter(&mut self, metrics: *const RuntimeMetrics) -> usize {
+    fn enter(&mut self, metrics: Arc<RuntimeMetrics>) -> usize {
         let id = self.next_id;
         self.next_id = self
             .next_id
@@ -1027,56 +1031,48 @@ impl ActiveRuntimeMetricsState {
         }
     }
 
-    fn current_metrics(&self) -> Option<*const RuntimeMetrics> {
-        self.scopes.last().map(|scope| scope.metrics)
+    fn current_metrics(&self) -> Option<&RuntimeMetrics> {
+        self.scopes.last().map(|scope| &*scope.metrics)
     }
 }
 
 #[cfg(feature = "bench-instrumentation")]
-fn active_runtime_metrics() -> Option<*const RuntimeMetrics> {
-    ACTIVE_RUNTIME_METRICS.with(|state| state.borrow().current_metrics())
+fn with_active_runtime_metrics(f: impl FnOnce(&RuntimeMetrics)) {
+    ACTIVE_RUNTIME_METRICS.with(|state| {
+        if let Some(metrics) = state.borrow().current_metrics() {
+            f(metrics);
+        }
+    });
 }
 
 #[cfg(feature = "bench-instrumentation")]
 /// Activates metrics for this thread until the guard is dropped.
 ///
-/// ```compile_fail
-/// use dotnet_metrics::{ActiveRuntimeMetricsGuard, RuntimeMetrics};
-///
-/// let guard;
-/// {
-///     let metrics = RuntimeMetrics::new();
-///     guard = ActiveRuntimeMetricsGuard::enter(&metrics);
-/// }
-/// drop(guard);
-/// ```
-///
-/// The guard retains the borrow supplied to [`Self::enter`], so it cannot outlive the
-/// `RuntimeMetrics` whose address is active in this thread's TLS slot. It is also
-/// deliberately thread-affine and cannot be sent to another thread.
-pub struct ActiveRuntimeMetricsGuard<'metrics> {
+/// The thread-local slot holds its own `Arc` of the metrics, so soundness does not depend on
+/// this guard being dropped: `mem::forget(guard)` leaves the scope active and the metrics
+/// alive (a leak, not a dangling pointer). The guard is also deliberately thread-affine and
+/// cannot be sent to another thread.
+pub struct ActiveRuntimeMetricsGuard {
     scope_id: usize,
-    _metrics: std::marker::PhantomData<&'metrics RuntimeMetrics>,
     // `Drop` must remove this ID from the TLS state in which `enter` registered it.
     // `Rc` makes the guard !Send and !Sync without changing its runtime representation.
     _thread_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 #[cfg(feature = "bench-instrumentation")]
-impl<'metrics> ActiveRuntimeMetricsGuard<'metrics> {
-    pub fn enter(metrics: &'metrics RuntimeMetrics) -> Self {
-        let scope_id = ACTIVE_RUNTIME_METRICS
-            .with(|state| state.borrow_mut().enter(metrics as *const RuntimeMetrics));
+impl ActiveRuntimeMetricsGuard {
+    pub fn enter(metrics: &Arc<RuntimeMetrics>) -> Self {
+        let scope_id =
+            ACTIVE_RUNTIME_METRICS.with(|state| state.borrow_mut().enter(Arc::clone(metrics)));
         Self {
             scope_id,
-            _metrics: std::marker::PhantomData,
             _thread_affinity: std::marker::PhantomData,
         }
     }
 }
 
 #[cfg(feature = "bench-instrumentation")]
-impl Drop for ActiveRuntimeMetricsGuard<'_> {
+impl Drop for ActiveRuntimeMetricsGuard {
     fn drop(&mut self) {
         ACTIVE_RUNTIME_METRICS.with(|state| {
             state.borrow_mut().leave(self.scope_id);
@@ -1086,93 +1082,52 @@ impl Drop for ActiveRuntimeMetricsGuard<'_> {
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_eval_stack_reallocation(pointer_fixup_duration: Duration) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_eval_stack_reallocation(pointer_fixup_duration);
-    }
+    with_active_runtime_metrics(|metrics| {
+        metrics.record_eval_stack_reallocation(pointer_fixup_duration)
+    });
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_frame_pool_hit() {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_frame_pool_hit();
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_frame_pool_hit());
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_frame_pool_miss() {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_frame_pool_miss();
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_frame_pool_miss());
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_frame_pool_recycle() {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_frame_pool_recycle();
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_frame_pool_recycle());
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_gc_fixed_point_iteration(iteration: u64, object_count: u64) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_gc_fixed_point_iteration(iteration, object_count);
-    }
+    with_active_runtime_metrics(|metrics| {
+        metrics.record_gc_fixed_point_iteration(iteration, object_count)
+    });
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_gc_fixed_point_cycle(iterations: u64) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_gc_fixed_point_cycle(iterations);
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_gc_fixed_point_cycle(iterations));
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_gc_trace_root_timing(root: impl Into<String>, duration: Duration) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_gc_trace_root_timing(root, duration);
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_gc_trace_root_timing(root, duration));
 }
 
 #[cfg(feature = "bench-instrumentation")]
 pub fn record_active_layout_scan_timing(path: impl Into<String>, duration: Duration) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_layout_scan_timing(path, duration);
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_layout_scan_timing(path, duration));
 }
 
 #[cfg(feature = "bench-instrumentation")]
 #[inline]
 pub fn record_active_allocation_pressure(source: AllocationPressureSource, bytes: usize) {
-    if let Some(metrics_ptr) = active_runtime_metrics() {
-        // SAFETY: F10.BorrowedStorageStable — The lifetime-bound active guard keeps the
-        // RuntimeMetrics borrow live while this thread-local scope dereferences its pointer.
-        let metrics = unsafe { &*metrics_ptr };
-        metrics.record_allocation_pressure(source, bytes);
-    }
+    with_active_runtime_metrics(|metrics| metrics.record_allocation_pressure(source, bytes));
 }
 
 #[cfg(feature = "bench-instrumentation")]
@@ -1200,9 +1155,9 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "bench-instrumentation")]
-    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard<'static>: Send);
+    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard: Send);
     #[cfg(feature = "bench-instrumentation")]
-    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard<'static>: Sync);
+    static_assertions::assert_not_impl_all!(ActiveRuntimeMetricsGuard: Sync);
 
     fn empty_cache_sizes() -> CacheSizes {
         CacheSizes {
@@ -1394,11 +1349,19 @@ mod tests {
         assert!(!snapshot.front_cache_misses_by_cache.contains_key("layout"));
     }
 
+    // `RuntimeMetrics` is `Send + Sync` only with `multithreading`; the `Arc` is the shape
+    // the executor hands to `ActiveRuntimeMetricsGuard::enter` either way.
+    #[cfg(feature = "bench-instrumentation")]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn shared_metrics() -> Arc<RuntimeMetrics> {
+        Arc::new(RuntimeMetrics::new())
+    }
+
     #[cfg(feature = "bench-instrumentation")]
     #[test]
     fn active_metrics_guard_restores_nested_thread_local_scope() {
-        let outer_metrics = RuntimeMetrics::new();
-        let inner_metrics = RuntimeMetrics::new();
+        let outer_metrics = shared_metrics();
+        let inner_metrics = shared_metrics();
 
         {
             let _outer_scope = ActiveRuntimeMetricsGuard::enter(&outer_metrics);
@@ -1429,8 +1392,8 @@ mod tests {
     #[cfg(feature = "bench-instrumentation")]
     #[test]
     fn active_metrics_guard_skips_an_out_of_order_dropped_scope_and_cleans_up_tls() {
-        let outer_metrics = RuntimeMetrics::new();
-        let inner_metrics = RuntimeMetrics::new();
+        let outer_metrics = shared_metrics();
+        let inner_metrics = shared_metrics();
 
         let outer_scope = ActiveRuntimeMetricsGuard::enter(&outer_metrics);
         let inner_scope = ActiveRuntimeMetricsGuard::enter(&inner_metrics);
@@ -1452,6 +1415,26 @@ mod tests {
                 .eval_stack_reallocations,
             0
         );
+    }
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[test]
+    fn leaked_active_metrics_guard_cannot_dangle() {
+        // Regression: the guard used to store a raw pointer, so a safe `mem::forget` plus
+        // dropping the metrics left a dangling TLS pointer (use-after-free under Miri).
+        let metrics = shared_metrics();
+        let observer = Arc::clone(&metrics);
+        std::mem::forget(ActiveRuntimeMetricsGuard::enter(&metrics));
+        drop(metrics);
+        record_active_eval_stack_reallocation(Duration::ZERO);
+        assert_eq!(
+            observer
+                .bench_snapshot(empty_cache_sizes())
+                .eval_stack_reallocations,
+            1
+        );
+        // The leaked scope is still registered on this test thread; clear it.
+        ACTIVE_RUNTIME_METRICS.with(|state| state.borrow_mut().scopes.clear());
     }
 
     #[cfg(feature = "bench-instrumentation")]
