@@ -129,6 +129,23 @@ where
         Ok(false)
     }
 
+    /// Whether `td` is a byref-like (`ref struct`) type, marked by
+    /// `System.Runtime.CompilerServices.IsByRefLikeAttribute`. The compiler may embed its own
+    /// copy of the attribute, so the attribute type is matched by full name.
+    pub fn is_byref_like(&self, td: &TypeDescription) -> bool {
+        const IS_BYREF_LIKE_ATTR: &str = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
+        td.resolution
+            .definition()
+            .type_attributes(td.index)
+            .unwrap_or_default()
+            .iter()
+            .any(|attr| {
+                self.loader
+                    .locate_attribute(td.resolution.clone(), attr)
+                    .is_ok_and(|ctor| ctor.parent.type_name() == IS_BYREF_LIKE_ATTR)
+            })
+    }
+
     pub fn has_finalizer(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {
         if let Some(cached) = self.caches.get_has_finalizer_cached(&td) {
             return Ok(cached);

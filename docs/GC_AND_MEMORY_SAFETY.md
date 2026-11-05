@@ -53,6 +53,10 @@ and heap, array, static and box storage need no byref support.
 byref or byref-like value into a heap field, array element, static or box is invalid IL, and the
 VM relies on the input being valid. The checks that exist are:
 
+- A `by_ref` field is laid out only when its declaring type is byref-like (marked with
+  `IsByRefLikeAttribute`, `ResolverService::is_byref_like`); otherwise the layout factory returns
+  `TypeResolutionError::InvalidLayout`.
+- `box` of a byref-like value throws `System.InvalidProgramException`.
 - `System.TypedReference` cannot be laid out as a field or element or read from managed
   storage (`TypeResolutionError::InvalidLayout` from the layout factory and from
   `read_cts_value`).

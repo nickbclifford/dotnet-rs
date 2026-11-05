@@ -97,6 +97,10 @@ fn corlib_resolution(module: &'static str, assembly: &'static str) -> Resolution
             }),
         ),
     );
+    let mut invalid_program = TypeDefinition::new(None, "InvalidProgramException");
+    invalid_program.namespace = Some("System".into());
+    invalid_program.extends = Some(exception_idx.into());
+    res.push_type_definition(invalid_program);
     let mut vt = TypeDefinition::new(None, "ValueType");
     vt.namespace = Some("System".into());
     vt.extends = Some(obj_idx.into());
@@ -553,6 +557,38 @@ fn run_program_with_collection(
     ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
     collect_after_local_store: bool,
 ) -> i32 {
+    let (shared, entrypoint) = build_program(asm, setup);
+    if !collect_after_local_store {
+        return run_i32_entrypoint(shared, entrypoint);
+    }
+    let mut collected = false;
+    let mut result = None;
+    run_entrypoint_observed(shared, entrypoint, |engine, step| {
+        if matches!(step, StepResult::Return) {
+            match engine.stack.execution.evaluation_stack.pop() {
+                StackValue::Int32(value) => result = Some(value),
+                other => panic!("Expected Int32 return, got {:?}", other),
+            }
+        }
+        let frames = &engine.stack.execution.frame_stack;
+        if !collected && frames.len() == 1 && frames.frames[0].state.ip == 3 {
+            collected = true;
+            return Observe::Collect;
+        }
+        Observe::Continue
+    });
+    assert!(collected, "collection point was not reached");
+    result.expect("entrypoint did not produce an Int32 return value")
+}
+
+/// Registers a test assembly whose `Run` method is built by `setup` and returns its entrypoint.
+fn build_program(
+    asm: &str,
+    setup: impl FnOnce(
+        &mut Resolution<'static>,
+        dotnetdll::prelude::TypeIndex,
+    ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
+) -> (Arc<SharedGlobalState>, MethodDescription) {
     let loader = get_mock_loader();
     #[allow(clippy::arc_with_non_send_sync)]
     let shared = Arc::new(SharedGlobalState::new(loader.clone()));
@@ -587,27 +623,7 @@ fn run_program_with_collection(
         res_s,
         MethodMemberIndex::Method(method_index),
     );
-    if !collect_after_local_store {
-        return run_i32_entrypoint(shared, entrypoint);
-    }
-    let mut collected = false;
-    let mut result = None;
-    run_entrypoint_observed(shared, entrypoint, |engine, step| {
-        if matches!(step, StepResult::Return) {
-            match engine.stack.execution.evaluation_stack.pop() {
-                StackValue::Int32(value) => result = Some(value),
-                other => panic!("Expected Int32 return, got {:?}", other),
-            }
-        }
-        let frames = &engine.stack.execution.frame_stack;
-        if !collected && frames.len() == 1 && frames.frames[0].state.ip == 3 {
-            collected = true;
-            return Observe::Collect;
-        }
-        Observe::Continue
-    });
-    assert!(collected, "collection point was not reached");
-    result.expect("entrypoint did not produce an Int32 return value")
+    (shared, entrypoint)
 }
 
 // Stale-address probe: `ldloca; conv.u` then a callee needing a big evaluation stack forces the
@@ -820,6 +836,148 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
         )
     });
     assert_eq!(r, 0);
+}
+
+/// Defines a value type `name` with one instance `Int32` field `F` (a `ref int` field when
+/// `ref_field`), marked byref-like through an embedded `IsByRefLikeAttribute` when `byref_like`.
+fn push_test_value_type(
+    res: &mut Resolution<'static>,
+    name: &str,
+    byref_like: bool,
+    ref_field: bool,
+) -> (TypeIndex, BaseType<MethodType>) {
+    let corlib = res.push_assembly_reference(
+        dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
+    );
+    let value_type_ref =
+        res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
+            Some("System".into()),
+            "ValueType",
+            dotnetdll::resolved::types::ResolutionScope::Assembly(corlib),
+        ));
+    let mut struct_def = TypeDefinition::new(None, name.to_string());
+    struct_def.extends = Some(value_type_ref.into());
+    if byref_like {
+        let mut attr_def = TypeDefinition::new(None, "IsByRefLikeAttribute");
+        attr_def.namespace = Some("System.Runtime.CompilerServices".into());
+        let attr_idx = res.push_type_definition(attr_def);
+        let ctor_sig = MethodSignature {
+            instance: true,
+            ..void_sig()
+        };
+        let ctor = res.push_method(
+            attr_idx,
+            Method::new(
+                Accessibility::Public,
+                ctor_sig,
+                ".ctor",
+                Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::Return])),
+            ),
+        );
+        struct_def.attributes.push(Attribute::new(
+            UserMethod::Definition(ctor),
+            CustomAttributeData {
+                constructor_args: vec![],
+                named_args: vec![],
+            },
+        ));
+    }
+    let struct_idx = res.push_type_definition(struct_def);
+    res.push_field(
+        struct_idx,
+        Field {
+            static_member: false,
+            by_ref: ref_field,
+            ..new_static_field("F", BaseType::<MemberType>::Int32)
+        },
+    );
+    let struct_ty = BaseType::Type {
+        source: TypeSource::User(UserType::Definition(struct_idx)),
+        value_kind: Some(ValueKind::ValueType),
+    };
+    (struct_idx, struct_ty)
+}
+
+fn instance_layout_of_test_value_type(
+    byref_like: bool,
+) -> Result<dotnet_value::layout::FieldLayoutManager, dotnet_types::error::TypeResolutionError> {
+    let mut struct_idx = None;
+    let asm = if byref_like {
+        "RefFieldByRefLike"
+    } else {
+        "RefFieldPlain"
+    };
+    let (shared, entrypoint) = build_program(asm, |res, _| {
+        struct_idx = Some(push_test_value_type(res, "S", byref_like, true).0);
+        (
+            1,
+            vec![],
+            vec![Instruction::LoadConstantInt32(0), Instruction::Return],
+        )
+    });
+    let td = TypeDescription::new(entrypoint.resolution(), struct_idx.unwrap());
+    crate::resolver::VmResolverService::new(shared)
+        .instance_fields_with_lookup(td, &GenericLookup::default())
+}
+
+// ECMA-335 §II.14.4.2: a `ref` field may be declared only by a byref-like type.
+#[test]
+fn ref_field_layout_requires_byref_like_declaring_type() {
+    let layout = instance_layout_of_test_value_type(true).expect("byref-like layout");
+    let field = layout.fields.values().next().expect("one field");
+    assert!(matches!(
+        &*field.layout,
+        LayoutManager::Scalar(Scalar::ManagedPtr)
+    ));
+    assert!(matches!(
+        instance_layout_of_test_value_type(false),
+        Err(dotnet_types::error::TypeResolutionError::InvalidLayout(_))
+    ));
+}
+
+fn box_test_value_type(byref_like: bool) -> Result<i32, String> {
+    let asm = if byref_like {
+        "BoxByRefLike"
+    } else {
+        "BoxPlain"
+    };
+    let (shared, entrypoint) = build_program(asm, |res, _| {
+        let (_, struct_ty) = push_test_value_type(res, "S", byref_like, false);
+        (
+            1,
+            vec![local(struct_ty.clone())],
+            vec![
+                Instruction::LoadLocal(0),
+                Instruction::BoxValue(MethodType::Base(Box::new(struct_ty))),
+                Instruction::Pop,
+                Instruction::LoadConstantInt32(1),
+                Instruction::Return,
+            ],
+        )
+    });
+    let mut outcome = None;
+    run_entrypoint_observed(shared, entrypoint, |engine, step| match step {
+        StepResult::Return => {
+            outcome = Some(Ok(engine.stack.execution.evaluation_stack.pop().as_i32()));
+            Observe::Stop
+        }
+        StepResult::MethodThrew(exception) => {
+            outcome = Some(Err(exception.type_name.clone()));
+            Observe::Stop
+        }
+        _ => Observe::Continue,
+    });
+    outcome.expect("entrypoint neither returned nor threw")
+}
+
+// ECMA-335 §II.14.4.2: a byref-like value can never be boxed.
+#[test]
+fn box_of_byref_like_value_throws_invalid_program() {
+    assert_eq!(box_test_value_type(false), Ok(1));
+    assert_eq!(
+        box_test_value_type(true),
+        Err("System.InvalidProgramException".to_string())
+    );
 }
 
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):

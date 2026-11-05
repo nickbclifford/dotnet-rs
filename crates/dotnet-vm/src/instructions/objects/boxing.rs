@@ -33,6 +33,14 @@ pub fn box_value<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
         // boxing is a noop for all reference types
         ctx.push(value);
     } else {
+        // ECMA-335 §II.14.4.2: a byref-like value may contain managed pointers and must
+        // never reach the heap, so boxing one is invalid IL.
+        if let StackValue::ValueType(instance) = &value
+            && ctx.resolver().is_byref_like(&instance.description)
+        {
+            return ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        }
         let obj = dotnet_vm_ops::vm_try!(ctx.box_value(&t, value));
         ctx.push(StackValue::ObjectRef(obj));
     }

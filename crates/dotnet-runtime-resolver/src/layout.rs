@@ -362,6 +362,18 @@ impl LayoutFactory {
                     | RuntimeSlotId::RuntimeFieldHandleValue
                     | RuntimeSlotId::RuntimeMethodHandleValue,
                 ) => Arc::new(Scalar::ObjectRef.into()),
+                // ECMA-335 §II.14.4.2: a managed pointer may be stored only in a byref-like
+                // type, which itself lives only in locals, arguments and the evaluation stack.
+                _ if f.by_ref && !resolver.is_byref_like(&td) => {
+                    return Err(TypeResolutionError::InvalidLayout(
+                        format!(
+                            "ref field '{}' is declared by '{}', which is not a byref-like type",
+                            f.name,
+                            td.type_name()
+                        )
+                        .into(),
+                    ));
+                }
                 _ if f.by_ref => Arc::new(Scalar::ManagedPtr.into()),
                 _ => {
                     let t = resolver.get_field_type(
