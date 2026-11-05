@@ -1,4 +1,4 @@
-use gc_arena::{Collect, Mutation, barrier::Unlock, collect::Trace};
+use gc_arena::{Collect, Gc, Mutation, barrier::Unlock, collect::Trace};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreading")]
@@ -75,6 +75,38 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     }
 }
 
+impl<T: ?Sized> ThreadSafeLock<T> {
+    /// Borrow the contents mutably, first triggering gc-arena's backward write barrier on the
+    /// `Gc` that owns the lock.
+    ///
+    /// The barrier makes the collector re-trace the owner if it was already marked, so any
+    /// `Gc` pointer stored through the guard is seen by incremental marking. A `&Mutation`
+    /// alone is not a barrier, which is why this takes the owning `Gc`.
+    pub fn borrow_mut<'gc>(this: Gc<'gc, Self>, mc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'gc, T>
+    where
+        T: 'gc,
+    {
+        let lock: &'gc Self = Gc::write(mc, this);
+        // SAFETY: F1.GcHandleRooted — `Gc::write` just triggered the backward barrier on the
+        // lock's owning `Gc` in this callback, so storing new `Gc` children is allowed.
+        unsafe { lock.borrow_mut_unbarriered(mc) }
+    }
+
+    /// Like [`ThreadSafeLock::borrow_mut`], but returns `None` instead of blocking or
+    /// panicking when the lock is already borrowed. The barrier is triggered either way.
+    pub fn try_borrow_mut<'gc>(
+        this: Gc<'gc, Self>,
+        mc: &Mutation<'gc>,
+    ) -> Option<ThreadSafeWriteGuard<'gc, T>>
+    where
+        T: 'gc,
+    {
+        let lock: &'gc Self = Gc::write(mc, this);
+        // SAFETY: F1.GcHandleRooted — barrier triggered on the owning `Gc` just above.
+        unsafe { lock.try_borrow_mut_unbarriered(mc) }
+    }
+}
+
 #[cfg(feature = "multithreading")]
 impl<T: ?Sized> ThreadSafeLock<T> {
     /// Borrow the contents immutably.
@@ -84,8 +116,21 @@ impl<T: ?Sized> ThreadSafeLock<T> {
         }
     }
 
-    /// Borrow the contents mutably.
-    pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
+    /// Borrow the contents mutably without triggering a write barrier.
+    ///
+    /// Prefer [`ThreadSafeLock::borrow_mut`], which barriers the owning `Gc`.
+    ///
+    /// # Safety
+    ///
+    /// Through the returned guard the caller must not make the contents adopt a new `Gc`
+    /// pointer, unless `Gc::write` has already been triggered on the `Gc` that owns this lock
+    /// during the current arena callback, or the written data is not traced by the collector
+    /// (for example raw bytes that hold no GC references). Otherwise incremental marking can
+    /// miss the new pointer and free a live object.
+    pub unsafe fn borrow_mut_unbarriered<'gc>(
+        &self,
+        _gc: &Mutation<'gc>,
+    ) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
             guard: RwLockWriteGuard::map(self.inner.write(), |x| x),
             safepoint_guard: SafepointWriteGuard::enter(),
@@ -101,11 +146,18 @@ impl<T: ?Sized> ThreadSafeLock<T> {
         })
     }
 
-    /// Try to borrow the contents mutably without blocking.
+    /// Try to borrow the contents mutably without blocking and without triggering a write
+    /// barrier.
     ///
     /// Returns `None` if any locks (read_unchecked or write) are currently held.
-    pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
-        let _ = _gc;
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`ThreadSafeLock::borrow_mut_unbarriered`].
+    pub unsafe fn try_borrow_mut_unbarriered<'gc>(
+        &self,
+        _gc: &Mutation<'gc>,
+    ) -> Option<ThreadSafeWriteGuard<'_, T>> {
         self.inner.try_write().map(|guard| ThreadSafeWriteGuard {
             guard: RwLockWriteGuard::map(guard, |x| x),
             safepoint_guard: SafepointWriteGuard::enter(),
@@ -132,16 +184,27 @@ impl<T: ?Sized> ThreadSafeLock<T> {
         }
     }
 
-    /// Borrow the contents mutably.
-    pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
+    /// Borrow the contents mutably without triggering a write barrier.
+    ///
+    /// Prefer [`ThreadSafeLock::borrow_mut`], which barriers the owning `Gc`.
+    ///
+    /// # Safety
+    ///
+    /// Through the returned guard the caller must not make the contents adopt a new `Gc`
+    /// pointer, unless `Gc::write` has already been triggered on the `Gc` that owns this lock
+    /// during the current arena callback, or the written data is not traced by the collector
+    /// (for example raw bytes that hold no GC references). Otherwise incremental marking can
+    /// miss the new pointer and free a live object.
+    pub unsafe fn borrow_mut_unbarriered<'gc>(
+        &self,
+        _gc: &Mutation<'gc>,
+    ) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
-            // SAFETY: F1.GcHandleRooted — `_gc` is a `&Mutation<'gc>` token which, by gc-arena's
-            // contract, can only be obtained inside a `mutate` closure.  The
-            // arena guarantees no GC cycle runs concurrently with mutation, so
-            // no other code can observe the RefLock as immutably borrowed through
-            // the GC tracing path at this point.  `unlock_unchecked` is the
-            // gc-arena-blessed way to obtain a mutable borrow on a `RefLock`
-            // inside a mutation context.
+            // SAFETY: F1.GcHandleRooted — `_gc` proves we are inside a `mutate` callback, during
+            // which gc-arena runs no collection step, so the tracer cannot hold a shared borrow
+            // of this `RefLock`. That makes the `RefCell` borrow sound with respect to tracing;
+            // whether new contents need a write barrier is the caller's obligation under this
+            // function's `# Safety` contract.
             guard: unsafe { self.inner.unlock_unchecked().borrow_mut() },
         }
     }
@@ -156,16 +219,21 @@ impl<T: ?Sized> ThreadSafeLock<T> {
             .map(|guard| ThreadSafeReadGuard { guard })
     }
 
-    /// Try to borrow the contents mutably without blocking.
+    /// Try to borrow the contents mutably without blocking and without triggering a write
+    /// barrier.
     ///
     /// Returns `None` if any locks (read_unchecked or write) are currently held.
-    pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
-        // SAFETY: F1.GcHandleRooted — Same invariant as `borrow_mut`: holding a `&Mutation<'gc>`
-        // token guarantees we are inside a mutation context where the arena's
-        // GC cycle cannot run.  `unlock_unchecked` is the gc-arena-prescribed
-        // way to access a `RefLock` mutably within a mutation context.  If
-        // another borrow is already active `try_borrow_mut` returns `None`
-        // instead of panicking, making this safe to call speculatively.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`ThreadSafeLock::borrow_mut_unbarriered`].
+    pub unsafe fn try_borrow_mut_unbarriered<'gc>(
+        &self,
+        _gc: &Mutation<'gc>,
+    ) -> Option<ThreadSafeWriteGuard<'_, T>> {
+        // SAFETY: F1.GcHandleRooted — as in `borrow_mut_unbarriered`: `_gc` proves no collection
+        // step is running, so the tracer holds no shared borrow of the `RefLock`. A held
+        // mutator borrow makes `try_borrow_mut` return `None` instead of panicking.
         unsafe {
             self.inner
                 .unlock_unchecked()
@@ -338,12 +406,12 @@ mod tests {
     fn test_exclusive_writer() {
         use gc_arena::{Arena, Rootable};
 
-        type TestArena = Arena<Rootable![ThreadSafeLock<i32>]>;
+        type TestArena = Arena<Rootable![Gc<'_, ThreadSafeLock<i32>>]>;
 
-        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(42));
+        let mut arena = TestArena::new(|mc| Gc::new(mc, ThreadSafeLock::new(42)));
         arena.mutate_root(|mc, lock| {
             {
-                let mut guard = lock.borrow_mut(mc);
+                let mut guard = ThreadSafeLock::borrow_mut(*lock, mc);
                 *guard = 100;
             }
             let guard = lock.borrow();
@@ -355,11 +423,11 @@ mod tests {
     fn test_try_borrow() {
         use gc_arena::{Arena, Rootable};
 
-        type TestArena = Arena<Rootable![ThreadSafeLock<i32>]>;
+        type TestArena = Arena<Rootable![Gc<'_, ThreadSafeLock<i32>>]>;
 
-        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(42));
+        let mut arena = TestArena::new(|mc| Gc::new(mc, ThreadSafeLock::new(42)));
         arena.mutate_root(|mc, lock| {
-            let _writer = lock.borrow_mut(mc);
+            let _writer = ThreadSafeLock::borrow_mut(*lock, mc);
             // Should fail to get reader while writer is active
             assert!(lock.try_borrow().is_none());
         });
@@ -370,12 +438,12 @@ mod tests {
     fn write_guards_track_safepoint_exclusion_across_mapping() {
         use gc_arena::{Arena, Rootable};
 
-        type TestArena = Arena<Rootable![ThreadSafeLock<(i32, i32)>]>;
+        type TestArena = Arena<Rootable![Gc<'_, ThreadSafeLock<(i32, i32)>>]>;
 
         assert!(!has_active_thread_safe_write_guard());
-        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new((1, 2)));
+        let mut arena = TestArena::new(|mc| Gc::new(mc, ThreadSafeLock::new((1, 2))));
         arena.mutate_root(|mc, lock| {
-            let guard = lock.borrow_mut(mc);
+            let guard = ThreadSafeLock::borrow_mut(*lock, mc);
             assert!(has_active_thread_safe_write_guard());
 
             let mut mapped = ThreadSafeWriteGuard::map(guard, |pair| &mut pair.1);
@@ -386,5 +454,36 @@ mod tests {
             assert!(!has_active_thread_safe_write_guard());
             assert_eq!(*lock.borrow(), (1, 3));
         });
+    }
+
+    #[test]
+    fn borrow_mut_barriers_new_gc_children_of_marked_parent() {
+        use gc_arena::{Arena, Gc, Rootable, static_collect};
+        use std::rc::Rc;
+
+        struct Flag(Rc<Cell<bool>>);
+        impl Drop for Flag {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        static_collect!(Flag);
+
+        type Parent<'gc> = Gc<'gc, ThreadSafeLock<Option<Gc<'gc, Flag>>>>;
+        type TestArena = Arena<Rootable![Parent<'_>]>;
+
+        let dropped = Rc::new(Cell::new(false));
+        let mut arena = TestArena::new(|mc| Gc::new(mc, ThreadSafeLock::new(None)));
+        // Blacken the parent, as incremental marking between two mutator slices would.
+        assert!(arena.finish_marking().is_some(), "marking completes");
+        arena.mutate(|mc, parent| {
+            let child = Gc::new(mc, Flag(dropped.clone()));
+            *ThreadSafeLock::borrow_mut(*parent, mc) = Some(child);
+        });
+        arena.finish_cycle();
+        assert!(
+            !dropped.get(),
+            "child stored through borrow_mut was swept: missing write barrier"
+        );
     }
 }

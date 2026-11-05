@@ -74,7 +74,7 @@ macro_rules! with_string_mut {
                 $stack.as_borrow_scope(),
                 $stack.as_borrow_scope().gc_ready_token(),
             );
-            let mut heap = handle.borrow_mut(&gc);
+            let mut heap = $crate::ThreadSafeLock::borrow_mut(handle, &gc);
             if let $crate::object::HeapStorage::Str(ref mut $s) = heap.storage {
                 $code
             } else {

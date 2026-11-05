@@ -98,7 +98,10 @@ fn clear_array_range<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'
         }
     }
 
-    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
+    let mut heap = dotnet_value::ThreadSafeLock::borrow_mut(
+        handle,
+        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+    );
     let HeapStorage::Vec(v) = &mut heap.storage else {
         return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
     };
@@ -364,7 +367,10 @@ pub fn intrinsic_array_set_value<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> +
             );
         }
     }
-    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
+    let mut heap = dotnet_value::ThreadSafeLock::borrow_mut(
+        handle,
+        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+    );
     let HeapStorage::Vec(v) = &mut heap.storage else {
         return ctx.throw_by_name_with_message("System.ArgumentException", NOT_ARRAY_MSG);
     };

@@ -494,8 +494,10 @@ pub fn intrinsic_runtime_helpers_initialize_array<'gc, T: SpanIntrinsicHost<'gc>
         );
     };
 
-    let mut array_heap =
-        array_handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
+    let mut array_heap = dotnet_utils::gc::ThreadSafeLock::borrow_mut(
+        array_handle,
+        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+    );
     let HeapStorage::Vec(vector) = &mut array_heap.storage else {
         return ctx.throw_by_name_with_message(
             "System.ArgumentException",

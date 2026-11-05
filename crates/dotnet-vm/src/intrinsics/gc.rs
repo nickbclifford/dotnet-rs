@@ -119,10 +119,12 @@ pub fn intrinsic_gc_suppress_finalize<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc
 ) -> StepResult {
     let obj = ctx.pop_obj();
     if let Some(handle) = obj.0
-        && let Some(o) = handle
-            .borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()))
-            .storage
-            .as_obj_mut()
+        && let Some(o) = dotnet_value::ThreadSafeLock::borrow_mut(
+            handle,
+            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        )
+        .storage
+        .as_obj_mut()
     {
         o.finalizer_suppressed = true;
     }
@@ -140,12 +142,14 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, T: TypedStackOps<'gc> + MemoryO
     if let Some(handle) = obj.0 {
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
-            handle
-                .borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()))
-                .storage
-                .as_obj_mut()
-                .expect("is_obj checked above")
-                .finalizer_suppressed = false;
+            dotnet_value::ThreadSafeLock::borrow_mut(
+                handle,
+                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+            )
+            .storage
+            .as_obj_mut()
+            .expect("is_obj checked above")
+            .finalizer_suppressed = false;
 
             // Add back to finalization queue if not already present
             let mut queue = ctx.heap().finalization_queue.borrow_mut();

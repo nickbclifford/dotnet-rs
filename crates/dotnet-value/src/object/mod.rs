@@ -299,10 +299,17 @@ impl ObjectPtr {
     }
 
     pub fn with_data_mut<T>(&self, _gc: GCHandle<'_>, f: impl FnOnce(&mut [u8]) -> T) -> T {
-        // SAFETY: F1.GcHandleRooted — We have GCHandle which proves we are in a mutation context.
-        // Even if the object is in another arena, we can still write to its storage
-        // because we hold the ThreadSafeLock.
-        let mut inner = unsafe { self.0.as_ref().borrow_mut(_gc.mutation()) };
+        // SAFETY: F1.GcHandleRooted — `self.0` is non-null and aligned, and the caller keeps the
+        // pointee live and rooted for this access (see `ObjectPtr::from_raw`).
+        let lock = unsafe { self.0.as_ref() };
+        // SAFETY: F1.GcHandleRooted — the object may belong to another arena, so no `Gc` for
+        // this lock exists under our `Mutation` brand and the owner barrier of
+        // `ThreadSafeLock::borrow_mut` cannot be applied; the unbarriered borrow is used
+        // instead. This relies on the byte closure adopting no new traced `Gc` children
+        // without a separately recorded barrier: callers in `dotnet-runtime-memory` record
+        // cross-arena stores through `WriteBarrierRecorder` before writing. That caller-side
+        // premise is not enforced by this safe signature (docs/plans/04, item 3).
+        let mut inner = unsafe { lock.borrow_mut_unbarriered(_gc.mutation()) };
         inner.storage.with_data_mut(f)
     }
 
@@ -714,7 +721,7 @@ impl<'gc> ObjectRef<'gc> {
         let ObjectRef(Some(o)) = &self else {
             return Err(ExecutionError::NullReference);
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         let HeapStorage::Obj(instance) = &mut inner.storage else {
             let variant = match &inner.storage {
@@ -760,7 +767,7 @@ impl<'gc> ObjectRef<'gc> {
         let ObjectRef(Some(o)) = &self else {
             return Err(ExecutionError::NullReference);
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         let HeapStorage::Vec(instance) = &mut inner.storage else {
             // invariant: try_as_vector_mut callers must only use object references whose heap
@@ -812,7 +819,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::as_object_mut on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         let HeapStorage::Obj(instance) = &mut inner.storage else {
             let variant = match &inner.storage {
@@ -849,7 +856,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::as_vector_mut on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         let HeapStorage::Vec(instance) = &mut inner.storage else {
             panic!("called ObjectRef::as_vector_mut on non-vector heap reference")
@@ -888,7 +895,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::set_sync_block_index on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         inner.validate_arena_id();
         inner.set_sync_block_index(new_index);
@@ -932,7 +939,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::with_data_mut on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(&gc);
+        let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         match &mut inner.storage {
             HeapStorage::Vec(v) => f(&mut v.storage),

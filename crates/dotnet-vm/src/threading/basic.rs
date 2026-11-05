@@ -986,15 +986,15 @@ mod tests {
     #[test]
     fn request_stop_the_world_rejects_active_thread_safe_write_guard() {
         use dotnet_utils::gc::ThreadSafeLock;
-        use gc_arena::{Arena, Rootable};
+        use gc_arena::{Arena, Gc, Rootable};
         use std::panic;
 
-        type TestArena = Arena<Rootable![ThreadSafeLock<i32>]>;
+        type TestArena = Arena<Rootable![Gc<'_, ThreadSafeLock<i32>>]>;
 
         let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
-        let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(0));
+        let mut arena = TestArena::new(|mc| Gc::new(mc, ThreadSafeLock::new(0)));
         arena.mutate_root(|mc, lock| {
-            let _writer = lock.borrow_mut(mc);
+            let _writer = ThreadSafeLock::borrow_mut(*lock, mc);
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 let _guard = manager.request_stop_the_world();
             }));

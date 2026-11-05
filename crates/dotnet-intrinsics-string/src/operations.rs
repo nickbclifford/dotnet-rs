@@ -554,7 +554,8 @@ pub fn intrinsic_string_copy_string_content<
                 ctx.as_borrow_scope(),
                 ctx.as_borrow_scope().gc_ready_token(),
             );
-            let mut dest_heap = dest_handle.borrow_mut(gc.mutation());
+            let mut dest_heap =
+                dotnet_utils::gc::ThreadSafeLock::borrow_mut(dest_handle, gc.mutation());
             match &mut dest_heap.storage {
                 HeapStorage::Str(dest) => {
                     let d_pos = dest_pos + offset;

@@ -326,7 +326,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                                     let handles = engine.stack.local.heap.gchandles.borrow();
                                     let (obj, _) = handles[0].as_ref().expect("witness slot");
                                     let h = obj.0.expect("payload must still be live to write");
-                                    h.borrow_mut(gc).storage =
+                                    dotnet_utils::gc::ThreadSafeLock::borrow_mut(h, gc).storage =
                                         HeapStorage::Str(CLRString::from(text));
                                 })
                             })

@@ -37,6 +37,7 @@ pub use crate::{
     string::CLRString,
     validation::ValidationTag,
 };
+pub use dotnet_utils::gc::ThreadSafeLock;
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, BorrowScopeOps, GcReadyToken, GcScopeGuard, LocalIndex, StackSlotIndex,
 };
