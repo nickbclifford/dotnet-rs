@@ -16,8 +16,9 @@ When the `Vec` grows, or a frame is suspended or restored (`suspend_above`/`rest
 `EvaluationStack::update_stack_pointers` rewrites every cached Stack pointer it can find. This
 does not cover:
 
-- `stloc` to a value-type local. It replaces the slot's value and its buffer, so an earlier
-  byref to that local goes stale.
+- `stloc` to a value-type local. It replaces the slot's value and its buffer. A Stack byref
+  re-resolves its slot on each access, but an address cached from it (`conv.u`, `AsPointer`,
+  `with_data`) goes stale (`p37_ldloca_value_type_survives_stloc`).
 
 - addresses already converted to native integers (`ldloca; conv.u`). See the ignored tests
   `p01_ldloca_convu_stind_i4` and `p09_ldloca_convu_survives_callee_stack_growth` in
@@ -55,9 +56,10 @@ the fixup.
   address leaked to another thread through a native integer has the same status as a
   leaked localloc address today. A general protocol for raw, atomic and bulk access is a
   separate future plan.
-- **Dangling native-int addresses after the frame returns.** Unmanaged-origin accesses are
-  trusted (`PointerOrigin::Unmanaged` branches in `raw_memory_ops_impl`). Homes get the same
-  treatment as localloc blocks. Quarantine or ABA protection would apply to both and is
+- **Dangling native-int addresses after the frame returns.** Once a home address is converted
+  to a native integer (`conv.u`) it is an Unmanaged-origin address, trusted like a localloc
+  address (`PointerOrigin::Unmanaged` branches in `raw_memory_ops_impl`). This applies only to
+  native integers; byrefs stay checked (design step 4). Quarantine or ABA protection would apply to both and is
   separate work.
 - **Static field addresses** (`p12_ldsflda_convu_stind_static`, alignment). Separate small fix.
 - **Bulk-operation chunking/GC barriers** beyond what is needed for `p15` to pass.
@@ -78,11 +80,15 @@ the fixup.
    through `&mut` to the bytes.
 3. **Loads and stores.** `ldloc`/`stloc`/`ldarg`/`starg` on a homed variable read and write the
    home bytes through the same layout-driven read/write the VM uses for value-type fields.
-4. **Byref representation.** A byref to a home keeps a logical address (frame depth or index,
-   home offset) plus a cached pointer. The pointer never needs rebasing because the block does
-   not move. Encode it in the existing Stack origin slot or a new origin variant. Either way,
-   resolution checks that the frame still exists and the range is in bounds. Staleness after
-   return behaves the same as today's Stack origin.
+4. **Byref representation.** A byref to a home is a managed pointer with its own checked
+   origin, `PointerOrigin::FrameHome`, carrying a frame identity and the home offset, plus a
+   cached pointer that never needs rebasing because the block does not move. The frame
+   identity is a per-frame serial number, not a depth, so a stale byref cannot resolve into a
+   newer frame at the same depth. Resolution checks that the frame with that serial is still
+   live and that the range lies inside its home block; a stale or out-of-range byref is an
+   error, never an access. Home byrefs never use the `Unmanaged` origin, which is for addresses
+   the VM cannot check. Encode the origin within the existing 24 bytes (tag 7 has free
+   sub-tags; follow the Stack and static encodings in `crates/dotnet-value/src/pointer/serde.rs`).
 5. **Tracing.** Frames trace the GC references and managed pointers inside their home block
    using its layout, so `StackFrame`'s `Collect` impl gains the home block.
 6. **Fixup removal.** Once no Stack-origin pointer targets the evaluation-stack `Vec`, delete
@@ -97,15 +103,22 @@ the fixup.
 Each slice ends with the VM running guest code through the new path and its tests enabled.
 Do not build a later slice's support in an earlier slice.
 
-1. **Homed locals, single frame.** The two placement checks above, then steps 1–4 for locals
-   only, in one frame. Enable `p01` and
+1. **Homed locals, single frame (done).** The two placement checks above, then steps 1–3 for
+   locals only, in one frame. It used the `Unmanaged` origin for home byrefs; slice 2 replaces
+   that. Enable `p01` and
    `p03`, and add a regression for a byref to a value-type local that survives `stloc`. `p02`,
    `p35` and the existing local and value-type tests keep passing.
-2. **Homed arguments and nested calls.** Arguments, `ldarga`, callee growth. Enable `p09`.
+2. **Checked home byrefs and homed arguments.** Step 4: add `FrameHome`, move `ldloca` on homed
+   locals to it, and add a regression that a byref to a returned frame's home is rejected
+   rather than accessed. Then home arguments: `ldarga`, `starg`, `ldarg`, copying arguments
+   into the block at frame entry. Enable `p09`.
 3. **Frame lifecycle.** Return, unwind, `tail.`/`jmp`, pooling and filter suspension release
    or retain homes correctly. Extend the localloc lifecycle tests that already exist for these
    paths to cover homes.
-4. **Block ops and fixup deletion.** Enable `p15`. Step 6.
+4. **Block ops and fixup deletion.** Enable `p15`. Step 6. Once arguments are homed, the only
+   remaining Stack-origin producers should be eval-temporary `this` pointers
+   (`constructor_frame`, the value-type `newobj` intrinsic); home those too and delete the
+   Stack origin with the fixup if nothing else needs it.
 5. **Measure.** Compare `runtime_primitives` and `end_to_end` against `main` before slice 1. A
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
 
@@ -114,6 +127,8 @@ Do not build a later slice's support in an earlier slice.
 - `p01`, `p03`, `p09` and `p15` are un-ignored and pass natively and in the pointer-provenance
   Miri lane (both configurations), and the existing controls still pass.
 - `update_stack_pointers` and its supporting code no longer exist.
+- Every byref to a home uses the `FrameHome` origin, and a byref to a returned frame's home
+  is rejected (regression test).
 - `docs/GC_AND_MEMORY_SAFETY.md` describes frame homes, and `docs/pointer-provenance/INVENTORY.md`
   marks R02 resolved.
 
@@ -130,5 +145,6 @@ The scope and slice rules above exist to prevent that.
 ## Ask the maintainer only if
 
 - fitting the byref encoding requires changing `ManagedPtr::SIZE`;
+- a home byref seems to need an unchecked origin (such as `Unmanaged`) to work;
 - a supported program (not invalid IL) stores a home-origin byref in a heap location;
 - slice 5 shows a regression on methods that take no addresses.
