@@ -120,9 +120,9 @@ pub unsafe fn copy_nonoverlapping_raw(dst: *mut u8, src: *const u8, len: usize) 
         return;
     }
 
-    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity and non-overlap for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — `len > 0`, and this function's `# Safety` contract makes `dst` writable for `len` bytes and disjoint from `src`, so the exclusive slice aliases nothing.
     let dst_slice = unsafe { std::slice::from_raw_parts_mut(dst, len) };
-    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — `len > 0`, and this function's `# Safety` contract makes the pointer valid for `len` bytes.
     let src_slice = unsafe { std::slice::from_raw_parts(src, len) };
     copy_nonoverlapping(dst_slice, src_slice);
 }
@@ -157,7 +157,7 @@ pub unsafe fn fill_raw(dst: *mut u8, len: usize, value: u8) {
         return;
     }
 
-    // SAFETY: F10.RawMemoryAccessValid — The caller guarantees pointer validity for `len` bytes.
+    // SAFETY: F10.RawMemoryAccessValid — `len > 0`, and this function's `# Safety` contract makes the pointer valid for `len` bytes.
     let dst_slice = unsafe { std::slice::from_raw_parts_mut(dst, len) };
     fill(dst_slice, value);
 }
@@ -174,7 +174,7 @@ pub fn clear(dst: &mut [u8]) {
 /// - `dst` must be valid for writes of `len` bytes.
 #[inline]
 pub unsafe fn clear_raw(dst: *mut u8, len: usize) {
-    // SAFETY: F10.RawMemoryAccessValid — Same safety contract as `fill_raw`.
+    // SAFETY: F10.RawMemoryAccessValid — this function's `# Safety` contract (writable for `len` bytes) is `fill_raw`'s.
     unsafe { fill_raw(dst, len, 0) };
 }
 
