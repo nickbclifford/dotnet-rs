@@ -1613,7 +1613,7 @@ mod tests {
     use dotnet_value::layout::{FieldLayoutManager, GcDesc};
 
     #[test]
-    fn m1d_transient_managed_ptr_store_is_rejected() {
+    fn owner_retention_transient_managed_ptr_store_is_rejected() {
         use dotnet_types::{TypeDescription, generics::GenericLookup};
         use dotnet_utils::{ByteOffset, gc::GCHandle, sync::Arc};
         use dotnet_value::{
@@ -2215,7 +2215,7 @@ mod tests {
     /// is rejected after an ID is re-registered, before the callback runs.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn m1g_recreation_memory_owner_aba() {
+    fn arena_identity_memory_owner_aba() {
         let id = ArenaId::new(190_433);
         register_arena(id, Arc::new(AtomicBool::new(false)));
         let raw = Box::into_raw(Box::new(ThreadSafeLock::new(ObjectInner::new(

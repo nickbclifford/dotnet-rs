@@ -1128,7 +1128,7 @@ mod tests {
     /// rejected before marshalling; ref arguments use the existing copy path.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn m1g_recreation_native_escape_preflight() {
+    fn arena_identity_native_escape_preflight() {
         use dotnet_utils::{
             ArenaId,
             gc::{ThreadSafeLock, register_arena, try_acquire_lease, unregister_arena},

@@ -720,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn m1d_pointer_pops_use_trait_pop_and_reject_non_pointers() {
+    fn owner_retention_pointer_pops_use_trait_pop_and_reject_non_pointers() {
         let mut stack = CountingStack {
             stack: EvaluationStack::new(),
             pops: 0,

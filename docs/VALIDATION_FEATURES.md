@@ -80,7 +80,7 @@ managed-pointer offsets trigger its debug bounds trap:
 
 - VM control `p13_ldelema_managed_add_far_out_of_bounds_then_conv_u`;
 - VM regression `conv_u8_after_far_oob_managed_add_does_not_panic`;
-- value regression `m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
+- value regression `ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors`.
 
 The pinned Miri lanes run without that feature, so these tests execute there.
 

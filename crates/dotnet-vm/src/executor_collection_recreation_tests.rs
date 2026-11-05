@@ -67,7 +67,7 @@ fn probe(executor: &mut Executor) -> Option<String> {
 
 #[cfg(not(feature = "multithreading"))]
 #[test]
-fn m1e_recreation_vm_collection() {
+fn arena_lifetime_vm_collection() {
     // Single-arena no-features control: forced collections keep a GC-handle-rooted object.
     let mut executor = Executor::new(shared());
     let ptr = allocate_unrooted(&mut executor);
@@ -187,7 +187,7 @@ fn run_vm_collection_recreation(root_in_a: bool) -> Vec<Option<String>> {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection() {
+fn arena_lifetime_vm_collection() {
     let seen = run_vm_collection_recreation(true);
     assert_eq!(
         seen,
@@ -198,7 +198,7 @@ fn m1e_recreation_vm_collection() {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection_unrooted_negative_control() {
+fn arena_lifetime_vm_collection_unrooted_negative_control() {
     // Without arena A's reference the collection really sweeps B's object (born-black
     // allocation can survive the first cycle, so the second collection is the witness).
     let seen = run_vm_collection_recreation(false);
@@ -220,7 +220,7 @@ fn m1e_recreation_vm_collection_unrooted_negative_control() {
 ///   further collections (weak-handle witnesses in the owners; no dangling read is possible).
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
+fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     use crate::{
         gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
     };
@@ -501,7 +501,7 @@ fn m1e_recreation_vm_collection_fixed_point_payload_and_reclamation() {
 /// must not install that object into the replacement registration's roots.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_mark_command_rejects_stale_registration() {
+fn arena_lifetime_mark_command_rejects_stale_registration() {
     use crate::gc::coordinator::{GCCommand, MarkObjectPointers, MarkPhaseCommand};
     use crate::threading::{ThreadManagerOps, execute_gc_command_for_current_thread};
     use dotnet_utils::gc::{register_arena, try_acquire_lease, unregister_arena};
@@ -624,7 +624,7 @@ fn m1e_recreation_mark_command_rejects_stale_registration() {
 /// generation alone does not identify the particular destination arena.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_installation_checks_arena_generation() {
+fn arena_lifetime_installation_checks_arena_generation() {
     let source = include_str!("threading/basic.rs");
     let command = source
         .split("MarkPhaseCommand::Objects(ptrs) =>")

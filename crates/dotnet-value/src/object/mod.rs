@@ -1123,7 +1123,7 @@ mod tests {
     /// passes through the inert cross-arena wrapper without exposing its pointer.
     #[cfg(feature = "multithreading")]
     #[test]
-    fn m1e_recreation_opaque_gc_transport() {
+    fn arena_lifetime_opaque_gc_transport() {
         use dotnet_utils::gc::{CrossArenaRef, OpaqueObjectPtr, try_acquire_lease};
         use gc_arena::{Arena, Rootable};
         let arena = Arena::<Rootable![EmptyTestRoot]>::new(|_| EmptyTestRoot);

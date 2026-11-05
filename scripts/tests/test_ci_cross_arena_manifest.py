@@ -34,7 +34,7 @@ GUARD = 'test result: ok. 1 passed; 0 failed; 0 ignored;'
 
 LIBRARY_BOTH = {
     ('dotnet-value', 'object_tests::tests::recreation_publication_pending_survival'),
-    ('dotnet-value', 'pointer::tests::m1g_recreation_origin_aba'),
+    ('dotnet-value', 'pointer::tests::arena_identity_origin_aba'),
 }
 LIBRARY_ST = LIBRARY_BOTH | {
     ('dotnet-value', 'object_tests::tests::recreation_codec_local_invalid_control'),
@@ -43,9 +43,9 @@ LIBRARY_ST = LIBRARY_BOTH | {
 LIBRARY_MT = LIBRARY_BOTH | {
     ('dotnet-value', 'object_tests::tests::recreation_codec_id40000'),
     ('dotnet-value', 'object_tests::tests::recreation_codec_registered_boundaries'),
-    ('dotnet-utils', 'gc::cross_arena::tests::m1e_recreation_transport'),
-    ('dotnet-utils', 'gc::cross_arena::tests::m1e_recreation_transport_permissive_control'),
-} | {('dotnet-utils', 'gc::cross_arena::tests::m1g_recreation_registry_' + suffix)
+    ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport'),
+    ('dotnet-utils', 'gc::cross_arena::tests::arena_lifetime_transport_permissive_control'),
+} | {('dotnet-utils', 'gc::cross_arena::tests::arena_identity_registry_' + suffix)
      for suffix in ('duplicate', 'fast_bit_transaction', 'generation_exhaustion',
                     'identity_token_reuse', 'drain_reuse_control', 'checked_counter_control')}
 
@@ -105,7 +105,7 @@ class CrossArenaManifestTests(unittest.TestCase):
                       JOB.index('      - name: Execute guarded singleton recreations')]
         self.assertIn("matrix.configuration == 'no-features' && matrix.group == 'library'", absence)
         self.assertIn("--require '0 tests, 0 benchmarks'", absence)
-        self.assertIn('m1e_recreation_transport m1g_recreation_registry_', absence)
+        self.assertIn('arena_lifetime_transport arena_identity_registry_', absence)
 
     def test_each_row_executes_guarded_exact_selectors(self):
         seen = {'no-features': set(), 'multithreading': set()}
@@ -140,10 +140,10 @@ class CrossArenaManifestTests(unittest.TestCase):
                     if row['group'] == 'vm-teardown':
                         self.assertEqual(cargo[-4], row['selector'])
                 if row['group'] == 'vm-stress':
-                    self.assertEqual(calls[0][-4], BASE + 'm1e_recreation_teardown_stress')
+                    self.assertEqual(calls[0][-4], BASE + 'arena_lifetime_teardown_stress')
                 if row['group'] == 'vm-collection':
-                    suffix = ('m1e_recreation_vm_collection_fixed_point_payload_and_reclamation'
-                              if row['configuration'] == 'multithreading' else 'm1e_recreation_vm_collection')
+                    suffix = ('arena_lifetime_vm_collection_fixed_point_payload_and_reclamation'
+                              if row['configuration'] == 'multithreading' else 'arena_lifetime_vm_collection')
                     self.assertEqual(calls[0][-4], 'executor::executor_collection_recreation_tests::' + suffix)
                 if library:
                     actual = {(c[c.index('-p') + 1], c[-4]) for c in calls}
@@ -164,7 +164,7 @@ class CrossArenaManifestTests(unittest.TestCase):
         self.assertNotIn('-Zmiri-strict-provenance', JOB[:JOB.index('      - name: Isolated strict-provenance transport core')])
         self.assertIn("--timeout 900", strict)
         self.assertIn("--require '" + GUARD + "'", strict)
-        self.assertIn('pointer::tests::m1e_recreation_transport_strict_core -- --exact --test-threads=1', strict)
+        self.assertIn('pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1', strict)
 
 
 if __name__ == '__main__':

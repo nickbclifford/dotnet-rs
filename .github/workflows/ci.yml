@@ -445,12 +445,12 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1a-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 3 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1a_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::heap_access_ -- --test-threads=1
       - name: Miri pointer semantics regressions (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1b-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1b_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::ptr_arith_ -- --test-threads=1
       - name: Miri atomic access regressions (no features)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-atomic-no-features --features no-features --timeout 900 \
@@ -461,7 +461,7 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case value-m1d-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 11 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features pointer::tests::owner_retention_ -- --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -578,12 +578,12 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-no-features --features no-features --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features stack::tests::owner_retention_ -- --test-threads=1
       - name: Miri stack owner retention (multithreading)
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case owner-retention-multithreading --features multithreading --timeout 900 \
             --require 'test result: ok. 8 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::m1d_ -- --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib --no-default-features --features multithreading stack::tests::owner_retention_ -- --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |
@@ -697,7 +697,7 @@ jobs:
         if: ${{ matrix.configuration == 'no-features' && matrix.group == 'library' }}
         run: |
           python3 scripts/ci_diagnostics.py run --phase compile --case utils-no-features --features no-features --timeout 900 -- cargo check -p dotnet-utils --no-default-features
-          for selector in m1e_recreation_transport m1g_recreation_registry_; do
+          for selector in arena_lifetime_transport arena_identity_registry_; do
             python3 scripts/ci_diagnostics.py run --phase compile --case "absent-$selector" --features no-features --timeout 900 \
               --require '0 tests, 0 benchmarks' -- cargo test -p dotnet-utils --lib --no-default-features "$selector" -- --list
           done
@@ -721,12 +721,12 @@ jobs:
                 singleton codec-boundaries-control dotnet-value object::tests::recreation_codec_short_storage
               fi
               singleton publication-model dotnet-value object_tests::tests::recreation_publication_pending_survival
-              singleton origin-aba dotnet-value pointer::tests::m1g_recreation_origin_aba
+              singleton origin-aba dotnet-value pointer::tests::arena_identity_origin_aba
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton transport-structural dotnet-utils gc::cross_arena::tests::m1e_recreation_transport
-                singleton transport-runtime dotnet-utils gc::cross_arena::tests::m1e_recreation_transport_permissive_control
+                singleton transport-structural dotnet-utils gc::cross_arena::tests::arena_lifetime_transport
+                singleton transport-runtime dotnet-utils gc::cross_arena::tests::arena_lifetime_transport_permissive_control
                 for name in duplicate fast_bit_transaction generation_exhaustion identity_token_reuse drain_reuse_control checked_counter_control; do
-                  singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::m1g_recreation_registry_$name"
+                  singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::arena_identity_registry_$name"
                 done
               fi
               ;;
@@ -735,13 +735,13 @@ jobs:
               ;;
             vm-collection)
               if [ '${{ matrix.configuration }}' = multithreading ]; then
-                singleton collection dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection_fixed_point_payload_and_reclamation
+                singleton collection dotnet-vm executor::executor_collection_recreation_tests::arena_lifetime_vm_collection_fixed_point_payload_and_reclamation
               else
-                singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::m1e_recreation_vm_collection
+                singleton collection-control dotnet-vm executor::executor_collection_recreation_tests::arena_lifetime_vm_collection
               fi
               ;;
             vm-stress)
-              singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::m1e_recreation_teardown_stress
+              singleton teardown-stress dotnet-vm executor::executor_teardown_recreation_tests::arena_lifetime_teardown_stress
               ;;
             *)
               echo "::error::unknown cross-arena group '${{ matrix.group }}'"
@@ -755,7 +755,7 @@ jobs:
         run: |
           python3 scripts/ci_diagnostics.py run --phase execute --case transport-strict-core --features multithreading --timeout 900 \
             --require 'test result: ok. 1 passed; 0 failed; 0 ignored;' -- \
-            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::m1e_recreation_transport_strict_core -- --exact --test-threads=1
+            cargo +nightly-2026-05-27 miri test -p dotnet-value --lib --no-default-features --features multithreading pointer::tests::arena_lifetime_transport_strict_core -- --exact --test-threads=1
       - name: Summarize diagnostics
         if: always()
         run: |

@@ -25,9 +25,9 @@ After the heap repairs, all five probes passed their individual diagnostics in b
 
 Three library regressions in `crates/dotnet-value/src/pointer/tests.rs` passed individually in both feature configurations, each with 1 passed/0 failed/0 ignored:
 
-- `pointer::tests::m1a_one_byte_heap_read`: reads exactly one byte (`0xA5`) from a one-byte heap payload.
-- `pointer::tests::m1a_safe_oob_address_observation`: checks the wrapping address at logical offset 4096 through both `PointerLike::pointer()` and `StackValue::ManagedPtr::as_ptr()` without dereferencing.
-- `pointer::tests::m1a_heap_pointer_survives_typed_write`: for array, object and boxed payloads, checks that a retained heap base survives a guarded typed write of 5, a raw write of 7, and a guarded readback of 7.
+- `pointer::tests::heap_access_one_byte_heap_read`: reads exactly one byte (`0xA5`) from a one-byte heap payload.
+- `pointer::tests::heap_access_safe_oob_address_observation`: checks the wrapping address at logical offset 4096 through both `PointerLike::pointer()` and `StackValue::ManagedPtr::as_ptr()` without dereferencing.
+- `pointer::tests::heap_access_heap_pointer_survives_typed_write`: for array, object and boxed payloads, checks that a retained heap base survives a guarded typed write of 5, a raw write of 7, and a guarded readback of 7.
 
 The first two are independent recreations; the typed-write test is new.
 
@@ -52,7 +52,7 @@ At M1b completion the catalog contained **31 entries: 24 controls and 7 diagnost
 | 11 | p25, p26 |
 | 12 | p27, p28 |
 
-The eight `dotnet-value` `pointer::tests::m1b_` regressions passed natively and under pinned Miri in both configurations (8 passed, 0 failed, 0 ignored per run). With `memory-validation`, 7 passed and 1 was ignored because that feature's bounds trap rejects its deliberate out-of-bounds offset.
+The eight `dotnet-value` `pointer::tests::ptr_arith_` regressions passed natively and under pinned Miri in both configurations (8 passed, 0 failed, 0 ignored per run). With `memory-validation`, 7 passed and 1 was ignored because that feature's bounds trap rejects its deliberate out-of-bounds offset.
 
 Shard 12's fresh-pointer `stind.i` controls were run using `bash scripts/pointer_provenance.sh controls --configuration CFG --shard 12`: p27 passed in 296 s (no-features) and 348 s (multithreading); p28 passed in 302 s and 321 s, respectively. These are per-probe times in the filtered Miri lane, not native timings. Details are in the [inventory](INVENTORY.md#m1b-phase-6-control-outcome-comparison-2026-10-29).
 

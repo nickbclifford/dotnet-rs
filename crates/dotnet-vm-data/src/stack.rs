@@ -451,7 +451,7 @@ impl<'gc> EvaluationStack<'gc> {
 mod tests {
     use super::*;
 
-    fn m1d_transient_stack() -> (
+    fn owner_retention_transient_stack() -> (
         EvaluationStack<'static>,
         dotnet_utils::sync::Arc<dotnet_value::layout::FieldLayoutManager>,
     ) {
@@ -487,8 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn m1d_pop_retained_ptr_keeps_transient_owner_alive() {
-        let (mut stack, probe) = m1d_transient_stack();
+    fn owner_retention_pop_retained_ptr_keeps_transient_owner_alive() {
+        let (mut stack, probe) = owner_retention_transient_stack();
         assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
         let pointer = stack.pop_retained_ptr();
         assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
@@ -500,15 +500,15 @@ mod tests {
     }
 
     #[test]
-    fn m1d_pop_address_matches_stack_value_pointer() {
-        let (mut stack, probe) = m1d_transient_stack();
+    fn owner_retention_pop_address_matches_stack_value_pointer() {
+        let (mut stack, probe) = owner_retention_transient_stack();
         let expected = stack.stack.last().unwrap().as_ptr().addr();
         assert_eq!(stack.pop_address(), expected);
         assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 1);
     }
 
     #[test]
-    fn m1d_pointer_pops_reject_non_pointers() {
+    fn owner_retention_pointer_pops_reject_non_pointers() {
         let mut stack = EvaluationStack::new();
         stack.push_i32(1);
         assert!(
@@ -525,16 +525,16 @@ mod tests {
     }
 
     #[test]
-    fn m1d_pop_ptr_retains_transient_owner() {
-        let (mut stack, probe) = m1d_transient_stack();
+    fn owner_retention_pop_ptr_retains_transient_owner() {
+        let (mut stack, probe) = owner_retention_transient_stack();
         assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
         let _pointer = stack.pop_retained_ptr();
         assert_eq!(dotnet_utils::sync::Arc::strong_count(&probe), 2);
     }
 
     #[test]
-    fn m1d_pop_ptr_access_after_pop() {
-        let (mut stack, _probe) = m1d_transient_stack();
+    fn owner_retention_pop_ptr_access_after_pop() {
+        let (mut stack, _probe) = owner_retention_transient_stack();
         let pointer = stack.pop_retained_ptr();
         // SAFETY: F10.RawMemoryAccessValid — The retained owner contains the
         // initialized byte and remains alive throughout this in-range read.
@@ -546,9 +546,9 @@ mod tests {
     /// `peek_stack_at` clone derives a raw address, is dropped, and the address
     /// is then used while the original stack slot is still alive.
     #[test]
-    fn m1d_peek_clone_drop_keeps_transient_address_valid() {
+    fn owner_retention_peek_clone_drop_keeps_transient_address_valid() {
         use dotnet_utils::sync::Arc;
-        let (stack, probe) = m1d_transient_stack();
+        let (stack, probe) = owner_retention_transient_stack();
         assert_eq!(Arc::strong_count(&probe), 2);
         let peeked = stack.peek_stack_at(0);
         // The clone shares the owner rather than forking the buffer.
@@ -574,9 +574,9 @@ mod tests {
     /// Ref write-back clones the origin; it must retain the same owner
     /// and stay valid after the argument slots are popped.
     #[test]
-    fn m1d_write_back_origin_clone_retains_transient_owner() {
+    fn owner_retention_write_back_origin_clone_retains_transient_owner() {
         use dotnet_utils::sync::Arc;
-        let (mut stack, probe) = m1d_transient_stack();
+        let (mut stack, probe) = owner_retention_transient_stack();
         let peeked = stack.peek_stack_at(0);
         let StackValue::ManagedPtr(p) = &peeked else {
             panic!("expected managed pointer");
@@ -599,10 +599,10 @@ mod tests {
 
     /// A TypedRef slot clones with the stack value and keeps the owner.
     #[test]
-    fn m1d_typed_ref_clone_retains_transient_owner() {
+    fn owner_retention_typed_ref_clone_retains_transient_owner() {
         use dotnet_utils::sync::Arc;
         use dotnet_value::TypedReferenceSlot;
-        let (mut stack, probe) = m1d_transient_stack();
+        let (mut stack, probe) = owner_retention_transient_stack();
         let StackValue::ManagedPtr(p) = stack.pop() else {
             panic!("expected managed pointer");
         };

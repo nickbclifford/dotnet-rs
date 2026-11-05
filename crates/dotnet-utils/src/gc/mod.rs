@@ -329,7 +329,7 @@ mod opaque_transport_recreation_tests {
     /// wrapper with a Box stand-in, not a GC object or a whole-VM test. No raw
     /// address is exposed; only inert metadata crosses the worker thread.
     #[test]
-    fn m1e_recreation_opaque_transport() {
+    fn arena_lifetime_opaque_transport() {
         let source = include_str!("mod.rs");
         let wrapper = source
             .split("pub struct OpaqueObjectPtr")

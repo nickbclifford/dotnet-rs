@@ -321,7 +321,7 @@ fn p00_smoke() {
 
 // ---- Claim 1: ldloca; conv.u; stind (write through a stack-slot address laundered via an int) ---
 #[test]
-#[ignore = "M3: p01 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p01_ldloca_convu_stind_i4() {
     let r = run_il(
         "P01",
@@ -613,7 +613,7 @@ fn run_program_with_collection(
 // Stale-address probe: `ldloca; conv.u` then a callee needing a big evaluation stack forces the
 // shared Vec<StackValue> to reallocate; the integer address held by the caller dangles.
 #[test]
-#[ignore = "M3: p09 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p09_ldloca_convu_survives_callee_stack_growth() {
     let r = run_program("P09", |res, type_idx| {
         let helper_body = make_test_method!(
@@ -719,7 +719,7 @@ fn p11_ldelema_stind_heap_array_control() {
 
 // Static field address laundered through an integer.
 #[test]
-#[ignore = "M3/M1d: p12 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "known or suspected host UB: static field addresses are not yet stable/aligned (docs/plans/README.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p12_ldsflda_convu_stind_static() {
     let r = run_program("P12", |res, type_idx| {
         let f = FieldSource::Definition(res.push_field(
@@ -827,7 +827,7 @@ fn p35_ldflda_on_stack_value_type_then_ldind() {
 #[test]
 #[cfg_attr(
     feature = "memory-validation",
-    ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+    ignore = "p13 deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
 )]
 fn p13_ldelema_managed_add_far_out_of_bounds_then_conv_u() {
     let r = run_program("P13", |_res, _t| {
@@ -894,7 +894,7 @@ fn conv_u8_heap_ldelema_matches_conv_u() {
 #[test]
 #[cfg_attr(
     feature = "memory-validation",
-    ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+    ignore = "conv.u8 regression deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
 )]
 fn conv_u8_after_far_oob_managed_add_does_not_panic() {
     let r = run_program("ConvU8FarOob", |_res, _t| {
@@ -1048,7 +1048,7 @@ fn p14_initblk_heap_array_via_managed_ptr() {
 
 // initblk(&local, 0x01, 4): destination is ManagedPtr(Stack).
 #[test]
-#[ignore = "M3/M1f/M5: p15 known or suspected host UB; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p15_initblk_stack_local_via_managed_ptr() {
     let r = run_program("P15", |_res, _t| {
         (
@@ -1165,7 +1165,7 @@ fn p18_localloc_ptr_clt() {
 
 // Agent claim: negative array index -> host overflow panic instead of IndexOutOfRangeException.
 #[test]
-#[ignore = "M1f: p19 negative index host panic/abort reproducer; explicit diagnostic only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "reproduces a host panic/abort on a negative array index; run only via scripts/pointer_provenance.sh diagnostic"]
 fn p19_ldelem_negative_index() {
     let r = run_il(
         "P19",
@@ -1894,7 +1894,7 @@ fn p_null_through_pointer_local_address() {
 
 /// C#: int x = 0; int y = 0x55; *(long*)&x = -1; return y;   (unverifiable but legal IL type pun)
 #[test]
-#[ignore = "M3: p_wide_store_into_int_local unverified on baseline; diagnostic-permissive-TB only via scripts/pointer_provenance.sh diagnostic"]
+#[ignore = "outcome not yet verified; run only via scripts/pointer_provenance.sh diagnostic"]
 fn p_wide_store_into_int_local() {
     let r = run_il(
         "Pass2Wide",

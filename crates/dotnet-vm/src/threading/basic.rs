@@ -844,7 +844,7 @@ mod tests {
     /// Harvest preserves a
     /// live identity and discards a queued stale generation before conversion.
     #[test]
-    fn m1e_recreation_harvest_rejects_stale_registration() {
+    fn arena_lifetime_harvest_rejects_stale_registration() {
         use dotnet_utils::gc::{
             CrossArenaRef, OpaqueObjectPtr, ThreadSafeLock, record_cross_arena_ref,
             try_acquire_lease, unregister_arena,

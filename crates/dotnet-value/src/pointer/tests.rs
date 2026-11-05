@@ -85,7 +85,7 @@ fn managed_ptr_to_heap_object_start<'gc>(obj: ObjectRef<'gc>) -> ManagedPtr<'gc>
     )
 }
 
-fn m1d_transient_object() -> (Object<'static>, Arc<FieldLayoutManager>) {
+fn owner_retention_transient_object() -> (Object<'static>, Arc<FieldLayoutManager>) {
     let layout = Arc::new(FieldLayoutManager {
         fields: HashMap::new(),
         total_size: 1,
@@ -102,8 +102,8 @@ fn m1d_transient_object() -> (Object<'static>, Arc<FieldLayoutManager>) {
 }
 
 #[test]
-fn m1d_transient_native_int_conversion_is_rejected() {
-    let (obj, _probe) = m1d_transient_object();
+fn owner_retention_transient_native_int_conversion_is_rejected() {
+    let (obj, _probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
     let transient =
         ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
@@ -112,7 +112,7 @@ fn m1d_transient_native_int_conversion_is_rejected() {
         transient.try_observe_address(),
         Err(ManagedPtrOwnershipError::TransientEscapes)
     );
-    let (obj, _probe) = m1d_transient_object();
+    let (obj, _probe) = owner_retention_transient_object();
     let null_transient =
         ManagedPtr::new_transient(None, TypeDescription::NULL, obj, ByteOffset::new(0));
     assert_eq!(
@@ -167,7 +167,7 @@ fn m1d_transient_native_int_conversion_is_rejected() {
 }
 
 #[test]
-fn m1d_cli_to_cts_rejects_transient_integer_escape() {
+fn owner_retention_cli_to_cts_rejects_transient_integer_escape() {
     use crate::{
         StackValue,
         cts_cli_conversion::{CliToCts, CtsScalarKind},
@@ -175,7 +175,7 @@ fn m1d_cli_to_cts_rejects_transient_integer_escape() {
     use dotnet_types::error::TypeResolutionError;
 
     for null in [false, true] {
-        let (obj, _probe) = m1d_transient_object();
+        let (obj, _probe) = owner_retention_transient_object();
         let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()));
         let managed = ManagedPtr::new_transient(
             if null { None } else { base },
@@ -235,8 +235,8 @@ fn m1d_cli_to_cts_rejects_transient_integer_escape() {
 }
 
 #[test]
-fn m1d_retained_ptr_keeps_transient_owner_alive() {
-    let (obj, probe) = m1d_transient_object();
+fn owner_retention_retained_ptr_keeps_transient_owner_alive() {
+    let (obj, probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
     let managed =
         ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
@@ -254,7 +254,7 @@ fn m1d_retained_ptr_keeps_transient_owner_alive() {
 }
 
 #[test]
-fn m1d_retained_ptr_heap_origin_reads_through_owner() {
+fn owner_retention_retained_ptr_heap_origin_reads_through_owner() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -278,11 +278,11 @@ fn m1d_retained_ptr_heap_origin_reads_through_owner() {
 }
 
 #[test]
-fn m1d_retained_ptr_rejects_non_pointer_values() {
+fn owner_retention_retained_ptr_rejects_non_pointer_values() {
     use crate::StackValue;
     use dotnet_types::error::ExecutionError;
 
-    let (obj, _probe) = m1d_transient_object();
+    let (obj, _probe) = owner_retention_transient_object();
     for (value, kind) in [
         (StackValue::Int32(7), "Int32"),
         (StackValue::Int64(7), "Int64"),
@@ -302,7 +302,7 @@ fn m1d_retained_ptr_rejects_non_pointer_values() {
 }
 
 #[test]
-fn m1d_retained_ptr_null() {
+fn owner_retention_retained_ptr_null() {
     use crate::{StackValue, TypedReferenceSlot};
 
     let null_managed = ManagedPtr::new(None, TypeDescription::NULL, None, false, None);
@@ -330,8 +330,8 @@ fn m1d_retained_ptr_null() {
 }
 
 #[test]
-fn m1d_normalize_retains_transient_owner() {
-    let (obj, probe) = m1d_transient_object();
+fn owner_retention_normalize_retains_transient_owner() {
+    let (obj, probe) = owner_retention_transient_object();
     assert_eq!(Arc::strong_count(&probe), 2);
     let normalized = PointerOrigin::new_transient(obj).normalize();
     assert_eq!(
@@ -344,8 +344,8 @@ fn m1d_normalize_retains_transient_owner() {
 }
 
 #[test]
-fn m1d_normalize_transient_access_after_consume() {
-    let (obj, _probe) = m1d_transient_object();
+fn owner_retention_normalize_transient_access_after_consume() {
+    let (obj, _probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| data.as_ptr());
     let normalized = PointerOrigin::new_transient(obj).normalize();
     // SAFETY: F10.RawMemoryAccessValid — normalized retains the one-byte
@@ -356,8 +356,8 @@ fn m1d_normalize_transient_access_after_consume() {
 }
 
 #[test]
-fn m1d_from_info_full_retains_transient_owner() {
-    let (obj, probe) = m1d_transient_object();
+fn owner_retention_from_info_full_retains_transient_owner() {
+    let (obj, probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
     let info = ManagedPtrInfo {
         address: Some(base),
@@ -377,8 +377,8 @@ fn m1d_from_info_full_retains_transient_owner() {
 }
 
 #[test]
-fn m1d_from_info_full_transient_access_after_info_consumed() {
-    let (obj, _probe) = m1d_transient_object();
+fn owner_retention_from_info_full_transient_access_after_info_consumed() {
+    let (obj, _probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
     let info = ManagedPtrInfo {
         address: Some(base),
@@ -397,8 +397,8 @@ fn m1d_from_info_full_transient_access_after_info_consumed() {
 }
 
 #[test]
-fn m1d_transient_managed_ptr_clone_aliases_owner_storage() {
-    let (obj, probe) = m1d_transient_object();
+fn owner_retention_transient_managed_ptr_clone_aliases_owner_storage() {
+    let (obj, probe) = owner_retention_transient_object();
     let base = obj.with_data(|data| NonNull::new(data.as_ptr().cast_mut()).unwrap());
     let original =
         ManagedPtr::new_transient(Some(base), TypeDescription::NULL, obj, ByteOffset::new(0));
@@ -425,7 +425,7 @@ fn m1d_transient_managed_ptr_clone_aliases_owner_storage() {
 }
 
 #[test]
-fn m1a_one_byte_heap_read() {
+fn heap_access_one_byte_heap_read() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -457,7 +457,7 @@ fn m1a_one_byte_heap_read() {
 }
 
 #[test]
-fn m1a_heap_pointer_survives_typed_write() {
+fn heap_access_heap_pointer_survives_typed_write() {
     with_test_gc_context(|gc_handle| {
         // Exercise both direct and decoded bases, with and without an exposed
         // integer round trip; Miri's exposed-provenance mode has known limitations.
@@ -787,7 +787,7 @@ fn heap_address_observation_wraps_without_granting_read_access() {
 }
 
 #[test]
-fn m1a_safe_oob_address_observation() {
+fn heap_access_safe_oob_address_observation() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -1567,7 +1567,7 @@ fn test_managed_ptr_unmanaged_roundtrip_miri() {
 }
 
 #[test]
-fn m1b_managed_ptr_checked_offset_reports_errors() {
+fn ptr_arith_managed_ptr_checked_offset_reports_errors() {
     let mut storage = [0u8; 8];
     storage[3] = 0x5A;
     storage[5] = 0xA5;
@@ -1688,7 +1688,7 @@ fn m1b_managed_ptr_checked_offset_reports_errors() {
 }
 
 #[test]
-fn m1b_unmanaged_ptr_null_contract() {
+fn ptr_arith_unmanaged_ptr_null_contract() {
     use crate::StackValue;
 
     let null = StackValue::unmanaged_ptr(std::ptr::null_mut());
@@ -1712,7 +1712,7 @@ fn m1b_unmanaged_ptr_null_contract() {
             assert!(matches!(stack_result, StackValue::UnmanagedPtr(_)));
             assert!(!stack_result.is_null());
             let restored = StackValue::unmanaged_ptr_offset(displaced, delta.wrapping_neg());
-            m1b_assert_unmanaged_sentinel(&restored);
+            ptr_arith_assert_unmanaged_sentinel(&restored);
         }
     }
 
@@ -1727,14 +1727,14 @@ fn m1b_unmanaged_ptr_null_contract() {
     }
 }
 
-fn m1b_assert_unmanaged_sentinel(value: &crate::StackValue<'_>) {
+fn ptr_arith_assert_unmanaged_sentinel(value: &crate::StackValue<'_>) {
     // SAFETY: F10.RawMemoryAccessValid — the test keeps the 64-byte Box allocation
     // alive, and `value` is expected to point back to its initialized first byte.
     let byte = unsafe { value.as_ptr().read() };
     assert_eq!(byte, 0xA5);
 }
 
-fn m1b_assert_unmanaged_round_trip(raw: *mut u8, delta: isize, int32: bool, subtract: bool) {
+fn ptr_arith_assert_unmanaged_round_trip(raw: *mut u8, delta: isize, int32: bool, subtract: bool) {
     let pointer = crate::StackValue::unmanaged_ptr(raw);
     let delta_value = || {
         if int32 {
@@ -1753,11 +1753,11 @@ fn m1b_assert_unmanaged_round_trip(raw: *mut u8, delta: isize, int32: bool, subt
     } else {
         (displaced - delta_value()).unwrap()
     };
-    m1b_assert_unmanaged_sentinel(&restored);
+    ptr_arith_assert_unmanaged_sentinel(&restored);
 }
 
 #[test]
-fn m1b_unmanaged_offsets_wrap_and_round_trip_with_deref() {
+fn ptr_arith_unmanaged_offsets_wrap_and_round_trip_with_deref() {
     let mut allocation = Box::new([0u8; 64]);
     let raw = allocation.as_mut_ptr();
     // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
@@ -1767,13 +1767,13 @@ fn m1b_unmanaged_offsets_wrap_and_round_trip_with_deref() {
     for delta in [1, -1, 8, i32::MIN as isize] {
         for int32 in [true, false] {
             for subtract in [false, true] {
-                m1b_assert_unmanaged_round_trip(raw, delta, int32, subtract);
+                ptr_arith_assert_unmanaged_round_trip(raw, delta, int32, subtract);
             }
         }
     }
     for delta in [isize::MIN, isize::MAX] {
         for subtract in [false, true] {
-            m1b_assert_unmanaged_round_trip(raw, delta, false, subtract);
+            ptr_arith_assert_unmanaged_round_trip(raw, delta, false, subtract);
         }
     }
 
@@ -1784,12 +1784,12 @@ fn m1b_unmanaged_offsets_wrap_and_round_trip_with_deref() {
     .unwrap()
         + crate::StackValue::Int32(2))
     .unwrap();
-    m1b_assert_unmanaged_sentinel(&wrapped);
+    ptr_arith_assert_unmanaged_sentinel(&wrapped);
     drop(allocation);
 }
 
 #[test]
-fn m1b_unmanaged_arithmetic_wraps_to_explicit_null() {
+fn ptr_arith_unmanaged_arithmetic_wraps_to_explicit_null() {
     let mut allocation = Box::new([0u8; 64]);
     let raw = allocation.as_mut_ptr();
     // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
@@ -1817,12 +1817,12 @@ fn m1b_unmanaged_arithmetic_wraps_to_explicit_null() {
     let null = crate::StackValue::unmanaged_ptr(std::ptr::null_mut());
     assert!(null.is_null());
     let reconstructed = (null + crate::StackValue::NativeInt(exposed_address as isize)).unwrap();
-    m1b_assert_unmanaged_sentinel(&reconstructed);
+    ptr_arith_assert_unmanaged_sentinel(&reconstructed);
     drop(allocation);
 }
 
 #[test]
-fn m1b_min_signed_operands_do_not_overflow() {
+fn ptr_arith_min_signed_operands_do_not_overflow() {
     let mut allocation = Box::new([0u8; 64]);
     let raw = allocation.as_mut_ptr();
     // SAFETY: F10.RawMemoryAccessValid — `raw` points to the initialized first byte
@@ -1832,22 +1832,22 @@ fn m1b_min_signed_operands_do_not_overflow() {
     let displaced_int32 =
         (crate::StackValue::Int32(i32::MIN) + crate::StackValue::unmanaged_ptr(raw)).unwrap();
     let restored_int32 = (displaced_int32 - crate::StackValue::Int32(i32::MIN)).unwrap();
-    m1b_assert_unmanaged_sentinel(&restored_int32);
+    ptr_arith_assert_unmanaged_sentinel(&restored_int32);
 
     let displaced_native_min =
         (crate::StackValue::unmanaged_ptr(raw) - crate::StackValue::NativeInt(isize::MIN)).unwrap();
     let restored_native_min =
         (displaced_native_min + crate::StackValue::NativeInt(isize::MIN)).unwrap();
-    m1b_assert_unmanaged_sentinel(&restored_native_min);
+    ptr_arith_assert_unmanaged_sentinel(&restored_native_min);
 
     let displaced_int32_sub =
         (crate::StackValue::unmanaged_ptr(raw) - crate::StackValue::Int32(i32::MIN)).unwrap();
     let restored_int32_sub = (displaced_int32_sub + crate::StackValue::Int32(i32::MIN)).unwrap();
-    m1b_assert_unmanaged_sentinel(&restored_int32_sub);
+    ptr_arith_assert_unmanaged_sentinel(&restored_int32_sub);
     drop(allocation);
 }
 
-fn m1b_assert_unmanaged_byte(value: &crate::StackValue<'_>, expected: u8) {
+fn ptr_arith_assert_unmanaged_byte(value: &crate::StackValue<'_>, expected: u8) {
     // SAFETY: F10.RawMemoryAccessValid — callers pass pointers into a live local Box allocation
     // (or a NativeInt with its provenance exposed from that allocation) and dereference only
     // initialized bytes within that allocation.
@@ -1856,7 +1856,7 @@ fn m1b_assert_unmanaged_byte(value: &crate::StackValue<'_>, expected: u8) {
 }
 
 #[test]
-fn m1b_pointer_comparisons_are_value_bearing() {
+fn ptr_arith_pointer_comparisons_are_value_bearing() {
     let mut allocation = Box::new([0u8; 16]);
     let base_raw = allocation.as_mut_ptr();
     // SAFETY: F10.RawMemoryAccessValid — `base_raw` points to the initialized first byte
@@ -2004,14 +2004,14 @@ fn m1b_pointer_comparisons_are_value_bearing() {
     // observes the initialized byte in the live Box allocation.
     let managed_byte = unsafe { managed.with_data(1, |bytes| bytes[0]) };
     assert_eq!(managed_byte, 0xA5);
-    m1b_assert_unmanaged_byte(&base, 0xA5);
-    m1b_assert_unmanaged_byte(&base_integer, 0xA5);
-    m1b_assert_unmanaged_byte(&later, 0x5A);
+    ptr_arith_assert_unmanaged_byte(&base, 0xA5);
+    ptr_arith_assert_unmanaged_byte(&base_integer, 0xA5);
+    ptr_arith_assert_unmanaged_byte(&later, 0x5A);
     drop(allocation);
 }
 
 #[test]
-fn m1b_managed_ptr_far_oob_compare_and_difference() {
+fn ptr_arith_managed_ptr_far_oob_compare_and_difference() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -2115,9 +2115,9 @@ fn m1b_managed_ptr_far_oob_compare_and_difference() {
 #[test]
 #[cfg_attr(
     feature = "memory-validation",
-    ignore = "M1b managed-pointer arithmetic deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design (F-TEST-003)"
+    ignore = "managed-pointer arithmetic deliberately forms an out-of-bounds managed address; memory-validation's debug bound trap rejects it by design"
 )]
-fn m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
+fn ptr_arith_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
     with_test_gc_context(|gc_handle| {
         let vector = Vector::new(
             ConcreteType::new(ResolutionS::NULL, BaseType::UInt8),
@@ -2155,7 +2155,7 @@ fn m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
             assert!(
                 message.contains("negative")
                     && message.contains("compact")
-                    && message.contains("M3")
+                    && message.contains("not supported")
             );
         }
 
@@ -2188,7 +2188,7 @@ fn m1b_managed_ptr_arithmetic_boundaries_report_explicit_errors() {
 }
 
 #[cfg(feature = "multithreading")]
-mod m1d_cross_arena {
+mod owner_retention_cross_arena {
     use super::*;
     use crate::{ArenaId, object::ObjectPtr, test_helpers::next_test_arena_id};
     use dotnet_utils::{
@@ -2278,7 +2278,7 @@ mod m1d_cross_arena {
     }
 
     #[test]
-    fn m1d_cross_arena_access_after_owner_teardown_is_rejected() {
+    fn owner_retention_cross_arena_access_after_owner_teardown_is_rejected() {
         let fixture = CrossArenaFixture::new();
         let ptr = fixture.managed_ptr();
         unregister_arena(fixture.arena_id);
@@ -2293,7 +2293,7 @@ mod m1d_cross_arena {
     }
 
     #[test]
-    fn m1d_cross_arena_lease_holds_teardown_until_access_completes() {
+    fn owner_retention_cross_arena_lease_holds_teardown_until_access_completes() {
         let fixture = CrossArenaFixture::new();
         let ptr = fixture.managed_ptr();
         let unregistered = Arc::new(AtomicBool::new(false));
@@ -2326,7 +2326,7 @@ mod m1d_cross_arena {
     }
 
     #[test]
-    fn m1d_retained_ptr_cross_arena_lease_blocks_teardown() {
+    fn owner_retention_retained_ptr_cross_arena_lease_blocks_teardown() {
         use crate::{StackValue, TypedReferenceSlot};
         use dotnet_types::error::ExecutionError;
 
@@ -2390,12 +2390,12 @@ mod m1d_cross_arena {
     /// leaves the write dangling. Writers must keep a lease across the write. Known-dangling
     /// by construction: run under pinned Miri `--ignored` only.
     #[test]
-    #[ignore = "F-GUARD-101: documents the pre-repair Fill fast-path pattern (observe, then write unprotected); known-dangling, Miri --ignored only"]
+    #[ignore = "documents the unprotected observe-then-write pattern the Fill fast path must not use; known-dangling, run under Miri with --ignored only"]
     #[allow(
         clippy::undocumented_unsafe_blocks,
         reason = "intentional UB diagnostic: no safety predicate holds, so a `// SAFETY:` registry citation would be false"
     )]
-    fn m1d_fill_fast_path_observed_pointer_dangles_after_teardown() {
+    fn owner_retention_fill_fast_path_observed_pointer_dangles_after_teardown() {
         let fixture = CrossArenaFixture::new();
         let observed = fixture
             .managed_ptr()
@@ -2412,7 +2412,7 @@ mod m1d_cross_arena {
     /// lease is still refused.
     #[test]
     #[cfg(feature = "memory-validation")]
-    fn m1d_cross_arena_validation_accepts_in_flight_lease() {
+    fn owner_retention_cross_arena_validation_accepts_in_flight_lease() {
         let fixture = CrossArenaFixture::new();
         let arena_id = fixture.arena_id;
         let object_ptr = fixture.object_ptr;
@@ -2440,8 +2440,8 @@ mod m1d_cross_arena {
 /// kept alive so a wrongful acceptance shows up as an assertion failure instead of a dangling
 /// read.
 #[cfg(feature = "multithreading")]
-mod m1g_recreation_origin_aba_support {
-    use super::m1d_cross_arena::CrossArenaFixture;
+mod arena_identity_origin_aba_support {
+    use super::owner_retention_cross_arena::CrossArenaFixture;
     use super::*;
     use dotnet_utils::{
         gc::{register_arena, try_acquire_lease, unregister_arena},
@@ -2509,9 +2509,9 @@ mod m1g_recreation_origin_aba_support {
 /// serialized bytes are rejected after the owner ID is unregistered and re-registered.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1g_recreation_origin_aba() {
+fn arena_identity_origin_aba() {
     let (in_memory_rejected, serialized_rejected) =
-        m1g_recreation_origin_aba_support::stale_origin_outcome(true);
+        arena_identity_origin_aba_support::stale_origin_outcome(true);
     assert!(
         in_memory_rejected && serialized_rejected == Some(true),
         "stale origin accepted after owner unregister/re-register: \
@@ -2520,20 +2520,20 @@ fn m1g_recreation_origin_aba() {
 }
 
 /// The in-memory half of the ABA check
-/// alone, without decoding serialized bytes (covered by `m1g_recreation_origin_aba`).
+/// alone, without decoding serialized bytes (covered by `arena_identity_origin_aba`).
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1g_recreation_in_memory_origin_aba() {
+fn arena_identity_in_memory_origin_aba() {
     let (in_memory_rejected, serialized_rejected) =
-        m1g_recreation_origin_aba_support::stale_origin_outcome(false);
+        arena_identity_origin_aba_support::stale_origin_outcome(false);
     assert!(in_memory_rejected, "stale ordinary origin was accepted");
     assert_eq!(serialized_rejected, None, "serialized check not requested");
 }
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1g_recreation_origin_aba_registry_control() {
-    m1g_recreation_origin_aba_support::registry_control();
+fn arena_identity_origin_aba_registry_control() {
+    arena_identity_origin_aba_support::registry_control();
 }
 
 /// CrossArena word 1 must carry the
@@ -2541,9 +2541,9 @@ fn m1g_recreation_origin_aba_registry_control() {
 /// consumed if needed so the fixture's ID and token differ and the assertion is specific.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1g_recreation_token_wire_identity() {
+fn arena_identity_token_wire_identity() {
     use dotnet_utils::gc::try_acquire_lease;
-    use m1d_cross_arena::CrossArenaFixture;
+    use owner_retention_cross_arena::CrossArenaFixture;
 
     let fixture = CrossArenaFixture::new();
     let mut token = try_acquire_lease(fixture.arena_id)
@@ -2600,7 +2600,7 @@ fn m1g_recreation_token_wire_identity() {
 /// No-features counterpart: CrossArena tag 5 is rejected and a local pointer still round trips.
 #[cfg(not(feature = "multithreading"))]
 #[test]
-fn m1g_recreation_origin_aba() {
+fn arena_identity_origin_aba() {
     let word0: usize = 0x1000 | 5;
     let word1: usize = (40_000usize << 32) | 8;
     let mut bytes = ManagedPtr::serialization_buffer();
@@ -2640,8 +2640,8 @@ fn m1g_recreation_origin_aba() {
 }
 
 #[cfg(feature = "multithreading")]
-mod m1e_recreation_transport_support {
-    use super::m1d_cross_arena::CrossArenaFixture;
+mod arena_lifetime_transport_support {
+    use super::owner_retention_cross_arena::CrossArenaFixture;
     use super::*;
     use crate::test_helpers::next_test_arena_id;
     use dotnet_utils::gc::{
@@ -2689,14 +2689,14 @@ mod m1e_recreation_transport_support {
 
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_transport_permissive_control() {
-    m1e_recreation_transport_support::transport_round_trip();
+fn arena_lifetime_transport_permissive_control() {
+    arena_lifetime_transport_support::transport_round_trip();
 }
 
 #[cfg(feature = "multithreading")]
 #[test]
 /// Same replay as the permissive control. The transport carries pointers rather than
 /// integers, so this passes under pinned Miri with `-Zmiri-strict-provenance` and runs everywhere.
-fn m1e_recreation_transport_strict_core() {
-    m1e_recreation_transport_support::transport_round_trip();
+fn arena_lifetime_transport_strict_core() {
+    arena_lifetime_transport_support::transport_round_trip();
 }

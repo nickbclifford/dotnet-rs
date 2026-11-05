@@ -20,6 +20,10 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
+  so byref arithmetic that goes below the base or past the compact range (for example
+  `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
+  (`managed_offset_error` in `crates/dotnet-value/src/stack_value.rs`).
 - **Static field addresses:** `ldsflda; conv.u` writes and static payload alignment
   (`p12_ldsflda_convu_stind_static`).
 - **Native call boundary:** payload addresses, ABI returns, by-ref/out copy-back and pinned

@@ -1418,7 +1418,7 @@ mod tests {
     /// Duplicate publication must not
     /// replace a live registration or leave its outstanding lease detached from the map.
     #[test]
-    fn m1g_recreation_registry_duplicate() {
+    fn arena_identity_registry_duplicate() {
         let id = ArenaId::new(10_151);
         register_arena(id, recreation_flag());
         let original = try_acquire_lease(id).expect("original registration");
@@ -1439,7 +1439,7 @@ mod tests {
     /// The fast bit and map must not
     /// disagree while unregister is waiting for the registry write lock.
     #[test]
-    fn m1g_recreation_registry_fast_bit_transaction() {
+    fn arena_identity_registry_fast_bit_transaction() {
         let id = ArenaId::new(51);
         register_arena(id, recreation_flag());
         let map = VALID_ARENAS.write();
@@ -1474,7 +1474,7 @@ mod tests {
     /// Re-register after removal while
     /// the old unregister is draining. This is a production-registry control, not a model.
     #[test]
-    fn m1g_recreation_registry_drain_reuse_control() {
+    fn arena_identity_registry_drain_reuse_control() {
         let id = ArenaId::new(52);
         register_arena(id, recreation_flag());
         let old = try_acquire_lease(id).expect("old lease");
@@ -1549,7 +1549,7 @@ mod tests {
     /// Exercise production allocation
     /// against an isolated registry, including failed-publication and token exhaustion.
     #[test]
-    fn m1g_recreation_registry_generation_exhaustion() {
+    fn arena_identity_registry_generation_exhaustion() {
         let mut registry = ArenaRegistry::new();
         let fast = AtomicU64::new(0);
         registry.next_generation = u64::MAX - 1;
@@ -1622,7 +1622,7 @@ mod tests {
     /// Tokens, exact leases and stale
     /// unregisters must not bind an old registration to its successor.
     #[test]
-    fn m1g_recreation_registry_identity_token_reuse() {
+    fn arena_identity_registry_identity_token_reuse() {
         let id = ArenaId::new(53);
         let old_id = try_register_arena(id, recreation_flag()).unwrap();
         let old = try_acquire_lease_for_identity(old_id).unwrap();
@@ -1659,7 +1659,7 @@ mod tests {
     /// An isolated checked-counter model
     /// for generation and future u32 tokens. It is not production token-allocation evidence.
     #[test]
-    fn m1g_recreation_registry_checked_counter_control() {
+    fn arena_identity_registry_checked_counter_control() {
         use std::sync::atomic::AtomicU32;
         let generations = AtomicU64::new(u64::MAX - 1);
         let tokens = AtomicU32::new(u32::MAX - 1);
@@ -1685,7 +1685,7 @@ mod tests {
     /// trip, no exposed provenance), so use after harvest works under permissive execution and
     /// Miri alike. It cannot by itself prove the full contract; the structural scan covers that.
     #[test]
-    fn m1e_recreation_transport_permissive_control() {
+    fn arena_lifetime_transport_permissive_control() {
         let id = ArenaId::new(10_101);
         register_arena(id, Arc::new(AtomicBool::new(false)));
         let allocation = Box::into_raw(Box::new(0xA5u8));
@@ -1720,7 +1720,7 @@ mod tests {
     /// producer/harvester uses `expose_provenance`/`with_exposed_provenance*`. It scans the
     /// complete producer -> buffer -> harvest path; it is source evidence, not VM execution.
     #[test]
-    fn m1e_recreation_transport() {
+    fn arena_lifetime_transport() {
         const FORBIDDEN: [&str; 2] = ["expose_provenance", "with_exposed_provenance"];
         // Top-level test module only: an item-level `#[cfg(test)]` must not truncate a file.
         const TEST_MODULE: &str = "\n#[cfg(test)]\nmod ";

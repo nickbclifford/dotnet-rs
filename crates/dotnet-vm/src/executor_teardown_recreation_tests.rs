@@ -237,7 +237,7 @@ fn recreation_executor_unwind_teardown_active_lease() {
 /// followed by a separate, unrooted teardown witness. A lease does not root objects.
 #[cfg(not(feature = "multithreading"))]
 #[test]
-fn m1e_recreation_teardown_stress() {
+fn arena_lifetime_teardown_stress() {
     let state = shared();
     let rounds = if cfg!(miri) { 2 } else { 20 };
     for _ in 0..rounds {
@@ -260,7 +260,7 @@ fn m1e_recreation_teardown_stress() {
 /// allocated; no claim is made that the lease roots either allocation.
 #[cfg(feature = "multithreading")]
 #[test]
-fn m1e_recreation_teardown_stress() {
+fn arena_lifetime_teardown_stress() {
     use crate::{gc::coordinator::GcCycleGuard, test_utils::worker::Worker};
     use dotnet_utils::gc::cross_arena::try_acquire_lease;
     use std::{

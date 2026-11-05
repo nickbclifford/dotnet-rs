@@ -1016,7 +1016,7 @@ impl<'gc> PartialOrd for StackValue<'gc> {
 
 fn managed_offset_error() -> ExecutionError {
     ExecutionError::NotImplemented(
-        "managed pointer offset is unrepresentable (negative or beyond the compact range requires the signed representation planned for M3; overflow or null cached address is unsupported)".into(),
+        "managed pointer offset is unrepresentable (negative or beyond the compact offset range is not supported; overflow or null cached address is unsupported)".into(),
     )
 }
 
