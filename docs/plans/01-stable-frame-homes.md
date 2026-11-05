@@ -139,6 +139,10 @@ Do not build a later slice's support in an earlier slice.
    see [slice-4 evidence](../ci-evidence/2026-11-05-stable-frame-homes-slice4.md).
 5. **Measure.** Compare `runtime_primitives` and `end_to_end` against `main` before slice 1. A
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
+   The [slice-5 preflight](../perf-evidence/2026-11-05-stable-frame-homes.md) found
+   a reproducible candidate-only EF Core argument-home initialization failure before
+   timing. The [enum-home repair](02-frame-home-enum-representation.md) addresses
+   that failure; performance measurement remains incomplete.
 
 ## Done when
 

@@ -31,8 +31,10 @@ pub struct VariableHome {
     pub offset: usize,
     /// Encoding of the variable in the block.
     pub layout: Arc<LayoutManager>,
-    /// Present when the variable is a value type: what a load rebuilds the value from.
+    /// Present for struct homes whose loads rebuild a value from its fields.
     pub value_type: Option<HomeValueType>,
+    /// Declared scalar value-type identity, independent of stack widening.
+    pub scalar_type: Option<TypeDescription>,
 }
 
 /// The identity a value-type variable is loaded as, matching the value `init_locals` creates or

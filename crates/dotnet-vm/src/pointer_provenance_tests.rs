@@ -1038,6 +1038,88 @@ fn homed_object_local_survives_collection() {
     assert_eq!(r, 4);
 }
 
+// Enum homes use underlying scalar bytes for scalar arguments, stores and indirect access.
+#[test]
+fn p43_enum_home_scalar_roundtrip() {
+    let result = run_program("P43", |res, owner| {
+        let corlib = res.push_assembly_reference(
+            dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
+        );
+        let enum_ref =
+            res.push_type_reference(dotnetdll::resolved::types::ExternalTypeReference::new(
+                Some("System".into()),
+                "Enum",
+                dotnetdll::resolved::types::ResolutionScope::Assembly(corlib),
+            ));
+        let mut definition = TypeDefinition::new(None, "HomeEnum");
+        definition.extends = Some(enum_ref.into());
+        let index = res.push_type_definition(definition);
+        res.push_field(
+            index,
+            Field {
+                static_member: false,
+                special_name: true,
+                runtime_special_name: true,
+                ..new_static_field("value__", BaseType::<MemberType>::Int32)
+            },
+        );
+        let enum_type = BaseType::Type {
+            source: TypeSource::User(UserType::Definition(index)),
+            value_kind: Some(ValueKind::ValueType),
+        };
+        let body = make_test_method!(max_stack: 3,
+        instructions: vec![
+            Instruction::LoadArgumentAddress(0),
+            Instruction::LoadConstantInt32(41),
+            Instruction::StoreArgument(0),
+            conv_u(),
+            Instruction::LoadConstantInt32(42),
+            stind(StoreType::Int32),
+            Instruction::LoadLocalAddress(0),
+            Instruction::LoadArgument(0),
+            Instruction::StoreLocal(0),
+            conv_u(),
+            ldind(LoadType::Int32),
+            Instruction::Return,
+        ], locals: vec![local(enum_type.clone())]);
+        let signature = MethodSignature {
+            parameters: vec![Parameter(
+                vec![],
+                ParameterType::Value(MethodType::Base(Box::new(enum_type.clone()))),
+            )],
+            ..parameterless_i32_signature()
+        };
+        let callee = res.push_method(
+            owner,
+            Method::new(
+                Accessibility::Public,
+                signature,
+                "EnumRoundtrip",
+                Some(body),
+            ),
+        );
+        (
+            1,
+            vec![local(enum_type)],
+            vec![
+                Instruction::LoadConstantInt32(10000),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(callee)),
+                },
+                Instruction::Pop,
+                Instruction::LoadLocal(0),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(callee)),
+                },
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(result, 42);
+}
+
 // A byref to a value-type argument must keep addressing that argument after `starg` assigns it a
 // new value: its address, converted after the store, writes the argument seen by the next `ldarg`.
 #[test]
@@ -3491,6 +3573,7 @@ mod batches {
         p33_localloc_blocks_released_on_exception_unwind,
         p01_ldloca_convu_stind_i4,
         p40_jmp_forwards_modified_home_argument,
+        p43_enum_home_scalar_roundtrip,
     ]);
 
     control_batch!(batch_3: [

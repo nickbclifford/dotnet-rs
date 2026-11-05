@@ -9,7 +9,7 @@ use dotnet_runtime_memory::RawMemoryAccess;
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
     CLRString, StackValue,
-    layout::{LayoutManager, Scalar},
+    layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
     storage::FieldStorage,
@@ -101,8 +101,7 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<(), crate::error::VmError> {
         let frame = self.frame_stack.current_frame();
         if let Some(slot) = frame.homes.local(index.as_usize()) {
-            let (address, layout) = (slot.address, slot.home.layout.clone());
-            return self.store_home(address, &layout, value);
+            return self.store_home(slot.address, slot.home, value);
         }
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
@@ -143,13 +142,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             let value = self
                 .evaluation_stack
                 .get_slot(arguments + crate::ArgumentIndex::new(index));
-            self.store_home(address, &home.layout, value)
-                .map_err(|error| {
-                    crate::error::TypeResolutionError::InvalidLayout(
-                        format!("argument {index} does not match its parameter type: {error}")
-                            .into(),
-                    )
-                })?;
+            self.store_home(address, home, value).map_err(|error| {
+                crate::error::TypeResolutionError::InvalidLayout(
+                    format!("argument {index} does not match its parameter type: {error}").into(),
+                )
+            })?;
         }
         Ok(())
     }
@@ -160,10 +157,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         slot: HomeSlot<'_>,
         pinned: bool,
     ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError> {
-        let live_type = match &slot.home.value_type {
-            Some(value_type) => value_type.description.clone(),
-            None => {
-                ResolutionOps::stack_value_type(self, &self.load_home(slot.address, slot.home))?
+        let live_type = if let Some(description) = &slot.home.scalar_type {
+            description.clone()
+        } else {
+            match &slot.home.value_type {
+                Some(value_type) => value_type.description.clone(),
+                None => {
+                    ResolutionOps::stack_value_type(self, &self.load_home(slot.address, slot.home))?
+                }
             }
         };
         Ok(StackValue::ManagedPtr(
@@ -204,11 +205,32 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     /// Encodes `value` into a homed local, applying the implicit conversions ECMA-335 §III.1.6
     /// allows when storing to a local.
     fn store_home(
-        &mut self,
+        &self,
         address: NonNull<u8>,
-        layout: &LayoutManager,
+        home: &VariableHome,
         value: StackValue<'gc>,
     ) -> Result<(), crate::error::VmError> {
+        let layout = &*home.layout;
+        let value = if let (Some(expected), StackValue::ValueType(object)) =
+            (&home.scalar_type, &value)
+        {
+            if &object.description != expected
+                || object.instance_storage.layout().total_size != layout.size().as_usize()
+            {
+                return Err(MemoryAccessError::TypeMismatch(
+                    "stored scalar value type does not match its home".into(),
+                )
+                .into());
+            }
+            let memory = RawMemoryAccess::new(&self.local.heap);
+            object.with_data(|data| {
+                // SAFETY: F10.RawMemoryAccessValid — the matching scalar value type owns
+                // initialized bytes of the checked layout size. This read stays in the borrow.
+                unsafe { memory.read_value_internal(self.gc, data.as_ptr(), None, layout, None) }
+            })?
+        } else {
+            value
+        };
         let value = match (layout, value) {
             (LayoutManager::Scalar(Scalar::NativeInt), StackValue::Int32(value)) => {
                 StackValue::NativeInt(value as isize)
@@ -264,8 +286,7 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<(), crate::error::VmError> {
         let frame = self.frame_stack.current_frame();
         if let Some(slot) = frame.homes.argument(index.as_usize()) {
-            let (address, layout) = (slot.address, slot.home.layout.clone());
-            return self.store_home(address, &layout, value);
+            return self.store_home(slot.address, slot.home, value);
         }
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {

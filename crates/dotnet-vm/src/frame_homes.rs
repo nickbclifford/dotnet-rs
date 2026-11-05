@@ -14,8 +14,8 @@ use dotnetdll::prelude::*;
 ///
 /// Byrefs, including value-type `this`, use the managed-pointer encoding.
 /// `TypedReference` variables still use their specialized stack representation. A
-/// value-type variable is encoded with its instance field layout, so loading a home rebuilds
-/// the value `init_locals` or the caller supplied.
+/// struct variable is encoded with its instance field layout; enums and named primitives
+/// use their scalar layout while retaining their declared identity for address-taking.
 pub(crate) fn build_frame_homes(
     method: &MethodDescription,
     locals: &[LocalVariable],
@@ -122,6 +122,8 @@ fn variable_home(
     ctx: &ResolutionContext,
 ) -> Result<Option<VariableHome>, TypeResolutionError> {
     let concrete = ctx.make_concrete(var_type)?;
+    let mut scalar_type = None;
+    let normalized = ctx.normalize_type(concrete.clone())?;
     let (layout, value_type) = match concrete.get() {
         BaseType::Type { .. } => {
             let description = ctx.loader().find_concrete_type(concrete.clone())?;
@@ -129,6 +131,11 @@ fn variable_home(
                 (ctx.resolver().type_layout_cached(concrete, ctx)?, None)
             } else if description.type_name() == "System.TypedReference" {
                 return Ok(None);
+            } else if description.is_enum().is_some()
+                || !matches!(normalized.get(), BaseType::Type { .. })
+            {
+                scalar_type = Some(description);
+                (ctx.resolver().type_layout_cached(normalized, ctx)?, None)
             } else {
                 let mut generics = concrete.make_lookup();
                 generics.set_method_generics(ctx.generics.method_generics.clone());
@@ -151,6 +158,7 @@ fn variable_home(
         offset: 0,
         layout,
         value_type,
+        scalar_type,
     }))
 }
 
@@ -166,6 +174,7 @@ fn this_home(
         offset: 0,
         layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
         value_type: None,
+        scalar_type: None,
     }))
 }
 
@@ -174,5 +183,6 @@ fn byref_home() -> VariableHome {
         offset: 0,
         layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
         value_type: None,
+        scalar_type: None,
     }
 }
