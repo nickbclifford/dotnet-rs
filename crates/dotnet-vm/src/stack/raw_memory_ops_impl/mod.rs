@@ -123,6 +123,14 @@ impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
+    fn retained_range(
+        &self,
+        pointer: &dotnet_value::pointer::RetainedPtr<'gc>,
+        size: usize,
+    ) -> Result<*mut u8, MemoryAccessError> {
+        pointer.checked_range(self, size)
+    }
+
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
         self
     }
@@ -164,6 +172,15 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
             PointerOrigin::FrameHome(serial) => {
+                // ldind.i/stind.i on a byref variable transfer the full managed-pointer
+                // encoding, preserving its origin rather than copying only a native word.
+                let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))
+                    && self.frame_stack.is_byref_home(serial, offset.as_usize())
+                {
+                    &LayoutManager::Scalar(Scalar::ManagedPtr)
+                } else {
+                    layout
+                };
                 let ptr =
                     frame_home_window(self, serial, offset.as_usize(), layout.size().as_usize())?;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
@@ -272,6 +289,15 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::FrameHome(serial) => {
+                // ldind.i/stind.i on a byref variable transfer the full managed-pointer
+                // encoding, preserving its origin rather than copying only a native word.
+                let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))
+                    && self.frame_stack.is_byref_home(serial, offset.as_usize())
+                {
+                    &LayoutManager::Scalar(Scalar::ManagedPtr)
+                } else {
+                    layout
+                };
                 let ptr =
                     frame_home_window(self, serial, offset.as_usize(), layout.size().as_usize())?;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);

@@ -82,10 +82,18 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
     } else {
         let target = dotnet_vm_ops::vm_try!(generics.method_arg(0));
         let layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(target.clone()));
-        (layout.size() * (len as usize)).as_usize()
+        let Some(bytes) = layout.size().as_usize().checked_mul(len as usize) else {
+            return ctx.throw_by_name_with_message(
+                "System.OverflowException",
+                "Arithmetic operation resulted in an overflow.",
+            );
+        };
+        bytes
     };
 
-    chunked_copy_with_safe_point(ctx, src.as_ptr(), dst.as_ptr(), total_count)
+    let source = dotnet_vm_ops::vm_try!(ctx.retained_range(&src, total_count));
+    let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, total_count));
+    chunked_copy_with_safe_point(ctx, source, destination, total_count)
 }
 
 #[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(ref byte, nuint)")]
@@ -100,7 +108,8 @@ pub fn intrinsic_span_helpers_clear_without_references<'gc, T: UnsafeIntrinsicHo
     let dst = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
     let total_count = len.max(0) as usize;
 
-    chunked_clear_with_safe_point(ctx, dst.as_ptr(), total_count)
+    let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, total_count));
+    chunked_clear_with_safe_point(ctx, destination, total_count)
 }
 
 #[dotnet_intrinsic("static void System.SpanHelpers::Fill<T>(T&, nuint, T)")]
@@ -137,7 +146,8 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
     {
         // `dst` keeps any cross-arena owner leased through the synchronous fill
         // and is dropped before a `Yield` reaches the scheduler.
-        let result = chunked_fill_with_safe_point(ctx, dst.as_ptr(), len, byte_value);
+        let address = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, len));
+        let result = chunked_fill_with_safe_point(ctx, address, len, byte_value);
         drop(dst);
         return result;
     }

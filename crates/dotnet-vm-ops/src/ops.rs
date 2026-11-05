@@ -243,6 +243,15 @@ pub trait ExceptionOps<'gc> {
 }
 
 pub trait RawMemoryOps<'gc>: BorrowScopeOps {
+    /// Resolves a retained operand's complete range before raw block access.
+    fn retained_range(
+        &self,
+        pointer: &RetainedPtr<'gc>,
+        size: usize,
+    ) -> Result<*mut u8, MemoryAccessError> {
+        pointer.checked_range(&dotnet_value::pointer::NoManagedPtrResolver, size)
+    }
+
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps;
 
     /// # Safety

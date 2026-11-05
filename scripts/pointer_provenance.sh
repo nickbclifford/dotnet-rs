@@ -46,6 +46,7 @@ expected_controls=(
 'pointer_provenance_tests::p38_ldarga_value_type_survives_starg|37|1'
 'pointer_provenance_tests::p39_frame_homes_survive_filter_suspension|38|4'
 'pointer_provenance_tests::p40_jmp_forwards_modified_home_argument|39|2'
+'pointer_provenance_tests::p15_initblk_stack_local_via_managed_ptr|40|3'
 )
 
 # full name | classification | native diagnostic permission | control shard
@@ -65,7 +66,7 @@ catalog=(
 'pointer_provenance_tests::p12_ldsflda_convu_stind_static|suspected-ub|no|-'
 'pointer_provenance_tests::p13_ldelema_managed_add_far_out_of_bounds_then_conv_u|control|no|9'
 'pointer_provenance_tests::p14_initblk_heap_array_via_managed_ptr|control|no|10'
-'pointer_provenance_tests::p15_initblk_stack_local_via_managed_ptr|suspected-ub|no|-'
+'pointer_provenance_tests::p15_initblk_stack_local_via_managed_ptr|control|no|40'
 'pointer_provenance_tests::p16_cpblk_heap_arrays_via_managed_ptr|control|no|11'
 'pointer_provenance_tests::p_null_through_pointer_local_address|control|no|12'
 'pointer_provenance_tests::p17_localloc_ptr_ceq_self|control|no|15'
@@ -97,7 +98,7 @@ catalog=(
 flags='-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks'
 die() { echo "error: $*" >&2; exit 2; }
 # Refuse stale, duplicate or non-singleton partitions before discovery.
-reviewed_count=39
+reviewed_count=40
 declare -A expected_by_name=() batch_by_name=() seen_names=() seen_controls=() shard_counts=() batch_members=()
 shards=() batches=()
 for row in "${expected_controls[@]}"; do
@@ -250,12 +251,12 @@ try:
         if case.get("ignored") is False and case.get("filter-match", {}).get("status") == "matches" and name not in diagnostics:
             if name not in controls or listing[name] != 1:
                 raise ValueError(f"unmatched enabled pointer probe: {name}")
-    if len(controls) != 39:
+    if len(controls) != 40:
         raise ValueError(f"reviewed control count mismatch: {len(controls)}")
 except (KeyError, TypeError, ValueError) as exc:
     print(f"control discovery/ignore guard failed: {exc}", file=sys.stderr)
     sys.exit(1)
-print(f"control discovery: {len(controls)} exact non-ignored controls; 39 singleton shards partition enabled probes")
+print(f"control discovery: {len(controls)} exact non-ignored controls; 40 singleton shards partition enabled probes")
 PYCODE
     then rm -rf "$dir"; return 1; fi
     rm -rf "$dir"

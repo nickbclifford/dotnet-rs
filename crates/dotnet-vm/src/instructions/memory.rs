@@ -27,9 +27,9 @@ pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     let size = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as usize;
     // Retain both operands through every chunk and until the instruction returns.
     let src_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
-    let src = src_owner.as_ptr();
+    let src = dotnet_vm_ops::vm_try!(ctx.retained_range(&src_owner, size));
     let dest_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
-    let dest = dest_owner.as_ptr();
+    let dest = dotnet_vm_ops::vm_try!(ctx.retained_range(&dest_owner, size));
 
     if src.is_null() || dest.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -69,7 +69,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     let val = dotnet_vm_ops::vm_try!(vm_pop!(ctx).try_as_isize()) as u8;
     // Retain the operand through every chunk and until the instruction returns.
     let addr_owner = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(vm_pop!(ctx)));
-    let addr = addr_owner.as_ptr();
+    let addr = dotnet_vm_ops::vm_try!(ctx.retained_range(&addr_owner, size));
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

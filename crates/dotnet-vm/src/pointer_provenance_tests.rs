@@ -1483,9 +1483,8 @@ fn p14_initblk_heap_array_via_managed_ptr() {
     assert_eq!(r, 0x01010101);
 }
 
-// initblk(&local, 0x01, 4): destination is ManagedPtr(Stack).
+// initblk(&local, 0x01, 4): the destination is a checked frame-home byref.
 #[test]
-#[ignore = "known or suspected host UB until frame homes land (docs/plans/01-stable-frame-homes.md); run only via scripts/pointer_provenance.sh diagnostic"]
 fn p15_initblk_stack_local_via_managed_ptr() {
     let r = run_program("P15", |_res, _t| {
         (
@@ -3501,6 +3500,7 @@ mod batches {
         p30_localloc_block_survives_nested_callee_localloc,
         p34_localloc_blocks_released_on_executor_teardown,
         p37_ldloca_value_type_survives_stloc,
+        p15_initblk_stack_local_via_managed_ptr,
     ]);
 
     control_batch!(batch_4: [
@@ -3515,4 +3515,44 @@ mod batches {
         p09_ldloca_convu_survives_callee_stack_growth,
         p39_frame_homes_survive_filter_suspension,
     ]);
+}
+
+#[test]
+fn addressed_byref_local_preserves_origin_through_indirect_access() {
+    let result = run_program("ByrefHome", |_res, _t| {
+        let mut byref = local(BaseType::Int32);
+        if let LocalVariable::Variable { by_ref, .. } = &mut byref {
+            *by_ref = true;
+        }
+        (
+            4,
+            vec![local(BaseType::Int32), byref],
+            vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::StoreLocal(1),
+                Instruction::LoadLocalAddress(1),
+                Instruction::LoadLocalAddress(0),
+                Instruction::StoreIndirect {
+                    unaligned: None,
+                    volatile: false,
+                    param0: StoreType::IntPtr,
+                },
+                Instruction::LoadLocalAddress(1),
+                Instruction::LoadIndirect {
+                    unaligned: None,
+                    volatile: false,
+                    param0: LoadType::IntPtr,
+                },
+                Instruction::LoadConstantInt32(42),
+                Instruction::StoreIndirect {
+                    unaligned: None,
+                    volatile: false,
+                    param0: StoreType::Int32,
+                },
+                Instruction::LoadLocal(0),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(result, 42);
 }

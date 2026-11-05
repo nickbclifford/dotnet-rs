@@ -1,5 +1,6 @@
 use crate::{StackValue, stack_value::stack_value_kind};
 use dotnet_types::error::ExecutionError;
+use std::ops::Deref;
 
 /// An observed address together with the stack value from which it was obtained.
 ///
@@ -47,6 +48,32 @@ impl<'gc> RetainedPtr<'gc> {
             _lease: super::ManagedPtr::retained_stack_value_lease(&value)?,
             _owner: value,
         })
+    }
+
+    /// Resolves a frame-home range before access, preserving retained ownership.
+    /// Other origins still require the caller's range proof.
+    pub fn checked_range<'r, R: super::ManagedPtrResolver<'r> + ?Sized>(
+        &self,
+        resolver: &R,
+        size: usize,
+    ) -> Result<*mut u8, dotnet_types::error::MemoryAccessError> {
+        let pointer = match &self._owner {
+            StackValue::ManagedPtr(pointer) => Some(pointer.deref()),
+            StackValue::TypedRef(slot) => Some(slot.value().deref()),
+            _ => None,
+        };
+        if let Some(pointer) = pointer
+            && let super::PointerOrigin::FrameHome(serial) = pointer.origin()
+        {
+            return super::frame_home_window(
+                resolver,
+                *serial,
+                pointer.byte_offset().as_usize(),
+                size,
+            )
+            .map(std::ptr::NonNull::as_ptr);
+        }
+        Ok(self.ptr)
     }
 
     /// Observes the raw pointer; it does not itself authorize an access.

@@ -770,14 +770,16 @@ pub fn intrinsic_unsafe_copy_block<
     let src = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
     let dest = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
-    if src.is_null() || dest.is_null() {
+    let source = dotnet_vm_ops::vm_try!(ctx.retained_range(&src, size));
+    let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dest, size));
+    if source.is_null() || destination.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    validate_atomic_access(src.as_ptr(), false);
-    validate_atomic_access(dest.as_ptr(), false);
+    validate_atomic_access(source, false);
+    validate_atomic_access(destination, false);
 
-    chunked_copy_with_safe_point(ctx, src.as_ptr(), dest.as_ptr(), size)
+    chunked_copy_with_safe_point(ctx, source, destination, size)
 }
 
 #[dotnet_intrinsic(
@@ -804,11 +806,12 @@ pub fn intrinsic_unsafe_init_block<
     let val = ctx.pop_i32() as u8;
     let addr = dotnet_vm_ops::vm_try!(RetainedPtr::try_from_stack_value(ctx.pop()));
 
-    if addr.is_null() {
+    let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&addr, size));
+    if destination.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    validate_atomic_access(addr.as_ptr(), false);
+    validate_atomic_access(destination, false);
 
-    chunked_fill_with_safe_point(ctx, addr.as_ptr(), size, val)
+    chunked_fill_with_safe_point(ctx, destination, size, val)
 }

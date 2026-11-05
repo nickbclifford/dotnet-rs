@@ -12,8 +12,8 @@ use dotnetdll::prelude::*;
 /// Lays out a home for every local the method body names in `ldloca` and every argument it
 /// names in `ldarga`.
 ///
-/// Byref-typed and `TypedReference` variables, and the `this` byref of a value-type method,
-/// keep their evaluation-stack slots: none of them can be encoded in a home block. A
+/// Byrefs, including value-type `this`, use the managed-pointer encoding.
+/// `TypedReference` variables still use their specialized stack representation. A
 /// value-type variable is encoded with its instance field layout, so loading a home rebuilds
 /// the value `init_locals` or the caller supplied.
 pub(crate) fn build_frame_homes(
@@ -47,10 +47,14 @@ pub(crate) fn build_frame_homes(
     for (index, local) in locals.iter().enumerate() {
         let home = match local {
             LocalVariable::Variable {
-                by_ref: false,
-                var_type,
-                ..
-            } if addressed_locals[index] => variable_home(var_type, ctx)?,
+                by_ref, var_type, ..
+            } if addressed_locals[index] => {
+                if *by_ref {
+                    Some(byref_home())
+                } else {
+                    variable_home(var_type, ctx)?
+                }
+            }
             _ => None,
         };
         local_homes.push(home.inspect(|home| {
@@ -67,7 +71,8 @@ pub(crate) fn build_frame_homes(
         } else {
             match &signature.parameters[index - usize::from(has_this)].1 {
                 ParameterType::Value(var_type) => variable_home(var_type, ctx)?,
-                ParameterType::Ref(_) | ParameterType::TypedReference => None,
+                ParameterType::Ref(_) => Some(byref_home()),
+                ParameterType::TypedReference => None,
             }
         };
         argument_homes.push(home.inspect(|home| {
@@ -149,18 +154,25 @@ fn variable_home(
     }))
 }
 
-/// The home of `this`: an object reference for a reference-type method. A value-type method's
-/// `this` is a byref and keeps its slot.
+/// The home of `this`: an object reference or a value-type receiver byref.
 fn this_home(
     method: &MethodDescription,
     ctx: &ResolutionContext,
 ) -> Result<Option<VariableHome>, TypeResolutionError> {
     if method.parent.is_value_type(ctx)? {
-        return Ok(None);
+        return Ok(Some(byref_home()));
     }
     Ok(Some(VariableHome {
         offset: 0,
         layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
         value_type: None,
     }))
+}
+
+fn byref_home() -> VariableHome {
+    VariableHome {
+        offset: 0,
+        layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
+        value_type: None,
+    }
 }

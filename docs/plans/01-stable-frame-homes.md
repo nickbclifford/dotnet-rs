@@ -119,11 +119,16 @@ Do not build a later slice's support in an earlier slice.
    `jmp` reads current argument homes, and home lookup includes suspended frames. Filter
    restoration saves the filter-owning frame's instruction pointer and absolute stack height.
 4. **Block ops and fixup deletion.** Route `cpblk`/`initblk`, `Buffer.Memmove` and
-   `Unsafe.CopyBlock`/`InitBlock` on a `FrameHome` byref through `frame_home_window`; today
-   they use its cached address unchecked. Enable `p15`. Then step 6. The remaining
+   `Unsafe.CopyBlock`/`InitBlock` on a `FrameHome` byref now resolve their complete
+   ranges through `RetainedPtr::checked_range` and `frame_home_window`; the adjacent
+   clear and byte-fill paths do too. `p15` is enabled in the native and Miri control
+   manifests. Remaining: step 6 and the storage migrations below. The remaining
    Stack-origin producers are evaluation-stack temporaries (`constructor_frame`, the
-   value-type `newobj` intrinsic) and byref-typed or `TypedReference` variables; home them
-   too and delete the Stack origin with the fixup if nothing else needs it.
+   value-type `newobj` intrinsic) and `TypedReference` variables. Address-taken
+   byref-typed locals and arguments (including value-type `this`) now use homes;
+   `ldind.i`/`stind.i` on those homes preserve their complete managed-pointer encoding.
+   Home the remaining producers and delete the Stack origin with the fixup if nothing
+   else needs it.
 5. **Measure.** Compare `runtime_primitives` and `end_to_end` against `main` before slice 1. A
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
 

@@ -204,6 +204,26 @@ impl FrameHomes {
         Some((homes.block.base(), homes.block.payload_len()))
     }
 
+    /// Whether this offset names an entire byref variable in this live block.
+    pub fn is_byref_home(&self, serial: FrameHomeSerial, offset: usize) -> bool {
+        self.homes.as_ref().is_some_and(|homes| {
+            homes.serial == serial
+                && homes
+                    .layout
+                    .locals
+                    .iter()
+                    .chain(homes.layout.arguments.iter())
+                    .flatten()
+                    .any(|home| {
+                        home.offset == offset
+                            && matches!(
+                                &*home.layout,
+                                LayoutManager::Scalar(dotnet_value::layout::Scalar::ManagedPtr)
+                            )
+                    })
+        })
+    }
+
     /// Visit every GC reference and managed pointer stored in the block.
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         let Some(homes) = &self.homes else {

@@ -2838,3 +2838,35 @@ fn arena_lifetime_transport_permissive_control() {
 fn arena_lifetime_transport_strict_core() {
     arena_lifetime_transport_support::transport_round_trip();
 }
+
+#[test]
+fn retained_frame_home_range_checks_full_access() {
+    let mut storage = [0u8; 32];
+    let base = std::ptr::NonNull::new(storage.as_mut_ptr()).unwrap();
+    let serial = FrameHomeSerial::new(123);
+    let live = FrameHomeResolver {
+        serial,
+        base,
+        len: storage.len(),
+    };
+    let pointer = frame_home_ptr(base, serial, 8);
+    let retained =
+        super::RetainedPtr::try_from_stack_value(crate::StackValue::ManagedPtr(pointer.into()))
+            .unwrap();
+    assert_eq!(
+        retained.checked_range(&live, 24).unwrap(),
+        base.as_ptr().wrapping_add(8)
+    );
+    assert!(matches!(
+        retained.checked_range(&live, 25),
+        Err(dotnet_types::error::MemoryAccessError::BoundsCheck { .. })
+    ));
+    assert!(matches!(
+        retained.checked_range(&live, usize::MAX),
+        Err(dotnet_types::error::MemoryAccessError::BoundsCheck { .. })
+    ));
+    assert!(matches!(
+        retained.checked_range(&NO_MANAGED_BASES, 1),
+        Err(dotnet_types::error::MemoryAccessError::InvalidOrigin)
+    ));
+}

@@ -989,6 +989,14 @@ impl<'gc> FrameStack<'gc> {
             .find_map(|frame| frame.homes.block_for(serial))
     }
 
+    /// Recognizes serialized byref variables in active and suspended frames.
+    pub fn is_byref_home(&self, serial: FrameHomeSerial, offset: usize) -> bool {
+        self.frames
+            .iter()
+            .chain(self.suspended_frames.iter())
+            .any(|frame| frame.homes.is_byref_home(serial, offset))
+    }
+
     pub fn recycle_frame(&mut self, mut frame: StackFrame<'gc>) {
         frame.prepare_for_pool();
         if self.pooled_frames.len() < STACKFRAME_POOL_LIMIT {
