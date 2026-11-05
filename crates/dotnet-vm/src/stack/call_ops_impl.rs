@@ -279,12 +279,16 @@ impl<'a, 'gc> CallArgumentBufferOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-/// Allocates the home block a frame of `method` needs before the frame is pushed.
-fn allocate_frame_homes(method: &MethodInfo<'static>) -> Result<FrameHomes, TypeResolutionError> {
-    let Some(layout) = &method.local_homes else {
+/// Allocates the home block a frame of `method` needs before the frame is pushed, under a
+/// fresh serial.
+fn allocate_frame_homes(
+    frames: &mut dotnet_vm_data::stack::FrameStack<'_>,
+    method: &MethodInfo<'static>,
+) -> Result<FrameHomes, TypeResolutionError> {
+    let Some(layout) = &method.homes else {
         return Ok(FrameHomes::default());
     };
-    FrameHomes::allocate(layout.clone()).map_err(|error| {
+    FrameHomes::allocate(layout.clone(), frames.issue_home_serial()).map_err(|error| {
         TypeResolutionError::MassiveAllocation(
             format!(
                 "local home block of {} bytes for {:?}: {error:?}",
@@ -369,11 +373,11 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let pinned_locals = self.init_locals(
             &method.source,
             method.locals,
-            method.local_homes.as_deref(),
+            method.homes.as_deref(),
             &generic_inst,
             locals_base,
         )?;
-        let homes = allocate_frame_homes(&method)?;
+        let homes = allocate_frame_homes(self.frame_stack, &method)?;
 
         let stack_base = locals_base + pinned_locals.len();
 
@@ -422,8 +426,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             generic_inst,
             pinned_locals,
         );
-        self.frame_stack.current_frame_mut().homes = homes;
-        Ok(())
+        self.install_frame_homes(homes)
     }
 
     #[inline]
@@ -447,11 +450,11 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         let pinned_locals = self.init_locals(
             &method.source,
             method.locals,
-            method.local_homes.as_deref(),
+            method.homes.as_deref(),
             &generic_inst,
             locals_base,
         )?;
-        let homes = allocate_frame_homes(&method)?;
+        let homes = allocate_frame_homes(self.frame_stack, &method)?;
         let stack_base = locals_base + pinned_locals.len();
 
         self.frame_stack.push_frame(
@@ -464,8 +467,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             generic_inst,
             pinned_locals,
         );
-        self.frame_stack.current_frame_mut().homes = homes;
-        Ok(())
+        self.install_frame_homes(homes)
     }
 
     fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {

@@ -249,12 +249,14 @@ pub enum PointerDeserializationError {
     UnresolvedStaticStorage,
     #[error("serialized cross-arena registration token {0} is not live")]
     UnresolvedCrossArenaToken(u32),
+    #[error("no live home block of frame {0} contains the serialized frame-home pointer")]
+    UnresolvedFrameHome(u64),
 }
 
 #[cfg(feature = "fuzzing")]
 impl Arbitrary<'_> for PointerDeserializationError {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.arbitrary::<usize>()? % 9;
+        let tag = u.arbitrary::<usize>()? % 10;
         match tag {
             0 => Ok(PointerDeserializationError::BufferTooSmall {
                 expected: u.arbitrary()?,
@@ -269,6 +271,9 @@ impl Arbitrary<'_> for PointerDeserializationError {
                 u.arbitrary()?,
             )),
             7 => Ok(PointerDeserializationError::UnresolvedStaticStorage),
+            8 => Ok(PointerDeserializationError::UnresolvedFrameHome(
+                u.arbitrary()?,
+            )),
             _ => Ok(PointerDeserializationError::UnresolvedCrossArenaToken(
                 u.arbitrary()?,
             )),

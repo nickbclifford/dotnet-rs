@@ -20,7 +20,7 @@ use dotnet_value::{
     pointer::{ManagedPtrInfo, ManagedPtrResolver, StaticMetadata},
     storage::FieldStorage,
 };
-use dotnet_vm_data::{FrameReturnAction, frame_homes::LocalHomeLayout};
+use dotnet_vm_data::{FrameReturnAction, frame_homes::FrameHomeLayout};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Mutation};
 use std::ptr::NonNull;
@@ -45,6 +45,7 @@ pub struct VesContext<'a, 'gc> {
 
 struct VesManagedPtrResolver<'a, 'gc> {
     evaluation_stack: &'a EvaluationStack<'gc>,
+    frame_stack: &'a FrameStack<'gc>,
     statics: &'a StaticStorageManager,
 }
 
@@ -61,6 +62,13 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
     }
+
+    fn frame_home_block(
+        &self,
+        serial: dotnet_value::pointer::FrameHomeSerial,
+    ) -> Option<(NonNull<u8>, usize)> {
+        self.frame_stack.home_block(serial)
+    }
 }
 
 impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
@@ -71,6 +79,7 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<ManagedPtrInfo<'gc>, dotnet_types::error::PointerDeserializationError> {
         let resolver = VesManagedPtrResolver {
             evaluation_stack: &*self.evaluation_stack,
+            frame_stack: &*self.frame_stack,
             statics: &self.shared.statics,
         };
         // SAFETY: F3.InteriorPointerRebased — The field reader supplies one complete ManagedPtr encoding
@@ -174,7 +183,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         &mut self,
         method: &MethodDescription,
         locals: &[LocalVariable],
-        homes: Option<&LocalHomeLayout>,
+        homes: Option<&FrameHomeLayout>,
         generics: &GenericLookup,
         locals_base: crate::StackSlotIndex,
     ) -> Result<PinnedLocals, TypeResolutionError> {
@@ -199,7 +208,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                     pinned_locals.push(false);
                     StackValue::UninitializedTypedRef
                 }
-                Variable { pinned, .. } if homes.is_some_and(|h| h.home(i).is_some()) => {
+                Variable { pinned, .. } if homes.is_some_and(|h| h.local(i).is_some()) => {
                     // The value lives in the frame's home block; this slot is never read.
                     pinned_locals.push(*pinned);
                     StackValue::null()

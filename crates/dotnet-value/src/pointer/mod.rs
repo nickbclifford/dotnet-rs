@@ -38,7 +38,7 @@ use crate::{
     ptr_common::PointerLike,
 };
 use dashmap::DashMap;
-use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_types::{TypeDescription, error::MemoryAccessError, generics::GenericLookup};
 use dotnet_utils::ManagedByteOffset;
 use gc_arena::{Collect, collect::Trace, static_collect};
 use std::{
@@ -118,6 +118,36 @@ pub trait ManagedPtrResolver<'gc> {
 
     /// Returns the live start address of static storage for `metadata`.
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>>;
+
+    /// Returns the base address and length of the home block of the live frame with
+    /// `serial`, or `None` when no live frame has that serial. Resolvers without frames
+    /// reject every frame-home pointer.
+    fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
+        None
+    }
+}
+
+/// The address of `size` bytes at `offset` in the home block of the live frame with `serial`.
+///
+/// This is the only way a frame-home byref becomes an accessible address: it fails with
+/// [`MemoryAccessError::InvalidOrigin`] when `resolver` has no live frame with that serial (the
+/// frame returned), and with [`MemoryAccessError::BoundsCheck`] when the range leaves the
+/// block. The returned address derives from the block base the resolver supplies.
+pub fn frame_home_window<'r, R: ManagedPtrResolver<'r> + ?Sized>(
+    resolver: &R,
+    serial: FrameHomeSerial,
+    offset: usize,
+    size: usize,
+) -> Result<NonNull<u8>, MemoryAccessError> {
+    let (base, len) = resolver
+        .frame_home_block(serial)
+        .ok_or(MemoryAccessError::InvalidOrigin)?;
+    if offset.checked_add(size).is_none_or(|end| end > len) {
+        return Err(MemoryAccessError::BoundsCheck { offset, size, len });
+    }
+    // INVARIANT: F10.FrameHomeChecked — the frame is live and `offset + size <= len`, so the
+    // result stays inside the block allocation (one past its end only when `size` is zero).
+    Ok(NonNull::new(base.as_ptr().wrapping_add(offset)).expect("a live home block is not at null"))
 }
 
 /// Caller-owned cache for decoded non-null Heap handles.
@@ -619,6 +649,8 @@ impl<'gc> ManagedPtr<'gc> {
             PointerOrigin::Heap(_) => self.try_with_heap_data(size, false, f),
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(_) => self.try_with_heap_data(size, false, f),
+            // Frame-home ranges are checked only through a resolver; see `with_frame_home_data`.
+            PointerOrigin::FrameHome(_) => None,
             _ => {
                 // SAFETY: F10.RawMemoryAccessValid — the origin is not heap-backed, so this function's `# Safety` contract supplies `with_data`'s: the cached pointer is valid for `size` bytes.
                 Some(unsafe { self.with_data(size, f) })
@@ -657,6 +689,9 @@ impl<'gc> ManagedPtr<'gc> {
                         self.byte_offset().as_usize()
                     )
                 }),
+            PointerOrigin::FrameHome(_) => {
+                panic!("ManagedPtr::with_data_up_to: frame-home access requires a resolver")
+            }
             _ => {
                 // SAFETY: F10.RawMemoryAccessValid — the origin is not heap-backed, so this function's `# Safety` contract supplies `with_data`'s: the cached pointer is valid for `max_size` bytes.
                 unsafe { self.with_data(max_size, f) }
@@ -696,6 +731,9 @@ impl<'gc> ManagedPtr<'gc> {
                         size
                     )
                 }),
+            PointerOrigin::FrameHome(_) => {
+                panic!("ManagedPtr::with_data: frame-home access requires a resolver")
+            }
             // Transient access uses its shared owner, outside the heap payload contract.
             PointerOrigin::Transient(obj) => obj.with_data(|data| {
                 let (offset, to_access) = self.access_window(data.len(), size);
@@ -721,12 +759,59 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
+    /// Reads `size` bytes at this frame-home pointer once `resolver` confirms that its frame
+    /// is live and the range lies inside the frame's home block.
+    ///
+    /// # Safety
+    /// `f` must not write to the frame's home block while it holds the slice.
+    ///
+    /// # Panics
+    /// If the origin is not [`PointerOrigin::FrameHome`].
+    pub unsafe fn with_frame_home_data<'r, T, R: ManagedPtrResolver<'r> + ?Sized>(
+        &self,
+        resolver: &R,
+        size: usize,
+        f: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, MemoryAccessError> {
+        self.validate_magic();
+        let PointerOrigin::FrameHome(serial) = self.origin else {
+            panic!("ManagedPtr::with_frame_home_data: not a frame-home pointer");
+        };
+        let address = frame_home_window(resolver, serial, self.byte_offset().as_usize(), size)?;
+        // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+        // that `size` bytes at `address` lie inside its home block; this function's `# Safety`
+        // contract excludes writes to the block while the slice lives.
+        let slice = unsafe { NonNull::slice_from_raw_parts(address, size).as_ref() };
+        Ok(f(slice))
+    }
+
     pub fn update_cached_ptr(&mut self, ptr: NonNull<u8>) {
         self.validate_magic();
         self._value = Some(ptr);
         if let PointerOrigin::Unmanaged = self.origin {
             self.offset = ManagedByteOffset::ZERO;
             self.flags = Self::with_unmanaged_inline_offset_flag(self.flags, false);
+        }
+    }
+
+    /// A byref to `offset` in the home block of the frame with `serial`; `address` is that
+    /// location while the frame is live.
+    pub fn new_frame_home(
+        address: NonNull<u8>,
+        inner_type: TypeDescription,
+        serial: FrameHomeSerial,
+        offset: ByteOffset,
+        pinned: bool,
+    ) -> Self {
+        let origin = PointerOrigin::FrameHome(serial);
+        Self {
+            magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
+            _value: Some(address),
+            inner_type,
+            offset: Self::pack_offset(&origin, Some(address), offset),
+            origin,
+            flags: Self::flags_from_pinned(pinned),
+            _marker: std::marker::PhantomData,
         }
     }
 

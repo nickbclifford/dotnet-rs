@@ -122,22 +122,24 @@ A managed pointer is a `ManagedPtr` (`crates/dotnet-value/src/pointer/mod.rs`) w
 a cached raw address (`_value`), the `PointerOrigin` that owns the target, the target
 `inner_type`, a compact byte `offset` from the origin's base, `flags` (pinned) and a validation
 `magic`. Its serialized form is `ManagedPtr::SIZE` (24) bytes. The `PointerOrigin` variants
-(`Heap`, `CrossArenaObjectRef`, `Static`, `Stack`, `Transient`, `Unmanaged`) and where a managed
-pointer may be stored are described in
+(`Heap`, `CrossArenaObjectRef`, `Static`, `FrameHome`, `Stack`, `Transient`, `Unmanaged`) and
+where a managed pointer may be stored are described in
 [Managed pointer placement](GC_AND_MEMORY_SAFETY.md#managed-pointer-placement).
 
-A local named by any `ldloca` in its method body has a home instead of a slot value (see
-[Frame-owned local homes](GC_AND_MEMORY_SAFETY.md#frame-owned-local-homes)). `build_method_info`
-selects these locals once per method instantiation and lays out their home block
-(`MethodInfo::local_homes`); each frame owns one block (`StackFrame::homes`). `ldloc`, `stloc`
-and `ldloca` on a homed local read, write and address the home bytes; its evaluation-stack slot
-holds a null placeholder that nothing reads. `ldloca` on a homed local pushes a byref with the
-`Unmanaged` origin whose address is the home itself: the block never moves while its frame is
-live, so the address needs no rebasing, and every consumer of `Unmanaged` byrefs already
-accesses the address directly.
+A local named by any `ldloca`, or an argument named by any `ldarga`, in its method body has a
+home instead of a slot value (see [Frame-owned homes](GC_AND_MEMORY_SAFETY.md#frame-owned-homes)).
+`build_method_info` selects these variables once per method instantiation and lays out their
+home block (`MethodInfo::homes`); each frame owns one block (`StackFrame::homes`) under a serial
+that is unique on its thread. `ldloc`, `stloc` and `ldloca` on a homed local, and `ldarg`,
+`starg` and `ldarga` on a homed argument, read, write and address the home bytes. A homed
+local's evaluation-stack slot holds a null placeholder that nothing reads; a homed argument's
+slot keeps the value passed in, which only `jmp` reads. `ldloca` and `ldarga` on a homed
+variable push a `PointerOrigin::FrameHome` byref naming the frame's serial and the home's offset.
+Every access finds the live frame with that serial and checks the range against its block before
+using the address, so the block never needs rebasing and a byref to a returned frame is rejected.
 
-`ldarga`, and `ldloca` on a byref-typed or `TypedReference` local, push a `PointerOrigin::Stack`
-managed pointer naming the absolute slot index and caching that slot's
+`ldloca` and `ldarga` on a byref-typed or `TypedReference` variable push a
+`PointerOrigin::Stack` managed pointer naming the absolute slot index and caching that slot's
 `StackValue::data_location`. For a scalar slot that address is inside the `Vec` element; for a
 value-type slot it is the value's own storage buffer.
 
@@ -147,15 +149,10 @@ in slots, in typed references, and serialized inside value-type slots (`ref` fie
 values). `suspend_above` and `restore_suspended` call `update_stack_pointers` directly. This is the
 mechanism behind `F3.InteriorPointerRebased`.
 
-Known limits of this scheme, which apply to arguments and to locals without a home:
-
-- `starg` to a value-type argument replaces the slot's value and its buffer, so a byref taken
-  earlier with `ldarga` caches an address in the old buffer.
-- An address converted to a native integer (`ldarga; conv.u`) is not a managed pointer and is not
-  rebased when the `Vec` reallocates.
-
-The plan [Stable homes for addressable locals and arguments](plans/01-stable-frame-homes.md)
-covers both.
+Stack-origin byrefs that remain are to evaluation-stack temporaries (such as the receiver of a
+value-type constructor) and to byref-typed and `TypedReference` variables. The plan
+[Stable homes for addressable locals and arguments](plans/01-stable-frame-homes.md) removes the
+fixup once nothing needs it.
 
 ### Frame-local `localloc` storage
 

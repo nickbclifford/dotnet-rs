@@ -212,6 +212,15 @@ pub fn with_span_data<
     }
 
     let m_ptr = ManagedPtr::from_info_full(info, element_type, false);
+    if let PointerOrigin::FrameHome(_) = m_ptr.origin() {
+        let total_size = len
+            .checked_mul(element_size)
+            .ok_or_else(|| memory_bounds_error(m_ptr.byte_offset().as_usize(), usize::MAX, 0))?;
+        // SAFETY: F10.FrameHomeChecked — `with_frame_home_data` checks the frame and range;
+        // span-data callbacks read or copy the elements and do not write to the frame's homes.
+        return unsafe { m_ptr.with_frame_home_data(ctx, total_size, f) }
+            .map_err(IntrinsicError::Memory);
+    }
     if matches!(m_ptr.origin(), PointerOrigin::Heap(owner) if owner.0.is_none()) {
         return Err(IntrinsicError::Static(
             "ManagedPtr::with_data: null owner handle",

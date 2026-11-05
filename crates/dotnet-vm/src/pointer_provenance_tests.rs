@@ -1035,6 +1035,174 @@ fn homed_object_local_survives_collection() {
     assert_eq!(r, 4);
 }
 
+/// Pushes `Leak`, a method that stores 5 in its homed local and returns a byref to it
+/// (`ref int Leak() { int x = 5; return ref Unsafe.AsRef(ref x); }`), and returns its index.
+fn push_leaking_method(res: &mut Resolution<'static>, type_idx: TypeIndex) -> MethodIndex {
+    let body = make_test_method!(
+        max_stack: 1,
+        instructions: vec![
+            Instruction::LoadConstantInt32(5),
+            Instruction::StoreLocal(0),
+            Instruction::LoadLocalAddress(0),
+            Instruction::Return,
+        ],
+        locals: vec![local(BaseType::Int32)],
+    );
+    let signature = MethodSignature {
+        return_type: ReturnType(
+            vec![],
+            Some(ParameterType::Ref(MethodType::Base(Box::new(
+                BaseType::Int32,
+            )))),
+        ),
+        ..parameterless_i32_signature()
+    };
+    res.push_method(
+        type_idx,
+        Method::new(Accessibility::Public, signature, "Leak", Some(body)),
+    )
+}
+
+/// Runs `Run` and returns the host error it stops with.
+fn run_expecting_error(
+    asm: &str,
+    setup: impl FnOnce(
+        &mut Resolution<'static>,
+        TypeIndex,
+    ) -> (usize, Vec<LocalVariable>, Vec<Instruction>),
+) -> crate::error::VmError {
+    let (shared, entrypoint) = build_program(asm, setup);
+    let mut error = None;
+    run_entrypoint_observed(shared, entrypoint, |_engine, step| match step {
+        StepResult::Error(e) => {
+            error = Some(e.clone());
+            Observe::Stop
+        }
+        StepResult::Return => panic!("{asm} returned instead of failing"),
+        _ => Observe::Continue,
+    });
+    error.unwrap_or_else(|| panic!("{asm} did not stop with an error"))
+}
+
+fn assert_stale_frame_home(error: crate::error::VmError) {
+    assert!(
+        matches!(
+            error,
+            crate::error::VmError::MemoryAccess(crate::error::MemoryAccessError::InvalidOrigin)
+        ),
+        "expected a stale frame-home error, got {error:?}"
+    );
+}
+
+// A byref to a returned frame's home names a frame that no longer exists: reading through it is
+// a host error, never a read of the released block.
+#[test]
+fn stale_frame_home_byref_read_is_rejected() {
+    let error = run_expecting_error("StaleHomeRead", |res, type_idx| {
+        let leak = push_leaking_method(res, type_idx);
+        (
+            2,
+            vec![],
+            vec![
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(leak)),
+                },
+                ldind(LoadType::Int32),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_stale_frame_home(error);
+}
+
+// As above for a write, after another frame with a home block has run at the same depth: the
+// stale byref must not resolve into the newer frame.
+#[test]
+fn stale_frame_home_byref_write_is_rejected_after_frame_reuse() {
+    let error = run_expecting_error("StaleHomeWrite", |res, type_idx| {
+        let leak = push_leaking_method(res, type_idx);
+        let other = push_leaking_method(res, type_idx);
+        (
+            3,
+            vec![LocalVariable::Variable {
+                custom_modifiers: vec![],
+                pinned: false,
+                by_ref: true,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            }],
+            vec![
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(leak)),
+                },
+                Instruction::StoreLocal(0),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(other)),
+                },
+                Instruction::Pop,
+                Instruction::LoadLocal(0),
+                Instruction::LoadConstantInt32(7),
+                stind(StoreType::Int32),
+                Instruction::LoadConstantInt32(0),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_stale_frame_home(error);
+}
+
+// A byref to a caller's homed local resolves through the caller's live frame while a callee with
+// its own home block runs.
+#[test]
+fn frame_home_byref_resolves_into_caller_frame() {
+    let r = run_program("CallerHome", |res, type_idx| {
+        let callee_body = make_test_method!(
+            max_stack: 2,
+            instructions: vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::Pop,
+                Instruction::LoadArgument(0),
+                Instruction::LoadConstantInt32(7),
+                stind(StoreType::Int32),
+                Instruction::Return,
+            ],
+            locals: vec![local(BaseType::Int32)],
+        );
+        let callee_sig = MethodSignature {
+            parameters: vec![Parameter(
+                vec![],
+                ParameterType::Ref(MethodType::Base(Box::new(BaseType::Int32))),
+            )],
+            ..void_sig()
+        };
+        let callee = res.push_method(
+            type_idx,
+            Method::new(
+                Accessibility::Public,
+                callee_sig,
+                "Store",
+                Some(callee_body),
+            ),
+        );
+        (
+            2,
+            vec![local(BaseType::Int32)],
+            vec![
+                Instruction::LoadLocalAddress(0),
+                Instruction::Call {
+                    tail_call: false,
+                    param0: MethodSource::User(UserMethod::Definition(callee)),
+                },
+                Instruction::LoadLocal(0),
+                Instruction::Return,
+            ],
+        )
+    });
+    assert_eq!(r, 7);
+}
+
 // ldelema + managed pointer arithmetic past the end of the array (one-past-end then beyond):
 // `Unsafe.Add(ref arr[0], 100)` style. Never dereferenced; address formation must use wrapping arithmetic.
 #[test]

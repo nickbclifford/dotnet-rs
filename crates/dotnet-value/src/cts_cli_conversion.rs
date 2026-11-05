@@ -23,6 +23,11 @@ fn managed_ptr_address(pointer: &ManagedPtr<'_>) -> Result<*const u8, TypeResolu
         PointerOrigin::CrossArenaObjectRef(_) => {
             observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
         }
+        // A frame-home address is converted, not accessed; the integer is unchecked like any
+        // native address.
+        PointerOrigin::FrameHome(_) => {
+            observed.map_or(std::ptr::null(), |address| address.as_ptr().cast_const())
+        }
         _ => {
             // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the cached
             // address of a Stack, Static or Unmanaged origin; no payload bytes are accessed.

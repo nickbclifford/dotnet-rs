@@ -33,14 +33,15 @@ where a byref value may be *stored*.
 | `Heap(ObjectRef)` | a field or element of a GC heap object (object, array, box, string) in this arena |
 | `CrossArenaObjectRef(CrossArenaOrigin)` | the same, for an object owned by another thread's arena (`multithreading` only) |
 | `Static(Arc<StaticMetadata>)` | static field storage |
-| `Stack(StackSlotIndex)` | an argument, an evaluation-stack slot, or a local without a home, of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
+| `FrameHome(FrameHomeSerial)` | a local or argument in the [home block](#frame-owned-homes) of the live frame with that serial, on the current thread |
+| `Stack(StackSlotIndex)` | an evaluation-stack slot, or a local or argument without a home, of the current thread (see [Evaluation stack, locals and managed pointers](ARCHITECTURE.md#evaluation-stack-locals-and-managed-pointers)) |
 | `Transient(Arc<Object>)` | a value-type value that has no slot of its own, such as the result of `ldflda` on a value type on the evaluation stack |
-| `Unmanaged` | unmanaged memory, including `localloc` blocks, [local homes](#frame-owned-local-homes) and addresses reconstructed from native integers |
+| `Unmanaged` | unmanaged memory, including `localloc` blocks and addresses reconstructed from native integers |
 
 **Storage.** A byref value may be stored only in:
 
 - evaluation-stack slots, locals and arguments (`StackValue` slots of the evaluation stack, and
-  [local homes](#frame-owned-local-homes));
+  [frame homes](#frame-owned-homes));
 - fields of byref-like (`ref struct`) value types, which are themselves stored only in those
   slots. The layout factory gives a `by_ref` field the `Scalar::ManagedPtr` layout
   (`LayoutFactory::collect_fields` in `crates/dotnet-runtime-resolver/src/layout.rs`), as it does
@@ -101,39 +102,61 @@ Limits of this contract:
   suspended frames' blocks; source inspection suggests a possible overwrite, which has not been
   reproduced.
 
-## Frame-Owned Local Homes
+## Frame-Owned Homes
 
-A local whose address is taken lives in a non-moving block owned by its frame, so a byref or
-native-int address taken from it stays valid while the evaluation stack grows and while the
-local is reassigned.
+A local or argument whose address is taken lives in a non-moving block owned by its frame, so a
+byref or native-int address taken from it stays valid while the evaluation stack grows and while
+the variable is reassigned.
 
-- **Selection.** `build_local_homes` (`crates/dotnet-vm/src/local_homes.rs`) scans the method
-  body once per method instantiation and homes every local named by an `ldloca`, except byref-typed
-  and `TypedReference` locals. Methods without such a local get no block and keep the
+- **Selection.** `build_frame_homes` (`crates/dotnet-vm/src/frame_homes.rs`) scans the method
+  body once per method instantiation and homes every local named by an `ldloca` and every
+  argument named by an `ldarga`, except byref-typed and `TypedReference` variables and the `this`
+  byref of a value-type method. Methods without such a variable get no block and keep the
   slot-only path.
 - **Layout.** The homes are fields of one block layout built by
-  `LayoutFactory::create_field_layout`. Each home has its type's layout; a value-type local uses
-  the instance field layout that its default value has, so a load rebuilds the same value. The
-  block is aligned to the larger of 16 and its largest home alignment (`LocalHomeLayout` in
+  `LayoutFactory::create_field_layout`. Each home has its type's layout; a value-type variable
+  uses its instance field layout, so a load rebuilds the value that was stored. The block is
+  aligned to the larger of 16 and its largest home alignment (`FrameHomeLayout` in
   `crates/dotnet-vm-data/src/frame_homes.rs`).
 - **Lifetime.** The frame owns a zeroed `RawBlock` (`FrameHomes`), allocated before the frame is
   pushed and released when the frame is reset for a new call, prepared for the pool, or dropped,
-  like its `localloc` blocks. Zero bytes are the default value of every local.
+  like its `localloc` blocks. Zero bytes are the default value of every local; each homed
+  argument is copied from its evaluation-stack slot when the frame is entered, and only `jmp`
+  reads that slot again.
 - **Access.** Every access goes through a raw pointer derived from the block base; no reference
-  to the bytes is formed except the shared view used while tracing. Loads and stores encode
-  values as value-type fields do: scalars in their CTS width, object references and managed
-  pointers in their serialized forms. A store applies the ECMA-335 §III.1.6 conversions to
-  native-int and small-integer locals.
-- **Byrefs.** `ldloca` on a homed local pushes an `Unmanaged`-origin byref to the home. Its
-  address is exposed, so a native integer formed from it (`conv.u`) can be dereferenced.
+  to the bytes is formed except the shared view used while tracing and the read-only views
+  `ManagedPtr::with_frame_home_data` hands to span intrinsics. Loads and stores encode values as
+  value-type fields do: scalars in their CTS width, object references and managed pointers in
+  their serialized forms. A store applies the ECMA-335 §III.1.6 conversions to native-int and
+  small-integer variables.
+- **Byrefs.** `ldloca` and `ldarga` on a homed variable push a `PointerOrigin::FrameHome` byref
+  naming the frame's serial and the home's offset in the block. `FrameStack::issue_home_serial`
+  gives every block a serial that is never reused on its thread, so a byref cannot resolve into a
+  later frame at the same depth. Every access resolves the byref through `frame_home_window`
+  (`crates/dotnet-value/src/pointer/mod.rs`): `FrameStack::home_block` searches the live frames
+  from the current one down for that serial, and the accessed range must lie inside the block.
+  A byref whose frame has returned fails with `MemoryAccessError::InvalidOrigin`, which the
+  instruction handlers report as a host error; an out-of-range access fails with
+  `MemoryAccessError::BoundsCheck` and raises `System.AccessViolationException` like other
+  failed accesses. The unchecked `ManagedPtr::with_data` family rejects a frame-home byref
+  instead of using its cached address. The byref keeps its origin when it is copied to the
+  evaluation stack, a homed variable or a `ref` field of a byref-like value; its serialized form
+  is a tag-7 encoding described at `ManagedPtr::SIZE`.
+- **Native addresses.** A byref's cached address is exposed when it is converted to a native
+  integer (`conv.u`, `Unsafe.AsPointer`) or passed to native code, so that integer can be
+  dereferenced as an `Unmanaged` address.
 - **Tracing.** `StackFrame`'s `Collect` implementation traces the object references and
   managed-pointer origins serialized in the block through its field layout.
 
 Limits of this contract:
 
-- Arguments (`ldarga`) still use evaluation-stack slots and `PointerOrigin::Stack`.
-- Like `localloc` blocks, a home's address is trusted after its frame returns; using it then is
-  not detected.
+- Like `localloc` blocks, a native-int address into a home is trusted after its frame returns;
+  using it then is not detected.
+- Block operations that take raw addresses from byrefs (`cpblk`, `initblk`, `Buffer.Memmove`,
+  `Unsafe.CopyBlock` and `Unsafe.InitBlock`) use a frame-home byref's cached address without
+  the frame check.
+- `jmp` copies arguments from their evaluation-stack slots, so a homed argument changed by
+  `starg` before `jmp` reaches the target with its value on entry.
 
 ## Pointer Ownership and Access
 

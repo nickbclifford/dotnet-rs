@@ -11,7 +11,7 @@ use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::Object,
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, ManagedPtrResolver, PointerOrigin},
 };
 use dotnet_vm_data::StepResult;
 use dotnetdll::prelude::MethodMemberIndex;
@@ -61,20 +61,24 @@ fn heap_read_error(pointer: &ManagedPtr<'_>, size: usize) -> StepResult {
     )
 }
 
-fn chunk_equal_from_a_slice<'gc>(
-    b_chunk: &ManagedPtr<'gc>,
-    current_chunk: usize,
-    a_slice: &[u8],
-) -> Result<bool, StepResult> {
-    // SAFETY: F10.RawMemoryAccessValid — the exact read validates the complete
-    // requested heap window before exposing bytes to the read-only comparison.
-    unsafe {
-        b_chunk
-            .try_with_data(current_chunk, |b_slice| {
-                simd_sequence_equal(a_slice, b_slice)
-            })
-            .ok_or_else(|| heap_read_error(b_chunk, current_chunk))
+/// Runs the read-only `f` over `size` bytes at `pointer`. A frame-home pointer is read only after
+/// `resolver` finds its live frame and checks the range against the frame's home block; other
+/// origins use the exact heap read.
+fn with_chunk_data<'gc, R: ManagedPtrResolver<'gc> + ?Sized, T>(
+    resolver: &R,
+    pointer: &ManagedPtr<'gc>,
+    size: usize,
+    f: impl FnOnce(&[u8]) -> Result<T, StepResult>,
+) -> Result<T, StepResult> {
+    if let PointerOrigin::FrameHome(_) = pointer.origin() {
+        // SAFETY: F10.FrameHomeChecked — `with_frame_home_data` checks the frame and range;
+        // the comparison closures only read.
+        return unsafe { pointer.with_frame_home_data(resolver, size, f) }
+            .map_err(|error| StepResult::Error(error.into()))?;
     }
+    // SAFETY: F10.RawMemoryAccessValid — the exact read validates the complete requested
+    // heap window before exposing bytes to the read-only comparison.
+    unsafe { pointer.try_with_data(size, f) }.unwrap_or_else(|| Err(heap_read_error(pointer, size)))
 }
 
 fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
@@ -83,6 +87,7 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
     b: &ManagedPtr<'gc>,
     total_bytes: usize,
 ) -> Result<bool, StepResult> {
+    let ctx = &*ctx;
     run_chunked_compare(
         total_bytes,
         |offset, current_chunk| {
@@ -92,16 +97,11 @@ fn chunked_sequence_equal<'gc, T: SpanIntrinsicHost<'gc>>(
             // SAFETY: F10.RawMemoryAccessValid — As above, the validated chunk offset is within `b`'s shared extent.
             let b_chunk = unsafe { b.clone().offset(offset as isize) };
 
-            // SAFETY: F10.RawMemoryAccessValid — the exact read validates the
-            // requested heap window before exposing bytes to the comparison.
-            match unsafe {
-                a_chunk.try_with_data(current_chunk, |a_slice| {
-                    chunk_equal_from_a_slice(&b_chunk, current_chunk, a_slice)
+            with_chunk_data(ctx, &a_chunk, current_chunk, |a_slice| {
+                with_chunk_data(ctx, &b_chunk, current_chunk, |b_slice| {
+                    Ok(simd_sequence_equal(a_slice, b_slice))
                 })
-            } {
-                Some(result) => result,
-                None => Err(heap_read_error(&a_chunk, current_chunk)),
-            }
+            })
         },
         || ctx.check_gc_safe_point(),
     )

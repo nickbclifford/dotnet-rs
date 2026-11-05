@@ -136,10 +136,18 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     // SAFETY: F1.GcHandleRooted; F10.RawMemoryAccessValid — `get_ptr_info` identifies the live parent storage, and the resolved field layout
     // supplies an in-bounds field offset and the representation read here.
     let value = match unsafe {
-        ctx.read_unaligned(origin, offset, &field_layout.layout, Some(target_type))
+        ctx.read_unaligned(
+            origin.clone(),
+            offset,
+            &field_layout.layout,
+            Some(target_type),
+        )
     } {
         Ok(v) => v,
-        Err(_) => {
+        Err(error) => {
+            if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
+                return step;
+            }
             if offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -196,9 +204,12 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
 
     // SAFETY: F1.GcHandleRooted; F10.RawMemoryAccessValid — `get_ptr_info` identifies the live parent storage, and the resolved field layout
     // supplies an in-bounds field offset; `write_unaligned` also applies the required write barrier.
-    match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
+    match unsafe { ctx.write_unaligned(origin.clone(), offset, value, &field_layout.layout) } {
         Ok(_) => {}
-        Err(_) => {
+        Err(error) => {
+            if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
+                return step;
+            }
             if offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

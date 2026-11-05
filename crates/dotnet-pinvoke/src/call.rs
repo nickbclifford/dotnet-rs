@@ -62,6 +62,21 @@ pub fn external_call<'gc>(
     res
 }
 
+/// The address of a frame-home byref passed to native code, once its frame is confirmed live.
+/// Native code receives a raw address, unchecked like any native address from then on.
+fn live_frame_home_address<'gc>(
+    ctx: &mut dyn PInvokeContext<'gc>,
+    pointer: &ManagedPtr<'gc>,
+) -> Result<*mut u8, StepResult> {
+    // SAFETY: F10.FrameHomeChecked — a zero-byte `read_bytes` resolves the frame-home origin
+    // through its live frame and checks the offset; it copies nothing.
+    unsafe { ctx.read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut []) }
+        .map_err(|error| StepResult::Error(error.into()))?;
+    Ok(pointer
+        .observe_address()
+        .map_or(std::ptr::null_mut(), NonNull::as_ptr))
+}
+
 fn resolve_parameter_base_type<'gc, T>(
     p_type: &ParameterType<MethodType>,
     res_ctx: &T,
@@ -936,6 +951,10 @@ fn external_call_impl<'gc>(
                             .into(),
                         );
                     }
+                    PointerOrigin::FrameHome(_) => match live_frame_home_address(ctx, p) {
+                        Ok(address) => address,
+                        Err(error) => return error,
+                    },
                     _ => {
                         // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads
                         // the cached address of a non-heap origin; no payload bytes are accessed
@@ -972,24 +991,37 @@ fn external_call_impl<'gc>(
                 let is_ref = matches!(p_type, ParameterType::Ref(_));
 
                 if is_ref {
-                    #[expect(
-                        clippy::multiple_unsafe_ops_per_block,
-                        reason = "the explicitly clamped managed read and copy share one bounds proof"
-                    )]
-                    // SAFETY: F10.RawMemoryAccessValid — For Heap/CrossArena origins,
-                    // `with_data_up_to` clamps to the actual payload extent (not accounting
-                    // `size_bytes()`) while the read guard is held. Other origins read through
-                    // the cached address, whose range the P/Invoke caller supplies. The
-                    // destination buffer is at least `buf_len` bytes and
-                    // its untouched tail remains zero-filled.
-                    unsafe {
-                        p.with_data_up_to(buf_len, |data| {
-                            std::ptr::copy_nonoverlapping(
-                                data.as_ptr(),
-                                buf.as_mut_ptr(),
-                                data.len(),
-                            );
-                        });
+                    if matches!(p.origin(), PointerOrigin::FrameHome(_)) {
+                        // A frame-home byref is read through its frame check: the whole native
+                        // buffer must lie inside the live frame's home block.
+                        // SAFETY: F10.FrameHomeChecked — `read_bytes` resolves the frame-home
+                        // origin through its live frame and checks the range before copying.
+                        let read = unsafe {
+                            ctx.read_bytes(p.origin().clone(), p.byte_offset(), &mut buf[..buf_len])
+                        };
+                        if let Err(error) = read {
+                            return StepResult::Error(error.into());
+                        }
+                    } else {
+                        #[expect(
+                            clippy::multiple_unsafe_ops_per_block,
+                            reason = "the explicitly clamped managed read and copy share one bounds proof"
+                        )]
+                        // SAFETY: F10.RawMemoryAccessValid — For Heap/CrossArena origins,
+                        // `with_data_up_to` clamps to the actual payload extent (not accounting
+                        // `size_bytes()`) while the read guard is held. Other origins read through
+                        // the cached address, whose range the P/Invoke caller supplies. The
+                        // destination buffer is at least `buf_len` bytes and
+                        // its untouched tail remains zero-filled.
+                        unsafe {
+                            p.with_data_up_to(buf_len, |data| {
+                                std::ptr::copy_nonoverlapping(
+                                    data.as_ptr(),
+                                    buf.as_mut_ptr(),
+                                    data.len(),
+                                );
+                            });
+                        }
                     }
                     temp_buffers.push(TempBuffer::Bytes(buf));
                     let buf_idx = temp_buffers.len() - 1;
@@ -1024,6 +1056,13 @@ fn external_call_impl<'gc>(
                         ctx.pin_object(owner);
                         pinned_objects.push(owner);
                     }
+                    let frame_home_address = match p.origin() {
+                        PointerOrigin::FrameHome(_) => match live_frame_home_address(ctx, p) {
+                            Ok(address) => Some(address),
+                            Err(error) => return error,
+                        },
+                        _ => None,
+                    };
 
                     #[expect(
                         clippy::multiple_unsafe_ops_per_block,
@@ -1033,11 +1072,14 @@ fn external_call_impl<'gc>(
                         // SAFETY: F10.RawMemoryAccessValid — The explicit Heap-owner branch
                         // observes the retained allocation base; that address itself is not a
                         // root/guard or access right. Its pin/guard is retained separately in
-                        // `local_guards`. Other accepted origins forward their cached address,
+                        // `local_guards`. A frame-home address was checked against its live
+                        // frame above. Other accepted origins forward their cached address,
                         // whose lifetime the P/Invoke caller supplies. CrossArena escape is
                         // rejected above; Transient clones share their owner.
                         unsafe {
-                        if let PointerOrigin::Heap(obj) = p.origin() {
+                        if let Some(address) = frame_home_address {
+                            address
+                        } else if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
                                 let guard = PinnedGuard::new(h);
                                 let ptr = guard

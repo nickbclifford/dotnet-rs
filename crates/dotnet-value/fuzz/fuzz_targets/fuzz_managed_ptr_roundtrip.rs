@@ -7,7 +7,7 @@ use dotnet_utils::{
 };
 use dotnet_value::{
     CLRString, HeapStorage, ObjectRef, StackSlotIndex,
-    pointer::{ManagedPtr, ManagedPtrResolver, PointerOrigin, StaticMetadata},
+    pointer::{FrameHomeSerial, ManagedPtr, ManagedPtrResolver, PointerOrigin, StaticMetadata},
 };
 use gc_arena::{Arena, Rootable};
 use libfuzzer_sys::fuzz_target;
@@ -68,6 +68,10 @@ impl<'gc> ManagedPtrResolver<'gc> for FuzzResolver {
     fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
         Some(self.storage_base)
     }
+
+    fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
+        Some((self.storage_base, STORAGE_LEN))
+    }
 }
 
 /// Runs a fuzz case with a live GC arena and its registered owner ID.
@@ -107,21 +111,21 @@ enum RoundtripInput {
     Unmanaged { address: usize },
     Stack { slot: u16, offset: u8 },
     Static { offset: u8 },
+    FrameHome { serial: u64, offset: u8 },
     Heap { offset: u8 },
     CrossArena { offset: u8 },
 }
 
 fuzz_target!(|input: RoundtripInput| {
     if let RoundtripInput::InvalidSerializedSubtag { subtag } = input {
-        // Subtag 1 is the Static encoding and subtag 2 is the intentionally
-        // non-deserializable Transient encoding. Keep this case in the truly
-        // unknown portion of the tag space.
-        let subtag = match subtag % 6 {
+        // Subtag 1 is the Static encoding, subtag 2 the intentionally
+        // non-deserializable Transient encoding and subtag 3 the FrameHome
+        // encoding. Keep this case in the truly unknown portion of the tag space.
+        let subtag = match subtag % 5 {
             0 => 0,
-            1 => 3,
-            2 => 4,
-            3 => 5,
-            4 => 6,
+            1 => 4,
+            2 => 5,
+            3 => 6,
             _ => 7,
         };
         let mut buf = ManagedPtr::serialization_buffer();
@@ -194,6 +198,18 @@ fuzz_target!(|input: RoundtripInput| {
                     ByteOffset::new(offset),
                 )
             }
+            RoundtripInput::FrameHome { serial, offset } => {
+                let offset = usize::from(offset);
+                let address = NonNull::new(storage_base.as_ptr().wrapping_add(offset))
+                    .expect("in-bounds array offset is non-null");
+                ManagedPtr::new_frame_home(
+                    address,
+                    dotnet_types::TypeDescription::NULL,
+                    FrameHomeSerial::new(serial),
+                    ByteOffset::new(offset),
+                    false,
+                )
+            }
             RoundtripInput::Heap { offset } => {
                 let offset = usize::from(offset);
                 let address = object.with_data(|data| {
@@ -247,7 +263,9 @@ fuzz_target!(|input: RoundtripInput| {
         let expected_tag = match &info.origin {
             PointerOrigin::Heap(_) | PointerOrigin::Unmanaged => 0,
             PointerOrigin::Stack(_) => 1,
-            PointerOrigin::Static(_) | PointerOrigin::Transient(_) => 7,
+            PointerOrigin::Static(_)
+            | PointerOrigin::Transient(_)
+            | PointerOrigin::FrameHome(_) => 7,
             PointerOrigin::CrossArenaObjectRef(_) => 5,
         };
         assert_eq!(word0 & 7, expected_tag, "Serialized origin tag mismatch");

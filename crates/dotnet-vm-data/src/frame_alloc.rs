@@ -350,7 +350,7 @@ mod tests {
                 MethodMemberIndex::Method(0),
             ),
             is_cctor: false,
-            local_homes: None,
+            homes: None,
         };
         let baseline = live_blocks();
         let baseline_bytes = bytes();

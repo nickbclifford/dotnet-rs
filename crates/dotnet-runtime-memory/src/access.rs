@@ -1571,9 +1571,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                     Scalar::ManagedPtr => {
                         let bytes = std::slice::from_raw_parts(ptr, ManagedPtr::SIZE);
-                        // Heap and unmanaged pointers can be resolved here. Stack and static
-                        // pointers require VM-owned live bases, so retain their stable origin
-                        // metadata for the VM to resolve when they are dereferenced.
+                        // Heap and unmanaged pointers can be resolved here. Stack, static and
+                        // frame-home pointers require VM-owned live bases, so retain their
+                        // stable origin metadata for the VM to resolve when they are
+                        // dereferenced.
                         let info = match ManagedPtr::read_resolved_branded(
                             bytes,
                             &gc,
@@ -1582,7 +1583,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             Ok(info) => Ok(info),
                             Err(
                                 PointerDeserializationError::UnresolvedStackSlot(_)
-                                | PointerDeserializationError::UnresolvedStaticStorage,
+                                | PointerDeserializationError::UnresolvedStaticStorage
+                                | PointerDeserializationError::UnresolvedFrameHome(_),
                             ) => ManagedPtr::read_metadata_branded(bytes, &gc),
                             Err(error) => Err(error),
                         }

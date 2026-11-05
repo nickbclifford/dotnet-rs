@@ -29,6 +29,7 @@ pub mod error;
 mod executor;
 #[cfg(test)]
 mod fault_tests;
+mod frame_homes;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
 pub mod gc;
@@ -39,7 +40,6 @@ mod intrinsics_codegen_guard_tests;
 #[cfg(test)]
 mod jmp_tests;
 pub mod layout;
-mod local_homes;
 #[cfg(test)]
 mod pointer_provenance_tests;
 pub mod resolution;
@@ -122,7 +122,7 @@ pub fn build_method_info(
                 .map(Arc::new)
                 .collect(),
             instructions: body.instructions.as_slice(),
-            local_homes: local_homes::build_local_homes(
+            homes: frame_homes::build_frame_homes(
                 &method,
                 &body.header.local_variables,
                 &body.instructions,
@@ -138,7 +138,7 @@ pub fn build_method_info(
             max_stack: 0,
             exceptions: vec![],
             instructions: &[],
-            local_homes: None,
+            homes: None,
             source: method,
         })
     }

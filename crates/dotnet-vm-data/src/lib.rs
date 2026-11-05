@@ -103,8 +103,9 @@ pub struct MethodInfo<'a> {
     pub source: MethodDescription,
     /// Whether the method is a static type initializer (`.cctor`).
     pub is_cctor: bool,
-    /// Home block layout for the locals this method addresses with `ldloca`, if any.
-    pub local_homes: Option<Arc<frame_homes::LocalHomeLayout>>,
+    /// Home block layout for the locals and arguments this method addresses with `ldloca`
+    /// and `ldarga`, if any.
+    pub homes: Option<Arc<frame_homes::FrameHomeLayout>>,
 }
 
 // SAFETY: F5.TracesEveryGcRef — MethodInfo<'static> contains only 'static metadata borrows, ordinary

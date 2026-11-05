@@ -213,7 +213,10 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 )
             } {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    if let Some(step) = super::stale_frame_home(m.origin(), &error) {
+                        return step;
+                    }
                     return ctx.throw_by_name_with_message(
                         "System.AccessViolationException",
                         ACCESS_VIOLATION_MSG,
@@ -247,6 +250,30 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
                 // and targets a reference type with zero offset, the pointed memory holds a
                 // StackValue::ObjectRef, not a serialized ObjectRef. Read it via the slot.
                 match (m.origin(), m.byte_offset()) {
+                    (PointerOrigin::FrameHome(_), offset) => {
+                        let layout = dotnet_value::layout::LayoutManager::Scalar(
+                            dotnet_value::layout::Scalar::ObjectRef,
+                        );
+                        // SAFETY: F10.FrameHomeChecked — `read_unaligned` resolves the frame-home
+                        // origin through its live frame and checks the object-reference range.
+                        match unsafe {
+                            ctx.read_unaligned(m.origin().clone(), offset, &layout, None)
+                        } {
+                            Ok(StackValue::ObjectRef(o)) => o,
+                            Ok(rest) => {
+                                return StepResult::type_error("ObjectRef", format!("{:?}", rest));
+                            }
+                            Err(error) => {
+                                if let Some(step) = super::stale_frame_home(m.origin(), &error) {
+                                    return step;
+                                }
+                                return ctx.throw_by_name_with_message(
+                                    "System.AccessViolationException",
+                                    ACCESS_VIOLATION_MSG,
+                                );
+                            }
+                        }
+                    }
                     (PointerOrigin::Stack(idx), off) if off.as_usize() == 0 => {
                         match ctx.get_slot_ref(*idx).clone() {
                             StackValue::ObjectRef(o) => o,

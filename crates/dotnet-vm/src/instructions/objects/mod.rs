@@ -317,7 +317,10 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
     // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the source origin and offset, while `source_bytes` is
     // exactly the resolved type layout's size; `read_bytes` performs the storage bounds check.
-    if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
+    if let Err(error) = unsafe { ctx.read_bytes(origin.clone(), offset, source_bytes) } {
+        if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
+            return step;
+        }
         return ctx
             .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
@@ -354,7 +357,10 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     if layout.is_or_contains_refs() {
         // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and the resolved
         // reference-bearing layout matches `value`; the callee checks bounds and records barriers.
-        if let Err(e) = unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
+        if let Err(e) = unsafe { ctx.write_unaligned(origin.clone(), offset, value, &layout) } {
+            if let Some(step) = crate::instructions::stale_frame_home(&origin, &e) {
+                return step;
+            }
             error!("stobj failed: {}", e);
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",
@@ -370,7 +376,10 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
         // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `bytes` is
         // exactly the resolved non-reference layout's size; the callee performs bounds checks.
-        if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, bytes) } {
+        if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, bytes) } {
+            if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
+                return step;
+            }
             return ctx.throw_by_name_with_message(
                 "System.AccessViolationException",
                 ACCESS_VIOLATION_MSG,
@@ -409,7 +418,10 @@ pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepRes
 
     // SAFETY: F3.InteriorPointerRebased — `get_ptr_context` decoded the destination origin and offset, and `zero_bytes` is
     // exactly the resolved layout's size; the callee performs the storage bounds check.
-    if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, zero_bytes) } {
+    if let Err(error) = unsafe { ctx.write_bytes(origin.clone(), offset, zero_bytes) } {
+        if let Some(step) = crate::instructions::stale_frame_home(&origin, &error) {
+            return step;
+        }
         return ctx
             .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }

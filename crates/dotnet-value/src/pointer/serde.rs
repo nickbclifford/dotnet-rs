@@ -2,8 +2,8 @@ use crate::{
     ByteOffset, StackSlotIndex,
     object::ObjectRef,
     pointer::{
-        HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver, PointerOrigin,
-        unmanaged_ptr_from_addr,
+        FrameHomeSerial, HeapManagedPtrDecodeCache, ManagedPtr, ManagedPtrInfo, ManagedPtrResolver,
+        PointerOrigin, unmanaged_ptr_from_addr,
     },
 };
 use dotnet_types::error::PointerDeserializationError;
@@ -18,6 +18,39 @@ const STACK_SLOT_MASK: usize = 0x3FFF_FFFF;
 const STACK_OFFSET_MIRROR_MASK: usize = 0x7FFF_FFFF;
 const STACK_SLOT_SHIFT: usize = 3;
 const STACK_OFFSET_SHIFT: usize = 33;
+
+/// Tag-7 sub-tag of a frame-home pointer. Word 0 is
+/// `7 | (3 << 3) | (serial_low << 6) | (offset_mirror << 38)`, where `serial_low` is the low
+/// 32 bits of the frame serial and `offset_mirror` the low 26 bits of the offset; word 1 is
+/// `offset | (serial_high << 32)` with the full 32-bit offset.
+const FRAME_HOME_SUBTAG: usize = 3;
+const FRAME_HOME_SERIAL_SHIFT: usize = 6;
+const FRAME_HOME_OFFSET_SHIFT: usize = 38;
+const FRAME_HOME_OFFSET_MIRROR_MASK: usize = 0x03FF_FFFF;
+const LOW_32_BITS: usize = 0xFFFF_FFFF;
+
+fn frame_home_managed_ptr_words(serial: FrameHomeSerial, offset: ByteOffset) -> (usize, usize) {
+    let serial = serial.get() as usize;
+    let offset = offset.as_usize();
+    let word0 = 7
+        | (FRAME_HOME_SUBTAG << 3)
+        | ((serial & LOW_32_BITS) << FRAME_HOME_SERIAL_SHIFT)
+        | ((offset & FRAME_HOME_OFFSET_MIRROR_MASK) << FRAME_HOME_OFFSET_SHIFT);
+    let word1 = offset | ((serial >> 32) << 32);
+    (word0, word1)
+}
+
+fn parse_frame_home_managed_ptr(
+    word0: usize,
+    word1: usize,
+) -> Result<(FrameHomeSerial, ByteOffset), PointerDeserializationError> {
+    let offset = word1 & LOW_32_BITS;
+    if word0 >> FRAME_HOME_OFFSET_SHIFT != offset & FRAME_HOME_OFFSET_MIRROR_MASK {
+        return Err(PointerDeserializationError::OffsetMismatch);
+    }
+    let serial = ((word0 >> FRAME_HOME_SERIAL_SHIFT) & LOW_32_BITS) | ((word1 >> 32) << 32);
+    Ok((FrameHomeSerial::new(serial as u64), ByteOffset::new(offset)))
+}
 
 /// The complete native-word representation of a serialized managed pointer.
 ///
@@ -187,6 +220,10 @@ impl<'gc> ManagedPtrResolver<'gc> for DebugWriteResolver {
     ) -> Option<NonNull<u8>> {
         self.base
     }
+
+    fn frame_home_block(&self, _serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
+        self.base.map(|base| (base, usize::MAX))
+    }
 }
 
 impl<'gc> ManagedPtr<'gc> {
@@ -205,6 +242,9 @@ impl<'gc> ManagedPtr<'gc> {
     ///   `7 | (1 << 3) | (registry_id << 6) | (offset << 38)`; word 1 is the
     ///   full compact byte offset, never a cached address. The packed word-0
     ///   field mirrors its low 26 bits.
+    /// - `FrameHome`: tag 7, sub-tag 3. Word 0 carries the low 32 bits of the frame
+    ///   serial and mirrors the low 26 bits of the offset; word 1 is the full 32-bit
+    ///   offset with the high 32 bits of the serial above it. Never a cached address.
     /// - `Unmanaged`: word 0 is zero and word 1 is the absolute address. The
     ///   address is the value because this origin has no recoverable handle.
     /// - `CrossArenaObjectRef`: word 0 is the provenance-carrying lock pointer
@@ -423,6 +463,14 @@ impl<'gc> ManagedPtr<'gc> {
                     })
                 }
                 2 => Err(PointerDeserializationError::UnknownSubtag(2)),
+                FRAME_HOME_SUBTAG => {
+                    let (serial, offset) = parse_frame_home_managed_ptr(word0_addr, word1)?;
+                    Ok(ManagedPtrInfo {
+                        address: None,
+                        origin: PointerOrigin::FrameHome(serial),
+                        offset,
+                    })
+                }
                 subtag => Err(PointerDeserializationError::UnknownSubtag(subtag)),
             },
             0 => {
@@ -511,6 +559,10 @@ impl<'gc> ManagedPtr<'gc> {
                     .static_storage_base(metadata)
                     .and_then(|base| NonNull::new(base.as_ptr().wrapping_add(offset)))
                     .ok_or(PointerDeserializationError::UnresolvedStaticStorage)?,
+            ),
+            PointerOrigin::FrameHome(serial) => Some(
+                crate::pointer::frame_home_window(resolver, *serial, offset, 0)
+                    .map_err(|_| PointerDeserializationError::UnresolvedFrameHome(serial.get()))?,
             ),
             PointerOrigin::Heap(owner) => match owner.0 {
                 Some(handle) => {
@@ -708,6 +760,10 @@ impl<'gc> ManagedPtr<'gc> {
                 let w1 = offset_u32 | (token << 32);
                 (w0, w1)
             }
+            PointerOrigin::FrameHome(serial) => {
+                let (w0, w1) = frame_home_managed_ptr_words(*serial, byte_offset);
+                (std::ptr::without_provenance_mut(w0), w1)
+            }
             PointerOrigin::Transient(_) => {
                 let w0: usize = 7 | (2 << 3) | (byte_offset.as_usize() << 6);
                 let w1 = byte_offset.as_usize();
@@ -724,8 +780,11 @@ impl<'gc> ManagedPtr<'gc> {
             },
         );
 
+        // A frame-home pointer decoded without its frame's resolver has no address to recover.
         #[cfg(debug_assertions)]
-        if !matches!(self.origin, PointerOrigin::Transient(_)) {
+        if !matches!(self.origin, PointerOrigin::Transient(_))
+            && !(matches!(self.origin, PointerOrigin::FrameHome(_)) && self._value.is_none())
+        {
             let expected_address = self._value.map(|address| address.as_ptr().addr());
             let base = self._value.and_then(|address| {
                 NonNull::new(address.as_ptr().wrapping_sub(byte_offset.as_usize()))

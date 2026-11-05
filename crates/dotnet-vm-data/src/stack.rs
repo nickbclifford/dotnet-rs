@@ -7,6 +7,7 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_utils::{ByteOffset, StackSlotIndex};
+use dotnet_value::pointer::FrameHomeSerial;
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
@@ -63,7 +64,8 @@ pub struct StackFrame<'gc> {
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
     pub frame_continuation: Option<FrameReturnAction>,
-    /// Homes of the locals this frame's method addresses with `ldloca`.
+    /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
+    /// `ldarga`.
     pub homes: FrameHomes,
 }
 
@@ -927,6 +929,8 @@ pub struct FrameStack<'gc> {
     pub frames: Vec<StackFrame<'gc>>,
     pub suspended_frames: Vec<StackFrame<'gc>>,
     pub pooled_frames: Vec<StackFrame<'gc>>,
+    /// The last home-block serial issued on this thread; zero before the first.
+    last_home_serial: u64,
 }
 
 impl<'gc> FrameStack<'gc> {
@@ -964,6 +968,24 @@ impl<'gc> FrameStack<'gc> {
 
     pub fn pop(&mut self) -> Option<StackFrame<'gc>> {
         self.frames.pop()
+    }
+
+    /// Issues the serial of a new home block. Serials only increase, so no two blocks of this
+    /// thread share one.
+    pub fn issue_home_serial(&mut self) -> FrameHomeSerial {
+        let serial = FrameHomeSerial::new(self.last_home_serial).next();
+        self.last_home_serial = serial.get();
+        serial
+    }
+
+    /// The base and length of the home block of the live frame with `serial`. Searches from
+    /// the current frame down, so a byref into the current or a nearby caller frame resolves
+    /// in a few steps; a returned frame's serial is found nowhere.
+    pub fn home_block(&self, serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.homes.block_for(serial))
     }
 
     pub fn recycle_frame(&mut self, mut frame: StackFrame<'gc>) {

@@ -1,6 +1,6 @@
 use crate::{
-    ArgumentIndex, ByteOffset, LocalIndex, StepResult,
-    stack::ops::{ArgumentOps, EvalStackOps, LocalOps, ResolutionOps, VmStackOps},
+    ArgumentIndex, LocalIndex, StepResult,
+    stack::ops::{ArgumentOps, EvalStackOps, LocalOps, VmStackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
@@ -67,34 +67,20 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
-pub fn ldarga<
-    'gc,
-    T: VmStackOps<'gc> + ArgumentOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>,
->(
-    ctx: &mut T,
-    index: u16,
-) -> StepResult {
-    let frame = ctx.current_frame();
-    let abs_idx = frame.base.arguments + index as usize;
-    let arg = ctx.get_argument(ArgumentIndex::new(index as usize));
-    let live_type = dotnet_vm_ops::vm_try!(ctx.stack_value_type(&arg));
-    ctx.push(StackValue::managed_stack_ptr(
-        abs_idx,
-        ByteOffset::new(0),
-        ctx.get_argument_address(ArgumentIndex::new(index as usize))
-            .as_ptr() as *mut _,
-        live_type,
-        true,
-    ));
+pub fn ldarga<'gc, T: VmStackOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
+    let pointer = dotnet_vm_ops::vm_try!(ctx.argument_address(ArgumentIndex::new(index as usize)));
+    ctx.push(pointer);
     StepResult::Continue
 }
 
-store_var!(
-    #[dotnet_instruction(StoreArgument(index))]
-    starg,
-    set_argument,
-    ArgumentIndex
-);
+#[dotnet_instruction(StoreArgument(index))]
+pub fn starg<'gc, T: ArgumentOps<'gc> + EvalStackOps<'gc>>(ctx: &mut T, index: u16) -> StepResult {
+    let value = vm_pop!(ctx);
+    match ctx.set_argument(ArgumentIndex::new(index as usize), value) {
+        Ok(()) => StepResult::Continue,
+        Err(error) => StepResult::Error(error),
+    }
+}
 load_var!(
     #[dotnet_instruction(LoadLocal(index))]
     ldloc,

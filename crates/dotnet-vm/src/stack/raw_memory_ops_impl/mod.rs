@@ -13,7 +13,7 @@ use dotnet_utils::{BorrowScopeOps, GcScopeGuard, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
-    pointer::{PointerOrigin, unmanaged_ptr_from_addr},
+    pointer::{PointerOrigin, frame_home_window, unmanaged_ptr_from_addr},
 };
 use dotnet_vm_data::frame_alloc::FrameAllocationError;
 use std::ptr::NonNull;
@@ -163,6 +163,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // guarantees `offset` (and width) stay within the slot's storage.
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr =
+                    frame_home_window(self, serial, offset.as_usize(), layout.size().as_usize())?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
+            }
             PointerOrigin::Static(metadata) => {
                 let storage = self
                     .statics()
@@ -263,6 +271,16 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
                 }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr =
+                    frame_home_window(self, serial, offset.as_usize(), layout.size().as_usize())?;
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe {
+                    memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
+                }
+            }
             PointerOrigin::Static(metadata) => {
                 let storage = self
                     .statics()
@@ -341,6 +359,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // guarantees `offset` (and width) stay within the slot's storage.
                 unsafe { memory.write_bytes_ptr(ptr, data) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), data.len())?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.write_bytes_ptr(ptr, data) }
+            }
             PointerOrigin::Static(metadata) => {
                 let storage = self
                     .statics()
@@ -400,6 +425,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
                 // guarantees `offset` (and width) stay within the slot's storage.
+                unsafe { memory.read_bytes_ptr(ptr, dest) }
+            }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), dest.len())?;
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
                 unsafe { memory.read_bytes_ptr(ptr, dest) }
             }
             PointerOrigin::Static(metadata) => {
@@ -555,6 +587,18 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // SAFETY: F10.RawMemoryAccessValid — The caller guarantees the resolved stack slot is valid.
                 unsafe { memory.object_atomic_ptr(slot, op) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let slot = frame_home_window(
+                    self,
+                    serial,
+                    offset.as_usize(),
+                    std::mem::size_of::<*mut u8>(),
+                )?;
+                let mut memory = RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.object_atomic_ptr(slot, op) }
+            }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data_mut(|data| {
                 let end = offset
                     .as_usize()
@@ -637,6 +681,16 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
                 // guarantees `offset` (and width) stay within the slot's storage.
+                unsafe {
+                    memory.compare_exchange_atomic_ptr(ptr, expected, new, size, success, failure)
+                }
+            }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), size)
+                    .map_err(CompareExchangeError::Bounds)?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
                 unsafe {
                     memory.compare_exchange_atomic_ptr(ptr, expected, new, size, success, failure)
                 }
@@ -740,6 +794,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // guarantees `offset` (and width) stay within the slot's storage.
                 unsafe { memory.exchange_atomic_ptr(ptr, value, size, ordering) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.exchange_atomic_ptr(ptr, value, size, ordering) }
+            }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 // SAFETY: F10.RawMemoryAccessValid — this function's caller guarantees `offset` (and width) lie within the
@@ -830,6 +891,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // guarantees `offset` (and width) stay within the slot's storage.
                 unsafe { memory.exchange_add_atomic_ptr(ptr, value, size, ordering) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.exchange_add_atomic_ptr(ptr, value, size, ordering) }
+            }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 // SAFETY: F10.RawMemoryAccessValid — this function's caller guarantees `offset` (and width) lie within the
@@ -907,6 +975,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 // SAFETY: F10.RawMemoryAccessValid — Stack origin: `ptr` comes from `resolve_address`, and this function's caller
                 // guarantees `offset` (and width) stay within the slot's storage.
+                unsafe { memory.load_atomic_ptr(ptr, size, ordering) }
+            }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
                 unsafe { memory.load_atomic_ptr(ptr, size, ordering) }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
@@ -994,6 +1069,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // guarantees `offset` (and width) stay within the slot's storage.
                 unsafe { memory.store_atomic_ptr(ptr, value, size, ordering) }
             }
+            PointerOrigin::FrameHome(serial) => {
+                let ptr = frame_home_window(self, serial, offset.as_usize(), size)?;
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+                // SAFETY: F10.FrameHomeChecked — `frame_home_window` found the live frame and checked
+                // that the accessed bytes lie inside its home block.
+                unsafe { memory.store_atomic_ptr(ptr, value, size, ordering) }
+            }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data_mut(|data| {
                 let base_ptr = data.as_mut_ptr();
                 // SAFETY: F10.BorrowedStorageStable — Transient-field metadata keeps `offset` within this write-guarded storage.
@@ -1077,6 +1159,7 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     unsafe { NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut()) }
                 })
             }
+            PointerOrigin::FrameHome(serial) => frame_home_window(self, *serial, offset.as_usize(), 0)?,
             PointerOrigin::Heap(owner) => {
                 let handle = owner.0.expect("resolve_address: null owner handle");
                 let inner = handle.borrow();

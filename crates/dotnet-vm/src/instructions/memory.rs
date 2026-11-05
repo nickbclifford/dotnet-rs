@@ -152,7 +152,10 @@ pub fn stind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     // `write_unaligned` checks bounds and applies the heap write barrier for `layout`.
     match unsafe { ctx.write_unaligned(origin.clone(), offset, val, &layout) } {
         Ok(_) => {}
-        Err(_) => {
+        Err(error) => {
+            if let Some(step) = super::stale_frame_home(&origin, &error) {
+                return step;
+            }
             if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -202,7 +205,10 @@ pub fn ldind<'gc, T: StackOps<'gc> + VmStackOps<'gc> + ExceptionOps<'gc> + RawMe
     // `read_unaligned` checks that the requested `layout` fits the selected storage.
     let val = match unsafe { ctx.read_unaligned(origin.clone(), offset, &layout, None) } {
         Ok(v) => v,
-        Err(_) => {
+        Err(error) => {
+            if let Some(step) = super::stale_frame_home(&origin, &error) {
+                return step;
+            }
             if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
                 return ctx
                     .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

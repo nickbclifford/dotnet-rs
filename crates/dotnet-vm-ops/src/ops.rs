@@ -195,7 +195,9 @@ pub trait LocalOps<'gc> {
 
 pub trait ArgumentOps<'gc> {
     fn get_argument(&self, index: ArgumentIndex) -> StackValue<'gc>;
-    fn set_argument(&mut self, index: ArgumentIndex, value: StackValue<'gc>);
+    /// Fails when `value` cannot be stored in the argument's home encoding (invalid IL).
+    fn set_argument(&mut self, index: ArgumentIndex, value: StackValue<'gc>)
+    -> Result<(), VmError>;
 }
 
 crate::trait_alias! {

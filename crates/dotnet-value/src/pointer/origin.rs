@@ -78,12 +78,47 @@ impl CrossArenaOrigin {
     }
 }
 
+/// Identity of one frame's home block.
+///
+/// Serials come from a per-thread counter that only increases, so a serial names at most one
+/// frame for the thread's lifetime: a byref kept past its frame's return cannot resolve into a
+/// later frame, even one at the same depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub struct FrameHomeSerial(u64);
+
+impl FrameHomeSerial {
+    /// The first serial a thread issues.
+    pub const FIRST: Self = Self(1);
+
+    pub const fn new(serial: u64) -> Self {
+        Self(serial)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// The serial issued after this one.
+    pub fn next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("frame-home serials are not exhausted within a thread's lifetime"),
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
     Stack(StackSlotIndex),
     Static(Arc<StaticMetadata>),
     Unmanaged,
+    /// A local or argument in the home block of the frame with this serial. Every access
+    /// resolves the frame through a [`super::ManagedPtrResolver`], which rejects a frame
+    /// that has returned and a range outside its block.
+    FrameHome(FrameHomeSerial),
     #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(CrossArenaOrigin),
     /// A value type resident on the evaluation stack (transient).
@@ -93,7 +128,7 @@ pub enum PointerOrigin<'gc> {
 #[cfg(feature = "fuzzing")]
 impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let variant = u.int_in_range(0..=5)?;
+        let variant = u.int_in_range(0..=6)?;
         match variant {
             0 => Ok(Self::Heap(u.arbitrary()?)),
             1 => Ok(Self::Stack(u.arbitrary()?)),
@@ -108,6 +143,7 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
             // Shared ownership is required even when Object is not Sync.
             #[allow(clippy::arc_with_non_send_sync)]
             5 => Ok(Self::Transient(Arc::new(u.arbitrary()?))),
+            6 => Ok(Self::FrameHome(u.arbitrary()?)),
             _ => unreachable!(),
         }
     }
@@ -176,6 +212,7 @@ impl<'gc> PointerOrigin<'gc> {
             #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(_) => 4,
             Self::Transient(_) => 5,
+            Self::FrameHome(_) => 6,
         }
     }
 

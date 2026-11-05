@@ -48,3 +48,20 @@ pub mod reflection;
 pub mod stack_ops;
 
 use dotnet_vm_ops::NULL_REF_MSG;
+
+/// The step for an access through `origin` that failed with `error`, when the origin is a byref
+/// to the home of a frame that has returned. The VM never touches the released home, and the
+/// program has no defined behaviour to resume, so this is a host error rather than the managed
+/// exception other failed accesses raise.
+pub(crate) fn stale_frame_home(
+    origin: &dotnet_value::pointer::PointerOrigin<'_>,
+    error: &crate::error::MemoryAccessError,
+) -> Option<crate::StepResult> {
+    match (origin, error) {
+        (
+            dotnet_value::pointer::PointerOrigin::FrameHome(_),
+            crate::error::MemoryAccessError::InvalidOrigin,
+        ) => Some(crate::StepResult::Error(error.clone().into())),
+        _ => None,
+    }
+}

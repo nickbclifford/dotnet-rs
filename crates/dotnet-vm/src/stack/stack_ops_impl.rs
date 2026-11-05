@@ -14,7 +14,7 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
-use dotnet_vm_data::frame_homes::LocalHome;
+use dotnet_vm_data::frame_homes::{FrameHomes, HomeSlot, VariableHome};
 use std::ptr::NonNull;
 
 impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
@@ -87,8 +87,8 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
-        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
-            return self.load_home(address, home);
+        if let Some(slot) = frame.homes.local(index.as_usize()) {
+            return self.load_home(slot.address, slot.home);
         }
         self.evaluation_stack.get_slot(frame.base.locals + index)
     }
@@ -100,8 +100,8 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
         value: StackValue<'gc>,
     ) -> Result<(), crate::error::VmError> {
         let frame = self.frame_stack.current_frame();
-        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
-            let layout = home.layout.clone();
+        if let Some(slot) = frame.homes.local(index.as_usize()) {
+            let (address, layout) = (slot.address, slot.home.layout.clone());
             return self.store_home(address, &layout, value);
         }
         #[cfg(feature = "multithreading")]
@@ -120,8 +120,66 @@ impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
-    /// Decodes the value of a homed local from its home bytes.
-    fn load_home(&self, address: NonNull<u8>, home: &LocalHome) -> StackValue<'gc> {
+    /// Installs `homes` in the frame just pushed and copies its homed arguments from their
+    /// evaluation-stack slots into the block, so the homes hold the values the caller passed.
+    pub(crate) fn install_frame_homes(
+        &mut self,
+        homes: FrameHomes,
+    ) -> Result<(), crate::error::TypeResolutionError> {
+        let frame = self.frame_stack.current_frame_mut();
+        frame.homes = homes;
+        let Some(layout) = frame.homes.layout().cloned() else {
+            return Ok(());
+        };
+        let arguments = frame.base.arguments;
+        for (index, home) in layout.homed_arguments() {
+            let slot = self
+                .frame_stack
+                .current_frame()
+                .homes
+                .argument(index)
+                .expect("a homed argument has a home in its frame's block");
+            let address = slot.address;
+            let value = self
+                .evaluation_stack
+                .get_slot(arguments + crate::ArgumentIndex::new(index));
+            self.store_home(address, &home.layout, value)
+                .map_err(|error| {
+                    crate::error::TypeResolutionError::InvalidLayout(
+                        format!("argument {index} does not match its parameter type: {error}")
+                            .into(),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    /// A byref to the homed variable `slot` of the current frame.
+    fn home_address(
+        &self,
+        slot: HomeSlot<'_>,
+        pinned: bool,
+    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError> {
+        let live_type = match &slot.home.value_type {
+            Some(value_type) => value_type.description.clone(),
+            None => {
+                ResolutionOps::stack_value_type(self, &self.load_home(slot.address, slot.home))?
+            }
+        };
+        Ok(StackValue::ManagedPtr(
+            ManagedPtr::new_frame_home(
+                slot.address,
+                live_type,
+                slot.serial,
+                ByteOffset::new(slot.home.offset),
+                pinned,
+            )
+            .into(),
+        ))
+    }
+
+    /// Decodes the value of a homed variable from its home bytes.
+    fn load_home(&self, address: NonNull<u8>, home: &VariableHome) -> StackValue<'gc> {
         if let Some(value_type) = &home.value_type {
             let size = value_type.fields.total_size;
             let mut data = vec![0u8; size];
@@ -192,11 +250,23 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_argument(&self, index: crate::ArgumentIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
+        if let Some(slot) = frame.homes.argument(index.as_usize()) {
+            return self.load_home(slot.address, slot.home);
+        }
         self.evaluation_stack.get_slot(frame.base.arguments + index)
     }
 
     #[inline]
-    fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>) {
+    fn set_argument(
+        &mut self,
+        index: crate::ArgumentIndex,
+        value: StackValue<'gc>,
+    ) -> Result<(), crate::error::VmError> {
+        let frame = self.frame_stack.current_frame();
+        if let Some(slot) = frame.homes.argument(index.as_usize()) {
+            let (address, layout) = (slot.address, slot.home.layout.clone());
+            return self.store_home(address, &layout, value);
+        }
         #[cfg(feature = "multithreading")]
         if matches!(value, StackValue::ValueType(..)) {
             #[cfg(feature = "bench-instrumentation")]
@@ -208,6 +278,7 @@ impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
         }
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.arguments + index, value);
+        Ok(())
     }
 }
 
@@ -261,16 +332,8 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
             .get(index.as_usize())
             .copied()
             .unwrap_or(false);
-        if let Some((address, home)) = frame.homes.get(index.as_usize()) {
-            let live_type = match &home.value_type {
-                Some(value_type) => value_type.description.clone(),
-                None => ResolutionOps::stack_value_type(self, &self.load_home(address, home))?,
-            };
-            // The home never moves while its frame is live, so the byref carries the address
-            // itself; an `Unmanaged` origin exposes it for later native-int round trips.
-            return Ok(StackValue::ManagedPtr(
-                ManagedPtr::new(Some(address), live_type, None, is_pinned, None).into(),
-            ));
+        if let Some(slot) = frame.homes.local(index.as_usize()) {
+            return self.home_address(slot, is_pinned);
         }
         let slot = frame.base.locals + index;
         let live_type =
@@ -284,10 +347,23 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
         ))
     }
 
-    #[inline]
-    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8> {
+    fn argument_address(
+        &self,
+        index: crate::ArgumentIndex,
+    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError> {
         let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.arguments + index)
+        if let Some(slot) = frame.homes.argument(index.as_usize()) {
+            return self.home_address(slot, true);
+        }
+        let slot = frame.base.arguments + index;
+        let live_type =
+            ResolutionOps::stack_value_type(self, self.evaluation_stack.get_slot_ref(slot))?;
+        Ok(StackValue::managed_stack_ptr(
+            slot,
+            ByteOffset::new(0),
+            self.evaluation_stack.get_slot_address(slot).as_ptr(),
+            live_type,
+            true,
+        ))
     }
 }

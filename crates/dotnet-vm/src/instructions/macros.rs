@@ -119,22 +119,6 @@ macro_rules! load_var {
     };
 }
 
-macro_rules! store_var {
-    ($(#[$attr:meta])* $func_name:ident, $set_method:ident, $index_type:ident) => {
-        $(#[$attr])*
-        pub fn $func_name<'gc, T: $crate::stack::ops::VariableOps<'gc> + $crate::stack::ops::EvalStackOps<'gc>>(
-            ctx: &mut T,
-            index: u16,
-        ) -> StepResult {
-            #[allow(unused_imports)]
-            use $crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps, VariableOps};
-            let val = vm_pop!(ctx);
-            ctx.$set_method($crate::$index_type::new(index as usize), val);
-            StepResult::Continue
-        }
-    };
-}
-
 macro_rules! load_const {
     ($(#[$attr:meta])* $func_name:ident, $arg_type:ty, $expr:expr) => {
         $(#[$attr])*

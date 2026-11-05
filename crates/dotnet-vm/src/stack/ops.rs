@@ -65,7 +65,12 @@ pub trait VmStackOps<'gc>: StackOps<'gc> {
         &self,
         index: crate::LocalIndex,
     ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
-    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
+    /// A byref to argument `index`: into its frame home when it has one, otherwise into its
+    /// evaluation-stack slot.
+    fn argument_address(
+        &self,
+        index: crate::ArgumentIndex,
+    ) -> Result<StackValue<'gc>, crate::error::TypeResolutionError>;
 }
 
 pub trait VmRawMemoryOps<'gc>: RawMemoryOps<'gc> {

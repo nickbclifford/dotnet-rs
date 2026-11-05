@@ -369,6 +369,14 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
     }
+
+    #[inline]
+    fn frame_home_block(
+        &self,
+        serial: dotnet_value::pointer::FrameHomeSerial,
+    ) -> Option<(NonNull<u8>, usize)> {
+        self.frame_stack.home_block(serial)
+    }
 }
 
 impl<'a, 'gc> dotnet_intrinsics_span::SpanPointerIntrospectionHost<'gc> for VesContext<'a, 'gc> {

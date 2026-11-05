@@ -29,6 +29,8 @@ pub(crate) fn managed_ptr_address(m: &ManagedPtr<'_>) -> *mut u8 {
         PointerOrigin::CrossArenaObjectRef(_) => {
             m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr)
         }
+        // Observation only: a frame-home byref is accessed through its frame check.
+        PointerOrigin::FrameHome(_) => m.observe_address().map_or(ptr::null_mut(), NonNull::as_ptr),
         _ => {
             // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
             // cached address of a non-heap origin; no payload bytes are accessed.

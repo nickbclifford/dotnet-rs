@@ -858,7 +858,7 @@ fn test_managed_ptr_offset_valid() {
 fn test_managed_ptr_metadata_rejects_unknown_static_subtag() {
     let mut buffer = ManagedPtr::serialization_buffer();
     let ptr_size = ObjectRef::SIZE;
-    let word0 = 7usize | (3 << 3);
+    let word0 = 7usize | (4 << 3);
     let word1 = 0usize;
     buffer[..ptr_size].copy_from_slice(&word0.to_ne_bytes());
     buffer[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
@@ -869,8 +869,146 @@ fn test_managed_ptr_metadata_rejects_unknown_static_subtag() {
     let decoded = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) };
     assert!(matches!(
         decoded,
-        Err(dotnet_types::error::PointerDeserializationError::UnknownSubtag(3))
+        Err(dotnet_types::error::PointerDeserializationError::UnknownSubtag(4))
     ));
+}
+
+/// Supplies one live frame home block, as a VM frame stack would for its serial.
+struct FrameHomeResolver {
+    serial: FrameHomeSerial,
+    base: NonNull<u8>,
+    len: usize,
+}
+
+impl<'gc> ManagedPtrResolver<'gc> for FrameHomeResolver {
+    fn stack_slot_base(&self, _slot: StackSlotIndex) -> Option<NonNull<u8>> {
+        None
+    }
+
+    fn static_storage_base(&self, _metadata: &StaticMetadata) -> Option<NonNull<u8>> {
+        None
+    }
+
+    fn frame_home_block(&self, serial: FrameHomeSerial) -> Option<(NonNull<u8>, usize)> {
+        (serial == self.serial).then_some((self.base, self.len))
+    }
+}
+
+fn frame_home_ptr(
+    base: NonNull<u8>,
+    serial: FrameHomeSerial,
+    offset: usize,
+) -> ManagedPtr<'static> {
+    ManagedPtr::new_frame_home(
+        NonNull::new(base.as_ptr().wrapping_add(offset)).expect("in-bounds offset"),
+        TypeDescription::NULL,
+        serial,
+        ByteOffset::new(offset),
+        false,
+    )
+}
+
+#[test]
+fn frame_home_pointer_round_trips_serial_and_offset() {
+    let mut block = [0u8; 32];
+    let base = NonNull::new(block.as_mut_ptr()).expect("array pointers are non-null");
+    // A serial wider than 32 bits exercises both halves of the split encoding.
+    let serial = FrameHomeSerial::new(0x1234_5678_9ABC_DEF0);
+    let ptr = frame_home_ptr(base, serial, 12);
+    let mut buffer = ManagedPtr::serialization_buffer();
+    ptr.write(&mut buffer);
+
+    // SAFETY: F10.RawMemoryAccessValid — `buffer` holds the complete encoding written above.
+    let metadata = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) }.expect("metadata");
+    assert_eq!(metadata.origin, PointerOrigin::FrameHome(serial));
+    assert_eq!(metadata.offset, ByteOffset::new(12));
+    assert_eq!(metadata.address, None);
+
+    let resolver = FrameHomeResolver {
+        serial,
+        base,
+        len: block.len(),
+    };
+    // SAFETY: F10.RawMemoryAccessValid — `buffer` holds the complete encoding written above.
+    let resolved =
+        unsafe { ManagedPtr::read_resolved_unchecked(&buffer, &resolver) }.expect("live");
+    assert_eq!(
+        resolved.address.map(|address| address.as_ptr().addr()),
+        Some(base.as_ptr().addr() + 12)
+    );
+}
+
+#[test]
+fn frame_home_pointer_rejects_returned_frame_and_offset_mismatch() {
+    let mut block = [0u8; 32];
+    let base = NonNull::new(block.as_mut_ptr()).expect("array pointers are non-null");
+    let serial = FrameHomeSerial::new(7);
+    let ptr = frame_home_ptr(base, serial, 4);
+    let mut buffer = ManagedPtr::serialization_buffer();
+    ptr.write(&mut buffer);
+
+    // No live frame has serial 7: the next frame at the same depth has serial 8.
+    let resolver = FrameHomeResolver {
+        serial: serial.next(),
+        base,
+        len: block.len(),
+    };
+    // SAFETY: F10.RawMemoryAccessValid — `buffer` holds the complete encoding written above.
+    let stale = unsafe { ManagedPtr::read_resolved_unchecked(&buffer, &resolver) };
+    assert_eq!(
+        stale,
+        Err(dotnet_types::error::PointerDeserializationError::UnresolvedFrameHome(7))
+    );
+
+    // Corrupt the word-1 offset while keeping the checksum valid.
+    let ptr_size = ObjectRef::SIZE;
+    let word0 = usize::from_ne_bytes(buffer[..ptr_size].try_into().unwrap());
+    let word1 = usize::from_ne_bytes(buffer[ptr_size..ptr_size * 2].try_into().unwrap()) + 1;
+    buffer[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+    buffer[ptr_size * 2..ptr_size * 3].copy_from_slice(&(word0 ^ word1).to_ne_bytes());
+    // SAFETY: F10.RawMemoryAccessValid — `buffer` is a complete, checksum-valid encoding.
+    let corrupt = unsafe { ManagedPtr::read_metadata_unchecked(&buffer) };
+    assert_eq!(
+        corrupt,
+        Err(dotnet_types::error::PointerDeserializationError::OffsetMismatch)
+    );
+}
+
+#[test]
+fn frame_home_access_checks_liveness_and_range() {
+    let mut block = [0u8; 32];
+    block[8] = 0x5A;
+    let base = NonNull::new(block.as_mut_ptr()).expect("array pointers are non-null");
+    let serial = FrameHomeSerial::new(3);
+    let live = FrameHomeResolver {
+        serial,
+        base,
+        len: block.len(),
+    };
+    let ptr = frame_home_ptr(base, serial, 8);
+
+    // SAFETY: F10.FrameHomeChecked — the closure only reads.
+    let byte = unsafe { ptr.with_frame_home_data(&live, 1, |data| data[0]) };
+    assert_eq!(byte, Ok(0x5A));
+    // SAFETY: F10.FrameHomeChecked — the closure only reads.
+    let too_long = unsafe { ptr.with_frame_home_data(&live, 25, |_| ()) };
+    assert_eq!(
+        too_long,
+        Err(dotnet_types::error::MemoryAccessError::BoundsCheck {
+            offset: 8,
+            size: 25,
+            len: 32
+        })
+    );
+    // SAFETY: F10.FrameHomeChecked — the closure only reads.
+    let returned = unsafe { ptr.with_frame_home_data(&NO_MANAGED_BASES, 1, |_| ()) };
+    assert_eq!(
+        returned,
+        Err(dotnet_types::error::MemoryAccessError::InvalidOrigin)
+    );
+    // The unchecked accessor never reads a frame-home pointer.
+    // SAFETY: F10.RawMemoryAccessValid — `try_with_data` rejects frame-home origins before access.
+    assert!(unsafe { ptr.try_with_data(1, |_| ()) }.is_none());
 }
 
 #[test]

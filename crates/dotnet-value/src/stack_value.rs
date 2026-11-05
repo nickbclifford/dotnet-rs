@@ -588,6 +588,10 @@ impl<'gc> StackValue<'gc> {
             PointerOrigin::CrossArenaObjectRef(_) => pointer
                 .observe_address()
                 .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
+            // Observation only: a frame-home byref is accessed through its frame check.
+            PointerOrigin::FrameHome(_) => pointer
+                .observe_address()
+                .map_or(std::ptr::null_mut(), |address| address.as_ptr()),
             _ => {
                 // SAFETY: F10.RawMemoryAccessValid — a zero-length window only reads the
                 // cached address of a non-heap origin; no payload bytes are accessed. The
