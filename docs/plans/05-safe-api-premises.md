@@ -1,6 +1,6 @@
 # Safe APIs whose soundness rests on unchecked caller premises
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** Safe Rust code in the workspace cannot make `FieldStorage`, `Object`, `StackValue` or the
 memory-operation helpers decode a non-reference slot as an `ObjectRef`, read bytes without the
 synchronization their contract needs, or call a raw-pointer copy/fill helper without an `unsafe`
@@ -126,14 +126,23 @@ pointer range that no type can carry.
 Typed slot checks, sealed unsafe byte decoding, restricted layout decoders, object-size
 metadata reads, unsafe chunked helpers and checked inline typed-access arithmetic are enabled.
 Field regressions cover wrong kinds, interior offsets, overflow, nested structs and arrays;
-compile-fail doctests cover the raw decoder and sealed trait. Remaining acceptance coverage:
-owned-origin typed read/write bounds regressions. Inline typed-helper regressions cover
+compile-fail doctests cover the raw decoder and sealed trait. Owned-origin typed read/write bounds regressions exercise Heap, Static and Transient
+through a real VesContext, including payload-end and overflow rejection, unchanged bytes
+on rejected writes, and a round trip at the last valid scalar slot. Inline typed-helper regressions cover
 read/write bounds, overflow, unchanged bytes on failure and the last valid scalar slot.
 Reference-slot round trips and concurrent object-size reads have focused coverage.
-The plan remains In progress until that coverage and all final checks pass.
+All acceptance coverage and final checks pass.
 
 Validation: `./check.sh --fast` passes all three configurations. The new field-access
 regressions pass under the pinned Miri configuration without default features and with
 `multithreading`; compile-fail doctests and `bash scripts/check_doc_drift.sh` pass.
 The unsynchronized-slice search leaves only the definition, tracing, resurrection and
 resurrection validation.
+
+Completion validation: `./check.sh --fast` passes (637, 750 and 765 tests in its
+three configurations). The owned-origin and inline-helper regressions pass without
+features and with `multithreading`. The pinned Miri storage regressions pass in both
+configurations (two tests without features, three with `multithreading`), as do both
+compile-fail doctests. Formatting, clippy in both configurations, doc drift (49 checks),
+and `git diff --check` pass. The unsynchronized-slice search retains only the allowed
+implementation sites described above.

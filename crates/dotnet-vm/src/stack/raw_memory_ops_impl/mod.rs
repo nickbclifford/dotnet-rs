@@ -1081,8 +1081,172 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
 #[cfg(test)]
 mod safe_api_tests {
     use super::*;
+    use crate::stack::ops::{VmCallOps, VmResolutionOps};
     use dotnet_runtime_memory::HeapManager;
     use gc_arena::{Arena, Rootable};
+
+    #[test]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "fixture stays within one arena mutation"
+    )]
+    fn owned_origin_typed_access_checks_complete_range() {
+        use crate::{
+            state::SharedGlobalState,
+            sync::Arc,
+            test_utils::{new_test_arena, test_gc_handle},
+        };
+        use dotnet_assemblies::AssemblyLoader;
+        use dotnet_types::generics::GenericLookup;
+        use dotnet_value::{
+            layout::FieldLayoutManager,
+            object::{HeapStorage, Object, ObjectRef},
+            pointer::StaticMetadata,
+            storage::FieldStorage,
+        };
+        use dotnetdll::prelude::*;
+
+        let loader = Arc::new(AssemblyLoader::new_bare("safe_api_bounds".into()).unwrap());
+        let mut res = Resolution::new(Module::new("SafeApiBounds.dll"));
+        res.assembly = Some(Assembly::new("SafeApiBounds"));
+        let ty = res.push_type_definition(TypeDefinition::new(None, "Storage"));
+        res.push_field(
+            ty,
+            Field {
+                attributes: vec![],
+                name: "Value".into(),
+                type_modifiers: vec![],
+                by_ref: false,
+                return_type: MemberType::Base(Box::new(BaseType::Int32)),
+                accessibility: dotnetdll::resolved::members::Accessibility::Access(
+                    dotnetdll::resolved::Accessibility::Public,
+                ),
+                static_member: true,
+                init_only: false,
+                literal: false,
+                default: None,
+                not_serialized: false,
+                special_name: false,
+                pinvoke: None,
+                runtime_special_name: false,
+                offset: None,
+                marshal: None,
+                initial_value: None,
+            },
+        );
+        let _method = res.push_method(
+            ty,
+            Method::new(
+                Accessibility::Public,
+                crate::test_utils::parameterless_i32_signature(),
+                "Main",
+                None,
+            ),
+        );
+        let resolution = loader.register_owned_assembly(res);
+        let entry = dotnet_types::members::MethodDescription::new(
+            TypeDescription::new(resolution.clone(), ty),
+            Default::default(),
+            resolution.clone(),
+            MethodMemberIndex::Method(0),
+        );
+        let td = TypeDescription::new(resolution, ty);
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|mc, engine| {
+            // SAFETY: F1.GcHandleRooted — engine remains the live arena root throughout this mutation.
+            let gc = unsafe { test_gc_handle(mc, engine) };
+            let info = shared
+                .caches
+                .get_method_info(entry.clone(), &Default::default(), shared.clone())
+                .unwrap();
+            let mut ctx = engine.ves_context(gc);
+            ctx.entrypoint_frame(info, Default::default(), vec![])
+                .unwrap();
+            let fields = Arc::new(FieldLayoutManager {
+                fields: Default::default(),
+                total_size: 8,
+                alignment: 4,
+                gc_desc: Default::default(),
+                has_ref_fields: false,
+            });
+            let make_object = || {
+                Object::new(
+                    td.clone(),
+                    GenericLookup::default(),
+                    FieldStorage::new(fields.clone(), vec![0; 8]),
+                )
+            };
+            let heap = ObjectRef::new(gc, HeapStorage::Obj(Box::new(make_object())));
+            let transient = Arc::new(make_object());
+            let metadata = Arc::new(StaticMetadata {
+                type_desc: td,
+                generics: GenericLookup::default(),
+            });
+            let generics = GenericLookup::default();
+            ctx.shared
+                .statics
+                .init(
+                    metadata.type_desc.clone(),
+                    &ctx.with_generics(&generics),
+                    ctx.thread_id.get(),
+                )
+                .unwrap();
+            let static_len = ctx
+                .statics()
+                .get(metadata.type_desc.clone(), &metadata.generics)
+                .storage
+                .with_data(|data| data.len());
+            let layout = LayoutManager::Scalar(Scalar::Int32);
+            for (origin, len) in [
+                (PointerOrigin::Heap(heap), 8),
+                (PointerOrigin::Transient(transient), 8),
+                (PointerOrigin::Static(metadata), static_len),
+            ] {
+                for offset in [len - 3, len, len + 1, usize::MAX - 1, usize::MAX] {
+                    // SAFETY: F10.RawMemoryAccessValid — fixture retains initialized integer storage;
+                    // owned origins must reject invalid ranges internally before any access.
+                    let read =
+                        unsafe { ctx.read_unaligned(origin.clone(), offset.into(), &layout, None) };
+                    assert!(
+                        matches!(read, Err(MemoryAccessError::BoundsCheck { .. })),
+                        "offset {offset}: {read:?}"
+                    );
+                    // SAFETY: F10.RawMemoryAccessValid — value and layout match; range validation belongs to the owned origin.
+                    let write = unsafe {
+                        ctx.write_unaligned(
+                            origin.clone(),
+                            offset.into(),
+                            StackValue::Int32(42),
+                            &layout,
+                        )
+                    };
+                    assert!(
+                        matches!(write, Err(MemoryAccessError::BoundsCheck { .. })),
+                        "offset {offset}: {write:?}"
+                    );
+                }
+                let mut bytes = vec![0; len];
+                // SAFETY: F10.RawMemoryAccessValid — the retained integer payload is live and len bytes long.
+                unsafe { ctx.read_bytes(origin.clone(), 0usize.into(), &mut bytes) }.unwrap();
+                assert_eq!(bytes, vec![0; len]);
+                // SAFETY: F10.RawMemoryAccessValid — final complete integer slot in retained storage, matching value and layout.
+                unsafe {
+                    ctx.write_unaligned(
+                        origin.clone(),
+                        (len - 4).into(),
+                        StackValue::Int32(42),
+                        &layout,
+                    )
+                }
+                .unwrap();
+                // SAFETY: F10.RawMemoryAccessValid — same initialized final integer slot, retained throughout this mutation.
+                let read =
+                    unsafe { ctx.read_unaligned(origin, (len - 4).into(), &layout, None) }.unwrap();
+                assert!(matches!(read, StackValue::Int32(42)));
+            }
+        });
+    }
 
     #[test]
     fn inline_typed_access_rejects_out_of_bounds_and_overflow() {
