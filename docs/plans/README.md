@@ -13,7 +13,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Next |
 | 06 | [Cross-arena collection fixture through production decoding](06-cross-arena-collection-fixture.md) | Prerequisite of 08 |
 | 07 | [Nested filters keep earlier suspended frames](07-nested-filter-suspension.md) | Prerequisite of 08 |
-| 08 | [Async/await VM effects](08-async-effects.md) | Blocked on 06 and 07; slice notes in [08-async-effects/](08-async-effects/) |
+| 08 | [Async/await VM effects](08-async-effects.md) | In progress; slice notes in [08-async-effects/](08-async-effects/) |
 | 04 | [Native continuations: Substring proof](04-native-continuations.md) | Measured large-call cost accepted; scheduler contract and behavior controls retained for 08 slice 1 |
 | 03 | [Repair enum and named scalar frame homes](03-frame-home-enum-representation.md) | Done; scalar bounds, opcode/growth coverage and historical reproductions verified |
 | 02 | [Stable homes for addressable locals and arguments](02-stable-frame-homes.md) | Done; measured primitive cost accepted |

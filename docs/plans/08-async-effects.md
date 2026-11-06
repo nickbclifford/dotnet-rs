@@ -1,7 +1,7 @@
 # Async/await VM effects
 
-**Status:** Not started (blocked on plans [06](06-cross-arena-collection-fixture.md) and
-[07](07-nested-filter-suspension.md))
+**Status:** In progress (`supervised/async-effects`; plans
+[06](06-cross-arena-collection-fixture.md) and [07](07-nested-filter-suspension.md) are complete)
 **Outcome:** `String.Substring`, multicast delegate invocation, reflection `Invoke`, `ldsfld`
 static initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
 bodies in both configurations. Their existing fixtures pass. The bespoke mechanisms they
@@ -75,6 +75,10 @@ Out:
   operation completes. Segment isolation arrives with the first slice where a parked
   activation waits on managed work (slice 2).
 - **Reflection** uses transparent calls (slice 3).
+- **Static initialization** uses the capturing `try_call` (slice 4), so outer filters see
+  `TypeInitializationException` rather than the inner exception, matching CLR (maintainer
+  decision, 2026-11-05). Today the wrap happens only in the unwind pass, after the search pass
+  has run filters against the inner exception.
 
 ## Terms
 
@@ -154,7 +158,7 @@ entry helper with an instruction completion action (see "Completion").
 | `vm()` | slice 1 | If a collection or stop is pending, yields to the executor before granting access. After 32 grants in one turn, yields before the 33rd. |
 | `yield_now()` | slice 1 | Always returns to the executor once. |
 | `call(NativeCall)` | slice 2 | Transparent: returns a `NativeValue`. A managed exception escaping the child propagates without resuming Rust. |
-| `try_call(NativeCall)` | slice 2 (first consumer decides) | Capturing: the child's handlers and cleanup run, then Rust receives `Err(RootedException)`. Outer filters run after the child unwinds. |
+| `try_call(NativeCall)` | slice 4 (only `ensure_initialized` needs it) | Capturing: the child's handlers and cleanup run, then Rust receives `Err(RootedException)`. Outer filters run after the child unwinds. |
 | `ensure_initialized(type, generics)` | slice 4 | Runs or waits for a .cctor and preserves publication, failure wrapping, recursion and wait-graph cycle rules. |
 | `wait_finalizers()` | slice 5 | VM-owned condition wait. |
 | `monitor_enter(object, deadline) -> bool` | slice 5 | VM-owned condition wait. On `true`, the guest owns the monitor even if later native code fails. |
