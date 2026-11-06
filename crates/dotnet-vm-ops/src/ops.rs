@@ -257,7 +257,10 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
 
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    /// Heap, Static, Transient, CrossArenaObjectRef and FrameHome origins check
+    /// the full range and return `BoundsCheck` for invalid offsets. For Unmanaged,
+    /// `offset` is an absolute live address valid for the complete access. The
+    /// caller must ensure synchronization and valid initialized representations.
     /// The `layout` must match the expected type of `value`.
     unsafe fn write_unaligned(
         &mut self,
@@ -269,7 +272,10 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
 
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    /// Heap, Static, Transient, CrossArenaObjectRef and FrameHome origins check
+    /// the full range and return `BoundsCheck` for invalid offsets. For Unmanaged,
+    /// `offset` is an absolute live address valid for the complete access. The
+    /// caller must ensure synchronization and valid initialized representations.
     /// The `layout` must match the expected type stored at the location.
     unsafe fn read_unaligned(
         &self,

@@ -460,8 +460,7 @@ unsafe impl<'gc> Collect<'gc> for Object<'gc> {
 
 impl<'gc> Object<'gc> {
     pub fn size_bytes(&self) -> usize {
-        // SAFETY: F10.BorrowedStorageStable — The object layout selected valid serialized storage for this value and preserves its lifetime.
-        size_of::<Object>() + unsafe { self.instance_storage.raw_data_unsynchronized().len() }
+        size_of::<Object>() + self.instance_storage.data_len()
     }
 
     /// Safely accesses the object's data as a byte slice.

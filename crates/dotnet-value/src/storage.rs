@@ -1,4 +1,4 @@
-use crate::layout::{FieldLayoutManager, FieldType, HasLayout};
+use crate::layout::{FieldLayoutManager, FieldType, HasLayout, Scalar};
 
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 use crate::ValidationTag;
@@ -39,8 +39,10 @@ pub struct FieldRef<'a, T: FieldType> {
 
 impl<T: FieldType> FieldRef<'_, T> {
     pub fn read(&self) -> T {
-        self.storage
-            .with_data(|data| T::read_from(&data[self.offset..]))
+        self.storage.with_data(|data| {
+            // SAFETY: F2.DescriptorMatchesEcmaLayout — construction checks the reference slot kind and the storage guard protects its bytes.
+            unsafe { T::read_from(&data[self.offset..]) }
+        })
     }
     pub fn write(&self, value: T) {
         self.storage
@@ -59,7 +61,8 @@ impl BoundedPtr {
     }
 
     /// # Safety
-    /// The caller must ensure that `offset` is within the bounds of `self.ptr` and `self.len`.
+    /// The pointer must be live and readable for the selected range, with no concurrent
+    /// writes. Bytes must encode a valid `T`, whose owners outlive the result.
     #[expect(
         clippy::multiple_unsafe_ops_per_block,
         reason = "the checked offset is converted to a slice and decoded as one field value"
@@ -138,23 +141,34 @@ impl FieldStorage {
         name: &str,
     ) -> Option<FieldRef<'_, T>> {
         let field = self.layout.get_field(owner, name)?;
+        if matches!(T::SCALAR, Scalar::ObjectRef | Scalar::ManagedPtr)
+            && T::SCALAR.size_const() != field.layout.size().as_usize()
+        {
+            return None;
+        }
         assert_eq!(T::SCALAR.size_const(), field.layout.size().as_usize());
-        Some(FieldRef {
-            storage: self,
-            offset: field.position.as_usize(),
-            _type: PhantomData,
-        })
+        self.field_at_offset(field.position.as_usize())
     }
 
     /// Gets a typed field reference at a layout-resolved byte offset.
     ///
-    /// Callers must obtain `offset` from this storage's [`FieldLayoutManager`]
-    /// and verify the expected field size before calling this method. This is
-    /// used by validated semantic field registries that retain field identity
-    /// separately from lazily constructed object layouts.
+    /// Reference types require an exact scalar-kind match at the slot start,
+    /// including nested fields and array elements. Plain scalars require bounds.
     pub fn field_at_offset<T: FieldType>(&self, offset: usize) -> Option<FieldRef<'_, T>> {
         let end = offset.checked_add(T::SCALAR.size_const())?;
         if end > self.layout.total_size {
+            return None;
+        }
+        if matches!(T::SCALAR, Scalar::ObjectRef | Scalar::ManagedPtr)
+            && !self.layout.fields.values().any(|field| {
+                offset
+                    .checked_sub(field.position.as_usize())
+                    .is_some_and(|relative| {
+                        relative < field.layout.size().as_usize()
+                            && field.layout.scalar_at(relative, T::SCALAR)
+                    })
+            })
+        {
             return None;
         }
         Some(FieldRef {
@@ -449,7 +463,8 @@ unsafe impl<'gc> Collect<'gc> for FieldStorage {
             );
         }
 
-        self.layout.trace(data, cc);
+        // SAFETY: F2.DescriptorMatchesEcmaLayout — this storage owns the layout and its initialized bytes; tracing runs during STW.
+        unsafe { self.layout.trace(data, cc) };
     }
 }
 
@@ -528,5 +543,114 @@ mod alignment_tests {
             &[0; size_of::<i32>()],
             Ordering::Release,
         );
+    }
+}
+
+#[cfg(test)]
+mod safe_api_tests {
+    use super::*;
+    use crate::{
+        ObjectRef,
+        layout::{FieldKey, FieldLayout, GcDesc, LayoutManager},
+        pointer::ManagedPtr,
+    };
+    use hashbrown::HashMap;
+
+    fn storage(kind: Scalar) -> FieldStorage {
+        let size = kind.size_const();
+        let mut fields = HashMap::new();
+        fields.insert(
+            FieldKey {
+                owner: TypeDescription::NULL,
+                name: "slot".into(),
+            },
+            FieldLayout {
+                position: crate::ByteOffset::new(0),
+                layout: Arc::new(LayoutManager::Scalar(kind)),
+            },
+        );
+        FieldStorage::new(
+            Arc::new(FieldLayoutManager {
+                fields,
+                total_size: size,
+                alignment: 8,
+                gc_desc: GcDesc::default(),
+                has_ref_fields: false,
+            }),
+            vec![0; size],
+        )
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn object_size_while_storage_read_guard_is_held() {
+        let object = crate::object::Object::new(
+            TypeDescription::NULL,
+            dotnet_types::generics::GenericLookup::default(),
+            storage(Scalar::Int64),
+        );
+        std::thread::scope(|scope| {
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let object_ref = &object;
+            scope.spawn(move || {
+                object_ref.instance_storage.with_data(|_| {
+                    ready_tx.send(()).unwrap();
+                    done_rx.recv().unwrap();
+                })
+            });
+            ready_rx.recv().unwrap();
+            assert_eq!(object.size_bytes(), size_of::<crate::object::Object>() + 8);
+            done_tx.send(()).unwrap();
+        });
+    }
+
+    #[test]
+    fn nested_and_array_reference_slots_require_exact_start() {
+        let inner = storage(Scalar::ObjectRef);
+        let mut outer = storage(Scalar::ObjectRef);
+        let width = Scalar::ObjectRef.size_const();
+        Arc::make_mut(&mut outer.layout)
+            .fields
+            .values_mut()
+            .next()
+            .unwrap()
+            .layout = Arc::new(LayoutManager::Array(crate::layout::ArrayLayoutManager {
+            element_layout: Arc::new(LayoutManager::Field((*inner.layout).clone())),
+            length: 2,
+        }));
+        Arc::make_mut(&mut outer.layout).total_size = width * 2;
+        *outer.data.write() = vec![0; width * 2];
+        assert!(outer.field_at_offset::<ObjectRef>(0).is_some());
+        assert!(outer.field_at_offset::<ObjectRef>(width).is_some());
+        assert!(outer.field_at_offset::<ObjectRef>(1).is_none());
+        assert!(outer.field_at_offset::<ObjectRef>(width * 2).is_none());
+    }
+
+    #[test]
+    fn typed_reference_access_requires_matching_slot() {
+        let integer = storage(Scalar::Int64);
+        assert!(
+            integer
+                .field::<ObjectRef>(TypeDescription::NULL, "slot")
+                .is_none()
+        );
+        assert!(integer.field_at_offset::<ObjectRef>(0).is_none());
+        assert!(integer.field_at_offset::<ObjectRef>(usize::MAX).is_none());
+        let object = storage(Scalar::ObjectRef);
+        assert!(object.field_at_offset::<ObjectRef>(0).is_some());
+        assert!(object.field_at_offset::<ObjectRef>(1).is_none());
+        assert!(object.field_at_offset::<ManagedPtr>(0).is_none());
+        let field = object.field_at_offset::<ObjectRef>(0).unwrap();
+        field.write(ObjectRef(None));
+        assert_eq!(field.read(), ObjectRef(None));
+        let managed = storage(Scalar::ManagedPtr);
+        assert!(managed.field_at_offset::<ObjectRef>(0).is_none());
+        assert!(
+            managed
+                .field::<ObjectRef>(TypeDescription::NULL, "slot")
+                .is_none()
+        );
+        assert!(managed.field_at_offset::<ManagedPtr>(0).is_some());
     }
 }

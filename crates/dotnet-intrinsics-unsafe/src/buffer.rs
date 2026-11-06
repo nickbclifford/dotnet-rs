@@ -93,7 +93,8 @@ pub fn intrinsic_buffer_memmove<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let source = dotnet_vm_ops::vm_try!(ctx.retained_range(&src, total_count));
     let destination = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, total_count));
-    chunked_copy_with_safe_point(ctx, source, destination, total_count)
+    // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
+    unsafe { chunked_copy_with_safe_point(ctx, source, destination, total_count) }
 }
 
 #[dotnet_intrinsic("static void System.SpanHelpers::ClearWithoutReferences(ref byte, nuint)")]
@@ -147,7 +148,8 @@ pub fn intrinsic_span_helpers_fill<'gc, T: UnsafeIntrinsicHost<'gc>>(
         // `dst` keeps any cross-arena owner leased through the synchronous fill
         // and is dropped before a `Yield` reaches the scheduler.
         let address = dotnet_vm_ops::vm_try!(ctx.retained_range(&dst, len));
-        let result = chunked_fill_with_safe_point(ctx, address, len, byte_value);
+        // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
+        let result = unsafe { chunked_fill_with_safe_point(ctx, address, len, byte_value) };
         drop(dst);
         return result;
     }

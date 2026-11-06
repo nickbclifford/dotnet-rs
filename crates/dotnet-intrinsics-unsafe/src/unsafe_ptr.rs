@@ -777,7 +777,9 @@ pub fn intrinsic_unsafe_copy_block<
     validate_atomic_access(source, false);
     validate_atomic_access(destination, false);
 
-    chunked_copy_with_safe_point(ctx, source, destination, size)
+    // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
+
+    unsafe { chunked_copy_with_safe_point(ctx, source, destination, size) }
 }
 
 #[dotnet_intrinsic(
@@ -811,5 +813,7 @@ pub fn intrinsic_unsafe_init_block<
 
     validate_atomic_access(destination, false);
 
-    chunked_fill_with_safe_point(ctx, destination, size, val)
+    // SAFETY: F10.RawMemoryAccessValid — retained_range checked the full managed range; retained operands stay alive through the call. Unmanaged validity and synchronization follow the guest intrinsic contract.
+
+    unsafe { chunked_fill_with_safe_point(ctx, destination, size, val) }
 }

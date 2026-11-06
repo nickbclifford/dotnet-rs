@@ -275,7 +275,8 @@ impl FrameHomes {
             // shared view, which ends before `trace` returns.
             let bytes =
                 unsafe { std::slice::from_raw_parts(block.base().as_ptr(), block.payload_len()) };
-            homes.layout.block.trace(bytes, cc);
+            // SAFETY: F10.RawMemoryAccessValid — the live block contains its layout encodings and tracing excludes concurrent instruction writes.
+            unsafe { homes.layout.block.trace(bytes, cc) };
         }
     }
 }

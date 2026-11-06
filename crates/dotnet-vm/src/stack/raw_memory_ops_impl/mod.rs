@@ -30,7 +30,11 @@ unsafe fn write_to_inline_storage<'gc>(
     value: StackValue<'gc>,
     layout: &LayoutManager,
 ) -> Result<(), MemoryAccessError> {
-    if offset.as_usize() + layout.size().as_usize() > data.len() {
+    if offset
+        .as_usize()
+        .checked_add(layout.size().as_usize())
+        .is_none_or(|end| end > data.len())
+    {
         return Err(MemoryAccessError::BoundsCheck {
             offset: offset.as_usize(),
             size: layout.size().as_usize(),
@@ -56,7 +60,11 @@ unsafe fn read_from_inline_storage<'gc>(
     layout: &LayoutManager,
     type_desc: Option<TypeDescription>,
 ) -> Result<StackValue<'gc>, MemoryAccessError> {
-    if offset.as_usize() + layout.size().as_usize() > data.len() {
+    if offset
+        .as_usize()
+        .checked_add(layout.size().as_usize())
+        .is_none_or(|end| end > data.len())
+    {
         return Err(MemoryAccessError::BoundsCheck {
             offset: offset.as_usize(),
             size: layout.size().as_usize(),
@@ -137,7 +145,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
 
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    /// Owned origins validate the complete range internally. For Unmanaged, the caller
+    /// must supply a live address valid for the access, with synchronization.
     /// The `layout` must match the expected type of `value`.
     #[inline]
     unsafe fn write_unaligned(
@@ -183,7 +192,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.write_to_heap(
                         self.gc,
@@ -209,7 +218,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.write_to_heap(
                         self.gc,
@@ -235,7 +244,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
 
     /// # Safety
     ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    /// Owned origins validate the complete range internally. For Unmanaged, the caller
+    /// must supply a live address valid for the access, with synchronization.
     /// The `layout` must match the expected type stored at the location.
     #[inline]
     unsafe fn read_unaligned(
@@ -283,7 +293,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
@@ -306,7 +316,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
@@ -356,7 +366,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.write_bytes(self.gc, Some(MemoryOwner::Local(owner)), offset, data)
                 }
@@ -373,7 +383,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.write_bytes(
                         self.gc,
@@ -417,7 +427,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe { memory.read_bytes(Some(MemoryOwner::Local(owner)), offset, dest) }
             }
             PointerOrigin::Unmanaged => {
@@ -432,7 +442,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.read_bytes(
                         Some(MemoryOwner::cross_arena(self.gc, origin)),
@@ -552,7 +562,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -628,7 +638,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -660,7 +670,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -721,7 +731,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -751,7 +761,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -812,7 +822,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -841,7 +851,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.load_atomic(Some(MemoryOwner::Local(owner)), offset, size, ordering)
                 }
@@ -892,7 +902,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.load_atomic(
                         Some(MemoryOwner::cross_arena(self.gc, origin)),
@@ -920,7 +930,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The heap owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -976,7 +986,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let heap = &self.local.heap;
                 let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 // SAFETY: F10.RawMemoryAccessValid — The cross-arena owner is passed as the object containing the location, as `RawMemoryAccess`
-                // requires; this function's caller guarantees `offset` (and width) are valid for it.
+                // requires; the memory layer checks the complete access range.
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -1065,5 +1075,80 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut()) }
             }),
         })
+    }
+}
+
+#[cfg(test)]
+mod safe_api_tests {
+    use super::*;
+    use dotnet_runtime_memory::HeapManager;
+    use gc_arena::{Arena, Rootable};
+
+    #[test]
+    fn inline_typed_access_rejects_out_of_bounds_and_overflow() {
+        let arena = Arena::<Rootable![()]>::new(|_| ());
+        #[cfg(feature = "multithreading")]
+        let arena_handle = Box::into_raw(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId::new(5050),
+        )));
+        arena.mutate(|mc, _| {
+            let gc = GCHandle::new(
+                mc,
+                #[cfg(feature = "multithreading")]
+                // SAFETY: F1.GcHandleRooted — the boxed handle remains live until mutate returns.
+                unsafe {
+                    (&*arena_handle).as_inner()
+                },
+                #[cfg(feature = "memory-validation")]
+                dotnet_utils::ArenaId::new(5050),
+            );
+            let heap = HeapManager::new();
+            let mut memory = RawMemoryAccess::new(&heap);
+            let layout = LayoutManager::Scalar(Scalar::Int32);
+            let mut data = [0u8; 8];
+            for offset in [5, 8, usize::MAX - 1, usize::MAX] {
+                // SAFETY: F10.RawMemoryAccessValid — data is live initialized integer storage; the helper must reject the range before forming a pointer, and this mutation scope retains the GC context.
+                let read = unsafe {
+                    read_from_inline_storage(&memory, gc, &data, offset.into(), &layout, None)
+                };
+                assert!(matches!(read, Err(MemoryAccessError::BoundsCheck { .. })));
+                // SAFETY: F10.RawMemoryAccessValid — the exclusive slice and integer layout match; invalid ranges are checked by the helper before writing.
+                let write = unsafe {
+                    write_to_inline_storage(
+                        &mut memory,
+                        gc,
+                        &mut data,
+                        offset.into(),
+                        StackValue::Int32(42),
+                        &layout,
+                    )
+                };
+                assert!(matches!(write, Err(MemoryAccessError::BoundsCheck { .. })));
+            }
+            assert_eq!(data, [0; 8]);
+            // SAFETY: F10.RawMemoryAccessValid — offset four selects the final four bytes of this exclusive eight-byte integer buffer.
+            unsafe {
+                write_to_inline_storage(
+                    &mut memory,
+                    gc,
+                    &mut data,
+                    4usize.into(),
+                    StackValue::Int32(42),
+                    &layout,
+                )
+            }
+            .unwrap();
+            // SAFETY: F10.RawMemoryAccessValid — the same in-bounds integer slot was initialized above and stays borrowed in this GC scope.
+            let read = unsafe {
+                read_from_inline_storage(&memory, gc, &data, 4usize.into(), &layout, None)
+            }
+            .unwrap();
+            assert!(matches!(read, StackValue::Int32(42)));
+        });
+        #[cfg(feature = "multithreading")]
+        // SAFETY: F10.RawMemoryAccessValid — mutate finished using the uniquely allocated handle.
+        unsafe {
+            drop(Box::from_raw(arena_handle))
+        };
     }
 }

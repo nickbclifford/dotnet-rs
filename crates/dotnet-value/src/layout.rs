@@ -47,6 +47,26 @@ impl From<Scalar> for LayoutManager {
 }
 
 impl LayoutManager {
+    pub(crate) fn scalar_at(&self, offset: usize, expected: Scalar) -> bool {
+        match self {
+            Self::Scalar(kind) => offset == 0 && *kind == expected,
+            Self::Field(fields) => fields.fields.values().any(|field| {
+                offset
+                    .checked_sub(field.position.as_usize())
+                    .is_some_and(|relative| {
+                        relative < field.layout.size().as_usize()
+                            && field.layout.scalar_at(relative, expected.clone())
+                    })
+            }),
+            Self::Array(array) => {
+                let width = array.element_layout.size().as_usize();
+                width != 0
+                    && offset / width < array.length
+                    && array.element_layout.scalar_at(offset % width, expected)
+            }
+        }
+    }
+
     pub fn visit_managed_ptrs(
         &self,
         offset: crate::ByteOffset,
@@ -135,7 +155,7 @@ impl LayoutManager {
         }
     }
 
-    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
+    pub(crate) fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 // SAFETY: F2.DescriptorMatchesEcmaLayout — The layout selected this field and storage contains its valid serialized representation.
@@ -148,7 +168,8 @@ impl LayoutManager {
                 info.origin.trace(cc);
             }
             LayoutManager::Field(f) => {
-                f.trace(storage, cc);
+                // SAFETY: F2.DescriptorMatchesEcmaLayout — the enclosing layout selects these valid storage bytes during tracing.
+                unsafe { f.trace(storage, cc) };
             }
             LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
@@ -161,7 +182,7 @@ impl LayoutManager {
         }
     }
 
-    pub fn resurrect<'gc>(
+    pub(crate) fn resurrect<'gc>(
         &self,
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
@@ -333,7 +354,7 @@ impl GcDesc {
         self.unaligned_offsets.sort_unstable();
     }
 
-    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
+    pub(crate) fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         let ptr_size = ObjectRef::SIZE;
 
         self.for_each_word_index(|word_index| {
@@ -408,7 +429,10 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
+    /// # Safety
+    /// Storage must match this layout, contain valid reference encodings with live
+    /// owners, and remain free of concurrent writes for the complete trace.
+    pub unsafe fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         // Trace regular ObjectRefs via the optimized GcDesc bitmap
         self.gc_desc.trace(storage, cc);
 
@@ -429,7 +453,7 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn resurrect<'gc>(
+    pub(crate) fn resurrect<'gc>(
         &self,
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
@@ -478,7 +502,7 @@ impl HasLayout for ArrayLayoutManager {
 }
 
 impl ArrayLayoutManager {
-    pub fn resurrect<'gc>(
+    pub(crate) fn resurrect<'gc>(
         &self,
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
@@ -548,18 +572,41 @@ impl Scalar {
     }
 }
 
-/// Trait for types that can be read/written to field storage
-pub trait FieldType: Sized {
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Built-in types that can be read/written to field storage.
+/// Raw byte decoding requires a representation proof:
+/// ```compile_fail,E0133
+/// use dotnet_value::{ObjectRef, layout::FieldType};
+/// let value = <ObjectRef<'static> as FieldType>::read_from(&[0; 8]);
+/// ```
+/// Implementations are sealed:
+/// ```compile_fail
+/// use dotnet_value::layout::{FieldType, Scalar};
+/// struct Forged;
+/// impl FieldType for Forged {
+///     const SCALAR: Scalar = Scalar::ObjectRef;
+///     unsafe fn read_from(_: &[u8]) -> Self { Self }
+///     fn write_to(&self, _: &mut [u8]) {}
+/// }
+/// ```
+pub trait FieldType: Sized + sealed::Sealed {
     const SCALAR: Scalar;
-    fn read_from(bytes: &[u8]) -> Self;
+    /// # Safety
+    /// Bytes must contain a valid serialized value of this type, with reference
+    /// owners alive for the returned value's lifetime.
+    unsafe fn read_from(bytes: &[u8]) -> Self;
     fn write_to(&self, bytes: &mut [u8]);
 }
 
 macro_rules! impl_scalar_field_type {
     ($type:ty, $scalar:expr) => {
+        impl sealed::Sealed for $type {}
         impl FieldType for $type {
             const SCALAR: Scalar = $scalar;
-            fn read_from(bytes: &[u8]) -> Self {
+            unsafe fn read_from(bytes: &[u8]) -> Self {
                 let size = std::mem::size_of::<Self>();
                 let mut buf = [0u8; std::mem::size_of::<Self>()];
                 buf.copy_from_slice(&bytes[..size]);
@@ -586,9 +633,10 @@ impl_scalar_field_type!(f64, Scalar::Float64);
 impl_scalar_field_type!(isize, Scalar::NativeInt);
 impl_scalar_field_type!(usize, Scalar::NativeInt);
 
+impl sealed::Sealed for ObjectRef<'_> {}
 impl<'gc> FieldType for ObjectRef<'gc> {
     const SCALAR: Scalar = Scalar::ObjectRef;
-    fn read_from(bytes: &[u8]) -> Self {
+    unsafe fn read_from(bytes: &[u8]) -> Self {
         // SAFETY: F2.DescriptorMatchesEcmaLayout — The layout selected this field and storage contains its valid serialized representation.
         unsafe { ObjectRef::read_unchecked(bytes) }
     }
@@ -597,9 +645,10 @@ impl<'gc> FieldType for ObjectRef<'gc> {
     }
 }
 
+impl sealed::Sealed for ManagedPtr<'_> {}
 impl<'gc> FieldType for ManagedPtr<'gc> {
     const SCALAR: Scalar = Scalar::ManagedPtr;
-    fn read_from(bytes: &[u8]) -> Self {
+    unsafe fn read_from(bytes: &[u8]) -> Self {
         // SAFETY: F2.DescriptorMatchesEcmaLayout — The layout selected this field and storage contains its valid serialized representation.
         let info = unsafe {
             ManagedPtr::read_resolved_unchecked(bytes, &crate::pointer::NoManagedPtrResolver)

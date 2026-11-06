@@ -13,7 +13,13 @@ pub(crate) fn ranges_overlap(src: *const u8, dst: *mut u8, len: usize) -> bool {
     src_start < dst_end && dst_start < src_end
 }
 
-pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
+/// # Safety
+/// The accessed ranges must remain live across safepoint polls, with synchronized
+/// reads and exclusive writes and no conflicting live Rust references. Source
+/// bytes must be initialized. Copy ranges may overlap. Unmanaged ranges are
+/// guaranteed by the guest unsafe-memory contract; retained owners keep managed
+/// allocations alive for the complete call.
+pub(crate) unsafe fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     ctx: &mut T,
     src: *const u8,
     dst: *mut u8,
@@ -82,7 +88,13 @@ pub(crate) fn chunked_copy_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     StepResult::Continue
 }
 
-pub(crate) fn chunked_fill_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
+/// # Safety
+/// The accessed ranges must remain live across safepoint polls, with synchronized
+/// reads and exclusive writes and no conflicting live Rust references. Source
+/// bytes must be initialized. Copy ranges may overlap. Unmanaged ranges are
+/// guaranteed by the guest unsafe-memory contract; retained owners keep managed
+/// allocations alive for the complete call.
+pub(crate) unsafe fn chunked_fill_with_safe_point<'gc, T: RawMemoryOps<'gc>>(
     ctx: &mut T,
     dst: *mut u8,
     total_count: usize,
