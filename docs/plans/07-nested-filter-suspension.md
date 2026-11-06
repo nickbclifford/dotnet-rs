@@ -1,6 +1,6 @@
 # Nested filters keep earlier suspended frames
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** A filter whose callee catches an exception through its own filter, entered while
 frames are already suspended, resumes the original search with every suspended frame and
 evaluation-stack slot intact, matching CLR output, in both configurations.
@@ -75,3 +75,33 @@ clears every segment on unhandled or terminal paths, as it does today.
 ## Ask the maintainer only if
 
 - CLR output for a fixture contradicts current filter-timing behavior beyond this defect.
+
+
+## Completion evidence
+
+Suspended storage uses flat owning vectors with LIFO segment boundaries. A traced
+`FrameStack::active_filters` retains filter state when throw/rethrow replaces the current
+exception mode; returning to its owner resumes the enclosing filter. Both completion paths
+pop their filter and check segment depth. Terminal clearing drops all records.
+
+The five `nested_filter_{catches,throws,byref,depth,rethrow}_42.cs` fixtures compare exit
+codes and stdout with CLR. The byref fixture retains a byref argument into a suspended
+worker local and reads/writes it during unwind after nested filtering. The existing
+`nested_filter_42.cs` remains enabled. CLR returns 7 for the former
+`exception_filter_5.cs` (filter 1 + finally 2 + catch 4); it is renamed
+`exception_filter_7.cs`.
+
+Validation (both with `--no-default-features` and with
+`--no-default-features --features multithreading`):
+- `DOTNET_TEST_FILTER=exceptions cargo test -p dotnet-cli --test integration_tests nested_filter`
+  plus the configuration flags: 11 passed.
+- `cargo +nightly-2026-05-27 miri test -p dotnet-vm-data --lib` plus configuration
+  flags and `-- --test-threads=1`: 22 passed, using
+  `-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks`.
+- The exception fixture selector `exceptions`: 25 passed in both configurations,
+  including a CLR exit-code comparison for `exception_filter_7.cs`.
+- Clippy for `dotnet-exceptions`, `dotnet-vm`, and `dotnet-vm-data` with
+  `-D warnings`; formatting and diff whitespace checks.
+
+An unfiltered integration invocation was interrupted while running unrelated fixtures;
+it is not recorded as a full-suite pass.

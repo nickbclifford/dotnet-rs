@@ -68,7 +68,7 @@ macro_rules! diff_test_exit_code {
 }
 
 // Rejected candidates: structs/interlocked_misaligned_1 (intentional ECMA alignment
-// divergence); exceptions/exception_filter_5 (VM correctness mismatch);
+// divergence);
 // exceptions/unhandled_exception_254 and stack_trace_*_254 (the in-process fixture oracle is
 // reserved code 254, while the unchanged subprocess behavior is real .NET exit 134 versus
 // dotnet-rs CLI exit 1 for unhandled exceptions); exceptions/intrinsic_trace_42 (rejected from
@@ -121,4 +121,35 @@ diff_test_exit_code!(
     exceptions_intrinsic_trace_42_matches_dotnet_exit_code,
     "tests/fixtures/exceptions/intrinsic_trace_42.cs",
     42
+);
+
+diff_test!(
+    nested_filter_catches_matches_dotnet,
+    "tests/fixtures/exceptions/nested_filter_catches_42.cs"
+);
+
+diff_test!(
+    nested_filter_throws_matches_dotnet,
+    "tests/fixtures/exceptions/nested_filter_throws_42.cs"
+);
+
+diff_test!(
+    nested_filter_depth_matches_dotnet,
+    "tests/fixtures/exceptions/nested_filter_depth_42.cs"
+);
+
+diff_test!(
+    nested_filter_byref_matches_dotnet,
+    "tests/fixtures/exceptions/nested_filter_byref_42.cs"
+);
+
+diff_test!(
+    nested_filter_rethrow_matches_dotnet,
+    "tests/fixtures/exceptions/nested_filter_rethrow_42.cs"
+);
+
+diff_test_exit_code!(
+    exceptions_exception_filter_7_matches_dotnet,
+    "tests/fixtures/exceptions/exception_filter_7.cs",
+    7
 );

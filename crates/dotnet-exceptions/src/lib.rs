@@ -295,19 +295,17 @@ impl ExceptionHandlingSystem {
         // Preempt any existing exception handling state (nested exceptions).
         // If we are already in the middle of a search or filter, we MUST NOT clear the suspended state,
         // as it contains the state of the outer exception we need to resume later.
-        if matches!(
-            *ctx.exception_mode(),
-            ExceptionState::None | ExceptionState::Throwing(_, _)
-        ) {
+        if ctx.frame_stack().active_filters.is_empty()
+            && matches!(
+                *ctx.exception_mode(),
+                ExceptionState::None | ExceptionState::Throwing(_, _)
+            )
+        {
             ctx.evaluation_stack_mut().clear_suspended();
             ctx.frame_stack_mut().clear_suspended();
         }
 
-        let nested_filter = match ctx.exception_mode() {
-            ExceptionState::Filtering(state) => Some(*state),
-            ExceptionState::Searching(state) => state.nested_filter,
-            _ => None,
-        };
+        let nested_filter = ctx.frame_stack().active_filters.last().copied();
 
         *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
             exception,
@@ -330,12 +328,6 @@ impl ExceptionHandlingSystem {
     ) -> StepResult {
         let stop_frame = if let ExceptionState::Searching(state) = ctx.exception_mode() {
             if let Some(nested) = state.nested_filter {
-                if nested.handler.frame_index == 0 {
-                    panic!(
-                        "Nested filter handler frame index is 0! (len={})",
-                        ctx.frame_stack().len()
-                    );
-                }
                 nested.handler.frame_index
             } else {
                 0
@@ -434,6 +426,10 @@ impl ExceptionHandlingSystem {
                                 original_stack_height,
                             });
 
+                            if let ExceptionState::Filtering(state) = *ctx.exception_mode() {
+                                ctx.frame_stack_mut().active_filters.push(state);
+                            }
+
                             // To run the filter, we must suspend the frames and stack above it.
                             let stack_base = ctx.frame_stack().frames[frame_index].base.stack;
                             ctx.evaluation_stack_mut().suspend_above(stack_base);
@@ -529,6 +525,7 @@ impl ExceptionHandlingSystem {
             ctx.evaluation_stack_mut().suspension_depth(),
             nested.suspension_depth
         );
+        assert_eq!(ctx.frame_stack_mut().active_filters.pop(), Some(nested));
         ctx.evaluation_stack_mut().restore_suspended();
         ctx.frame_stack_mut().restore_suspended();
 
@@ -548,7 +545,7 @@ impl ExceptionHandlingSystem {
                 section_index: nested.handler.section_index,
                 handler_index: nested.handler.handler_index + 1,
             },
-            nested_filter: None,
+            nested_filter: ctx.frame_stack().active_filters.last().copied(),
         });
 
         self.handle_exception(ctx, gc)

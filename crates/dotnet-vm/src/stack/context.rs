@@ -303,6 +303,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         );
 
         let result = self.return_frame();
+        if let Some(filter) = self.frame_stack.active_filters.last().copied()
+            && self.frame_stack.len() == filter.handler.frame_index + 1
+            && matches!(*self.exception_mode, ExceptionState::None)
+        {
+            *self.exception_mode = ExceptionState::Filtering(filter);
+        }
         if !matches!(result, StepResult::Continue) {
             return result;
         }

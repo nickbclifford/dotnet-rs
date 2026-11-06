@@ -205,6 +205,10 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         frame.exception_stack.pop();
 
         // Restore suspended evaluation and frame stacks
+        self.frame_stack
+            .active_filters
+            .pop()
+            .expect("active filter missing");
         self.evaluation_stack.restore_suspended();
         self.frame_stack.restore_suspended();
 
@@ -229,7 +233,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                     section_index: handler.section_index,
                     handler_index: handler.handler_index + 1,
                 },
-                nested_filter: None,
+                nested_filter: self.frame_stack.active_filters.last().copied(),
             });
         }
 

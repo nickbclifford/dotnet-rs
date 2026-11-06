@@ -435,10 +435,23 @@ mod tests {
         assert_eq!(frames.home_block(serial), Some(home));
         assert_eq!(frames.home_block(temporary_serial), Some((temporary, 16)));
         frames.frames[0].state.allocations.allocate(4096).unwrap();
+        frames.push_frame(
+            BasePointer::default(),
+            method.clone(),
+            Default::default(),
+            Default::default(),
+        );
+        let inner_pointer = frames.frames[1].state.allocations.allocate(1).unwrap();
+        // SAFETY: F10.RawMemoryAccessValid — this active frame owns the live byte.
+        unsafe { inner_pointer.as_ptr().write(0x7b) };
         frames.suspend_above(0);
+        assert_eq!(frames.suspended_frames.len(), 2);
         assert_eq!(frames.suspension_depth(), 2);
         assert_eq!(frames.home_block(serial), Some(home));
         frames.restore_suspended();
+        // SAFETY: F10.RawMemoryAccessValid — the restored inner frame owns the byte.
+        assert_eq!(unsafe { inner_pointer.as_ptr().read() }, 0x7b);
+        frames.pop();
         assert_eq!(frames.suspension_depth(), 1);
         assert_eq!(frames.home_block(serial), Some(home));
         frames.restore_suspended();
@@ -452,7 +465,17 @@ mod tests {
         assert_eq!(frames.home_block(serial), Some(home));
         assert_eq!(frames.home_block(temporary_serial), Some((temporary, 16)));
         frames.suspend_above(0);
+        frames.push_frame(
+            BasePointer::default(),
+            method,
+            Default::default(),
+            Default::default(),
+        );
+        frames.frames[1].state.allocations.allocate(8).unwrap();
+        frames.suspend_above(0);
+        assert_eq!(frames.suspension_depth(), 2);
         frames.clear_suspended();
+        assert_eq!(frames.suspension_depth(), 0);
         assert!(frames.home_block(serial).is_none());
         assert!(frames.home_block(temporary_serial).is_none());
         frames.clear();

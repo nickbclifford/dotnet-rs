@@ -606,6 +606,8 @@ mod tests {
 pub struct FrameStack<'gc> {
     pub frames: Vec<StackFrame<'gc>>,
     pub suspended_frames: Vec<StackFrame<'gc>>,
+    /// Enclosing filters retained while callees replace the current exception mode.
+    pub active_filters: Vec<crate::FilterState<'gc>>,
     suspended_segments: Vec<(usize, usize)>,
     pub pooled_frames: Vec<StackFrame<'gc>>,
     /// The last home-block serial issued on this thread; zero before the first.
@@ -733,12 +735,14 @@ impl<'gc> FrameStack<'gc> {
     pub fn clear(&mut self) {
         self.frames.clear();
         self.suspended_frames.clear();
+        self.active_filters.clear();
         self.suspended_segments.clear();
         self.pooled_frames.clear();
     }
 
     pub fn clear_suspended(&mut self) {
         self.suspended_frames.clear();
+        self.active_filters.clear();
         self.suspended_segments.clear();
     }
 
