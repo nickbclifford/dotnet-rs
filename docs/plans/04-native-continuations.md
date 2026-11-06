@@ -1,10 +1,10 @@
 # Native continuations: resumable Substring
 
-**Status:** In progress (finalizer, fallback coverage and performance evidence remain)
+**Status:** Complete (measured large-call cost accepted)
 
-Retained copy progress and rooting controls pass. Finalizer execution/order,
-remaining fallback call shapes and measured resource/performance acceptance remain
-unfinished; the current acceptance gaps are listed below.
+Retained copy progress, rooting, managed finalizer execution and dispatch refusal
+controls pass. Resource counters and process-heap profiling are implemented;
+the maintainer accepted the measured large-call cost.
 
 **Outcome:** Both `System.String.Substring` overloads retain copy progress across real
 single-threaded GC safepoints, consume operands once and copy each requested UTF-16
@@ -128,55 +128,112 @@ in `2b239a5f` by discarding backing evaluation operands on catch entry. The enab
 regression then passed all three fast configurations (632/744/759 tests respectively).
 The older audit's parameter-name and delegate-retry failures are resolved.
 
-Still required before completion:
+The maintainer accepted the repeatable large-call throughput regression on
+2026-11-05 (+4.30% mean across four pairs), considering the threshold tuning and
+the value of this scheduler contract for testing and deploying the future effects
+system. No repeatable >1% unaffected-control regression was established. All
+completion conditions are satisfied.
 
-- Execute an actual managed finalizer and assert its ordering around parked native
-  work. The present queue test uses a non-finalizable object and proves retention
-  and drainage only.
-- Map and execute indirect, tail and engine-API call admission/refusal controls;
-  direct calls, generic dispatch, delegates and reflection do not prove those paths.
-- Measure whole-call copied units, buffer allocations and peak retained bytes.
-  Source-level allocation sites, workload arithmetic and destination capacity are
-  not runtime counters or heap-wide peak measurements.
-- Repeat isolated paired performance comparisons and investigate repeatable >1%
-  unaffected-control regressions. Ask for acceptance if an unresolved regression remains.
+## Completion controls
 
-## Measurement baseline and limits
+`pending_finalizer_waits_until_copy_completes` now queues a real object, runs two
+actual collections while native work is parked, dispatches its virtual managed
+`Finalize` method and executes its body through return. The caller remains at its
+post-copy IP with exactly one string result. This is a deterministic scheduler
+control using a minimal corlib, rather than a CLR finalizer timing comparison.
 
-Historical baseline: `43663231`; implementation and detailed reports are retained in
-git through `747ac78d`. Preliminary timings made while checks were active showed
-approximately 3.5% empty/small and 4.0% large Substring slowdowns; they do not establish
-an isolated regression. The final compact representation was then measured without
-concurrent project checks, pinned to CPU 0, with 10 Criterion samples and a four-second
-target. Two opposite-order pairs showed empty/small +0.83%/+0.20% and dispatch
-+0.06%/+1.00% (rounded). No repeatable >1% unaffected-control regression was established
-in those pairs. Large Substring was +5.92%; the string workload was -7.10%, but its
-variability prevents attributing that improvement to the change. These are independent
-point estimates, not paired statistical confidence intervals or fresh acceptance runs.
+`dispatch_entry_controls_substring_eligibility` executes both overloads through
+ordinary, direct, tail and engine-API dispatch. Only direct admission parks;
+engine-API dispatch also refuses a deliberately stale admission flag. The runtime
+has no registered `calli` handler: `indirect_opcode_refuses_without_consuming_operands`
+executes normal and tail-prefixed `calli` through the production registry, verifies
+`NotImplemented`, and verifies intact operands, caller IP and absent activation.
+Supporting indirect calls remains outside this slice; generic dispatch is not
+claimed as proof of an indirect-call fallback.
 
-The large workload requests 12,000,000 UTF-16 units and 80 result buffers; a large
-buffer's capacity is 300,000 bytes. Those are calculations, not measured counters.
-A separate 30-sample forced-GC diagnostic measured parked-suffix latency: median
-192.274 microseconds (189.219–317.341), including two full collections and the remaining
-65,553 units, excluding setup, first chunk, final assertions and destruction.
-Observed destination capacity plus activation size was 262,258 bytes, excluding the
-source, allocator overhead and GC bookkeeping. This is neither whole-call throughput
-nor heap-wide peak memory, and does not measure GC overhead relative to the old path.
+The existing `bench-instrumentation` feature now enables per-thread substring
+counters at buffer allocation and actual chunk append boundaries on both paths.
+For each overload and dispatch entry, a 131,089-unit call measures 131,089 copied
+units, one buffer allocation, zero reallocations and a largest copy-buffer capacity
+of 262,178 bytes. The forced-collection control measures the same totals after two
+collections; abort after one chunk measures exactly 65,536 copied units. These
+counters exclude inputs, result objects, allocator overhead and GC bookkeeping;
+`max_buffer_bytes` is not presented as heap-wide peak memory.
 
-Reproduce benchmark builds with `cargo bench --profile bench-fat -p dotnet-benchmarks
---no-default-features --bench substring --bench end_to_end --no-run` in isolated
-baseline/candidate targets, using identical compiled fixtures. Pin the generated
-executables and compare opposite launch orders; use `--bench --sample-size 10
---warm-up-time 1 --measurement-time 4 --noplot`, selecting `dispatch|string` for
-`end_to_end`. Preserve raw samples and actual resource counters for final acceptance.
+Reproduce with `cargo test -p dotnet-vm --no-default-features --features
+bench-instrumentation --lib native_substring_tests -- --nocapture`. The feature is
+disabled for throughput comparisons. The ignored release control
+`measure_whole_copy_with_and_without_collection` reports admission-through-result
+latency with and without two collections, excluding input/caller construction.
 
-For the manual diagnostic, build `cargo test -p dotnet-vm --profile bench-fat
---no-default-features --lib measure_forced_collection_copy --no-run`, then run the
-optimized unit-test executable with
-`executor::native_substring_tests::measure_forced_collection_copy --exact --ignored
---nocapture --test-threads=1`. For p44 Miri use
-`bash scripts/pointer_provenance.sh controls --configuration CONFIG --shard 44`
-with `no-features` and `multithreading`; exposed-provenance warnings limit detection.
+Process heap profiling uses Valgrind Massif on each release `substring` benchmark
+executable in `--test` mode (`--time-unit=B --max-snapshots=100`). Baseline and
+candidate use byte-identical compiled small/large fixtures. Peak live allocated
+heap was 238,036,434 bytes baseline and 239,091,826 bytes candidate; allocator
+bookkeeping at those snapshots was 8,513,166 and 8,770,062 bytes respectively.
+These are whole-process diagnostic peaks including the loader, Criterion harness
+and unreclaimed guest allocations, not isolated per-call retained-memory costs.
+
+## Final measurements and acceptance
+
+Raw Criterion samples, mean estimates, resource-counter output, process-heap snapshot
+series, fixture hashes and source hashes are retained in [04-evidence.json](04-evidence.json).
+Historical baseline `43663231` was extracted into a separate source tree; only the
+Substring benchmark declaration, entrypoint and fixtures were copied into that tree.
+Both sides used the same toolchain, `bench-fat`, no default features and byte-identical
+compiled fixtures. Project checks finished before these four CPU-0-pinned pairs.
+Launch order alternated baseline/candidate and candidate/baseline. Each run used ten
+Criterion samples, one-second warmup and four-second measurement target.
+
+| Workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean pair change |
+|---|---:|---:|---:|---:|---:|
+| Empty/small Substring | +1.16% | -0.30% | +0.21% | -0.39% | +0.17% |
+| Multi-chunk Substring | +1.62% | +6.76% | +5.84% | +2.98% | +4.30% |
+| Ordinary dispatch | -0.64% | -0.54% | -0.71% | +0.79% | -0.28% |
+| String workload | -2.15% | -1.51% | -1.75% | -2.48% | -1.97% |
+
+These are changes between run mean point estimates, not paired confidence intervals.
+The empty/small first-pair slowdown did not repeat in either launch order; no repeatable
+>1% regression was established in unaffected controls. The large-call regression did
+repeat. That workload requests 12,000,000 units across 80 calls; each now returns to
+the executor twice before completion (160 additional scheduler turns). Both paths
+use the same bounded-copy helper and exact-capacity buffer; the new path retains
+progress and roots while returning through executor checks between chunks. The average absolute delta is 0.524 ms per workload run (about 3.28 microseconds
+per additional turn if attributed entirely to scheduling). This
+explains a concrete source of extra work, but does not isolate every contributor to
+the measured delta. The maintainer explicitly accepted this measured cost on
+2026-11-05; the raw measurements and their limitations remain recorded here.
+
+A separate isolated optimized native-control run measures admission through result
+publication for 131,089 units: median 199.748 microseconds without collection and
+196.417 microseconds with two real collections (30 samples each). Input and caller
+construction are excluded equally. The modes run consecutively, so their difference
+is not a reliable estimate of collection overhead; these are diagnostic latencies,
+not a claim that collection improves performance or a throughput comparison with
+the historical retry path.
+
+Build benchmark executables in separate baseline/candidate target directories:
+`cargo bench --profile bench-fat -p dotnet-benchmarks --no-default-features
+--bench substring --bench end_to_end --no-run`. Copy the compiled fixture output
+between their `bench-fat/dotnet-bench-fixtures` directories and verify DLL hashes.
+Run each generated executable with `taskset -c 0`, setting a distinct `CRITERION_HOME`
+per run, and arguments `--bench --sample-size 10 --warm-up-time 1
+--measurement-time 4 --noplot`; select each Substring case individually and
+`dispatch`/`string` individually for `end_to_end`. Set `NuGetAudit=false` during
+fixture preparation to avoid unavailable vulnerability-service requests.
+
+Build the native diagnostic with `cargo test -p dotnet-vm --profile bench-fat
+--no-default-features --lib measure_whole_copy_with_and_without_collection --no-run`,
+then pin its generated executable and select
+`executor::native_substring_tests::measure_whole_copy_with_and_without_collection
+--exact --ignored --nocapture --test-threads=1`.
+
+Validation: the fast matrix passed 633/745/760 tests; focused instrumentation controls
+passed 11 tests (two manual timings ignored); string helper tests passed seven tests;
+instrumented Clippy with warnings denied and doc drift checks passed. Pinned p44
+Tree Borrows controls pass in both no-features and multithreading configurations.
+Exposed-provenance warnings still limit Miri detection. For p44 run
+`bash scripts/pointer_provenance.sh controls --configuration CONFIG --shard 44`.
 
 ## Ask the maintainer only if
 

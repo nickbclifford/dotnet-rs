@@ -56,6 +56,54 @@ pub fn intrinsic_string_index_of<
 /// Maximum number of UTF-16 code units copied in one substring chunk.
 pub const SUBSTRING_CHUNK_SIZE: usize = 64 * 1024;
 
+/// Per-thread diagnostic counters; never enabled in ordinary throughput runs.
+#[cfg(feature = "bench-instrumentation")]
+pub mod substring_metrics {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Snapshot {
+        pub copied_units: usize,
+        pub buffer_allocations: usize,
+        pub buffer_reallocations: usize,
+        /// Largest live copy buffer observed, excluding sources/results and allocator overhead.
+        pub max_buffer_bytes: usize,
+    }
+    thread_local! { static COUNTERS: Cell<Snapshot> = Cell::new(Snapshot::default()); }
+    pub fn reset() {
+        COUNTERS.set(Snapshot::default());
+    }
+    pub fn snapshot() -> Snapshot {
+        COUNTERS.get()
+    }
+    pub(super) fn allocation(capacity: usize) {
+        COUNTERS.with(|slot| {
+            let mut c = slot.get();
+            c.buffer_allocations += usize::from(capacity != 0);
+            c.max_buffer_bytes = c.max_buffer_bytes.max(capacity * size_of::<u16>());
+            slot.set(c);
+        });
+    }
+    pub(super) fn copy(count: usize, before: usize, after: usize) {
+        COUNTERS.with(|slot| {
+            let mut c = slot.get();
+            c.copied_units += count;
+            c.buffer_reallocations += usize::from(before != after);
+            c.max_buffer_bytes = c.max_buffer_bytes.max(after * size_of::<u16>());
+            slot.set(c);
+        });
+    }
+}
+
+/// Allocate the copy buffer through the same diagnostic boundary on both paths.
+#[inline]
+pub fn substring_buffer(length: usize) -> Vec<u16> {
+    let buffer = Vec::with_capacity(length);
+    #[cfg(feature = "bench-instrumentation")]
+    substring_metrics::allocation(buffer.capacity());
+    buffer
+}
+
 /// Append one bounded chunk of a previously validated substring.
 pub fn copy_substring_chunk(
     source: &[u16],
@@ -65,7 +113,11 @@ pub fn copy_substring_chunk(
     destination: &mut Vec<u16>,
 ) -> usize {
     let count = (length - offset).min(SUBSTRING_CHUNK_SIZE);
+    #[cfg(feature = "bench-instrumentation")]
+    let before = destination.capacity();
     destination.extend_from_slice(&source[start + offset..start + offset + count]);
+    #[cfg(feature = "bench-instrumentation")]
+    substring_metrics::copy(count, before, destination.capacity());
     count
 }
 
@@ -147,7 +199,7 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
                 return result;
             }
 
-            let mut result_vec = Vec::with_capacity(l);
+            let mut result_vec = substring_buffer(l);
             let mut offset = 0;
             while offset < l {
                 let current_chunk = {

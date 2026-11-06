@@ -85,6 +85,14 @@ fn offer(executor: &mut Executor, eligible: bool) -> Option<StepResult> {
 }
 
 fn offer_len(executor: &mut Executor, eligible: bool, length: usize) -> Option<StepResult> {
+    timed_offer_len(executor, eligible, length).0
+}
+
+fn timed_offer_len(
+    executor: &mut Executor,
+    eligible: bool,
+    length: usize,
+) -> (Option<StepResult>, std::time::Duration) {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
@@ -104,7 +112,9 @@ fn offer_len(executor: &mut Executor, eligible: bool, length: usize) -> Option<S
                 ctx.push(StackValue::ObjectRef(source));
                 ctx.push(StackValue::Int32(2));
                 ctx.push(StackValue::Int32(length as i32));
-                ctx.offer_substring_continuation(source, 2, length, 3)
+                let start = std::time::Instant::now();
+                let result = ctx.offer_substring_continuation(source, 2, length, 3);
+                (result, start.elapsed())
             })
         })
         .unwrap()
@@ -382,13 +392,53 @@ pub(crate) fn native_substring_gc_control() {
 fn pending_finalizer_waits_until_copy_completes() {
     use crate::stack::ops::VesOps;
     let mut executor = executor();
+    // A minimal corlib type lets the production virtual-finalizer resolver run.
+    let mut res = Resolution::new(Module::new("mscorlib.dll"));
+    res.assembly = Some(Assembly::new("mscorlib"));
+    let mut object = TypeDefinition::new(None, "Object");
+    object.namespace = Some("System".into());
+    let ty_index = res.push_type_definition(object);
+    for name in ["Enum", "ValueType"] {
+        let mut stub = TypeDefinition::new(None, name);
+        stub.namespace = Some("System".into());
+        res.push_type_definition(stub);
+    }
+    let mut signature = parameterless_i32_signature();
+    signature.instance = true;
+    signature.return_type = dotnetdll::resolved::signature::ReturnType(vec![], None);
+    let mut finalizer = Method::new(
+        Accessibility::Public,
+        signature,
+        "Finalize",
+        Some(make_test_method!(max_stack: 1, instructions: vec![
+            Instruction::LoadConstantInt32(42), Instruction::Pop, Instruction::Return
+        ])),
+    );
+    finalizer.virtual_member = true;
+    res.push_method(ty_index, finalizer);
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let finalizable_type = TypeDescription::new(res, ty_index);
     assert_eq!(offer(&mut executor, true), Some(StepResult::Yield));
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
                 // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
-                let queued = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("queued")));
+                let layout = dotnet_value::layout::FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 0,
+                    alignment: 1,
+                    gc_desc: Default::default(),
+                    has_ref_fields: false,
+                };
+                let queued = ObjectRef::new(
+                    gc,
+                    HeapStorage::Obj(Box::new(dotnet_value::object::Object::new(
+                        finalizable_type,
+                        GenericLookup::default(),
+                        dotnet_value::storage::FieldStorage::new(Arc::new(layout), vec![]),
+                    ))),
+                );
                 engine
                     .stack
                     .local
@@ -412,7 +462,9 @@ fn pending_finalizer_waits_until_copy_completes() {
             })
         })
         .unwrap();
+    collect(&mut executor);
     assert_eq!(resume(&mut executor), StepResult::Yield);
+    collect(&mut executor);
     assert_eq!(resume(&mut executor), StepResult::Continue);
     executor
         .with_arena(|arena| {
@@ -421,8 +473,32 @@ fn pending_finalizer_waits_until_copy_completes() {
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert_eq!(
                     engine.ves_context(gc).process_pending_finalizers(),
-                    StepResult::Continue
+                    StepResult::FramePushed
                 );
+                assert_eq!(engine.stack.execution.frame_stack.len(), 2);
+                assert!(
+                    engine
+                        .stack
+                        .execution
+                        .frame_stack
+                        .current_frame()
+                        .is_finalizer
+                );
+                // Run the managed body, observing its value before it is popped.
+                assert_eq!(engine.step(gc), StepResult::Continue);
+                assert!(matches!(
+                    engine.stack.execution.evaluation_stack.stack.last(),
+                    Some(StackValue::Int32(42))
+                ));
+                assert_eq!(engine.step(gc), StepResult::Continue);
+                let _ = engine.step(gc);
+                assert_eq!(engine.stack.execution.frame_stack.len(), 1);
+                assert_eq!(
+                    engine.stack.execution.frame_stack.current_frame().state.ip,
+                    1
+                );
+                assert_eq!(engine.stack.execution.evaluation_stack.stack.len(), 1);
+                assert!(!engine.stack.local.heap.processing_finalizer.get());
                 assert!(
                     engine
                         .stack
@@ -479,92 +555,223 @@ fn dispatch_entry_controls_substring_eligibility() {
         },
     };
 
-    for direct in [true, false] {
+    for explicit_length in [false, true] {
+        for entry in ["direct", "ordinary", "tail", "engine_api"] {
+            let mut executor = executor();
+            let mut res = Resolution::new(Module::new("TestString.dll"));
+            res.assembly = Some(Assembly::new("TestString"));
+            let mut string = TypeDefinition::new(None, "String");
+            string.namespace = Some("System".into());
+            string.flags.before_field_init = true;
+            let ty_index = res.push_type_definition(string);
+            let int_type = || ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)));
+            let signature = MethodSignature {
+                instance: true,
+                explicit_this: false,
+                calling_convention: CallingConvention::Default,
+                parameters: (0..if explicit_length { 2 } else { 1 })
+                    .map(|_| Parameter(vec![], int_type()))
+                    .collect(),
+                return_type: ReturnType(
+                    vec![],
+                    Some(ParameterType::Value(MethodType::Base(Box::new(
+                        BaseType::String,
+                    )))),
+                ),
+                varargs: None,
+            };
+            let method_index = res.push_method(
+                ty_index,
+                Method::new(Accessibility::Public, signature, "Substring", None),
+            );
+            let res = executor.shared.loader.register_owned_assembly(res);
+            let ty = TypeDescription::new(res.clone(), ty_index);
+            let index = ty
+                .definition()
+                .methods
+                .iter()
+                .position(|m| std::ptr::eq(m, &res.definition()[method_index]))
+                .unwrap();
+            let method = MethodDescription::new(
+                ty,
+                GenericLookup::default(),
+                res,
+                MethodMemberIndex::Method(index),
+            );
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_intrinsics_string::search::substring_metrics::reset();
+            let result = executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|gc, engine| {
+                        // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                        let gc = unsafe { test_gc_handle(gc, engine) };
+                        let source = ObjectRef::new(
+                            gc,
+                            HeapStorage::Str(CLRString::new(payload()[..LENGTH + 2].to_vec())),
+                        );
+                        let mut ctx = engine.ves_context(gc);
+                        ctx.push(StackValue::ObjectRef(source));
+                        ctx.push(StackValue::Int32(2));
+                        if explicit_length {
+                            ctx.push(StackValue::Int32(LENGTH as i32));
+                        }
+                        if entry == "engine_api" {
+                            // Even stale admission from an outer direct call must be refused.
+                            ctx.call_state.substring_eligible = true;
+                            ctx.dispatch_resolved_method_for_engine_api(
+                                method,
+                                GenericLookup::default(),
+                            )
+                        } else {
+                            let target =
+                                UnifiedDispatchTarget::Resolved(method, GenericLookup::default());
+                            match entry {
+                                "direct" => ctx.unified_dispatch_direct(target, None, None),
+                                "tail" => ctx.unified_dispatch_tail(target, None, None),
+                                _ => ctx.unified_dispatch(target, None, None),
+                            }
+                        }
+                    })
+                })
+                .unwrap();
+            if entry == "direct" {
+                assert_eq!(result, StepResult::Yield);
+                assert_eq!(snapshot(&mut executor).0, CHUNK);
+                assert_eq!(resume(&mut executor), StepResult::Yield);
+                assert_eq!(resume(&mut executor), StepResult::Continue);
+            } else {
+                assert_eq!(result, StepResult::Continue);
+            }
+            #[cfg(feature = "bench-instrumentation")]
+            {
+                let measured = dotnet_intrinsics_string::search::substring_metrics::snapshot();
+                assert_eq!(measured.copied_units, LENGTH);
+                assert_eq!(measured.buffer_allocations, 1);
+                assert_eq!(measured.buffer_reallocations, 0);
+                assert!(measured.max_buffer_bytes >= LENGTH * size_of::<u16>());
+                eprintln!("substring entry={entry} explicit_length={explicit_length} {measured:?}");
+            }
+            executor
+                .with_arena(|arena| {
+                    arena.mutate(|_, engine| {
+                        assert!(engine.stack.execution.call_state.substring.is_none());
+                        assert!(!engine.stack.execution.call_state.substring_eligible);
+                        let values = &engine.stack.execution.evaluation_stack.stack;
+                        assert_eq!(values.len(), 1);
+                        let StackValue::ObjectRef(result) = &values[0] else {
+                            panic!("expected string")
+                        };
+                        let handle = result.0.unwrap();
+                        let inner = handle.borrow();
+                        let HeapStorage::Str(result) = &inner.storage else {
+                            panic!("expected string")
+                        };
+                        assert_eq!(&result[..], &payload()[2..2 + LENGTH]);
+                    })
+                })
+                .unwrap();
+        }
+    }
+}
+
+/// `calli` currently has no registered opcode handler. Keep its rejection explicit:
+/// the generic dispatch control above must not be mistaken for indirect-call support.
+#[test]
+fn indirect_opcode_refuses_without_consuming_operands() {
+    use dotnetdll::binary::signature::kinds::StandAloneCallingConvention;
+    for tail_call in [false, true] {
         let mut executor = executor();
-        let mut res = Resolution::new(Module::new("TestString.dll"));
-        res.assembly = Some(Assembly::new("TestString"));
-        let mut string = TypeDefinition::new(None, "String");
-        string.namespace = Some("System".into());
-        string.flags.before_field_init = true;
-        let ty_index = res.push_type_definition(string);
-        let int_type = || ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)));
-        let signature = MethodSignature {
-            instance: true,
-            explicit_this: false,
-            calling_convention: CallingConvention::Default,
-            parameters: vec![Parameter(vec![], int_type()), Parameter(vec![], int_type())],
-            return_type: ReturnType(
-                vec![],
-                Some(ParameterType::Value(MethodType::Base(Box::new(
-                    BaseType::String,
-                )))),
-            ),
-            varargs: None,
-        };
-        let method_index = res.push_method(
-            ty_index,
-            Method::new(Accessibility::Public, signature, "Substring", None),
-        );
-        let res = executor.shared.loader.register_owned_assembly(res);
-        let ty = TypeDescription::new(res.clone(), ty_index);
-        let index = ty
-            .definition()
-            .methods
-            .iter()
-            .position(|m| std::ptr::eq(m, &res.definition()[method_index]))
-            .unwrap();
-        let method = MethodDescription::new(
-            ty,
-            GenericLookup::default(),
-            res,
-            MethodMemberIndex::Method(index),
-        );
-        let result = executor
+        assert_eq!(offer_len(&mut executor, false, CHUNK + 1), None);
+        executor
             .with_arena(|arena| {
                 arena.mutate_root(|gc, engine| {
                     // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
                     let gc = unsafe { test_gc_handle(gc, engine) };
-                    let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(payload())));
-                    let mut ctx = engine.ves_context(gc);
-                    ctx.push(StackValue::ObjectRef(source));
-                    ctx.push(StackValue::Int32(2));
-                    ctx.push(StackValue::Int32(LENGTH as i32));
-                    let target = UnifiedDispatchTarget::Resolved(method, GenericLookup::default());
-                    if direct {
-                        ctx.unified_dispatch_direct(target, None, None)
-                    } else {
-                        ctx.unified_dispatch(target, None, None)
-                    }
-                })
-            })
-            .unwrap();
-        if direct {
-            assert_eq!(result, StepResult::Yield);
-            assert_eq!(snapshot(&mut executor).0, CHUNK);
-            assert_eq!(resume(&mut executor), StepResult::Yield);
-            assert_eq!(resume(&mut executor), StepResult::Continue);
-        } else {
-            assert_eq!(result, StepResult::Continue);
-        }
-        executor
-            .with_arena(|arena| {
-                arena.mutate(|_, engine| {
+                    let signature = MethodSignature {
+                        instance: true,
+                        explicit_this: false,
+                        calling_convention: StandAloneCallingConvention::DefaultManaged,
+                        parameters: vec![],
+                        return_type: dotnetdll::resolved::signature::ReturnType(vec![], None),
+                        varargs: None,
+                    };
+                    let instruction = Instruction::CallIndirect {
+                        param0: signature,
+                        tail_call,
+                    };
+                    let result = crate::dispatch::InstructionRegistry::dispatch(
+                        &mut engine.ves_context(gc),
+                        &instruction,
+                    );
+                    assert!(matches!(
+                        result,
+                        StepResult::Error(crate::error::VmError::Execution(
+                            dotnet_types::error::ExecutionError::NotImplemented(_)
+                        ))
+                    ));
                     assert!(engine.stack.execution.call_state.substring.is_none());
-                    assert!(!engine.stack.execution.call_state.substring_eligible);
-                    let values = &engine.stack.execution.evaluation_stack.stack;
-                    assert_eq!(values.len(), 1);
-                    let StackValue::ObjectRef(result) = &values[0] else {
-                        panic!("expected string")
-                    };
-                    let handle = result.0.unwrap();
-                    let inner = handle.borrow();
-                    let HeapStorage::Str(result) = &inner.storage else {
-                        panic!("expected string")
-                    };
-                    assert_eq!(&result[..], &payload()[2..2 + LENGTH]);
+                    assert_eq!(engine.stack.execution.evaluation_stack.stack.len(), 3);
+                    assert_eq!(
+                        engine.stack.execution.frame_stack.current_frame().state.ip,
+                        0
+                    );
                 })
             })
             .unwrap();
+    }
+}
+
+#[cfg(all(feature = "bench-instrumentation", not(feature = "multithreading")))]
+#[test]
+fn measured_copy_work_survives_collection_and_stops_on_abort() {
+    use dotnet_intrinsics_string::search::substring_metrics;
+    for abort in [false, true] {
+        let mut executor = executor();
+        substring_metrics::reset();
+        assert_eq!(offer(&mut executor, true), Some(StepResult::Yield));
+        collect(&mut executor);
+        if abort {
+            executor.shared.abort_signal().request_abort();
+            assert!(matches!(executor.run(), ExecutorResult::Error(_)));
+        } else {
+            assert_eq!(resume(&mut executor), StepResult::Yield);
+            collect(&mut executor);
+            assert_eq!(resume(&mut executor), StepResult::Continue);
+        }
+        let measured = substring_metrics::snapshot();
+        assert_eq!(measured.copied_units, if abort { CHUNK } else { LENGTH });
+        assert_eq!(measured.buffer_allocations, 1);
+        assert_eq!(measured.buffer_reallocations, 0);
+        eprintln!("substring forced_gc abort={abort} {measured:?}");
+    }
+}
+
+/// Whole native copy latency, from admission through result publication. Input and
+/// caller construction are excluded equally; collection time is included when requested.
+#[cfg(not(feature = "multithreading"))]
+#[test]
+#[ignore = "manual timing"]
+fn measure_whole_copy_with_and_without_collection() {
+    for forced_gc in [false, true] {
+        for sample in 0..30 {
+            let mut executor = executor();
+            let (result, initial) = timed_offer_len(&mut executor, true, LENGTH);
+            assert_eq!(result, Some(StepResult::Yield));
+            let start = std::time::Instant::now();
+            if forced_gc {
+                collect(&mut executor);
+            }
+            assert_eq!(resume(&mut executor), StepResult::Yield);
+            if forced_gc {
+                collect(&mut executor);
+            }
+            assert_eq!(resume(&mut executor), StepResult::Continue);
+            let elapsed = initial + start.elapsed();
+            eprintln!(
+                "whole_native_copy forced_gc={forced_gc} sample={sample} ns={} units={LENGTH}",
+                elapsed.as_nanos()
+            );
+        }
     }
 }
 

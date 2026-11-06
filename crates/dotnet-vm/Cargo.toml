@@ -78,6 +78,7 @@ fuzzing = [
 ]
 # Enables benchmark-only runtime instrumentation/counters in vm + memory + vm-data.
 bench-instrumentation = [
+    "dotnet-intrinsics-string/bench-instrumentation",
     "dotnet-metrics/bench-instrumentation",
     "dotnet-runtime-memory/bench-instrumentation",
     "dotnet-value/bench-instrumentation",

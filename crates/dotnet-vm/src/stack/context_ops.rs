@@ -380,7 +380,7 @@ impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<
                     "native substring already active",
                 ));
             }
-            let buffer = Vec::with_capacity(length);
+            let buffer = dotnet_intrinsics_string::search::substring_buffer(length);
             self.drop_top(operand_count);
             self.call_state.substring = Some(Box::new(super::context::NativeSubstringActivation {
                 source,

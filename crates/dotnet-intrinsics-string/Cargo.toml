@@ -16,6 +16,7 @@ gc-arena = { workspace = true }
 
 [features]
 default = []
+bench-instrumentation = []
 simd = ["dotnet-simd/simd"]
 
 [lints]

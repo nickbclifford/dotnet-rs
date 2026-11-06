@@ -1,0 +1,2427 @@
+{
+  "baseline_commit": "43663231",
+  "candidate_parent": "f5414b1fdc79d75c7fd403db86acdecef8b3c33f",
+  "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "kernel": "7.2.14-arch1-1",
+  "cpu_affinity": [
+    0
+  ],
+  "features": [],
+  "profile": "bench-fat",
+  "settings": {
+    "sample_size": 10,
+    "warmup_seconds": 1,
+    "measurement_seconds": 4,
+    "pair_orders": [
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate",
+      "candidate,baseline"
+    ]
+  },
+  "runs": [
+    {
+      "pair": 0,
+      "side": "baseline",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          728044529.0,
+          721443775.0,
+          725613426.0,
+          725995060.0,
+          725631383.0,
+          725165963.0,
+          732542540.0,
+          721712183.0,
+          731037141.0,
+          742478359.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 362372942.7575,
+          "upper_bound": 365967246.85
+        },
+        "point_estimate": 363983217.95,
+        "standard_error": 928474.6293758416
+      }
+    },
+    {
+      "pair": 0,
+      "side": "baseline",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          722043400.0,
+          721010705.0,
+          717652775.0,
+          723138330.0,
+          718360299.0,
+          721655473.0,
+          717183082.0,
+          720906717.0,
+          718590080.0,
+          718797074.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 359367741.0,
+          "upper_bound": 360576130.75
+        },
+        "point_estimate": 359966896.75,
+        "standard_error": 309183.25585033733
+      }
+    },
+    {
+      "pair": 0,
+      "side": "baseline",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          109811967.0,
+          219947108.0,
+          328543241.0,
+          435132044.0,
+          546586163.0,
+          654332338.0,
+          763600489.0,
+          871768895.0,
+          981957681.0,
+          1093446020.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 109085723.97785716,
+          "upper_bound": 109526991.62666667
+        },
+        "point_estimate": 109296347.49511905,
+        "standard_error": 113087.35675870087
+      }
+    },
+    {
+      "pair": 0,
+      "side": "baseline",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          73571092.0,
+          150818778.0,
+          229073152.0,
+          303863453.0,
+          374558768.0,
+          455592087.0,
+          535601878.0,
+          608448497.0,
+          690012234.0,
+          745791009.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12497324.005833331,
+          "upper_bound": 12687606.07798611
+        },
+        "point_estimate": 12599426.211805556,
+        "standard_error": 48937.1986416103
+      }
+    },
+    {
+      "pair": 0,
+      "side": "candidate",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          722735280.0,
+          725147652.0,
+          726957091.0,
+          717786578.0,
+          720647050.0,
+          722673942.0,
+          722764635.0,
+          722807668.0,
+          726124424.0,
+          725746238.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 360819450.20125,
+          "upper_bound": 362443088.9
+        },
+        "point_estimate": 361669527.9,
+        "standard_error": 415594.6792673651
+      }
+    },
+    {
+      "pair": 0,
+      "side": "candidate",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          703297281.0,
+          702351250.0,
+          692533009.0,
+          704017100.0,
+          703939443.0,
+          712571761.0,
+          704186425.0,
+          705478494.0,
+          712329776.0,
+          704188293.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 350595523.15,
+          "upper_bound": 353777907.45
+        },
+        "point_estimate": 352244641.6,
+        "standard_error": 830860.0369059468
+      }
+    },
+    {
+      "pair": 0,
+      "side": "candidate",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          111602671.0,
+          223356109.0,
+          332523017.0,
+          445556349.0,
+          549421974.0,
+          657988896.0,
+          770261470.0,
+          885706955.0,
+          990070926.0,
+          1097864837.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 110113593.99112798,
+          "upper_bound": 111029134.73026785
+        },
+        "point_estimate": 110560511.58154762,
+        "standard_error": 235782.70787690414
+      }
+    },
+    {
+      "pair": 0,
+      "side": "candidate",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          75876015.0,
+          153109003.0,
+          227471933.0,
+          303438070.0,
+          386721932.0,
+          448734001.0,
+          550524086.0,
+          622504954.0,
+          693538497.0,
+          784244552.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12680227.23679861,
+          "upper_bound": 12926504.42861111
+        },
+        "point_estimate": 12803185.06138889,
+        "standard_error": 63000.25651868195
+      }
+    },
+    {
+      "pair": 1,
+      "side": "baseline",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          723926024.0,
+          723200380.0,
+          722925279.0,
+          719804558.0,
+          727969491.0,
+          723974913.0,
+          727452363.0,
+          724226983.0,
+          728888658.0,
+          727049875.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 361634176.8875,
+          "upper_bound": 363282163.06125
+        },
+        "point_estimate": 362470926.2,
+        "standard_error": 420300.9060238666
+      }
+    },
+    {
+      "pair": 1,
+      "side": "baseline",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          720165746.0,
+          718746858.0,
+          715367748.0,
+          719506231.0,
+          720124904.0,
+          728715683.0,
+          676665608.0,
+          696504862.0,
+          713937935.0,
+          714334318.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 351323486.6,
+          "upper_bound": 359956947.03625
+        },
+        "point_estimate": 356203494.65,
+        "standard_error": 2246422.3241432174
+      }
+    },
+    {
+      "pair": 1,
+      "side": "baseline",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          108120935.0,
+          216947657.0,
+          325598606.0,
+          436739995.0,
+          547223176.0,
+          654924418.0,
+          761617188.0,
+          869226918.0,
+          977361020.0,
+          1083729509.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 108499452.04230158,
+          "upper_bound": 108982100.127127
+        },
+        "point_estimate": 108733577.57507937,
+        "standard_error": 123582.37117738162
+      }
+    },
+    {
+      "pair": 1,
+      "side": "baseline",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          7.0,
+          14.0,
+          21.0,
+          28.0,
+          35.0,
+          42.0,
+          49.0,
+          56.0,
+          63.0,
+          70.0
+        ],
+        "times": [
+          83668635.0,
+          167738921.0,
+          250324203.0,
+          334665102.0,
+          420637222.0,
+          503604199.0,
+          586471387.0,
+          671347992.0,
+          760377457.0,
+          848013491.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 11963889.087755103,
+          "upper_bound": 12032217.033257937
+        },
+        "point_estimate": 11995644.407029478,
+        "standard_error": 17552.640255193033
+      }
+    },
+    {
+      "pair": 1,
+      "side": "candidate",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          725925400.0,
+          719463437.0,
+          719154323.0,
+          719831248.0,
+          720193886.0,
+          720377325.0,
+          720375553.0,
+          718233466.0,
+          727530613.0,
+          719256728.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 359729491.9,
+          "upper_bound": 361527894.04875004
+        },
+        "point_estimate": 360517098.95,
+        "standard_error": 463883.94922079204
+      }
+    },
+    {
+      "pair": 1,
+      "side": "candidate",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          706373452.0,
+          706584764.0,
+          703900199.0,
+          709763741.0,
+          702053101.0,
+          702011715.0,
+          700311835.0,
+          700504010.0,
+          703136150.0,
+          682008639.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 348348150.6,
+          "upper_bound": 352634727.3
+        },
+        "point_estimate": 350832380.3,
+        "standard_error": 1125569.9215166017
+      }
+    },
+    {
+      "pair": 1,
+      "side": "candidate",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          108504552.0,
+          216560394.0,
+          323641190.0,
+          432100637.0,
+          546734503.0,
+          653797766.0,
+          762432939.0,
+          865513877.0,
+          972088536.0,
+          1079584973.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 108130076.50523809,
+          "upper_bound": 108721762.09071429
+        },
+        "point_estimate": 108408006.03940478,
+        "standard_error": 152272.52662613487
+      }
+    },
+    {
+      "pair": 1,
+      "side": "candidate",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          77793326.0,
+          150150963.0,
+          230231862.0,
+          307650248.0,
+          378127072.0,
+          457779751.0,
+          528938227.0,
+          618622765.0,
+          703859255.0,
+          788383046.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12688236.11308912,
+          "upper_bound": 12927723.231342593
+        },
+        "point_estimate": 12806378.350628307,
+        "standard_error": 61280.28884001351
+      }
+    },
+    {
+      "pair": 2,
+      "side": "baseline",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          729354437.0,
+          729367744.0,
+          727614133.0,
+          726864573.0,
+          731214156.0,
+          734922745.0,
+          741090904.0,
+          739097609.0,
+          739637483.0,
+          734772626.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 365195491.10875,
+          "upper_bound": 368263978.485
+        },
+        "point_estimate": 366696820.5,
+        "standard_error": 787772.8363595187
+      }
+    },
+    {
+      "pair": 2,
+      "side": "baseline",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          721742901.0,
+          699834477.0,
+          716418164.0,
+          715828627.0,
+          712871074.0,
+          713561003.0,
+          711138854.0,
+          710814230.0,
+          715782176.0,
+          714218454.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 354801973.3475,
+          "upper_bound": 358117346.0125
+        },
+        "point_estimate": 356610498.0,
+        "standard_error": 847331.1264180832
+      }
+    },
+    {
+      "pair": 2,
+      "side": "baseline",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          108865705.0,
+          216328422.0,
+          325592332.0,
+          433706433.0,
+          545049643.0,
+          651527956.0,
+          763707943.0,
+          870466067.0,
+          976244015.0,
+          1087176349.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 108498814.06489684,
+          "upper_bound": 108834746.49125199
+        },
+        "point_estimate": 108668380.8061508,
+        "standard_error": 86096.1263032478
+      }
+    },
+    {
+      "pair": 2,
+      "side": "baseline",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          72069643.0,
+          146661064.0,
+          216198109.0,
+          291651014.0,
+          364813107.0,
+          435669963.0,
+          515767859.0,
+          585946159.0,
+          672094902.0,
+          740431773.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12114882.585607637,
+          "upper_bound": 12276732.510633431
+        },
+        "point_estimate": 12193300.465932537,
+        "standard_error": 41401.6602639272
+      }
+    },
+    {
+      "pair": 2,
+      "side": "candidate",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          733329976.0,
+          723866434.0,
+          729701513.0,
+          727557521.0,
+          726389539.0,
+          724069464.0,
+          729998059.0,
+          724859543.0,
+          735764329.0,
+          725971262.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 362970211.2,
+          "upper_bound": 365308641.85
+        },
+        "point_estimate": 364075382.0,
+        "standard_error": 600823.1374762855
+      }
+    },
+    {
+      "pair": 2,
+      "side": "candidate",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          702610168.0,
+          700494410.0,
+          696886174.0,
+          695855160.0,
+          701750914.0,
+          704354299.0,
+          706899062.0,
+          702002905.0,
+          698563369.0,
+          697630001.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 349351730.25875,
+          "upper_bound": 351401910.94
+        },
+        "point_estimate": 350352323.1,
+        "standard_error": 526285.8563313739
+      }
+    },
+    {
+      "pair": 2,
+      "side": "candidate",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          108323977.0,
+          216779013.0,
+          327683829.0,
+          435463907.0,
+          540740820.0,
+          649483012.0,
+          760711573.0,
+          876271555.0,
+          991633211.0,
+          1093432177.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 108519756.55654761,
+          "upper_bound": 109301398.728373
+        },
+        "point_estimate": 108893444.77376983,
+        "standard_error": 200240.55469221916
+      }
+    },
+    {
+      "pair": 2,
+      "side": "candidate",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          76529640.0,
+          153157266.0,
+          225050821.0,
+          301972745.0,
+          382770533.0,
+          463256120.0,
+          567357479.0,
+          636639846.0,
+          701517638.0,
+          783332786.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12733370.953368057,
+          "upper_bound": 13093615.55775132
+        },
+        "point_estimate": 12904876.525291007,
+        "standard_error": 92281.46614362166
+      }
+    },
+    {
+      "pair": 3,
+      "side": "baseline",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          722012538.0,
+          717864338.0,
+          719786011.0,
+          722379627.0,
+          717723765.0,
+          723535609.0,
+          719431523.0,
+          717621083.0,
+          719112852.0,
+          720637732.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 359413122.335,
+          "upper_bound": 360637350.5
+        },
+        "point_estimate": 360005253.9,
+        "standard_error": 313050.8334230842
+      }
+    },
+    {
+      "pair": 3,
+      "side": "baseline",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          713067380.0,
+          715062381.0,
+          716056557.0,
+          720677816.0,
+          715600494.0,
+          732277180.0,
+          715016579.0,
+          719764599.0,
+          717204057.0,
+          711475752.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 357358035.19625,
+          "upper_bound": 360728449.885
+        },
+        "point_estimate": 358810139.75,
+        "standard_error": 875925.5983478408
+      }
+    },
+    {
+      "pair": 3,
+      "side": "baseline",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          107725038.0,
+          218320073.0,
+          326790693.0,
+          436233616.0,
+          542717492.0,
+          649518589.0,
+          756238282.0,
+          864495800.0,
+          973600735.0,
+          1079127920.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 108098493.3943095,
+          "upper_bound": 108692748.93333332
+        },
+        "point_estimate": 108385697.27968255,
+        "standard_error": 152081.28239400807
+      }
+    },
+    {
+      "pair": 3,
+      "side": "baseline",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          74821774.0,
+          146607965.0,
+          220211852.0,
+          295966604.0,
+          371785007.0,
+          447939337.0,
+          531405022.0,
+          606429583.0,
+          681674459.0,
+          750660065.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12357351.254814815,
+          "upper_bound": 12542785.349560354
+        },
+        "point_estimate": 12451020.4967791,
+        "standard_error": 47678.024181050496
+      }
+    },
+    {
+      "pair": 3,
+      "side": "candidate",
+      "case": "dispatch",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          727493538.0,
+          721505832.0,
+          726233963.0,
+          722882462.0,
+          727034462.0,
+          722640936.0,
+          722895701.0,
+          722563052.0,
+          725860732.0,
+          737670684.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 361676074.6,
+          "upper_bound": 364396108.81375
+        },
+        "point_estimate": 362839068.1,
+        "standard_error": 709580.884864039
+      }
+    },
+    {
+      "pair": 3,
+      "side": "candidate",
+      "case": "string",
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          694223544.0,
+          693282221.0,
+          705870477.0,
+          701218272.0,
+          700314491.0,
+          703339003.0,
+          692617065.0,
+          702683253.0,
+          702102512.0,
+          702245996.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 348466621.92,
+          "upper_bound": 351188902.05
+        },
+        "point_estimate": 349894841.7,
+        "standard_error": 700574.5673775781
+      }
+    },
+    {
+      "pair": 3,
+      "side": "candidate",
+      "case": "substring_empty_small",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0
+        ],
+        "times": [
+          108066627.0,
+          216280904.0,
+          323776910.0,
+          431900706.0,
+          540508599.0,
+          647923343.0,
+          755850968.0,
+          862192949.0,
+          970824178.0,
+          1078502564.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 107899291.52954663,
+          "upper_bound": 108034315.43263988
+        },
+        "point_estimate": 107966927.3650397,
+        "standard_error": 34637.769191997584
+      }
+    },
+    {
+      "pair": 3,
+      "side": "candidate",
+      "case": "substring_large",
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          6.0,
+          12.0,
+          18.0,
+          24.0,
+          30.0,
+          36.0,
+          42.0,
+          48.0,
+          54.0,
+          60.0
+        ],
+        "times": [
+          76839853.0,
+          151371723.0,
+          227418785.0,
+          302897268.0,
+          374939610.0,
+          468441118.0,
+          539236508.0,
+          632272926.0,
+          699290677.0,
+          784722916.0
+        ]
+      },
+      "mean": {
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 12690760.766119048,
+          "upper_bound": 12957060.556338293
+        },
+        "point_estimate": 12822614.885859787,
+        "standard_error": 68089.36143894139
+      }
+    }
+  ],
+  "whole_native_copy_ns": {
+    "forced_gc=false": [
+      331839,
+      203765,
+      199018,
+      198617,
+      199739,
+      205029,
+      199757,
+      200660,
+      202965,
+      275432,
+      196933,
+      198025,
+      203155,
+      219125,
+      196893,
+      199538,
+      197794,
+      201562,
+      197514,
+      197534,
+      198215,
+      205369,
+      198166,
+      198116,
+      205119,
+      197775,
+      200159,
+      203005,
+      203676,
+      193697
+    ],
+    "forced_gc=true": [
+      199297,
+      196162,
+      203686,
+      194569,
+      196663,
+      201471,
+      194980,
+      195751,
+      196222,
+      200560,
+      195370,
+      193887,
+      196182,
+      199528,
+      199218,
+      196612,
+      199779,
+      195831,
+      194789,
+      195140,
+      198547,
+      196842,
+      194399,
+      202795,
+      195150,
+      206281,
+      197374,
+      201312,
+      193526,
+      195511
+    ]
+  },
+  "massif_snapshots": {
+    "baseline": [
+      {
+        "time": 0,
+        "mem_heap_B": 0,
+        "mem_heap_extra_B": 0,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 18451384,
+        "mem_heap_B": 16106180,
+        "mem_heap_extra_B": 48820,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 36582120,
+        "mem_heap_B": 26980244,
+        "mem_heap_extra_B": 283780,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 55336016,
+        "mem_heap_B": 40046524,
+        "mem_heap_extra_B": 942164,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 73461744,
+        "mem_heap_B": 51672668,
+        "mem_heap_extra_B": 1743988,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 86119880,
+        "mem_heap_B": 59028260,
+        "mem_heap_extra_B": 2425700,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 96093488,
+        "mem_heap_B": 65839228,
+        "mem_heap_extra_B": 2836404,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 107663672,
+        "mem_heap_B": 72650580,
+        "mem_heap_extra_B": 3027636,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 120308376,
+        "mem_heap_B": 72071252,
+        "mem_heap_extra_B": 3017428,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 130324656,
+        "mem_heap_B": 72014164,
+        "mem_heap_extra_B": 3001084,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 148118208,
+        "mem_heap_B": 71171380,
+        "mem_heap_extra_B": 2982732,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 160424800,
+        "mem_heap_B": 76906780,
+        "mem_heap_extra_B": 3194340,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 179448080,
+        "mem_heap_B": 86997340,
+        "mem_heap_extra_B": 3400996,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 192563288,
+        "mem_heap_B": 90280716,
+        "mem_heap_extra_B": 3344332,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 203947880,
+        "mem_heap_B": 95356796,
+        "mem_heap_extra_B": 3462380,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 217501128,
+        "mem_heap_B": 95339132,
+        "mem_heap_extra_B": 3448204,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 225393712,
+        "mem_heap_B": 96859612,
+        "mem_heap_extra_B": 3504804,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 237274144,
+        "mem_heap_B": 100444404,
+        "mem_heap_extra_B": 3986876,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 252550792,
+        "mem_heap_B": 109550492,
+        "mem_heap_extra_B": 4172540,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 267052512,
+        "mem_heap_B": 113673884,
+        "mem_heap_extra_B": 4124948,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 278469728,
+        "mem_heap_B": 110125190,
+        "mem_heap_extra_B": 4129418,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 294186632,
+        "mem_heap_B": 110136694,
+        "mem_heap_extra_B": 4129538,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 309903744,
+        "mem_heap_B": 110135742,
+        "mem_heap_extra_B": 4129426,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 321130152,
+        "mem_heap_B": 110135798,
+        "mem_heap_extra_B": 4129442,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 334601792,
+        "mem_heap_B": 110139102,
+        "mem_heap_extra_B": 4129858,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 342456632,
+        "mem_heap_B": 110138238,
+        "mem_heap_extra_B": 4129738,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 362093528,
+        "mem_heap_B": 110141046,
+        "mem_heap_extra_B": 4130098,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 373878344,
+        "mem_heap_B": 110521808,
+        "mem_heap_extra_B": 4145800,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 390398704,
+        "mem_heap_B": 125725478,
+        "mem_heap_extra_B": 4165258,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 410091528,
+        "mem_heap_B": 137630854,
+        "mem_heap_extra_B": 4442690,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 429033312,
+        "mem_heap_B": 150850686,
+        "mem_heap_extra_B": 5135810,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 442865824,
+        "mem_heap_B": 160045854,
+        "mem_heap_extra_B": 5712562,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 457125376,
+        "mem_heap_B": 168475398,
+        "mem_heap_extra_B": 6444890,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 476553112,
+        "mem_heap_B": 182399574,
+        "mem_heap_extra_B": 7147746,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 488413328,
+        "mem_heap_B": 181848438,
+        "mem_heap_extra_B": 7138954,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 505060536,
+        "mem_heap_B": 181699830,
+        "mem_heap_extra_B": 7118978,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 521641568,
+        "mem_heap_B": 180708598,
+        "mem_heap_extra_B": 7098506,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 533789976,
+        "mem_heap_B": 187890702,
+        "mem_heap_extra_B": 7372042,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 547252328,
+        "mem_heap_B": 195534838,
+        "mem_heap_extra_B": 7539122,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 559573176,
+        "mem_heap_B": 198565510,
+        "mem_heap_extra_B": 7488834,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 567899616,
+        "mem_heap_B": 197203390,
+        "mem_heap_extra_B": 7459026,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 580884616,
+        "mem_heap_B": 205063398,
+        "mem_heap_extra_B": 7578738,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 598033944,
+        "mem_heap_B": 206470478,
+        "mem_heap_extra_B": 7622506,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 606996352,
+        "mem_heap_B": 209009302,
+        "mem_heap_extra_B": 7902074,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 618311320,
+        "mem_heap_B": 213851038,
+        "mem_heap_extra_B": 8243114,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 633778504,
+        "mem_heap_B": 228458454,
+        "mem_heap_extra_B": 8291778,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 642628216,
+        "mem_heap_B": 219656526,
+        "mem_heap_extra_B": 8243994,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 655973128,
+        "mem_heap_B": 223495978,
+        "mem_heap_extra_B": 8248142,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 664966784,
+        "mem_heap_B": 228870722,
+        "mem_heap_extra_B": 8252222,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 677600440,
+        "mem_heap_B": 226985794,
+        "mem_heap_extra_B": 8358982,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 685694152,
+        "mem_heap_B": 227138274,
+        "mem_heap_extra_B": 8471606,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 697838448,
+        "mem_heap_B": 238036434,
+        "mem_heap_extra_B": 8513166,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 697838448,
+        "mem_heap_B": 238036434,
+        "mem_heap_extra_B": 8513166,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 705931008,
+        "mem_heap_B": 232960258,
+        "mem_heap_extra_B": 8508878,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 714061696,
+        "mem_heap_B": 232661090,
+        "mem_heap_extra_B": 8508974,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 722183592,
+        "mem_heap_B": 233475778,
+        "mem_heap_extra_B": 8586454,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 730038440,
+        "mem_heap_B": 231973787,
+        "mem_heap_extra_B": 8456397,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 741989512,
+        "mem_heap_B": 220232555,
+        "mem_heap_extra_B": 8246557,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 750613128,
+        "mem_heap_B": 212320544,
+        "mem_heap_extra_B": 7623752,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 758468232,
+        "mem_heap_B": 204786088,
+        "mem_heap_extra_B": 7303104,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 766326136,
+        "mem_heap_B": 197194792,
+        "mem_heap_extra_B": 7036496,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 774189120,
+        "mem_heap_B": 189640128,
+        "mem_heap_extra_B": 6728176,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 782059064,
+        "mem_heap_B": 182093104,
+        "mem_heap_extra_B": 6405256,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 789913912,
+        "mem_heap_B": 174660144,
+        "mem_heap_extra_B": 5983368,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 797768832,
+        "mem_heap_B": 167351784,
+        "mem_heap_extra_B": 5436808,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 805739096,
+        "mem_heap_B": 159922128,
+        "mem_heap_extra_B": 4896200,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 813602080,
+        "mem_heap_B": 152337096,
+        "mem_heap_extra_B": 4618248,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 821457376,
+        "mem_heap_B": 144783976,
+        "mem_heap_extra_B": 4316072,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 831816456,
+        "mem_heap_B": 134520800,
+        "mem_heap_extra_B": 4220168,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 841510296,
+        "mem_heap_B": 124921664,
+        "mem_heap_extra_B": 4125464,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 856595400,
+        "mem_heap_B": 109839696,
+        "mem_heap_extra_B": 4122328,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 864450272,
+        "mem_heap_B": 102607408,
+        "mem_heap_extra_B": 3499744,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 872305144,
+        "mem_heap_B": 95067768,
+        "mem_heap_extra_B": 3184512,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 880160000,
+        "mem_heap_B": 87480792,
+        "mem_heap_extra_B": 2916632,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 888015240,
+        "mem_heap_B": 79932840,
+        "mem_heap_extra_B": 2609344,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 895870336,
+        "mem_heap_B": 72399656,
+        "mem_heap_extra_B": 2287432,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 903725184,
+        "mem_heap_B": 64972456,
+        "mem_heap_extra_B": 1859784,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 911580040,
+        "mem_heap_B": 57663928,
+        "mem_heap_extra_B": 1313456,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 919461712,
+        "mem_heap_B": 50313960,
+        "mem_heap_extra_B": 781752,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 927324536,
+        "mem_heap_B": 42728928,
+        "mem_heap_extra_B": 503960,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 935179408,
+        "mem_heap_B": 35176288,
+        "mem_heap_extra_B": 201728,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 945538944,
+        "mem_heap_B": 24912632,
+        "mem_heap_extra_B": 105848,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 955232784,
+        "mem_heap_B": 15313496,
+        "mem_heap_extra_B": 11144,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 970317224,
+        "mem_heap_B": 232056,
+        "mem_heap_extra_B": 8144,
+        "mem_stacks_B": 0
+      }
+    ],
+    "candidate": [
+      {
+        "time": 0,
+        "mem_heap_B": 0,
+        "mem_heap_extra_B": 0,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 18452592,
+        "mem_heap_B": 16105636,
+        "mem_heap_extra_B": 49836,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 36584336,
+        "mem_heap_B": 26979700,
+        "mem_heap_extra_B": 284876,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 55338280,
+        "mem_heap_B": 40045980,
+        "mem_heap_extra_B": 943308,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 73463848,
+        "mem_heap_B": 51672124,
+        "mem_heap_extra_B": 1745132,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 86122000,
+        "mem_heap_B": 59027716,
+        "mem_heap_extra_B": 2426860,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 96095720,
+        "mem_heap_B": 65838684,
+        "mem_heap_extra_B": 2837612,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 107665904,
+        "mem_heap_B": 72650036,
+        "mem_heap_extra_B": 3028844,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 120310608,
+        "mem_heap_B": 72070708,
+        "mem_heap_extra_B": 3018636,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 130326888,
+        "mem_heap_B": 72013620,
+        "mem_heap_extra_B": 3002292,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 141178888,
+        "mem_heap_B": 71215252,
+        "mem_heap_extra_B": 2998420,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 157107632,
+        "mem_heap_B": 73721660,
+        "mem_heap_extra_B": 3060628,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 167651256,
+        "mem_heap_B": 83867220,
+        "mem_heap_extra_B": 3458692,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 181107368,
+        "mem_heap_B": 87477172,
+        "mem_heap_extra_B": 3395268,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 190492104,
+        "mem_heap_B": 89719284,
+        "mem_heap_extra_B": 3356596,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 203949568,
+        "mem_heap_B": 95356252,
+        "mem_heap_extra_B": 3463172,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 214205192,
+        "mem_heap_B": 95367548,
+        "mem_heap_extra_B": 3452476,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 232705408,
+        "mem_heap_B": 98701748,
+        "mem_heap_extra_B": 3672140,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 247756536,
+        "mem_heap_B": 105325020,
+        "mem_heap_extra_B": 4156700,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 261830840,
+        "mem_heap_B": 118838612,
+        "mem_heap_extra_B": 4176692,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 274249456,
+        "mem_heap_B": 110123734,
+        "mem_heap_extra_B": 4133050,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 292195160,
+        "mem_heap_B": 110137406,
+        "mem_heap_extra_B": 4133450,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 302449984,
+        "mem_heap_B": 110138654,
+        "mem_heap_extra_B": 4133618,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 312704664,
+        "mem_heap_B": 110137318,
+        "mem_heap_extra_B": 4133426,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 322959600,
+        "mem_heap_B": 110139254,
+        "mem_heap_extra_B": 4133690,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 333214256,
+        "mem_heap_B": 110137502,
+        "mem_heap_extra_B": 4133474,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 348596424,
+        "mem_heap_B": 110137438,
+        "mem_heap_extra_B": 4133466,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 364987368,
+        "mem_heap_B": 110134278,
+        "mem_heap_extra_B": 4133074,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 374821960,
+        "mem_heap_B": 110827400,
+        "mem_heap_extra_B": 4156704,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 390386088,
+        "mem_heap_B": 125724934,
+        "mem_heap_extra_B": 4168898,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 397924464,
+        "mem_heap_B": 132250270,
+        "mem_heap_extra_B": 4192306,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 412072440,
+        "mem_heap_B": 139064174,
+        "mem_heap_extra_B": 4519722,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 429021160,
+        "mem_heap_B": 150850142,
+        "mem_heap_extra_B": 5138762,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 448994304,
+        "mem_heap_B": 164711006,
+        "mem_heap_extra_B": 5917186,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 462086304,
+        "mem_heap_B": 172990782,
+        "mem_heap_extra_B": 6501906,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 476540944,
+        "mem_heap_B": 182399030,
+        "mem_heap_extra_B": 7150650,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 486778856,
+        "mem_heap_B": 181984278,
+        "mem_heap_extra_B": 7143010,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 498983216,
+        "mem_heap_B": 181512342,
+        "mem_heap_extra_B": 7124234,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 507822528,
+        "mem_heap_B": 181433814,
+        "mem_heap_extra_B": 7121274,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 524097944,
+        "mem_heap_B": 180693686,
+        "mem_heap_extra_B": 7095410,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 533082864,
+        "mem_heap_B": 187230150,
+        "mem_heap_extra_B": 7340138,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 547241520,
+        "mem_heap_B": 195534982,
+        "mem_heap_extra_B": 7542250,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 563613520,
+        "mem_heap_B": 199688462,
+        "mem_heap_extra_B": 7468994,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 580871856,
+        "mem_heap_B": 205062854,
+        "mem_heap_extra_B": 7581082,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 594020128,
+        "mem_heap_B": 207140366,
+        "mem_heap_extra_B": 7624802,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 614042232,
+        "mem_heap_B": 213663342,
+        "mem_heap_extra_B": 8197658,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 633769184,
+        "mem_heap_B": 228457910,
+        "mem_heap_extra_B": 8295034,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 642618848,
+        "mem_heap_B": 219655982,
+        "mem_heap_extra_B": 8247298,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 659281088,
+        "mem_heap_B": 223796146,
+        "mem_heap_extra_B": 8251390,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 676582920,
+        "mem_heap_B": 227124514,
+        "mem_heap_extra_B": 8415766,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 684171368,
+        "mem_heap_B": 227367906,
+        "mem_heap_extra_B": 8532518,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 691747352,
+        "mem_heap_B": 228193410,
+        "mem_heap_extra_B": 8653494,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 708182112,
+        "mem_heap_B": 239091826,
+        "mem_heap_extra_B": 8770062,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 708182112,
+        "mem_heap_B": 239091826,
+        "mem_heap_extra_B": 8770062,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 715748344,
+        "mem_heap_B": 234094018,
+        "mem_heap_extra_B": 8766102,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 723288400,
+        "mem_heap_B": 234324034,
+        "mem_heap_extra_B": 8848686,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 730826784,
+        "mem_heap_B": 233192891,
+        "mem_heap_extra_B": 8717717,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 744255472,
+        "mem_heap_B": 220232043,
+        "mem_heap_extra_B": 8249877,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 752878456,
+        "mem_heap_B": 212320544,
+        "mem_heap_extra_B": 7627160,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 760416928,
+        "mem_heap_B": 205087416,
+        "mem_heap_extra_B": 7321816,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 768349264,
+        "mem_heap_B": 197427952,
+        "mem_heap_extra_B": 7048944,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 775938408,
+        "mem_heap_B": 190136200,
+        "mem_heap_extra_B": 6751552,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 783501928,
+        "mem_heap_B": 182879808,
+        "mem_heap_extra_B": 6444424,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 791040384,
+        "mem_heap_B": 175713160,
+        "mem_heap_extra_B": 6072616,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 798578904,
+        "mem_heap_B": 168745368,
+        "mem_heap_extra_B": 5501888,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 806117288,
+        "mem_heap_B": 161682416,
+        "mem_heap_extra_B": 5026456,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 813655848,
+        "mem_heap_B": 154473832,
+        "mem_heap_extra_B": 4696480,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 821194248,
+        "mem_heap_B": 147215256,
+        "mem_heap_extra_B": 4416656,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 829784352,
+        "mem_heap_B": 138816544,
+        "mem_heap_extra_B": 4225264,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 838070752,
+        "mem_heap_B": 130530176,
+        "mem_heap_extra_B": 4225232,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 858858416,
+        "mem_heap_B": 109840224,
+        "mem_heap_extra_B": 4127520,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 866604264,
+        "mem_heap_B": 102712904,
+        "mem_heap_extra_B": 3508992,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 874142992,
+        "mem_heap_B": 95479776,
+        "mem_heap_extra_B": 3203392,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 882075376,
+        "mem_heap_B": 87820312,
+        "mem_heap_extra_B": 2930472,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 889664808,
+        "mem_heap_B": 80528560,
+        "mem_heap_extra_B": 2632792,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 897227960,
+        "mem_heap_B": 73272168,
+        "mem_heap_extra_B": 2326032,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 904766664,
+        "mem_heap_B": 66105624,
+        "mem_heap_extra_B": 1953872,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 912305096,
+        "mem_heap_B": 59138184,
+        "mem_heap_extra_B": 1382880,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 919843568,
+        "mem_heap_B": 52075040,
+        "mem_heap_extra_B": 907552,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 927382312,
+        "mem_heap_B": 44866192,
+        "mem_heap_extra_B": 577656,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 934920728,
+        "mem_heap_B": 37607616,
+        "mem_heap_extra_B": 297816,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 943510512,
+        "mem_heap_B": 29208904,
+        "mem_heap_extra_B": 106744,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 951796912,
+        "mem_heap_B": 20922536,
+        "mem_heap_extra_B": 106712,
+        "mem_stacks_B": 0
+      },
+      {
+        "time": 972585224,
+        "mem_heap_B": 232056,
+        "mem_heap_extra_B": 8880,
+        "mem_stacks_B": 0
+      }
+    ]
+  },
+  "counter_output": "\ntest executor::native_substring_tests::measure_forced_collection_copy ... ignored, manual timing\ntest executor::native_substring_tests::measure_whole_copy_with_and_without_collection ... ignored, manual timing\ntest executor::native_substring_tests::declining_offer_preserves_operands ... ok\ntest executor::native_substring_tests::teardown_releases_parked_arena ... ok\ntest executor::native_substring_tests::changed_call_site_clears_activation ... ok\ntest executor::native_substring_tests::abort_clears_parked_activation_without_more_copying ... ok\ntest executor::native_substring_tests::native_substring_gc_control ... ok\ntest executor::native_substring_tests::pending_finalizer_waits_until_copy_completes ... ok\nsubstring entry=direct explicit_length=false Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\ntest executor::native_substring_tests::rooted_progress_survives_real_collections_and_completes_once ... ok\ntest executor::native_substring_tests::incomplete_chunks_yield_without_collection_pressure ... ok\nsubstring forced_gc abort=false Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\ntest executor::native_substring_tests::indirect_opcode_refuses_without_consuming_operands ... ok\nsubstring forced_gc abort=true Snapshot { copied_units: 65536, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\ntest executor::native_substring_tests::measured_copy_work_survives_collection_and_stops_on_abort ... ok\nsubstring entry=ordinary explicit_length=false Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=tail explicit_length=false Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=engine_api explicit_length=false Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=direct explicit_length=true Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=ordinary explicit_length=true Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=tail explicit_length=true Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\nsubstring entry=engine_api explicit_length=true Snapshot { copied_units: 131089, buffer_allocations: 1, buffer_reallocations: 0, max_buffer_bytes: 262178 }\ntest executor::native_substring_tests::dispatch_entry_controls_substring_eligibility ... ok\n\ntest result: ok. 11 passed; 0 failed; 2 ignored; 0 measured; 117 filtered out; finished in 0.07s\n\n",
+  "fixture_sha256": {
+    "substring/Large_0/SingleFile.dll": "816bed64d1bd84f5a35eea3ae73ef45d75e338608127b5f1b0952f44f2ea1a0a",
+    "substring/Small_0/SingleFile.dll": "83b6d21c46f794c4ab51b47b722918fb9cd7cd3315e5d61d3c5497a4d75f4f67",
+    "dispatch/VirtualDispatchStress_0/SingleFile.dll": "dc286e3c5de4850811a084d1287575c65214c4788aa9a85316e02750a641d93f",
+    "string/StringOpsSimd_0/SingleFile.dll": "fe68368f31431da66eb794aa75ebc32d31c72fb78a2787790644c0d47bdf5ed7"
+  },
+  "source_sha256": {
+    "crates/dotnet-intrinsics-string/src/search.rs": "553f9fc3a1559cfe62b8bb50fb9645ae739fa010f2afe5c9096ca35b5e52319b",
+    "crates/dotnet-vm/src/stack/context_ops.rs": "4b4fa8b42f94feea0492dd4850ccc8b6c43bb37636cebdd246d34445d5aff08b"
+  }
+}
