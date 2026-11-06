@@ -55,6 +55,21 @@ Its optimized execution passed separately; the performance record gives its inte
 resource observations and reproduction command. Local logs are volatile; this report
 preserves the validation outcomes and the source retains the controls.
 
+## Parameter-name repair follow-up
+
+The Substring range throws now set `ArgumentException._paramName` in addition to
+the existing message. The enabled chunk fixture compares all seven parameter names
+with CLR under no-default and default features. The original delegate/reflection
+fallback fixture remains enabled and passes under both configurations.
+
+An exploratory modification to the fallback fixture caught exceptions from
+`one(-1)` and `two(0, -1)` and printed their parameter names. Those names matched
+CLR, but under default features the VM subsequently failed with a type mismatch
+(expected Int32, actual source string), including when the calls were placed after
+the reflection checks. The exploratory cases were removed; the cause and whether
+it predates this repair are unverified. This is additional fallback coverage still
+needed before certification, alongside the audit's finalizer and performance gaps.
+
 ## Miri reproduction
 
 ```sh

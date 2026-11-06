@@ -224,8 +224,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             }
             let memory = RawMemoryAccess::new(&self.local.heap);
             object.with_data(|data| {
+                if data.len() != layout.size().as_usize() {
+                    return Err(MemoryAccessError::TypeMismatch(
+                        "stored scalar value type has an invalid byte length".into(),
+                    ));
+                }
                 // SAFETY: F10.RawMemoryAccessValid — the matching scalar value type owns
-                // initialized bytes of the checked layout size. This read stays in the borrow.
+                // initialized bytes of the checked layout and buffer size. The read stays in
+                // the borrow.
                 unsafe { memory.read_value_internal(self.gc, data.as_ptr(), None, layout, None) }
             })?
         } else {
@@ -369,5 +375,121 @@ impl<'a, 'gc> VmStackOps<'gc> for VesContext<'a, 'gc> {
             "address-taking requires a supported frame home; TypedReference addresses are not supported"
                 .into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod scalar_home_audit_tests {
+    use super::*;
+    use crate::{
+        state::SharedGlobalState,
+        sync::Arc,
+        test_utils::{new_test_arena, test_gc_handle},
+    };
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_types::TypeDescription;
+    use dotnet_value::layout::{FieldLayoutManager, GcDesc};
+    use dotnetdll::prelude::*;
+
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "single-threaded test uses production shared-state types"
+    )]
+    #[test]
+    fn scalar_home_rejects_wrong_identity_and_layout_size() {
+        let loader = Arc::new(AssemblyLoader::new_bare("scalar_home_audit".into()).unwrap());
+        let mut res = Resolution::new(Module::new("ScalarAudit.dll"));
+        let expected_index = res.push_type_definition(TypeDefinition::new(None, "Scalar"));
+        let wrong_index = res.push_type_definition(TypeDefinition::new(None, "OtherScalar"));
+        let res = loader.register_owned_assembly(res);
+        let expected = TypeDescription::new(res.clone(), expected_index);
+        let wrong = TypeDescription::new(res, wrong_index);
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — engine remains the live root throughout this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let ctx = engine.ves_context(gc);
+            let home = VariableHome {
+                offset: 0,
+                layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                scalar_type: Some(expected.clone()),
+                value_type: None,
+            };
+            for (description, wrong_size) in [(wrong, false), (expected.clone(), true)] {
+                let size = if wrong_size { 8 } else { 4 };
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: size,
+                    alignment: 4,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                let value = ObjectInstance::new(
+                    description,
+                    Default::default(),
+                    FieldStorage::new(layout, vec![0; size]),
+                );
+                let mut destination = 0x12345678i32;
+                assert!(
+                    ctx.store_home(
+                        NonNull::from(&mut destination).cast(),
+                        &home,
+                        StackValue::ValueType(value)
+                    )
+                    .is_err()
+                );
+                assert_eq!(destination, 0x12345678);
+            }
+        });
+    }
+
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "single-threaded test uses production shared-state types"
+    )]
+    #[test]
+    fn scalar_home_rejects_short_payload() {
+        let loader = Arc::new(AssemblyLoader::new_bare("scalar_home_short".into()).unwrap());
+        let mut res = Resolution::new(Module::new("ScalarShort.dll"));
+        let index = res.push_type_definition(TypeDefinition::new(None, "Scalar"));
+        let description = TypeDescription::new(loader.register_owned_assembly(res), index);
+        let shared = Arc::new(SharedGlobalState::new(loader));
+        let mut arena = new_test_arena(&shared);
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — engine remains the live root throughout this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let ctx = engine.ves_context(gc);
+            let home = VariableHome {
+                offset: 0,
+                layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                scalar_type: Some(description.clone()),
+                value_type: None,
+            };
+            for length in 0..4 {
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 4,
+                    alignment: 4,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                let value = ObjectInstance::new(
+                    description.clone(),
+                    Default::default(),
+                    FieldStorage::new(layout, vec![0; length]),
+                );
+                let mut destination = 0x12345678i32;
+                assert!(
+                    ctx.store_home(
+                        NonNull::from(&mut destination).cast(),
+                        &home,
+                        StackValue::ValueType(value),
+                    )
+                    .is_err()
+                );
+                assert_eq!(destination, 0x12345678);
+            }
+        });
     }
 }

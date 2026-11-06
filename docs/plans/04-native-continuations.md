@@ -1,6 +1,11 @@
 # Native continuations: resumable Substring
 
-**Status:** Complete (explicit Substring continuation proof)
+**Status:** In progress (finalizer, fallback coverage and performance evidence remain)
+
+The [completion audit](../ci-evidence/2026-11-05-plans03-04-completion-audit.md)
+records the historical parameter-name failure and remaining acceptance gaps. The
+parameter-name repair is recorded in the implementation evidence. Retained copy
+progress and rooting controls pass; the complete exit conditions are not satisfied.
 **Outcome:** Both `System.String.Substring` overloads retain copy progress across real
 single-threaded GC safepoints, consume operands once and copy each requested UTF-16
 code unit once.

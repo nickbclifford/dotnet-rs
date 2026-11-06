@@ -14,6 +14,32 @@ use dotnet_vm_data::{
 };
 
 impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
+    fn throw_argument_out_of_range(&mut self, param_name: &str) -> StepResult {
+        let argument_type =
+            dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type("System.ArgumentException"));
+        let result =
+            self.throw_by_name_with_message("System.ArgumentOutOfRangeException", param_name);
+        if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
+            (&result, *self.exception_mode)
+        {
+            let gc = self.gc;
+            let param_ref = StackValue::string(gc, CLRString::from(param_name)).as_object_ref();
+            self.register_new_object(&param_ref);
+            exception.as_object_mut(gc, |obj| {
+                if obj
+                    .instance_storage
+                    .has_field(argument_type.clone(), "_paramName")
+                {
+                    let mut field = obj
+                        .instance_storage
+                        .get_field_mut_local(argument_type, "_paramName");
+                    param_ref.write(&mut field);
+                }
+            });
+        }
+        result
+    }
+
     #[inline]
     fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult {
         let gc = self.gc;

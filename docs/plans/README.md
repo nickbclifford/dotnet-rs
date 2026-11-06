@@ -14,8 +14,8 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 | 06 | [Cross-arena collection fixture through production decoding](06-cross-arena-collection-fixture.md) | Prerequisite of 08 |
 | 07 | [Nested filters keep earlier suspended frames](07-nested-filter-suspension.md) | Prerequisite of 08 |
 | 08 | [Async/await VM effects](08-async-effects.md) | Blocked on 06 and 07; slice notes in [08-async-effects/](08-async-effects/) |
-| 04 | [Native continuations: Substring proof](04-native-continuations.md) | Done; superseded by 08 slice 1 once that lands |
-| 03 | [Repair enum and named scalar frame homes](03-frame-home-enum-representation.md) | Done; repair found during 02 slice 5 |
+| 04 | [Native continuations: Substring proof](04-native-continuations.md) | Audit found exception parameter-name mismatch; later superseded by 08 slice 1 |
+| 03 | [Repair enum and named scalar frame homes](03-frame-home-enum-representation.md) | Audit found an unverified scalar-buffer safety premise |
 | 02 | [Stable homes for addressable locals and arguments](02-stable-frame-homes.md) | Done; measured primitive cost accepted |
 | 01 | [Executor teardown ownership](01-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
 

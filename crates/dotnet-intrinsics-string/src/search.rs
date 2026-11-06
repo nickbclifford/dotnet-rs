@@ -125,10 +125,7 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
             };
 
             if start_at < 0 || start_at as usize > s_len {
-                return ctx.throw_by_name_with_message(
-                    "System.ArgumentOutOfRangeException",
-                    "startIndex",
-                );
+                return ctx.throw_argument_out_of_range("startIndex");
             }
 
             let start_at = start_at as usize;
@@ -136,10 +133,7 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
                 None => s_len - start_at,
                 Some(l) => {
                     if l < 0 || l as usize > s_len - start_at {
-                        return ctx.throw_by_name_with_message(
-                            "System.ArgumentOutOfRangeException",
-                            "length",
-                        );
+                        return ctx.throw_argument_out_of_range("length");
                     }
                     l as usize
                 }

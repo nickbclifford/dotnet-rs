@@ -78,6 +78,18 @@ macro_rules! diff_test_exit_code {
 // representation); and threading/threading_*_0 (exit-code-only comparison has no signal).
 // The original expression-compilation case is retained while the canonical set expands coverage.
 diff_test!(
+    fields_enum_frame_homes_42_matches_dotnet,
+    "tests/fixtures/fields/enum_frame_homes_42.cs"
+);
+diff_test!(
+    strings_substring_chunks_42_matches_dotnet,
+    "tests/fixtures/strings/substring_chunks_42.cs"
+);
+diff_test!(
+    strings_substring_fallback_42_matches_dotnet,
+    "tests/fixtures/strings/substring_fallback_42.cs"
+);
+diff_test!(
     expressions_expression_compile_42_matches_dotnet,
     "tests/fixtures/expressions/expression_compile_42.cs"
 );

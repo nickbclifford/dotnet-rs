@@ -1,6 +1,26 @@
 # Repair enum and named scalar frame homes
 
-**Status:** Complete
+**Status:** In progress (completion audit found remaining acceptance gaps)
+
+The [completion audit](../ci-evidence/2026-11-05-plans03-04-completion-audit.md)
+records fresh validation and remaining acceptance gaps. The implementation record
+below is historical; its claim of an explicit byte-buffer-length check was not true
+of the audited implementation. The subsequent guard is recorded below.
+
+### Scalar-buffer repair (2026-11-05)
+
+Scalar home stores now reject a byte buffer whose actual length differs from the
+scalar layout size, inside the shared borrow and before the raw read. A regression
+tests all shorter Int32 buffers and verifies the destination remains unchanged; the
+identity and declared-layout rejection test remains in place. Both tests pass with
+default features and with `--no-default-features`. VM clippy for no-default-features
+tests passes with warnings denied. Explicit opcode and nested-growth mapping and the
+fresh historical failure and identical-cache EF reproduction remain outstanding;
+this repair alone does not complete the plan.
+
+Pinned nightly-2026-05-27 Tree Borrows Miri passed p43 in both no-feature and
+multithreading configurations and the short-payload test without features. The runs
+emitted exposed-provenance warnings, which limit Miri's ability to detect pointer bugs.
 
 ## Evidence
 
@@ -123,5 +143,5 @@ Local repair validation logs are under `target/plan01-slice5/logs/repair-*`.
 - Pointer-runner tests passed (21 tests); the batch drift guard confirms 43 controls
   occur exactly once in four batches. Formatting and whitespace checks passed.
 
-The original slice-5 timings remain unmeasured. This repair does not complete
-plan 02 or claim a performance outcome.
+Plan 02 subsequently completed its benchmark matrix and accepted the documented
+primitive cost; see its performance closure. This repair itself claims no timings.

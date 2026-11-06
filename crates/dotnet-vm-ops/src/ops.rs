@@ -207,6 +207,7 @@ crate::trait_alias! {
 
 pub trait ExceptionOps<'gc> {
     fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult;
+    fn throw_argument_out_of_range(&mut self, param_name: &str) -> StepResult;
     fn throw_by_name_with_inner(
         &mut self,
         name: &str,

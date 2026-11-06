@@ -11,7 +11,11 @@ public class Program {
 
     static bool ThrowsRange(Action action) {
         try { action(); }
-        catch (ArgumentOutOfRangeException) { return true; }
+        catch (ArgumentOutOfRangeException exception) {
+            // The differential test checks parameter names against the CLR too.
+            Console.WriteLine(exception.ParamName);
+            return true;
+        }
         return false;
     }
 
