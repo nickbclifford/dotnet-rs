@@ -435,6 +435,12 @@ mod tests {
         assert_eq!(frames.home_block(serial), Some(home));
         assert_eq!(frames.home_block(temporary_serial), Some((temporary, 16)));
         frames.frames[0].state.allocations.allocate(4096).unwrap();
+        frames.suspend_above(0);
+        assert_eq!(frames.suspension_depth(), 2);
+        assert_eq!(frames.home_block(serial), Some(home));
+        frames.restore_suspended();
+        assert_eq!(frames.suspension_depth(), 1);
+        assert_eq!(frames.home_block(serial), Some(home));
         frames.restore_suspended();
         assert!(frames.suspended_frames.is_empty());
         assert_eq!(frames.frames.len(), 2);

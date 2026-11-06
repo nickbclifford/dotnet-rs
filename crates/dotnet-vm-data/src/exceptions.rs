@@ -37,6 +37,7 @@ pub struct SearchState<'gc> {
 #[derive(Clone, Copy, PartialEq, Collect, Debug)]
 #[collect(no_drop)]
 pub struct FilterState<'gc> {
+    pub suspension_depth: usize,
     pub exception: ObjectRef<'gc>,
     pub handler: HandlerAddress,
     pub original_ip: usize,

@@ -143,6 +143,7 @@ unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
 pub struct EvaluationStack<'gc> {
     pub stack: Vec<StackValue<'gc>>,
     pub suspended_stack: Vec<StackValue<'gc>>,
+    suspended_segments: Vec<(usize, usize)>,
 }
 
 // SAFETY: F5.TracesEveryGcRef — `EvaluationStack` traces all GC-managed fields (`stack` and `suspended_stack`).
@@ -164,6 +165,7 @@ impl<'gc> EvaluationStack<'gc> {
         Self {
             stack: vec![],
             suspended_stack: vec![],
+            suspended_segments: vec![],
         }
     }
 
@@ -342,24 +344,68 @@ impl<'gc> EvaluationStack<'gc> {
     pub fn clear(&mut self) {
         self.stack.clear();
         self.suspended_stack.clear();
+        self.suspended_segments.clear();
     }
 
     pub fn clear_suspended(&mut self) {
         self.suspended_stack.clear();
+        self.suspended_segments.clear();
     }
 
     pub fn suspend_above(&mut self, index: StackSlotIndex) {
-        self.suspended_stack = self.stack.split_off(index.as_usize());
+        self.suspended_segments
+            .push((index.as_usize(), self.suspended_stack.len()));
+        self.suspended_stack
+            .extend(self.stack.drain(index.as_usize()..));
+    }
+
+    pub fn suspension_depth(&self) -> usize {
+        self.suspended_segments.len()
     }
 
     pub fn restore_suspended(&mut self) {
-        self.stack.append(&mut self.suspended_stack);
+        let (base, start) = self
+            .suspended_segments
+            .pop()
+            .expect("evaluation suspension underflow");
+        assert!(self.stack.len() >= base, "evaluation suspension base lost");
+        self.stack.truncate(base);
+        self.stack.extend(self.suspended_stack.drain(start..));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_suspension_restores_each_operand_segment() {
+        let mut stack = int_stack(&[10, 20, 30]);
+        stack.suspend_above(StackSlotIndex::new(1));
+        stack.push(StackValue::Int32(40));
+        stack.suspend_above(StackSlotIndex::new(1));
+        stack.push(StackValue::Int32(50));
+        assert_eq!(stack.suspension_depth(), 2);
+        stack.restore_suspended();
+        assert_eq!(as_i32_values(&stack.stack), vec![10, 40]);
+        stack.restore_suspended();
+        assert_eq!(as_i32_values(&stack.stack), vec![10, 20, 30]);
+        assert_eq!(stack.suspension_depth(), 0);
+    }
+
+    #[test]
+    fn empty_suspension_has_its_own_depth_and_discards_cleanly() {
+        let mut stack = int_stack(&[10]);
+        stack.suspend_above(StackSlotIndex::new(0));
+        stack.suspend_above(StackSlotIndex::new(0));
+        assert_eq!(stack.suspension_depth(), 2);
+        stack.restore_suspended();
+        assert!(stack.stack.is_empty());
+        assert_eq!(stack.suspended_stack.len(), 1);
+        stack.clear_suspended();
+        assert_eq!(stack.suspension_depth(), 0);
+        assert!(stack.suspended_stack.is_empty());
+    }
 
     fn owner_retention_transient_stack() -> (
         EvaluationStack<'static>,
@@ -560,6 +606,7 @@ mod tests {
 pub struct FrameStack<'gc> {
     pub frames: Vec<StackFrame<'gc>>,
     pub suspended_frames: Vec<StackFrame<'gc>>,
+    suspended_segments: Vec<(usize, usize)>,
     pub pooled_frames: Vec<StackFrame<'gc>>,
     /// The last home-block serial issued on this thread; zero before the first.
     last_home_serial: u64,
@@ -686,18 +733,31 @@ impl<'gc> FrameStack<'gc> {
     pub fn clear(&mut self) {
         self.frames.clear();
         self.suspended_frames.clear();
+        self.suspended_segments.clear();
         self.pooled_frames.clear();
     }
 
     pub fn clear_suspended(&mut self) {
         self.suspended_frames.clear();
+        self.suspended_segments.clear();
     }
 
     pub fn suspend_above(&mut self, index: usize) {
-        self.suspended_frames = self.frames.split_off(index + 1);
+        self.suspended_segments
+            .push((index + 1, self.suspended_frames.len()));
+        self.suspended_frames.extend(self.frames.drain(index + 1..));
+    }
+
+    pub fn suspension_depth(&self) -> usize {
+        self.suspended_segments.len()
     }
 
     pub fn restore_suspended(&mut self) {
-        self.frames.append(&mut self.suspended_frames);
+        let (base, start) = self
+            .suspended_segments
+            .pop()
+            .expect("frame suspension underflow");
+        assert_eq!(self.frames.len(), base, "frame suspension base mismatch");
+        self.frames.extend(self.suspended_frames.drain(start..));
     }
 }

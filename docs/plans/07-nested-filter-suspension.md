@@ -1,6 +1,6 @@
 # Nested filters keep earlier suspended frames
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** A filter whose callee catches an exception through its own filter, entered while
 frames are already suspended, resumes the original search with every suspended frame and
 evaluation-stack slot intact, matching CLR output, in both configurations.

@@ -427,6 +427,7 @@ impl ExceptionHandlingSystem {
                                 filter_frame.base.stack + filter_frame.stack_height;
 
                             *ctx.exception_mode_mut() = ExceptionState::Filtering(FilterState {
+                                suspension_depth: ctx.frame_stack().suspension_depth() + 1,
                                 exception,
                                 handler: handler_addr,
                                 original_ip,
@@ -520,6 +521,14 @@ impl ExceptionHandlingSystem {
     ) -> StepResult {
         // Resume original search
         // Restore suspended evaluation and frame stacks
+        assert_eq!(
+            ctx.frame_stack().suspension_depth(),
+            nested.suspension_depth
+        );
+        assert_eq!(
+            ctx.evaluation_stack_mut().suspension_depth(),
+            nested.suspension_depth
+        );
         ctx.evaluation_stack_mut().restore_suspended();
         ctx.frame_stack_mut().restore_suspended();
 

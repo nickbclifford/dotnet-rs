@@ -190,6 +190,14 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             }
         };
 
+        if let ExceptionState::Filtering(state) = *self.exception_mode {
+            assert_eq!(self.frame_stack.suspension_depth(), state.suspension_depth);
+            assert_eq!(
+                self.evaluation_stack.suspension_depth(),
+                state.suspension_depth
+            );
+        }
+
         // Restore state of the frame where filter ran
         let frame = &mut self.frame_stack.frames[handler.frame_index];
         frame.state.ip = original_ip;
