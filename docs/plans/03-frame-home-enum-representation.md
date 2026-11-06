@@ -49,16 +49,45 @@ nested evaluation-stack growth, stable home addresses/serials, native access, an
 remain struct-home assignment controls. Scalar rejection tests cover wrong identity,
 wrong layout size, and shorter/longer payloads without changing destination bytes.
 
-The [completion follow-up](../ci-evidence/2026-11-05-plan03-completion-follow-up.md)
-contains actual generated-IL mapping, fresh historical reproduction, identical-cache
-EF hashes/results, and validation commands/results. Earlier audit findings remain
-in their historical records.
+## Completion validation
 
-Focused/default/no-feature tests, pinned Tree Borrows p37/p38/p43 and scalar
-rejection tests in both configurations, runner/batch/doc checks, and the full
-`./check.sh --fast` passed. The enabled Substring delegate regression exposed a catch-entry
-stack cleanup defect during that gate; the minimal exception repair is included and
-all three fast configurations now pass.
+Completion commit: `2b239a5f`. Rust 1.95.0 and .NET SDK 10.0.114 were used.
+`./check.sh --fast` passed clippy and all three suites: 632 tests / 7 skipped without
+features, 744 / 5 with multithreading, and 759 / 7 with validation-all added.
+The enum fixture's CLR oracle and scalar rejection tests pass in both configurations.
+Pinned nightly-2026-05-27 Tree Borrows Miri passed p37, p38, p43 and both scalar rejection
+tests in both configurations. Runner contracts passed 21 tests, batch verification
+covered 44 controls once, and doc drift passed 49 checks. Exposed-provenance warnings
+limit Miri detection; these results are not a complete pointer-safety proof.
+
+Actual fixture IL confirms Name uses `ldarga` and `constrained. EventId`; Replace<T>
+uses `ldarga`, `starg` and `ldobj !!T`; Identity<T> uses `constrained. !!T`; Default<T>
+uses `ldloca` and `initobj !!T`. p43 constructs explicit object operations and asserts
+both scalar and value-type call results independently.
+
+Fresh isolated revision `c743e4d0` rejected the identical enum fixture with
+`Expected ValueType for Struct write` (exit 1); CLR and the repaired runtime returned 42.
+Historical EF test mode failed with the same argument-0 layout error (exit 101).
+Repaired `ef_inmemory --test` passed with default and no-default features using copies
+of the original baseline cache. All 14 fixture/dependency hashes matched before and
+after execution; the complete manifests are retained in git at `2b239a5f`.
+These smoke tests establish correctness, not performance.
+
+Reproduce focused tests with `cargo test -p dotnet-cli --test integration_tests
+fields_enum_frame_homes_42_matches_dotnet` and `cargo test -p dotnet-vm --lib
+scalar_home_rejects`, adding `--no-default-features` for the second configuration.
+For pinned Miri, use `bash scripts/pointer_provenance.sh controls --configuration CONFIG
+--shard SHARD`: p37=35, p38=37, p43=43. For scalar Miri use
+`MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"
+cargo +nightly-2026-05-27 miri test -p dotnet-vm --lib scalar_home_rejects`, with and
+without `--no-default-features`. EF smoke: build the `end_to_end` benchmark with
+`cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end --no-run`,
+then run its executable with `ef_inmemory --test`, preserving fixture bytes when comparing.
+
+The fast gate also exposed a catch-entry defect through the enabled Substring delegate
+regression: logical stack height was reset while backing operands remained. Catch entry
+now truncates those operands before pushing the exception, as required by ECMA-335
+I.12.4.2.5. The exception/retry CLR regression passes in all three fast configurations.
 
 Plan02's completed benchmark matrix and accepted primitive cost satisfy the separate
 performance dependency. EF test-mode smoke results here claim no performance timings.

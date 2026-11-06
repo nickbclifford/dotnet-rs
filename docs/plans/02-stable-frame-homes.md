@@ -1,6 +1,7 @@
 # Stable homes for addressable locals and arguments
 
 **Status:** Complete (measured primitive cost accepted)
+Completion rechecked against `98f04a77`; validation and accepted costs are summarized below.
 **Outcome:** A byref or native-int address taken from a local or argument keeps reading and
 writing that variable across assignment, evaluation-stack growth and nested calls, and Miri
 reports no UB. The evaluation-stack pointer fixup is deleted.
@@ -136,18 +137,38 @@ Do not build a later slice's support in an earlier slice.
    evaluation-stack fixup, scratch caches and fixup metrics have been deleted. Retired
    Stack encodings are rejected without changing the surviving encodings or the 24-byte size.
    Native fast checks and all 42 pointer controls under Miri pass in both configurations;
-   see [slice-4 evidence](../ci-evidence/2026-11-05-stable-frame-homes-slice4.md).
+   the subsequent completion audit also passed all 44 reviewed controls in both configurations.
 5. **Measure.** Compare `runtime_primitives` and `end_to_end` against `main` before slice 1. A
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
-   The [slice-5 preflight](../perf-evidence/2026-11-05-stable-frame-homes.md) found
-   a reproducible candidate-only EF Core argument-home initialization failure before
-   timing. The [enum-home repair](03-frame-home-enum-representation.md) addresses
-   that failure. The [measurement record](../perf-evidence/2026-11-05-stable-frame-homes-measurement.md)
-   reports no-home control slowdowns. The [control investigation](../perf-evidence/2026-11-05-frame-homes-control-investigation.md)
-   isolates a generated stack-copy cost and launch/placement-sensitive vector results.
-   The [performance closure](../perf-evidence/2026-11-05-frame-homes-performance-closure.md)
-   records three bounded source experiments. None met the repair bar in both feature
-   configurations; the maintainer accepted the documented primitive cost. Slice 5 is complete.
+   The preflight found the EF enum argument-home failure repaired by
+   [Plan 03](03-frame-home-enum-representation.md). All 18 measured end-to-end cases
+   improved in both feature configurations and both comparisons against pre-home
+   baseline `0bae3727`; verified address-free arithmetic and stack guest controls improved.
+   This does not establish performance for every address-free guest method.
+   The isolated Rust stack control showed an approximately 4% generated-copy cost;
+   its magnitude varies with launch conditions. Vector results reversed or became
+   inconclusive with launch/placement changes; no algorithm regression was established.
+   Three bounded source experiments (push inlining, cold trace extraction, and capacity
+   extraction) failed to improve both configurations repeatably beyond 1%.
+   The maintainer accepted the documented primitive cost; no experimental source change
+   was retained. This acceptance does not cover future correctness or guest regressions.
+   Detailed measurements and experiment commands are preserved in git at `747ac78d`.
+
+## Completion validation
+
+The `98f04a77` audit found no remaining Plan 02 implementation gap. All 44 reviewed
+pointer controls passed pinned Tree Borrows Miri in both configurations; native pointer
+suites passed 59 tests with 3 diagnostic probes ignored per configuration. Library Miri
+passed 94 dotnet-value tests (1 ignored) and 20 dotnet-vm-data tests with default features.
+These are bounded controls, not a soundness proof; exposed-provenance warnings limit
+pointer-bug detection. Nested-filter suspension, static addresses, cross-thread native
+addresses and general bulk-operation barriers remain outside this plan.
+
+Reproduce with `bash scripts/pointer_provenance.sh batch --configuration CONFIG --batch N`
+for configurations `no-features` and `multithreading`, batches 1–4, and
+`bash scripts/pointer_provenance.sh verify-batches`. Use the pinned runner flags for
+library Miri; run `./check.sh --fast` for native/clippy validation. The Plan 03 completion
+at `2b239a5f` subsequently passed the full fast matrix and its focused deep controls.
 
 ## Done when
 

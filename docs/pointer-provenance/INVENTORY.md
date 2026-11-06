@@ -315,7 +315,9 @@ The eight `pointer::tests::ptr_arith_` regressions are `ptr_arith_unmanaged_ptr_
 
 #### M1b validation limits
 
-The finished-tree M1b Criterion comparison was not measured on an idle host; see the [pointer-semantics comparison](../perf-evidence/2026-07-to-10-comparisons.md#pointer-semantics-comparison-2026-10-29).
+The finished-tree M1b Criterion comparison was not measured on an idle host and does
+not establish an isolated regression. Detailed historical comparisons are retained
+in git at `747ac78d`.
 
 The VM controls use the **filtered permissive Tree Borrows** lane: `nightly-2026-05-27` with `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`. This is **not strict-provenance evidence**, **not a full VM Miri suite**, and **not a soundness proof**. The 24 controls are an explicitly selected bounded lane; passing them establishes only their asserted paths, not every pointer, storage, ownership or ABI contract. Native discovery (`verify-controls`) is not execution. The Phase 6 control runs were not native executions; the pre-repair native diagnostics for p17/p18 are recorded separately above.
 
@@ -350,7 +352,8 @@ M1a repaired heap paths: Heap/CrossArena `ManagedPtr::with_data` checks checked 
 
 Not changed by the M1a repairs: Stack/Static observation and the `ManagedPtr::with_data` stack fallback; the string write contract (no writable access to interned Arc-backed data); P/Invoke pinning/guard lifetime, ABI and return/copy semantics; and general `cpblk`/`initblk` correctness (count width, checked complete ranges, barriers/rooting and yield/resumption state). At that point the legacy `StackValue` managed-pointer-versus-native-integer comparisons and managed-pointer subtraction called `managed_ptr_to_raw`, whose Heap arm used in-bounds `.add` even for a far-out-of-bounds logical offset; the M1b work addressed those.
 
-**Evidence limits:** Native Criterion benchmark numbers are performance measurements, not Miri evidence. The [native benchmark comparisons](../perf-evidence/2026-07-to-10-comparisons.md#heap-access-comparison-2026-10-28) record repeated no-features regressions.
+**Evidence limits:** Native Criterion benchmark numbers are performance measurements, not Miri evidence. Historical native comparisons recorded repeated no-features regressions; those
+measurements remain in git at `747ac78d` and must not be treated as pointer-safety evidence.
 
 ## Initial six-control calibration (2026-10-27)
 
@@ -376,7 +379,7 @@ current plan are listed under [Not yet planned](../plans/README.md#not-yet-plann
 | ID | Finding | Evidence | Scoped result |
 |---|---|---|---|
 | R01 | Oversized heap slice, shared-derived writable address, safe out-of-bounds formation | Baseline p10/p13/p14/p16/p20 each miri-ub at the oversized slice; after the M1a repair all five pass in both configurations; p11 is a passing control. Three LIB-M recreations also pass. | Heap access repaired for the tested paths. Stack and static targets are not covered. |
-| R02 | Assigning to a local invalidates an earlier byref; evaluation-stack growth invalidates an address held as a native integer | p01/p09/p37/p38 controls with p02/p03; LIB-M absent; models E12b/E13 distinct | Repaired for locals and arguments by [frame homes](../GC_AND_MEMORY_SAFETY.md#frame-owned-homes); byrefs to homes resolve through the frame check (`FrameHome`). Constructor receivers also use caller-owned temporary homes. Typedref address-taking is rejected under the chosen strict ECMA policy; the Stack origin and fixup have been removed. Resolved: native fast checks and all 42 pointer controls under Miri pass in both configurations; see [slice-4 evidence](../ci-evidence/2026-11-05-stable-frame-homes-slice4.md). |
+| R02 | Assigning to a local invalidates an earlier byref; evaluation-stack growth invalidates an address held as a native integer | p01/p09/p37/p38 controls with p02/p03; LIB-M absent; models E12b/E13 distinct | Repaired for locals and arguments by [frame homes](../GC_AND_MEMORY_SAFETY.md#frame-owned-homes); byrefs to homes resolve through the frame check (`FrameHome`). Constructor receivers also use caller-owned temporary homes. Typedref address-taking is rejected under the chosen strict ECMA policy; the Stack origin and fixup have been removed. Resolved: native fast checks and all 42 pointer controls under Miri pass in both configurations; the subsequent completion audit passed all 44 controls in both configurations. See [Plan 02](../plans/02-stable-frame-homes.md#completion-validation) for validation limits and reproduction. |
 | R03 | Transient owner destroyed while in use; expired static/arena guards | Pre-repair native liveness/clone failures and Miri dangling accesses in both configurations; repaired tests pass. Controlled cross-arena teardown gave Miri UAF before repair, rejection and in-flight lease passes after (multithreading only). p36 refutes the static allocation-lifetime hypothesis for its direct one-byte case; p12 panicked on alignment, not UB. | Owner/guard retention repaired for the tested paths. Fill reachability is source-inferred. |
 | R04 | Unmanaged serde exposure; integer GC transport | Historical LIB-M sources absent; p05 VM-M control refutes unconditional failure only. Retained-transport recreation and isolated strict-core experiment pass. | Retained GC transport implemented. Unmanaged serde not changed; p05 is not a general serde fix. |
 | R05 | Repeated localloc; pointer arithmetic, null, wrapping and comparison | Step 0.1 measured p06/p08 Miri UB and p17/p18 assertion failures, p_null passed; Phase 6 controls p06–p08, p17/p18, p21–p24 and p_null passed in both configurations. M1c p04 and p29–p34 passed in both configurations. | Arithmetic, comparison and null paths repaired; stable frame-local `localloc` storage and its tested lifecycle paths repaired. |

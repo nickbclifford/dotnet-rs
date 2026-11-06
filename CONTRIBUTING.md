@@ -19,8 +19,10 @@ Before running local builds or tests, install:
 - Subsystem docs (`docs/*.md`) describe how the code works now. They contain no work items.
 - [`docs/INVARIANT_REGISTRY.md`](docs/INVARIANT_REGISTRY.md) defines the predicates that
   `// SAFETY:` comments cite.
-- Evidence and history live in `docs/pointer-provenance/`, `docs/ci-evidence/` and git. They
-  are reference material, not instructions.
+- Live docs retain current validation conclusions, accepted costs and unresolved limits.
+  Detailed historical reports live in git; they are reference material, not instructions.
+  The last complete report snapshot is commit `747ac78d`; inspect its docs tree with
+  `git ls-tree -r --name-only 747ac78d docs`, then use `git show 747ac78d:<path>`.
 
 When a document and the code disagree, the code describes current behavior; fix the document.
 

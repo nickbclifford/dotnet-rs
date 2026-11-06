@@ -364,4 +364,7 @@ Skip the PGO-use test build step:
 - The script stores generated/merged artifacts under the selected `--target-dir` and rewrites stale profile files for repeatable runs.
 - Keep this PGO path optional; ordinary timing comparisons still use standard `bench-thin`/`bench-fat` commands.
 
-Dated before/after comparisons from past changes are kept in [perf-evidence/](perf-evidence/).
+Historical comparisons are retained in git at commit `747ac78d`. Current plans retain
+accepted performance costs and unresolved measurement limits. Retrieve old reports with
+`git ls-tree -r --name-only 747ac78d docs` and `git show 747ac78d:<path>`; local
+`target/` artifacts and `/tmp` logs are volatile and are not preserved by git.

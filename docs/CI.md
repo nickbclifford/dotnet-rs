@@ -75,7 +75,8 @@ files and fails on drift.
 
 `timeout-minutes` values are caps sized from hosted samples, not expected runtimes. Jobs that use
 `scripts/ci_diagnostics.py` set `CI_DIAG_DEADLINE` to the job timeout minus three minutes so
-diagnostics can still upload. Dated measurements are in [ci-evidence/](ci-evidence/).
+diagnostics can still upload. Historical measurements are retained in git at commit
+`747ac78d`; they are dated observations, not runtime guarantees.
 
 | Job | Timeout | Rationale |
 |---|---|---|
@@ -274,4 +275,3 @@ so self-hosted timings are not mixed with hosted samples. The host and image liv
 - [Validation Features](VALIDATION_FEATURES.md)
 - [Fuzzing](FUZZING.md)
 - [Benchmark Workflow](BENCHMARK_WORKFLOW.md)
-- [CI evidence](ci-evidence/)

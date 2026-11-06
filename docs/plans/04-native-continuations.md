@@ -2,10 +2,10 @@
 
 **Status:** In progress (finalizer, fallback coverage and performance evidence remain)
 
-The [completion audit](../ci-evidence/2026-11-05-plans03-04-completion-audit.md)
-records the historical parameter-name failure and remaining acceptance gaps. The
-parameter-name repair is recorded in the implementation evidence. Retained copy
-progress and rooting controls pass; the complete exit conditions are not satisfied.
+Retained copy progress and rooting controls pass. Finalizer execution/order,
+remaining fallback call shapes and measured resource/performance acceptance remain
+unfinished; the current acceptance gaps are listed below.
+
 **Outcome:** Both `System.String.Substring` overloads retain copy progress across real
 single-threaded GC safepoints, consume operands once and copy each requested UTF-16
 code unit once.
@@ -110,9 +110,73 @@ evidence is recorded; and eligible calls use the continuation by default. The la
 async/await effects redesign remains a separate outcome using this scheduler contract
 and its behavior tests.
 
-Validation and measured costs are recorded in the
-[implementation evidence](../ci-evidence/2026-11-05-substring-continuation.md) and
-[performance evidence](../perf-evidence/2026-11-05-substring-continuation.md).
+## Current validation and remaining work
+
+The boxed `CallState` representation is enabled for eligible calls; it retains a
+traced source, output buffer, offset and caller identity separately from handler
+unwind state. No unsafe lifetime erasure or managed re-entry was added. Native tests
+cover real collection between chunks, exact progress, stable buffer storage, one
+completion, weak-source survival/reclamation, abort/budget cleanup, call-site mismatch,
+queue deferral and teardown. p44 (shard 44, batch 3) passed pinned Tree Borrows Miri
+without features and with multithreading; the latter checks refusal with intact operands.
+These bounded controls are not a complete soundness proof.
+
+Both managed fixtures have CLR oracles for UTF-16/ranges/handler contexts and
+reflection/delegate fallback. Range throws populate `ArgumentException._paramName`;
+all seven checked names match CLR. The delegate exception/retry failure was repaired
+in `2b239a5f` by discarding backing evaluation operands on catch entry. The enabled
+regression then passed all three fast configurations (632/744/759 tests respectively).
+The older audit's parameter-name and delegate-retry failures are resolved.
+
+Still required before completion:
+
+- Execute an actual managed finalizer and assert its ordering around parked native
+  work. The present queue test uses a non-finalizable object and proves retention
+  and drainage only.
+- Map and execute indirect, tail and engine-API call admission/refusal controls;
+  direct calls, generic dispatch, delegates and reflection do not prove those paths.
+- Measure whole-call copied units, buffer allocations and peak retained bytes.
+  Source-level allocation sites, workload arithmetic and destination capacity are
+  not runtime counters or heap-wide peak measurements.
+- Repeat isolated paired performance comparisons and investigate repeatable >1%
+  unaffected-control regressions. Ask for acceptance if an unresolved regression remains.
+
+## Measurement baseline and limits
+
+Historical baseline: `43663231`; implementation and detailed reports are retained in
+git through `747ac78d`. Preliminary timings made while checks were active showed
+approximately 3.5% empty/small and 4.0% large Substring slowdowns; they do not establish
+an isolated regression. The final compact representation was then measured without
+concurrent project checks, pinned to CPU 0, with 10 Criterion samples and a four-second
+target. Two opposite-order pairs showed empty/small +0.83%/+0.20% and dispatch
++0.06%/+1.00% (rounded). No repeatable >1% unaffected-control regression was established
+in those pairs. Large Substring was +5.92%; the string workload was -7.10%, but its
+variability prevents attributing that improvement to the change. These are independent
+point estimates, not paired statistical confidence intervals or fresh acceptance runs.
+
+The large workload requests 12,000,000 UTF-16 units and 80 result buffers; a large
+buffer's capacity is 300,000 bytes. Those are calculations, not measured counters.
+A separate 30-sample forced-GC diagnostic measured parked-suffix latency: median
+192.274 microseconds (189.219–317.341), including two full collections and the remaining
+65,553 units, excluding setup, first chunk, final assertions and destruction.
+Observed destination capacity plus activation size was 262,258 bytes, excluding the
+source, allocator overhead and GC bookkeeping. This is neither whole-call throughput
+nor heap-wide peak memory, and does not measure GC overhead relative to the old path.
+
+Reproduce benchmark builds with `cargo bench --profile bench-fat -p dotnet-benchmarks
+--no-default-features --bench substring --bench end_to_end --no-run` in isolated
+baseline/candidate targets, using identical compiled fixtures. Pin the generated
+executables and compare opposite launch orders; use `--bench --sample-size 10
+--warm-up-time 1 --measurement-time 4 --noplot`, selecting `dispatch|string` for
+`end_to_end`. Preserve raw samples and actual resource counters for final acceptance.
+
+For the manual diagnostic, build `cargo test -p dotnet-vm --profile bench-fat
+--no-default-features --lib measure_forced_collection_copy --no-run`, then run the
+optimized unit-test executable with
+`executor::native_substring_tests::measure_forced_collection_copy --exact --ignored
+--nocapture --test-threads=1`. For p44 Miri use
+`bash scripts/pointer_provenance.sh controls --configuration CONFIG --shard 44`
+with `no-features` and `multithreading`; exposed-provenance warnings limit detection.
 
 ## Ask the maintainer only if
 
