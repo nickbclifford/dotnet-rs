@@ -709,6 +709,11 @@ impl ExceptionHandlingSystem {
                 frame.state.ip = handler_start_ip;
                 frame.stack_height = StackSlotIndex::new(0);
 
+                // Exceptions discard the protected region's evaluation operands,
+                // including operands retained by an intrinsic that threw in this frame.
+                let stack_base = frame.base.stack;
+                ctx.evaluation_stack_mut().truncate(stack_base);
+                let frame = &mut ctx.frame_stack_mut().frames[target_h.frame_index];
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);

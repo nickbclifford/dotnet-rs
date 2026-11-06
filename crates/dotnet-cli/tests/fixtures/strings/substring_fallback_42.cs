@@ -27,6 +27,12 @@ public class Program {
         string twoResult = (string)twoMethod.Invoke(source, new object[] { 1, 65537 });
         if (!Matches(oneResult, source, 2, 65538)) return 4;
         if (!Matches(twoResult, source, 1, 65537)) return 5;
+        try { one(-1); return 6; }
+        catch (ArgumentOutOfRangeException error) { Console.WriteLine(error.ParamName); }
+        try { two(0, -1); return 7; }
+        catch (ArgumentOutOfRangeException error) { Console.WriteLine(error.ParamName); }
+        if (!Matches(one(2), source, 2, 65538)) return 8;
+        if (!Matches(two(1, 65537), source, 1, 65537)) return 9;
         return 42;
     }
 }

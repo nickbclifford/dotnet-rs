@@ -1041,7 +1041,7 @@ fn homed_object_local_survives_collection() {
 // Enum homes use underlying scalar bytes for scalar arguments, stores and indirect access.
 #[test]
 fn p43_enum_home_scalar_roundtrip() {
-    let result = run_program("P43", |res, owner| {
+    let (shared, entrypoint) = build_program("P43", |res, owner| {
         let corlib = res.push_assembly_reference(
             dotnetdll::resolved::assembly::ExternalAssemblyReference::new("mscorlib"),
         );
@@ -1067,21 +1067,42 @@ fn p43_enum_home_scalar_roundtrip() {
             source: TypeSource::User(UserType::Definition(index)),
             value_kind: Some(ValueKind::ValueType),
         };
+        let grow = res.push_method(
+            owner,
+            Method::new(
+                Accessibility::Public,
+                void_sig(),
+                "Grow",
+                Some(make_test_method!(max_stack: 4096, instructions: vec![Instruction::Return])),
+            ),
+        );
         let body = make_test_method!(max_stack: 3,
         instructions: vec![
+            Instruction::LoadLocalAddress(0),
+            Instruction::LoadConstantInt32(40),
+            Instruction::StoreLocal(0),
             Instruction::LoadArgumentAddress(0),
             Instruction::LoadConstantInt32(41),
             Instruction::StoreArgument(0),
+            Instruction::Call {
+                tail_call: false,
+                param0: MethodSource::User(UserMethod::Definition(grow)),
+            },
             conv_u(),
             Instruction::LoadConstantInt32(42),
             stind(StoreType::Int32),
-            Instruction::LoadLocalAddress(0),
             Instruction::LoadArgument(0),
             Instruction::StoreLocal(0),
             conv_u(),
             ldind(LoadType::Int32),
+            Instruction::StoreLocal(1),
+            Instruction::LoadLocalAddress(0),
+            Instruction::LoadLocal(1),
+            Instruction::StoreObject { param0: MethodType::Base(Box::new(enum_type.clone())), unaligned: None, volatile: false },
+            Instruction::LoadLocalAddress(0),
+            Instruction::LoadObject { param0: MethodType::Base(Box::new(enum_type.clone())), unaligned: None, volatile: false },
             Instruction::Return,
-        ], locals: vec![local(enum_type.clone())]);
+        ], locals: vec![local(enum_type.clone()), local(BaseType::Int32)]);
         let signature = MethodSignature {
             parameters: vec![Parameter(
                 vec![],
@@ -1099,7 +1120,7 @@ fn p43_enum_home_scalar_roundtrip() {
             ),
         );
         (
-            1,
+            3,
             vec![local(enum_type)],
             vec![
                 Instruction::LoadConstantInt32(10000),
@@ -1107,17 +1128,65 @@ fn p43_enum_home_scalar_roundtrip() {
                     tail_call: false,
                     param0: MethodSource::User(UserMethod::Definition(callee)),
                 },
-                Instruction::Pop,
+                Instruction::LoadConstantInt32(42),
+                Instruction::CompareEqual,
                 Instruction::LoadLocal(0),
                 Instruction::Call {
                     tail_call: false,
                     param0: MethodSource::User(UserMethod::Definition(callee)),
                 },
+                Instruction::LoadConstantInt32(42),
+                Instruction::CompareEqual,
+                Instruction::And,
+                Instruction::LoadConstantInt32(42),
+                Instruction::Multiply,
                 Instruction::Return,
             ],
         )
     });
-    assert_eq!(result, 42);
+    let mut initial_capacity = None;
+    let mut grew = false;
+    let mut result = None;
+    let mut homes_before_growth = None;
+    let mut checked_homes = false;
+    run_entrypoint_observed(shared, entrypoint, |engine, step| {
+        let capacity = engine.stack.execution.evaluation_stack.stack.capacity();
+        let initial = *initial_capacity.get_or_insert(capacity);
+        let frames = &engine.stack.execution.frame_stack.frames;
+        if frames.len() >= 2 {
+            let homes = &frames[1].homes;
+            let local = homes.local(0).unwrap();
+            let argument = homes.argument(0).unwrap();
+            let identity = (
+                local.serial,
+                local.address,
+                argument.serial,
+                argument.address,
+            );
+            if capacity < 4096 {
+                homes_before_growth = Some(identity);
+            } else if let Some(before) = homes_before_growth
+                && before.0 == identity.0
+            {
+                assert_eq!(
+                    identity, before,
+                    "growth must preserve both home identities"
+                );
+                checked_homes = true;
+            }
+        }
+        grew |= capacity > initial;
+        if matches!(step, StepResult::Return) {
+            result = Some(engine.stack.execution.evaluation_stack.pop().as_i32());
+        }
+        Observe::Continue
+    });
+    assert!(
+        checked_homes,
+        "home identities must be checked after growth"
+    );
+    assert!(grew, "nested call must grow the evaluation stack");
+    assert_eq!(result, Some(42));
 }
 
 // A byref to a value-type argument must keep addressing that argument after `starg` assigns it a

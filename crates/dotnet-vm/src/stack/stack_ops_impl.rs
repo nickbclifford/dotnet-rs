@@ -466,7 +466,7 @@ mod scalar_home_audit_tests {
                 scalar_type: Some(description.clone()),
                 value_type: None,
             };
-            for length in 0..4 {
+            for length in [0, 1, 2, 3, 5, 8] {
                 let layout = Arc::new(FieldLayoutManager {
                     fields: Default::default(),
                     total_size: 4,

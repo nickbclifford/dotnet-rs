@@ -1,0 +1,20 @@
+{
+  "source_manifest": "target/plan01-slice5/fixture-hashes-before.json:baseline",
+  "files": {
+    "ef_inmemory/EfInMemory.deps.json": "40b10ddf829d97acb201f7f6aa4cfbd0b6662209bdf6d941126f15ca0b9202b8",
+    "ef_inmemory/EfInMemory.dll": "9566b204a284ba55678ea2b61cb7ae7f95e56db53d49f2533717aa5e9c1b0bb6",
+    "ef_inmemory/EfInMemory.runtimeconfig.json": "7ba757eef0be489e46aa47a9d01db04237b2a188cb536ce494554cbd7c948822",
+    "ef_inmemory/Microsoft.EntityFrameworkCore.Abstractions.dll": "4e3293dd990f5f6856af0b5ce930f4406a626d8ff4284fa1d51be36e0ce6693e",
+    "ef_inmemory/Microsoft.EntityFrameworkCore.InMemory.dll": "965d2f70c4d633f453b6e4244c462fbcf3e0a68973be86e37c716cdd4d2c7521",
+    "ef_inmemory/Microsoft.EntityFrameworkCore.dll": "17e279e20d491f43a0cce7de34a676aff17277634eae29ce70a06a34976d765e",
+    "ef_inmemory/Microsoft.Extensions.Caching.Abstractions.dll": "3bbacda4964f974b7322abd7762edf21a2cec4a9c45caa6663707bf6771060f5",
+    "ef_inmemory/Microsoft.Extensions.Caching.Memory.dll": "990344295445818eeb7bf31681f4ba6f07caaa9787da6aa792fa75bc50718cf4",
+    "ef_inmemory/Microsoft.Extensions.DependencyInjection.Abstractions.dll": "8a789eb00fff2f3a6d412a23cb45ea49a069a6e6ffdd5bf84d70b2316090940f",
+    "ef_inmemory/Microsoft.Extensions.DependencyInjection.dll": "9750c9c508173f282f011c86986d6eae39f8bf866e437f88975da441356556ba",
+    "ef_inmemory/Microsoft.Extensions.Logging.Abstractions.dll": "0fb0b8632f58b49eed4b77fa6f13da8a2eab80a3c3f7e0f1406e337d53200a05",
+    "ef_inmemory/Microsoft.Extensions.Logging.dll": "bcf5190511bdc690b7b2d0f62d8d977e5f636493e65d91ec15416569cc8571d6",
+    "ef_inmemory/Microsoft.Extensions.Options.dll": "492dc1f252015f41b757e235a20f22386cc8c92a5d1de4cd4490d66d73ae805c",
+    "ef_inmemory/Microsoft.Extensions.Primitives.dll": "198d9078852b65fe481588a0154b933105a75ac47c9fdabb648157a783ac619c"
+  },
+  "all_match": true
+}
