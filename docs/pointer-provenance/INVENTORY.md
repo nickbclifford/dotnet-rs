@@ -385,7 +385,7 @@ current plan are listed under [Not yet planned](../plans/README.md#not-yet-plann
 | R05 | Repeated localloc; pointer arithmetic, null, wrapping and comparison | Step 0.1 measured p06/p08 Miri UB and p17/p18 assertion failures, p_null passed; Phase 6 controls p06–p08, p17/p18, p21–p24 and p_null passed in both configurations. M1c p04 and p29–p34 passed in both configurations. | Arithmetic, comparison and null paths repaired; stable frame-local `localloc` storage and its tested lifecycle paths repaired. |
 | R06 | Pinned payload address; FFI return overwrite | Heap-origin P/Invoke address derivation uses the observer under existing pins/guards; no native-call return/copy regression added. Historical Rust/libffi sources missing. | No P/Invoke lifetime, ABI or return contract repaired. |
 | R07 | By-ref/out copy, temporary growth, null and string ABI | Existing P/Invoke crate tests pass in both configurations; no end-to-end native ABI evidence. | Not repaired. |
-| R08 | Cross-arena root barrier and teardown; arena/address packing | Library model, ID40000 codec, registry/library ABA, real-VM collection and teardown recreations; details below. | Root barrier, retained transport, identity/token checks and executor teardown ownership implemented. The real-VM collection test uses a foreign-branded fixture. |
+| R08 | Cross-arena root barrier and teardown; arena/address packing | Library model, ID40000 codec, registry/library ABA, real-VM collection and teardown recreations; details below. | Root barrier, retained transport, identity/token checks and executor teardown ownership implemented. The real-VM collection tests transfer production-encoded field storage and decode through receiver-owned instance fields. |
 | R09 | Host races and alignment, mixed-size overlap, static atomics | MODEL E9/E10 reports; VM paths R/A only | Not repaired. |
 | R10 | Block-operation barriers, count width, yield state | p14 `initblk` and p16 `cpblk` pass in both configurations for short valid scalar ranges; p15 checked frame-home `initblk` passes in both configurations | Heap address formation and checked frame-home ranges only. Chunked yield/retry, general count width and barriers not established. |
 | R11 | Negative index, `ByteOffset` sign, `conv.i` and native-int stores | Phase 6 controls p24–p28 and p_null pass in both configurations; p19 is a reported native panic; `p_wide_store_into_int_local` unverified. | `ByteOffset` direction, pointer conversion/store and native-integer round trips repaired for the asserted paths. Negative array index not covered. |
@@ -397,10 +397,12 @@ without the barrier in both configurations; it is not a VM test. The ID40000 **l
 recreation failed by null assertion before unsigned decoding and passes after repair, including
 release. The **actual Executor** teardown witness confirmed early normal destruction before drain;
 the repaired normal and extracted paths pass their measured tests. The **real-VM** collection
-recreation uses production coordinator commands, payload access and eventual reclamation, but
-its foreign-branded fixture concern was accepted, not resolved; the earlier two-collection
-pre-fix run was invalidated by a Miri dangling-pointer diagnostic. The revised before-result is
-an assertion, not proof of sound brand discipline. No-features supplies single-arena/local controls;
+recreation uses production coordinator commands, payload access and eventual reclamation.
+Plan 06 replaces raw-pointer fixture branding with owner-side encoding and receiver-side
+instance-field decoding through the production codec for both cross edges. Temporary carrier
+fields are cleared immediately after decoding. The earlier two-collection pre-fix run was
+invalidated by a Miri dangling-pointer diagnostic; it remains historical evidence, not a
+production-codec result. No-features supplies single-arena/local controls;
 registry and cross-arena transport are absent.
 
 R08 compact codec: the boundary, unavailable-owner, short-storage and managed-ID exhaustion tests are recreations. The interim multithreaded Tag-5 codec supports 64-bit pointers, registered owner IDs 0..=65535 and nonzero 8-byte-aligned addresses below 2^48; INVALID remains untagged. The VM reserves ID 0 and allocates monotonic IDs 1..=65535 without recycling, so it can create at most 65,535 managed thread arenas over a process lifetime before a host invariant panic. Unrepresentable or unavailable managed objects likewise fail loudly rather than becoming null. The generation-qualified origin and retained transport do not remove the compact ObjectRef's unsafe live-original-allocation contract.

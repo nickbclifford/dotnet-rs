@@ -1,6 +1,6 @@
 # Cross-arena collection fixture through production decoding
 
-**Status:** Not started
+**Status:** Complete
 **Outcome:** The three multithreaded real-VM cross-arena collection tests obtain arena B's
 object in arena A only through the production storage codec, contain no `Gc::from_ptr`, and
 pass natively and under pinned Tree Borrows Miri.
@@ -77,3 +77,21 @@ test reads a possibly swept object.
 - A ported test fails, meaning production decoding does not keep the object alive. That is a
   runtime defect, not a fixture problem. Do not weaken the assertion.
 - No production storage path can carry the reference without loading a fixture assembly.
+
+## Implementation evidence
+
+Both slices now use production-encoded `FieldStorage`, loaded through a receiver-owned
+instance field; the temporary carrier slot is cleared after decoding. No fixture assembly
+is needed. The module contains no `Gc::from_ptr`. Native collection-module checks passed
+(5 multithreaded tests and 1 no-features control). Pinned Tree Borrows Miri passed
+all three multithreaded collection tests (3 passed, zero ignored; 158.45 s) and the
+no-features control (1 passed, zero ignored; 40.56 s). Clippy with warnings denied,
+formatting and diff whitespace checks passed.
+
+Reproduce the collection checks with `cargo test -p dotnet-vm --lib
+--no-default-features --features multithreading
+executor::executor_collection_tests::arena_lifetime_vm_collection -- --test-threads=1`.
+For Miri replace `cargo test` with `cargo +nightly-2026-05-27 miri test` and set
+`MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-disable-isolation -Zmiri-ignore-leaks"`.
+Omit `--features multithreading` for the single-arena control. These are permissive
+Tree Borrows results, not strict-provenance or full-VM soundness evidence.

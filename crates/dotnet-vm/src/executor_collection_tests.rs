@@ -7,13 +7,14 @@
 //! production `THREAD_ARENA`/`execute_gc_command_for_current_thread` command path.
 //!
 //! The survival witness is a production weak GC handle checked in B after each collection;
-//! a missed publication clears the foreign handle before another trace. This fixture retains a
-//! foreign-branded `Gc` in A, which production code never does; it is a test-only shortcut.
+//! a missed publication clears the foreign handle before another trace. References cross
+//! threads as production-encoded field storage and are decoded through a receiver-owned field.
 
 use super::*;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_value::string::CLRString;
+#[cfg(feature = "multithreading")]
 use gc_arena::Gc;
 
 const PAYLOAD: &str = "executor_collection_payload";
@@ -26,6 +27,69 @@ fn shared() -> Arc<SharedGlobalState> {
     Arc::new(SharedGlobalState::new(Arc::new(
         AssemblyLoader::new_bare("executor_collection".to_string()).unwrap(),
     )))
+}
+
+/// Pointer-bearing field storage moves intact between threads; no integer pointer transport.
+#[cfg(feature = "multithreading")]
+fn encode_reference(obj: ObjectRef<'_>) -> dotnet_value::storage::FieldStorage {
+    use dotnet_value::layout::{
+        FieldKey, FieldLayout, FieldLayoutManager, GcDesc, LayoutManager, Scalar,
+    };
+    let mut fields = hashbrown::HashMap::new();
+    fields.insert(
+        FieldKey {
+            owner: dotnet_types::TypeDescription::NULL,
+            name: "reference".into(),
+        },
+        FieldLayout {
+            position: dotnet_utils::ByteOffset::new(0),
+            layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
+        },
+    );
+    let mut gc_desc = GcDesc::default();
+    gc_desc.set(0);
+    let storage = dotnet_value::storage::FieldStorage::new(
+        Arc::new(FieldLayoutManager {
+            fields,
+            total_size: ObjectRef::SIZE,
+            alignment: 8,
+            gc_desc,
+            has_ref_fields: true,
+        }),
+        vec![0; ObjectRef::SIZE],
+    );
+    storage.field_at_offset::<ObjectRef>(0).unwrap().write(obj);
+    storage
+}
+
+#[cfg(feature = "multithreading")]
+fn decode_reference<'gc>(
+    storage: dotnet_value::storage::FieldStorage,
+    handle: dotnet_utils::gc::GCHandle<'gc>,
+) -> ObjectRef<'gc> {
+    let carrier = ObjectRef::new(
+        handle,
+        HeapStorage::Obj(Box::new(dotnet_value::object::Object {
+            description: dotnet_types::TypeDescription::NULL,
+            generics: Default::default(),
+            instance_storage: storage,
+            has_finalizer: false,
+            finalizer_suppressed: false,
+            _phantom: std::marker::PhantomData,
+        })),
+    );
+    carrier
+        .try_as_object(|object| {
+            let field = object
+                .instance_storage
+                .field_at_offset::<ObjectRef>(0)
+                .unwrap();
+            let reference = field.read();
+            // The temporary carrier must never become an additional collection root.
+            field.write(ObjectRef(None));
+            reference
+        })
+        .unwrap()
 }
 
 /// Allocates the payload string in the executor's arena without rooting it and returns its
@@ -70,12 +134,14 @@ fn probe(executor: &mut Executor) -> Option<String> {
 fn arena_lifetime_vm_collection() {
     // Single-arena no-features control: forced collections keep a GC-handle-rooted object.
     let mut executor = Executor::new(shared());
-    let ptr = allocate_unrooted(&mut executor);
+    allocate_unrooted(&mut executor);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|_gc, engine| {
-                // SAFETY: F1.GcHandleRooted — the object is live in this same arena and is only rooted here.
-                let obj = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr().cast::<dotnet_utils::gc::ThreadSafeLock<dotnet_value::object::ObjectInner<'_>>>()) }));
+                let obj = engine.stack.local.heap.gchandles.borrow()[0]
+                    .as_ref()
+                    .unwrap()
+                    .0;
                 engine
                     .stack
                     .local
@@ -97,15 +163,11 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
         gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
     };
     use dotnet_utils::gc::GCHandleType;
-    use dotnet_value::object::ObjectPtr;
     use std::{sync::mpsc, thread, time::Duration};
 
-    struct Handoff(ObjectPtr);
-    // SAFETY: F11.ObjectPointerThreadSafe — ObjectPtr is Send+Sync by design; this wrapper only documents the transfer.
-    unsafe impl Send for Handoff {}
-
     let state = shared();
-    let (ptr_tx, ptr_rx) = mpsc::channel::<(dotnet_utils::ArenaId, Handoff)>();
+    let (ptr_tx, ptr_rx) =
+        mpsc::channel::<(dotnet_utils::ArenaId, dotnet_value::storage::FieldStorage)>();
     let (collected_tx, collected_rx) = mpsc::channel::<()>();
     let (probe_tx, probe_rx) = mpsc::channel::<Option<String>>();
     let b_state = Arc::clone(&state);
@@ -113,8 +175,20 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
     let owner_b = thread::spawn(move || {
         let mut b = Executor::new(Arc::clone(&b_state));
         let id = b.thread_id;
-        let ptr = allocate_unrooted(&mut b);
-        ptr_tx.send((id, Handoff(ptr))).unwrap();
+        allocate_unrooted(&mut b);
+        let storage = b
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| {
+                    encode_reference(
+                        engine.stack.local.heap.gchandles.borrow()[0]
+                            .as_ref()
+                            .unwrap()
+                            .0,
+                    )
+                })
+            })
+            .unwrap();
+        ptr_tx.send((id, storage)).unwrap();
         // Mutator loop: park at real safe points so the coordinator can stop this arena.
         // Exits when the driver drops `collected_tx`.
         loop {
@@ -131,16 +205,14 @@ fn run_vm_collection(root_in_a: bool) -> Vec<Option<String>> {
 
     let owner_b = Worker::new(owner_b, collected_tx);
     let mut a = Executor::new(Arc::clone(&state));
-    let (b_id, Handoff(ptr)) = ptr_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let (b_id, storage) = ptr_rx.recv_timeout(Duration::from_secs(30)).unwrap();
     assert_ne!(a.thread_id, b_id);
     if root_in_a {
         a.with_arena(|arena| {
-            arena.mutate_root(|_gc, engine| {
-                // SAFETY: F6.NoEscapeAcrossArena — accepted cross-arena boundary; B's arena
-                // outlives the collections below. If a collection ever misses publication
-                // (pre-fix), the handle is removed below before any further trace so the
-                // swept object is never traced or dereferenced.
-                let obj = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr().cast::<dotnet_utils::gc::ThreadSafeLock<dotnet_value::object::ObjectInner<'_>>>()) }));
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live root for this mutation.
+                let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                let obj = decode_reference(storage, handle);
                 engine
                     .stack
                     .local
@@ -236,9 +308,7 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
     const WRITTEN: &str = "executor_collection_payload_written";
     const VECTOR_MARK: &str = "<vector>";
 
-    struct Handoff(ObjectPtr);
-    // SAFETY: F11.ObjectPointerThreadSafe — ObjectPtr is Send+Sync by design; this wrapper only documents the transfer.
-    unsafe impl Send for Handoff {}
+    type Handoff = dotnet_value::storage::FieldStorage;
 
     enum Cmd {
         Probe,
@@ -305,12 +375,24 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
         let join = thread::spawn(move || {
             let mut owner = Executor::new(Arc::clone(&owner_state));
             let id = owner.thread_id;
-            let ptr = if vector {
+            if vector {
                 allocate_unrooted_vector(&mut owner)
             } else {
                 allocate_unrooted(&mut owner)
             };
-            ptr_tx.send((id, Handoff(ptr))).unwrap();
+            let storage = owner
+                .with_arena(|arena| {
+                    arena.mutate(|_, engine| {
+                        encode_reference(
+                            engine.stack.local.heap.gchandles.borrow()[0]
+                                .as_ref()
+                                .unwrap()
+                                .0,
+                        )
+                    })
+                })
+                .unwrap();
+            ptr_tx.send((id, storage)).unwrap();
             // Mutator loop: park at real safe points so the coordinator can stop this arena.
             // Exits when the driver drops its command sender.
             loop {
@@ -333,24 +415,14 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
                             .unwrap();
                         reply_tx.send(None).unwrap();
                     }
-                    Ok(Cmd::Link(Handoff(target))) => {
+                    Ok(Cmd::Link(target)) => {
                         owner
                             .with_arena(|arena| {
                                 arena.mutate_root(|gc, engine| {
-                                    // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena
-                                    // boundary (see the module doc): the target's owner arena outlives the
-                                    // collections; the reference is serialized into vector bytes
-                                    // immediately and no branded handle escapes this closure.
-                                    let target = ObjectRef(Some(unsafe {
-                                        Gc::from_ptr(
-                                            target
-                                                .as_ptr()
-                                                .cast::<dotnet_utils::gc::ThreadSafeLock<
-                                                    dotnet_value::object::ObjectInner<'_>,
-                                                >>(
-                                                ),
-                                        )
-                                    }));
+                                    // SAFETY: F1.GcHandleRooted — live root, handle confined to mutation.
+                                    let handle =
+                                        unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+                                    let target = decode_reference(target, handle);
                                     let handles = engine.stack.local.heap.gchandles.borrow();
                                     let (obj, _) = handles[0].as_ref().expect("witness slot");
                                     assert!(obj.0.is_some(), "vector must still be live to link");
@@ -376,27 +448,19 @@ fn arena_lifetime_vm_collection_fixed_point_payload_and_reclamation() {
 
     let state = shared();
     // Y (string) in arena C, X (vector) in arena B, root in arena A (this thread).
-    let (c_id, Handoff(y_ptr), c_worker, c_rx) = spawn_owner(&state, false);
-    let (b_id, Handoff(x_ptr), b_worker, b_rx) = spawn_owner(&state, true);
+    let (c_id, y_storage, c_worker, c_rx) = spawn_owner(&state, false);
+    let (b_id, x_storage, b_worker, b_rx) = spawn_owner(&state, true);
     let mut a = Executor::new(Arc::clone(&state));
     assert!(a.thread_id != b_id && a.thread_id != c_id && b_id != c_id);
 
     let recv = |rx: &mpsc::Receiver<Option<String>>| rx.recv_timeout(Duration::from_secs(30));
-    b_worker
-        .resources()
-        .send(Cmd::Link(Handoff(y_ptr)))
-        .unwrap();
+    b_worker.resources().send(Cmd::Link(y_storage)).unwrap();
     recv(&b_rx).expect("arena B linked X -> Y");
     a.with_arena(|arena| {
-        arena.mutate_root(|_gc, engine| {
-            // SAFETY: F6.NoEscapeAcrossArena — test-only cross-arena boundary (see the module doc); B's
-            // arena outlives the collections and the handle is cleared below before any
-            // trace that could follow a missed publication.
-            let obj = ObjectRef(Some(unsafe {
-                Gc::from_ptr(x_ptr.as_ptr().cast::<dotnet_utils::gc::ThreadSafeLock<
-                    dotnet_value::object::ObjectInner<'_>,
-                >>())
-            }));
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — live root, handle confined to mutation.
+            let handle = unsafe { crate::test_utils::test_gc_handle(gc, engine) };
+            let obj = decode_reference(x_storage, handle);
             engine
                 .stack
                 .local

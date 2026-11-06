@@ -785,6 +785,8 @@ jobs:
             vm-collection)
               if [ '${{ matrix.configuration }}' = multithreading ]; then
                 singleton collection dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection_fixed_point_payload_and_reclamation
+                singleton collection-survival dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection
+                singleton collection-negative dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection_unrooted_negative_control
               else
                 singleton collection-control dotnet-vm executor::executor_collection_tests::arena_lifetime_vm_collection
               fi
