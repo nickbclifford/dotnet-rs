@@ -93,7 +93,7 @@ Each name is an exact `pointer_provenance_tests::<name>` filter in the owning so
 
 For an individual diagnostic-only probe, use e.g. `bash scripts/pointer_provenance.sh diagnostic --configuration no-features --probe p01_ldloca_convu_stind_i4`; this is an opt-in diagnostic, not a CI gate. Do not run known-UB diagnostics natively. `bash scripts/pointer_provenance.sh list` lists the exact catalog; see the script for options. 
 
-## Plan 01 slice 3 verification (2026-11-04)
+## Plan 02 (stable frame homes) slice 3 verification (2026-11-04)
 
 The extended p31–p34 controls and new p39/p40 controls passed as guarded Miri singletons in
 both no-features and multithreading configurations, using the pinned nightly and Tree Borrows
@@ -402,7 +402,7 @@ registry and cross-arena transport are absent.
 
 R08 compact codec: the boundary, unavailable-owner, short-storage and managed-ID exhaustion tests are recreations. The interim multithreaded Tag-5 codec supports 64-bit pointers, registered owner IDs 0..=65535 and nonzero 8-byte-aligned addresses below 2^48; INVALID remains untagged. The VM reserves ID 0 and allocates monotonic IDs 1..=65535 without recycling, so it can create at most 65,535 managed thread arenas over a process lifetime before a host invariant panic. Unrepresentable or unavailable managed objects likewise fail loudly rather than becoming null. The generation-qualified origin and retained transport do not remove the compact ObjectRef's unsafe live-original-allocation contract.
 
-R08 extracted-Executor TLS ownership: `executor::executor_teardown_tests::extracted_executor_tls_ownership` is a recreation. Before repair its multithreading assertion failed because a second Executor was accepted after extraction and before the first Executor dropped; a separate actual-Executor witness observed the successor arena destroyed while its lease was held. The regression is enabled and passes with the ownership, affinity and panic-retention repair ([plan 03](../plans/03-executor-teardown-ownership.md)). No-features has no extracted/TLS backend and uses the single-arena cleanup control.
+R08 extracted-Executor TLS ownership: `executor::executor_teardown_tests::extracted_executor_tls_ownership` is a recreation. Before repair its multithreading assertion failed because a second Executor was accepted after extraction and before the first Executor dropped; a separate actual-Executor witness observed the successor arena destroyed while its lease was held. The regression is enabled and passes with the ownership, affinity and panic-retention repair ([plan 01](../plans/01-executor-teardown-ownership.md)). No-features has no extracted/TLS backend and uses the single-arena cleanup control.
 
 R08 teardown stress: `executor::executor_teardown_tests::arena_lifetime_teardown_stress` is a recreation, not a complete R08 proof. Before teardown repair, repeated real two-Executor coordinated collections followed by a held-lease exit exposed early destruction in the normal path, while extracted-arena exits preserved the witness; the no-features counterpart repeats single-arena collection and cleanup. The enabled MT test covers normal/extracted ownership and held/released leases over 20 native rounds or four Miri rounds. Worker owners release leases and channels before joining, including on unwind; an outer process timeout is still needed for a genuine deadlock. The teardown witness is allocated after collection.
 

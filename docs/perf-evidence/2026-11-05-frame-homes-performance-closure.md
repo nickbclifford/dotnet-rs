@@ -77,7 +77,7 @@ The original unfavorable measurements remain part of the record.
 No production source repair survived, so the existing successful fast checks and
 native/Miri pointer controls for the enum-home repair remain applicable. Production
 `crates/`, Cargo manifests and lockfile match `93825418`; no unchanged correctness or
-full end-to-end matrix was rerun for this documentation-only closure. Plan 01's
+full end-to-end matrix was rerun for this documentation-only closure. Plan 02's
 original correctness requirements remain satisfied, and slice 5 closes under the
 maintainer's accepted-cost exception. This accepts the documented primitive cost,
 not future correctness failures or newly discovered guest regressions.

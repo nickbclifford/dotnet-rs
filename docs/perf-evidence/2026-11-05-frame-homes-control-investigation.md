@@ -1,4 +1,4 @@
-> **Subsequent disposition:** Plan 01 is complete under the maintainer’s accepted-cost
+> **Subsequent disposition:** Plan 02 is complete under the maintainer’s accepted-cost
 > exception. See the [performance closure](2026-11-05-frame-homes-performance-closure.md).
 > Statements below describing the plan as open record its status at investigation time.
 
@@ -10,7 +10,7 @@ consistent directional cost across launch/placement experiments; the earlier +8%
 result does not establish a vector algorithm regression. Neither result justifies
 restoring pointer fixups. No production source or benchmark changes were made.
 
-Plan 01 remains in progress. A maintainable Rust source repair for the stack copy
+Plan 02 remains in progress. A maintainable Rust source repair for the stack copy
 sequence has not been established; the maintainer's report-and-pause policy still
 applies before changing runtime code.
 
@@ -164,4 +164,4 @@ flow and differ only at the documented load-source operands.
 No runtime source change, new performance claim about guest workloads, commit or
 push was made. `git diff --check` passes. The next engineering task is a safe,
 measured source-level improvement to the stack move path, or an explicit maintainer
-acceptance of its documented cost. Plan 01 stays open pending that decision.
+acceptance of its documented cost. Plan 02 stays open pending that decision.

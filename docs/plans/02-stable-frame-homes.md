@@ -141,7 +141,7 @@ Do not build a later slice's support in an earlier slice.
    regression on methods without `ldloca`/`ldarga` is a defect. Report other costs.
    The [slice-5 preflight](../perf-evidence/2026-11-05-stable-frame-homes.md) found
    a reproducible candidate-only EF Core argument-home initialization failure before
-   timing. The [enum-home repair](02-frame-home-enum-representation.md) addresses
+   timing. The [enum-home repair](03-frame-home-enum-representation.md) addresses
    that failure. The [measurement record](../perf-evidence/2026-11-05-stable-frame-homes-measurement.md)
    reports no-home control slowdowns. The [control investigation](../perf-evidence/2026-11-05-frame-homes-control-investigation.md)
    isolates a generated stack-copy cost and launch/placement-sensitive vector results.

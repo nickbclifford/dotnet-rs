@@ -50,7 +50,7 @@ Out, with reasons:
   `ObjectRef::with_data_mut`) can plant forged pointer bytes, and bulk copies of reference slots
   need barriers. Fixing that is the shared raw-memory protocol and resumable-bulk-operations work
   already listed under "Not yet planned" (R09/R12, R10/R11); it is added there as a bullet.
-- The `Stack`-origin unchecked address is plan 01's frame and locals work.
+- The `Stack`-origin unchecked address is plan 02's frame and locals work.
 - Stop-the-world reads aliasing a parked writer's guard is not a defect today; see Refuted. It is clarified in `INVARIANT_REGISTRY.md`, not planned.
 - `ObjectPtr::with_data_mut` is a safe function over a raw pointer that skips the owner barrier
   because no owning `Gc` exists under the caller's brand. It overlaps R09/R12 and stays there.
@@ -73,7 +73,7 @@ pointer range that no type can carry.
    by a live reference. Their callers already validate; each gets a SAFETY comment stating it.
 4. Rewrite the `RawMemoryOps` `# Safety` text per origin. `Heap`, `Static`, `Transient`,
    `CrossArenaObjectRef`: no caller premise beyond a matching `layout`; out-of-range yields
-   `BoundsCheck`. `Unmanaged`: `offset` is a live address. `Stack`: unchanged until plan 01.
+   `BoundsCheck`. `Unmanaged`: `offset` is a live address. `Stack`: unchanged until plan 02.
    Use `checked_add` in the two inline-storage helpers so a wrapped sum is an error.
 
 ## Slices

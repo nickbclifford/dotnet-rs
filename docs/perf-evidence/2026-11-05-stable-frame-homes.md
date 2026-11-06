@@ -1,8 +1,8 @@
 # Stable frame homes: slice 5 preflight (2026-11-05)
 
 Slice 5 is incomplete. The original candidate EF Core failure below was repaired
-after this preflight; see the [repair record](../plans/02-frame-home-enum-representation.md).
-No performance estimates or regression claims were obtained. Plan 01 remains in progress.
+after this preflight; see the [repair record](../plans/03-frame-home-enum-representation.md).
+No performance estimates or regression claims were obtained. Plan 02 remains in progress.
 
 ## Revisions and configuration
 

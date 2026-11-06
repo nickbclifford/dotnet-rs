@@ -1,6 +1,6 @@
 # Stable frame homes: slice 4 acceptance (2026-11-05)
 
-Slice 4 of plan 01 is complete. The Stack origin, serialized/cached rebasing,
+Slice 4 of plan 02 is complete. The Stack origin, serialized/cached rebasing,
 evaluation-stack fixup, scratch caches, unused slot-address APIs, fixup metrics and
 rebasing fuzz target are removed. Managed pointers remain 24 bytes; retired Stack
 encodings fail decoding, and surviving encodings keep their tags.
@@ -36,5 +36,5 @@ The ECMA-335 MCP search corroborated the typed-reference signature restrictions 
 I.8.6.1.3. The rejection policy is a deliberate compatibility boundary; this work does
 not claim support for CoreCLR's unsafe typedref address-taking behavior.
 
-Plan 01 remains in progress for slice 5 performance measurement. General bulk-operation
+Plan 02 remains in progress for slice 5 performance measurement. General bulk-operation
 barriers/yield state and static-address provenance remain separate work.

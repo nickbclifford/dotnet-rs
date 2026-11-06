@@ -1,11 +1,11 @@
-> **Subsequent disposition:** Plan 01 is complete under the maintainer’s accepted-cost
+> **Subsequent disposition:** Plan 02 is complete under the maintainer’s accepted-cost
 > exception. See the [performance closure](2026-11-05-frame-homes-performance-closure.md).
 > Statements below describing the plan as open record its status at investigation time.
 
 # Stable frame homes: slice 5 measurement (2026-11-05)
 
 **Status: in progress.** Measurement and follow-up are complete, with unresolved
-no-home control slowdowns and variability. Plan 01 remains open for maintainer review. The earlier [preflight](2026-11-05-stable-frame-homes.md) records the
+no-home control slowdowns and variability. Plan 02 remains open for maintainer review. The earlier [preflight](2026-11-05-stable-frame-homes.md) records the
 separate EF correctness blocker fixed before this campaign.
 
 The baseline is `0bae37275891576cf76d7daf4ab552229805d5b8`; the candidate is
@@ -220,7 +220,7 @@ causes. The opposite no-default result further limits any generalization.
 Raw samples, comparisons, telemetry, disassembly and diagnostic profiles remain in
 `target/plan01-slice5/`; they are local, volatile artifacts. The new report and plan
 link are uncommitted. No runtime fix was made. Because the no-home stack/vector
-slowdowns remain unexplained and default stack is variable, leave plan 01 in progress
+slowdowns remain unexplained and default stack is variable, leave plan 02 in progress
 and ask the maintainer how to proceed. No slowdown of an address-free guest method was
 confirmed in the two direct guest controls.
 
@@ -230,5 +230,5 @@ The [control investigation](2026-11-05-frame-homes-control-investigation.md) iso
 a generated stack-copy/data-flow cost with matched binary experiments, and records
 new vector results whose direction reverses or disappears under controlled launch
 and placement. An alternate matched placement still varies, so vector code address
-alone is not a complete explanation. No production repair was made; plan 01 remains
+alone is not a complete explanation. No production repair was made; plan 02 remains
 open for a maintainable stack-copy improvement or maintainer acceptance of its cost.

@@ -10,10 +10,17 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 04 | [Safe APIs whose soundness rests on unchecked caller premises](04-safe-api-premises.md) | Next |
-| 02 | [Native continuations: Substring proof](02-native-continuations.md) | Done; async/await effects remain a separate follow-up |
-| 01 | [Stable homes for addressable locals and arguments](01-stable-frame-homes.md) | Done; measured primitive cost accepted |
-| 03 | [Executor teardown ownership](03-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
+| 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Next |
+| 06 | [Cross-arena collection fixture through production decoding](06-cross-arena-collection-fixture.md) | Prerequisite of 08 |
+| 07 | [Nested filters keep earlier suspended frames](07-nested-filter-suspension.md) | Prerequisite of 08 |
+| 08 | [Async/await VM effects](08-async-effects.md) | Blocked on 06 and 07; slice notes in [08-async-effects/](08-async-effects/) |
+| 04 | [Native continuations: Substring proof](04-native-continuations.md) | Done; superseded by 08 slice 1 once that lands |
+| 03 | [Repair enum and named scalar frame homes](03-frame-home-enum-representation.md) | Done; repair found during 02 slice 5 |
+| 02 | [Stable homes for addressable locals and arguments](02-stable-frame-homes.md) | Done; measured primitive cost accepted |
+| 01 | [Executor teardown ownership](01-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
+
+Plan IDs follow dependency order: a plan's prerequisites have lower IDs. Never reuse an ID; a
+repair or follow-up found while executing a plan gets the next free ID.
 
 ## Not yet planned
 
@@ -21,10 +28,6 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
-- **Async/await effects:** build on the completed [Substring continuation proof](02-native-continuations.md)
-  with an effects API that simplifies instruction and intrinsic implementations and reduces data
-  shuffling. The explicit continuation establishes the scheduling and rooting contract; the
-  Rust future driver and rooted access API still need a design.
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
   so byref arithmetic that goes below the base or past the compact range (for example
   `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
@@ -42,8 +45,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   (`ThreadSafeLock::borrow_mut_unbarriered`). Fold into R09/R12 and R10/R11.
 - **Resumable bulk operations and barriers:** `cpblk`/`initblk`/`Memmove`/`Array.Copy`/`Fill`
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
-- **Cross-arena collection fixture:** the real-VM collection test builds a foreign-branded
-  `Gc`; replace it with a validly branded fixture (remainder of R08).
 - **Thread-pool scheduling:** `ThreadPool.UnsafeQueueUserWorkItem` is an accepted no-op
   (`dotnet-intrinsics-threading/src/thread.rs`), so guest code whose continuations need the
   thread pool (`Task.Run`, timers, `Task.Delay`) cannot complete. Guest `async`/`await` that

@@ -81,7 +81,7 @@ above establishes the enum case only.
   Run the relevant pinned Tree Borrows pointer Miri controls in both configurations,
   adding any new pointer control to the CI manifest. Record actual results; a passing
   EF smoke test does not substitute for these checks.
-- Once correctness passes, resume plan 01 slice 5's full benchmark matrix and its
+- Once correctness passes, resume plan 02 slice 5's full benchmark matrix and its
   address-free regression review. Do not report performance from the diagnostic build.
 
 ## Implementation record (2026-11-05)
@@ -124,4 +124,4 @@ Local repair validation logs are under `target/plan01-slice5/logs/repair-*`.
   occur exactly once in four batches. Formatting and whitespace checks passed.
 
 The original slice-5 timings remain unmeasured. This repair does not complete
-plan 01 or claim a performance outcome.
+plan 02 or claim a performance outcome.
