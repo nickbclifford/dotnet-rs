@@ -170,21 +170,69 @@ impl GCArena {
     }
 
     pub fn finish_cycle(&mut self) {
+        self.arena.finish_cycle();
+        self.cycle_completed();
+    }
+
+    /// Advances a single-threaded arena's collection without ever sweeping an unfinalized cycle.
+    ///
+    /// The finalization queue holds finalizable objects weakly, so `finalize_check` must see every
+    /// cycle at the fully marked point. Otherwise the sweep frees dead objects the queue still
+    /// points to. gc-arena's `collect_debt` passes through that point on its own, so every cycle
+    /// here stops when fully marked, runs `finalize_arena`, and only then starts sweeping.
+    /// `cycle_debt` finishes a sweep without starting the next cycle's marking.
+    #[cfg(not(feature = "multithreading"))]
+    pub fn collect_single_threaded(&mut self, work: crate::gc::CollectionWork) {
+        use gc_arena::arena::CollectionPhase;
+
+        match work {
+            crate::gc::CollectionWork::Debt => {
+                if self.arena.collection_phase() == CollectionPhase::Sweeping {
+                    self.arena.cycle_debt();
+                    if self.arena.collection_phase() == CollectionPhase::Sleeping {
+                        self.cycle_completed();
+                    }
+                } else if let Some(marked) = self.arena.mark_debt() {
+                    crate::gc::finalize_arena(marked);
+                    self.start_sweeping();
+                }
+            }
+            crate::gc::CollectionWork::Full => {
+                if self.arena.collection_phase() == CollectionPhase::Sweeping {
+                    // Finish the cycle in progress; it was finalized before it began sweeping.
+                    // The requested full collection still needs a fresh cycle.
+                    self.finish_cycle();
+                }
+                if let Some(marked) = self.arena.finish_marking() {
+                    crate::gc::finalize_arena(marked);
+                    self.start_sweeping();
+                }
+                self.finish_cycle();
+            }
+        }
+    }
+
+    /// Marks what finalization resurrected, then moves the arena from fully marked to sweeping.
+    #[cfg(not(feature = "multithreading"))]
+    fn start_sweeping(&mut self) {
+        // Resurrection can make the arena gray again. The arena is not sweeping yet, so
+        // `finish_marking` marks the rest and returns the fully marked arena.
+        if let Some(marked) = self.arena.finish_marking() {
+            marked.start_sweeping();
+        }
+    }
+
+    fn cycle_completed(&mut self) {
         // A completed cycle is the single collection-epoch boundary for every
         // per-CallStack decode cache. Entries remain traced during the cycle,
         // then must be discarded before an old serialized handle address can be
         // reused in the next mutator epoch.
-        self.arena.finish_cycle();
         self.arena.mutate_root(|_, engine| {
             engine
                 .stack
                 .heap_managed_ptr_decode_cache
                 .invalidate_after_collection();
         });
-    }
-
-    pub fn collect_debt(&mut self) {
-        self.arena.collect_debt()
     }
 
     pub fn metrics(&self) -> &Metrics {

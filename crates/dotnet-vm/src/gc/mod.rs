@@ -21,6 +21,16 @@ pub use coordinator::{
 #[cfg(not(feature = "multithreading"))]
 pub use coordinator::{GCCommand, GCCoordinator};
 
+/// How much single-threaded collection work to do.
+#[cfg(not(feature = "multithreading"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollectionWork {
+    /// Pay the arena's allocation debt incrementally.
+    Debt,
+    /// Run a complete collection cycle, as `GC.Collect` requests.
+    Full,
+}
+
 /// Perform post-marking finalization check for a GC arena.
 /// This handles object finalization by checking which objects are no longer reachable.
 pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {

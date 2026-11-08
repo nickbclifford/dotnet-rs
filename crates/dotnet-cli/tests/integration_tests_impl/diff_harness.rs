@@ -298,6 +298,11 @@ diff_test!(
     "tests/fixtures/gc/finalizer_collect_42.cs"
 );
 
+diff_test!(
+    finalizer_allocation_matches_dotnet,
+    "tests/fixtures/gc/finalizer_allocation_42.cs"
+);
+
 #[cfg(feature = "multithreading")]
 diff_test!(
     retired_finalizer_collect_matches_dotnet,

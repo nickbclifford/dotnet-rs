@@ -282,7 +282,8 @@ Two implementations are selected via the `multithreading` feature flag:
   4. **Phase 4 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
 
 **Single-threaded (`cfg(not(feature = "multithreading"))`)**:
-- Stub implementation — `should_collect` always returns false (relies on `gc-arena`'s own local collection).
+- Stub implementation — `should_collect` always returns false. The executor collects locally through `GCArena::collect_single_threaded`: allocation debt incrementally, and a full cycle when `GC.Collect` requests one.
+- Every cycle stops when fully marked so `finalize_check` runs before sweeping, mirroring phases 3 and 4 above. The finalization queue holds finalizable objects weakly, so a cycle that swept first would free objects the queue still points to. gc-arena's `collect_debt` passes through the fully marked phase without stopping, so the executor never calls it.
 - No cross-arena tracking needed.
 
 ### `GCCommand` enum

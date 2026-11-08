@@ -609,15 +609,13 @@ impl Executor {
                 *budget -= 1;
             }
 
-            // Perform incremental GC progress with finalization support
-            // In a real VM this would be tuned based on allocation pressure
+            // Incremental collection progress. Only collect debt every 8 ticks to reduce overhead.
             #[cfg(not(feature = "multithreading"))]
             {
                 self.gc_tick_counter += 1;
-                // Only collect debt every 8 ticks to reduce overhead
                 if self.gc_tick_counter.is_multiple_of(8)
                     && let Err(e) = self.with_arena(|arena| {
-                        arena.collect_debt();
+                        arena.collect_single_threaded(crate::gc::CollectionWork::Debt);
                     })
                 {
                     break ExecutorResult::Error(e);
@@ -955,17 +953,7 @@ impl Executor {
             if !self.shared.is_abort_requested() {
                 // Perform full collection with finalization (mimics multithreading behavior)
                 self.with_arena(|arena| {
-                    // Try to mark all remaining objects. If finish_marking() returns None,
-                    // the arena is not in a markable phase (e.g., already in Collecting
-                    // or Sleep phase). In that case, fall through to finish_cycle() which
-                    // handles all phases correctly by performing a full collection cycle.
-                    if let Some(marked) = arena.finish_marking() {
-                        crate::gc::finalize_arena(marked);
-                    }
-                    // finish_cycle() performs a full collection regardless of current phase.
-                    // It internally calls do_collection with no early stop, which handles
-                    // Mark, Collecting, and Sleep phases correctly.
-                    arena.finish_cycle();
+                    arena.collect_single_threaded(crate::gc::CollectionWork::Full);
                 })?;
             }
 
