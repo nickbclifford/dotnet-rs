@@ -101,7 +101,16 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
    - `../dotnet-intrinsics-reflection/src`
    - `../dotnet-intrinsics-unsafe/src`
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
-3. Extracts: type name, member name, arity, is_static, handler path
+3. Extracts type, member, arity, staticness, handler path, async status and selector.
+   An async body has signature `async fn(VmEffects) -> NativeResult`, requires a
+   `fallback = path` handler and may specify `select = path`. Stacked annotations must
+   agree on both paths, which must be public for the generated re-exports. The selector
+   receives a shared host reference, a `NativeOperandView`, method and generic metadata and
+   returns `NativeSelection`. The host reference is for read-only resolution before commitment.
+   The generated entry passes the dispatch mode, selector, fallback and boxed body to
+   `NativeIntrinsicHost::start_native`. Only ordinary non-tail calls admit suspension; other
+   modes use the fallback without selecting or consuming operands. Synchronous arms retain
+   their existing calling convention.
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
 5. `generate_intrinsic_phf` creates:
     - `intrinsics_dispatch.rs`: Contains `MethodIntrinsicId` and `FieldIntrinsicId` enums and their respective `dispatch_*` functions.

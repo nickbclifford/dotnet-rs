@@ -19,7 +19,7 @@ Method dispatch in `dotnet-rs` has several interleaved paths that interact in no
 The main dispatch loop in `step` / `step_normal`:
 
 1. Check exception state (`ExceptionState::None`, `ExecutingHandler`, `Filtering`). If an exception is being handled, route to `ves_context.handle_exception()`.
-2. Check for pending multicast delegate steps in the current frame's `multicast_state`. If present, route to `handle_multicast_step`.
+2. Check for pending fallback multicast steps in the current frame's `multicast_state`. If present, route to `handle_multicast_step`; admitted multicast calls use native activations.
 3. Fetch the CIL instruction at the current Instruction Pointer (`IP`).
 4. Record the original IP and evaluation stack height to allow for safe yield/suspension retries.
 5. Emit an instruction trace when tracing is enabled and record it in the `InstructionRingBuffer` (in `dispatch/ring_buffer.rs`). This circular buffer maintains a history of the last N executed instructions to provide context during crashes or for performance analysis.
@@ -72,26 +72,22 @@ Single delegate invocation:
 1. Pop the delegate object from the stack
 2. Read target object and method index through `DelegateView` (centralizing the `_target`/`_method` layout invariant)
 3. Resolve the method from the index
-4. Build a `PreparedCall` so bound-`this` insertion and argument repush order are shared with multicast stepping, then dispatch the resolved method
+4. Push the bound receiver when required, repush the arguments in order, and dispatch the resolved method
 
-### Multicast Delegate Stepping Protocol
+### Multicast invocation
 
-Multicast delegates (created by `Delegate.Combine`) contain multiple targets that must be invoked sequentially. This is complex because each target is a full method call that goes through the normal dispatch loop.
+`VesContext::try_start_multicast` selects the effects path before consuming the operand window.
+Scalars, object references, and supported heap and frame-home byrefs are rooted while
+`multicast_body` calls each resolved target through the transparent call effect. Each target is
+resolved on demand; the last return is published, and exceptions cross the native boundary without
+resuming the body. Calls dispatched through an existing managed caller use a synthetic `Invoke`
+frame for return completion. Single-target delegates remain synchronous.
 
-**`MulticastState` struct** (in `crates/dotnet-vm-data/src/stack.rs`; canonical path: `dotnet_vm_data::MulticastState`):
-```rust
-pub struct MulticastState<'gc> {
-    pub targets: ObjectHandle<'gc>, // Array of delegate objects
-    pub next_index: usize,          // Next target to invoke
-    pub args: Vec<StackValue<'gc>>, // Preserved arguments for each invocation
-}
-```
-
-**Stepping Protocol** (`ExecutionEngine::handle_multicast_step` in `dispatch/mod.rs`):
-1. **Return Handling**: When `handle_multicast_step` is entered, it first checks if the previous target just returned. If the delegate signature has a return value, it pops and discards it (only the *last* target's return value is kept).
-2. **Next Target**: It reads the next delegate object from the `targets` array using `next_index` (which is then incremented) via the branded object-reference vector iterator.
-3. **Dispatch**: It builds a multicast `PreparedCall`, pushes the target object and preserved `args` back onto the evaluation stack in call order, then calls `dispatch_method` for the new target.
-4. **Completion**: If `next_index` reaches the end of the array, `handle_multicast_step` delegates to `ctx.handle_return()` to finalize the multicast invocation and propagate the last return value to the caller.
+Unsupported declared returns, aggregates and pointer origins, including static-field byrefs,
+use `MulticastState`. `ExecutionEngine::handle_multicast_step` retains the original arguments,
+discards intermediate returns, and dispatches each target in order. If dispatch starts or waits
+for a type initializer, it rebuilds the pending target call after initialization instead of
+advancing the list. The effects call handler similarly retains a pending target across initialization.
 
 ### Key Delegate Intrinsics
 
@@ -140,7 +136,7 @@ When a resolved method call is about to be dispatched, both VM-context and `Exec
 ## Non-Obvious Connections
 
 ### Delegates ↔ Exception Handling
-When a multicast delegate target throws, exception handling must interact with the multicast stepping state. The exception may need to propagate past the multicast dispatch frame.
+A throwing target stops the list. Exception search crosses a native boundary for admitted calls or the dummy `Invoke` frame for fallback calls, running the child's cleanup before the outer handler.
 
 ### Delegates ↔ Reflection
 `delegate_get_method` returns a `MethodInfo` reflection object, connecting the delegate system to the reflection registry (`ReflectionRegistry` in `state.rs`).

@@ -17,7 +17,8 @@ This document describes the garbage collection subsystem, memory safety invarian
 
 The `// SAFETY:` predicates this subsystem relies on are stated in the
 [invariant registry](INVARIANT_REGISTRY.md): `F1.StwParked`, `F1.ArenaGenerationMatch`,
-`F1.ExecutorArenaRetained`, `F1.GcHandleRooted`, `F5.TracesEveryGcRef`,
+`F1.ExecutorArenaRetained`, `F1.RetiredCollectionExclusion`, `F1.FinalizerPublication`,
+`F1.GcHandleRooted`, `F5.TracesEveryGcRef`,
 `F6.NoEscapeAcrossArena` and `F9.MetadataArenaOutlivesDescriptors`.
 
 ## Managed pointer placement
@@ -143,8 +144,9 @@ the variable is reassigned.
   gives every block a serial that is never reused on its thread, so a byref cannot resolve into a
   later frame at the same depth. Every access resolves the byref through `frame_home_window`
   (`crates/dotnet-value/src/pointer/mod.rs`): `FrameStack::home_block` searches the live frames
-  from the current one down, then filter-suspended frames, for that serial; the accessed range
-  must lie inside the block. Suspended homes stay allocated and traced across collection and
+  from the current one down, then filter-suspended frames, for that serial. `VesContext` also
+  searches the caller parked during finalizer execution. The accessed range must lie inside the
+  block. Suspended homes stay allocated and traced across collection and
   restoration. Return, unwind, tail-call replacement, `jmp`, suspension discard and teardown
   release homes; pooled frames retain no home block.
   A byref whose frame has returned fails with `MemoryAccessError::InvalidOrigin`, which the
@@ -215,6 +217,25 @@ Executor), not a substitute for drain. Drop may panic and incomplete cleanup can
 retention is not a promise of non-panicking Drop or recovery. No final full GC is performed by
 Executor Drop.
 
+#### Retired worker arenas
+
+In `multithreading`, a managed worker that completes its entry point does not immediately drop its
+executor. After cleaning up the managed segment, it publishes the completion outcome and enters
+`Executor::serve_retired`. The owner thread and arena remain registered with the GC coordinator and
+the exact-identity lease registry. A retired owner counts as stopped for stop-the-world and services
+the coordinator's mark, finalize and sweep commands; it never resumes its ordinary managed entry
+point. When a sweep queues finalizers, the owner runs only finalizer segments, services their safe
+points, and returns to the retirement loop.
+
+Shutdown starts only from that service loop. The owner excludes collections, rechecks that no
+finalizer is queued, marks the worker as shutting down, and unregisters its exact arena identity.
+It then drains outstanding leases outside the collection lock before freeing the arena. If exact
+drain cannot complete, storage is deliberately leaked. These ordering requirements are
+`F1.RetiredCollectionExclusion` in the [invariant registry](INVARIANT_REGISTRY.md) and the
+[retained-arena design](plans/09-retired-arena-lifetime.md#design). The cost and ID-space limit for
+retaining completed workers are recorded in the
+[worker lifecycle contract](THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit).
+
 The following is an MT schematic: coordinator handles are not themselves TLS arena storage.
 
 ```mermaid
@@ -257,7 +278,7 @@ Two implementations are selected via the `multithreading` feature flag:
 - Orchestrates STW collection via `collect_all_arenas` using a phase-based approach. In `Executor::perform_full_gc` the `CollectionSession` and the `StopTheWorldGuard` are bound together into a `GcCycleGuard` (which enforces drop order: session cleanup before thread resume), and `collect_all_arenas` is invoked through that guard:
   1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `GCCommand::Mark(MarkPhaseCommand::All)` to all arenas.
   2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `GCCommand::Mark(MarkPhaseCommand::Objects(…))` for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
-  3. **Phase 3 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to run finalizers on unreachable objects.
+  3. **Phase 3 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to queue unreachable finalizable objects.
   4. **Phase 4 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
 
 **Single-threaded (`cfg(not(feature = "multithreading"))`)**:
@@ -270,8 +291,19 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
   - `MarkPhaseCommand::All` — start marking phase, trace all local roots in the arena.
   - `MarkPhaseCommand::Objects(MarkObjectPointers)` — trace specific typed cross-arena object pointers.
 - `Sweep(SweepPhaseCommand)`:
-  - `SweepPhaseCommand::Finalize` — run finalizers for dead objects.
+  - `SweepPhaseCommand::Finalize` — queue unreachable finalizable objects.
   - `SweepPhaseCommand::Sweep` — reclaim unreachable objects.
+
+### Global finalizer completion
+
+`SharedGlobalState` tracks whether each arena has queued or in-progress finalizers and counts each
+contributing arena once. Collection publishes newly queued work before the stop-the-world cycle
+ends; finalizer-segment retirement and arena teardown update the same contribution. Ordinary
+`GC.WaitForPendingFinalizers` completes only when no live or retired arena has pending or active
+finalizer work. Its effects path waits outside an arena mutation and rechecks the global count while
+servicing GC stops. A call made from within a finalizer retains the synchronous self-wait path, so
+it waits on its own in-progress finalizer just as the CLR does. `F1.FinalizerPublication` records
+the publication invariant and its falsifiers.
 
 ```mermaid
 sequenceDiagram
@@ -337,7 +369,7 @@ Registration rejects duplicate live IDs; checked generation and token allocation
 
 ### Weak References
 The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
-- **Implementation**: `HeapManager::finalize_check` zero-fills weak handles for objects that are unreachable and don't require (or have finished) finalization.
+- **Implementation**: `HeapManager::finalize_check` zero-fills weak handles for objects that are unreachable and don't require (or have finished) finalization. The `GCHandle` intrinsics use opaque slot IDs with two clear low bits for CoreLib's handle tags; `System.WeakReference` liveness is tested in its handle's owning arena. [Cross-thread handle access](plans/README.md#not-yet-planned) remains limited.
 - **BCL Support**: `System.WeakReference<T>` is not in the BCL support library and must be defined by the user or added to `support.dll`.
 - **Cross-Arena Limitation**: The `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not tracked or zeroed by the global coordinator.
 
@@ -361,22 +393,44 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 
 ## Cross-GC-Safe-Point Continuations
 
-The interpreter only reaches GC safe points at `StepResult::Yield` boundaries between
-`arena.mutate_root(|gc, engine| engine.run(gc))` calls. Any VM state that must survive that unwind
-must live in `Collect`-traced storage reachable from the root (`ExecutionEngine<'gc>` →
-`CallStack<'gc>` → `ThreadContext<'gc>`), or in traced per-frame state (`StackFrame<'gc>`).
+The interpreter reaches GC safe points between `arena.mutate_root(|gc, engine| engine.run(gc))`
+calls. Any VM state that must survive that return must live in `Collect`-traced storage reachable
+from the root (`ExecutionEngine<'gc>` → `CallStack<'gc>` → `ThreadContext<'gc>`), or in traced
+per-frame state (`StackFrame<'gc>`).
 
-### Two resume families
+### Static initializer failures
+
+An initializer that throws a managed exception retains its `TypeInitializationException` in a
+traced `FieldStorage` reference slot owned by its `StaticStorage`. The wrapper retains the
+original inner exception; publication precedes the failed-state release and waiter notification.
+Both legacy initializer unwinding and the effects claim publish to this storage. An abandoned
+claim publishes failure without an exception object. Reads decode retained references only within
+a live arena mutation. Retired worker owners remain available for collection and foreign-reference
+decoding until shutdown, as described in [managed worker lifecycle](THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit).
+The aligned static-reference atomic path has a known provenance limitation under Miri; see
+[shared raw-memory access](plans/README.md#not-yet-planned).
+
+### Resume families
 
 1. **Re-run/resume interpreter control flow in-place**
    - Uses `VmContinuation<'gc>` on `ThreadContext<'gc>`.
    - Covers retrying the current instruction and preserving nested handler-unwind queues.
-2. **Retain progress for a finite native operation**
-   - Uses `ThreadContext::call_state.substring`, separate from handler-unwind state.
-   - Retains a traced source and an owned UTF-16 buffer across executor turns.
+2. **Retain native progress and call managed code**
+   - Uses the `CallState` activation stack, separate from handler-unwind state.
+   - Retains traced operands and root sets across executor turns; a managed child carries its
+     native return destination on its frame. The root-transfer contract is in the
+     [invariant registry](INVARIANT_REGISTRY.md).
+   - A condition wait is retained by its activation and replies are checked against the effect
+     kind and generation. Monitor release epochs only make waiters eligible to probe again;
+     acquisition occurs inside a fresh mutation. `Executor::run` schedules finalizers first and
+     waits without a mutation or arena lease, in bounded intervals so GC stops are serviced.
+     Ordinary finalizer waits check the global pending-or-active arena count using this protocol;
+     self-waits and non-inline calls keep the
+     legacy retry. Admitted monitor calls use the same condition driver; excluded shapes retain their legacy paths.
 3. **Resume with return-value post-processing after a managed call returns**
    - Uses per-frame `FrameReturnAction` on `StackFrame<'gc>`.
-   - Covers reflection-driven call flows that must box/coerce the return value after callee return.
+   - Covers excluded reflection calls using the synchronous fallback; admitted calls transform
+     their own results in their activation.
 
 ### `VmContinuation<'gc>`
 
@@ -394,48 +448,56 @@ continuation state:
 
 `FrameReturnAction` is a per-frame continuation action for return handling. The current variant is:
 
-- `InvokeReturn(RuntimeType)` — after the callee returns, apply reflection `Invoke` return
-  semantics (including boxing/coercion/null handling) using the captured return type metadata.
+- `InvokeReturn(RuntimeType)` — after a legacy reflection call returns, apply boxing,
+  coercion and null handling using the captured return type metadata. Admitted reflection
+  calls instead root their arguments and constructed receiver in a native activation and
+  transform their own successful result. Declared byref returns are rejected before dispatch.
 
 Because `FrameReturnAction` contains only `'static` metadata (`RuntimeType`), it does not add any
-new GC references to trace.
+new GC references to trace. A reflected target delayed by its type initializer retains a traced
+`ReflectionPending` on the caller, so initializer completion retries that target without applying
+its return action. Synchronous completion applies the action immediately; exceptional unwinding
+and frame retirement clear it.
 
 ### `VesContext` continuation API
 
 `VesContext` exposes explicit helpers for continuation state transitions:
 
-- `yield_and_retry()` — records `VmContinuation::RetryInstruction` when no traced continuation
+- `yield_and_retry()` — for legacy initializer triggers, records `VmContinuation::RetryInstruction` when no traced continuation
   state is already queued, restores the instruction snapshot via `back_up_ip`, then returns
   `StepResult::Yield`. If handler-unwind state is already present, that state is preserved because
   the retry itself is encoded by the restored IP/stack snapshot.
-- `yield_spin()` — returns `StepResult::Yield` without changing continuation state.
-- `set_frame_return_action(action)` — stores the per-frame `FrameReturnAction` for post-return
-  handling.
+- `set_frame_return_action(action)` — stores the per-frame `FrameReturnAction` for excluded
+  reflection calls' post-return handling.
 - `push_handler_unwind(state)` / `pop_handler_unwind()` — mutate
   `VmContinuation::HandlerUnwinds` as unwind work is suspended/resumed.
 
 ### Finite native copies
 
-Single-threaded ordinary, non-tail `call` and `callvirt` instructions can retain large
-`Substring` copies in `NativeSubstringActivation`. The source is a traced `ObjectRef`;
-the destination buffer contains UTF-16 code units and no GC references. Arguments are
-consumed once before copying. Each executor turn copies at most 64K code units, then
-yields if incomplete. Source storage guards end before yielding. The executor services
-collection requests and abort/budget checks between turns.
+Ordinary, non-tail `call` and `callvirt` instructions retain large `Substring` copies
+in a native effects activation in both configurations. The source is held in the
+activation's `DynamicRootSet`; the destination buffer contains UTF-16 code units and no
+GC references. Arguments are consumed once before copying. Each executor turn copies at
+most 64K code units, then yields if incomplete. Heap borrows end before yielding. The
+executor services collection requests and abort/budget checks between turns.
 
 The caller remains at the call instruction until completion publishes one result and
 advances its IP once. Resumption checks caller depth, IP and operand-stack height.
-Queued finalizers stay rooted and start after the finite copy completes. Terminal
-executor results clear retained native work. Reflection, delegates, indirect and tail
-calls and multithreaded builds use the synchronous intrinsic path.
+Queued finalizers run in a separate managed segment while the copy remains rooted and parked.
+Terminal executor results clear retained native work. Non-inline reflection, indirect and tail
+calls use the synchronous intrinsic path; eligible calls issued by native effects can also enter
+the async copy.
 
 ### GC handles and Rust futures
 
-The current execution layer uses explicit traced continuation state. `gc-arena` brands
-`Gc<'gc, T>` handles with an invariant lifetime scoped to mutation closures. An untraced
-Rust future must not retain those handles across `.await`, because collection cannot
-trace compiler-generated future locals. Any future effects API must keep GC references
-in separately traced roots and confine heap access to each poll's mutation.
+`gc-arena` brands `Gc<'gc, T>` handles with an invariant lifetime scoped to mutation
+closures. Native futures retain references through activation-owned roots, not branded
+handles, and access the heap through bounded poll-scoped effects. Multicast byrefs retain a
+traced heap origin or a frame-home serial and offset; each fetch reconstructs the pointer after
+checking its owner. Static-field and other excluded origins stay on the existing delegate path.
+Static-field instructions retain a store operand in traced activation storage while initialization
+runs; their completion action performs the field operation and advances the caller only after
+initialization succeeds. The static-address result retains its static origin.
 
 ## Panic-Safety Guarantees During STW
 

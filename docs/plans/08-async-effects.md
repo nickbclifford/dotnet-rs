@@ -1,11 +1,11 @@
 # Async/await VM effects
 
-**Status:** In progress (`supervised/async-effects`; plans
-[06](06-cross-arena-collection-fixture.md) and [07](07-nested-filter-suspension.md) are complete)
-**Outcome:** `String.Substring`, multicast delegate invocation, reflection `Invoke`, `ldsfld`
-static initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
-bodies in both configurations. Their existing fixtures pass. The bespoke mechanisms they
-replace are deleted (listed per slice under "Done when").
+**Status:** Complete
+**Outcome:** `String.Substring`, admitted multicast delegate invocation, reflection `Invoke`, static
+field initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
+bodies in both configurations for admitted shapes. Their existing fixtures pass. The bespoke
+mechanisms they replace are deleted, except the scoped multicast, reflection, static-initializer
+and wait fallbacks described below.
 
 Builds on the explicit Substring continuation ([plan 04](04-native-continuations.md)) and keeps
 its scheduling and rooting contract. Detailed notes for slices 2–5 are in
@@ -13,32 +13,11 @@ its scheduling and rooting contract. Detailed notes for slices 2–5 are in
 
 ## Problem
 
-Native code that must survive a GC safepoint, re-enter managed code or wait currently uses one
-of several unrelated mechanisms, each with its own state and bookkeeping:
-
-- **Substring.**
-  - ST: a dedicated traced activation (`NativeSubstringActivation`,
-    `dotnet-vm/src/stack/context.rs`), an offer hook on `IntrinsicStringHost`, a
-    `substring_eligible` flag set in `unified_dispatch_direct` and cleared in intrinsic dispatch
-    (`stack/call_ops_impl.rs`), a codegen special case that generates `is_substring`
-    (`dotnet-vm/build_support/codegen.rs`), and checks in `step`/`run`
-    (`dispatch/mod.rs`) and in finalizer processing (`executor.rs`, `context_ops.rs`).
-  - MT: the offer hook declines (`context_ops.rs`, `offer_substring_continuation`), so a
-    safepoint yield throws away the copied prefix and the retry starts over.
-  - Tests: `dotnet-vm/src/native_substring_tests.rs`; fixtures
-    `strings/substring_chunks_42.cs` and `strings/substring_fallback_42.cs`.
-- **Multicast delegates** keep target array, index and arguments in `MulticastState` on a
-  frame (`dotnet-intrinsics-delegates/src/invoke.rs`).
-- **Reflection `Invoke`** post-processes returns through
-  `FrameReturnAction::InvokeReturn` (`dotnet-intrinsics-reflection/src/methods.rs`,
-  `stack/context.rs`).
-- **`ldsfld`** returns early with the result of `initialize_static_storage` and is retried
-  (`instructions/objects/fields.rs`, `statics.rs`).
-- **`GC.WaitForPendingFinalizers`** spins via `yield_spin` (`dotnet-vm/src/intrinsics/gc.rs`).
-- **`Monitor.Enter`** returns `Yield` and retries (`dotnet-intrinsics-threading/src/monitor.rs`).
-
-One effects API replaces these with ordinary sequential Rust and one rooting and scheduling
-contract.
+Native operations that cross GC safepoints, re-enter managed code or wait need a shared rooting
+and scheduling contract. The consumers use native effects for admitted calls in both ST and MT:
+Substring's bounded copy, multicast target calls, reflection invocation, static field
+initialization, finalizer waiting and monitor acquisition. The synchronous and continuation
+fallbacks below preserve excluded call shapes and initialization triggers.
 
 ## Scope
 
@@ -53,9 +32,10 @@ Out:
 - **Localloc addresses.** ECMA-335 §III.3.47: `localloc` returns an unmanaged pointer (native
   int). They are scalars here and carry no pointer permission.
 - **Static field addresses as transport** until `p12_ldsflda_convu_stind_static` (README,
-  "Not yet planned") is fixed.
+  "Not yet planned") is fixed. Multicast invocations that require them stay on the existing
+  continuation, selected before operands are committed.
 - Transient and unmanaged pointers, and byref-containing aggregates. These stay on the legacy
-  path.
+  path; multicast retains its continuation for such shapes.
 - External async runtimes, guest `Task` scheduling, thread-pool work, `Thread.Sleep`/`Join`.
 - `select`/`join` over concurrent effects on one capability.
 - Typed argument binding for intrinsic bodies.
@@ -75,10 +55,31 @@ Out:
   operation completes. Segment isolation arrives with the first slice where a parked
   activation waits on managed work (slice 2).
 - **Reflection** uses transparent calls (slice 3).
-- **Static initialization** uses the capturing `try_call` (slice 4), so outer filters see
-  `TypeInitializationException` rather than the inner exception, matching CLR (maintainer
-  decision, 2026-11-05). Today the wrap happens only in the unwind pass, after the search pass
-  has run filters against the inner exception.
+- **Multicast fallback (2026-11-06).** Preserve the existing continuation for invocation shapes
+  that effects cannot safely transport, including static-field byrefs. Route supported shapes
+  through transparent calls. The fallback is an explicit exception to deleting the multicast
+  continuation, not permission to transport excluded pointers or reject previously supported
+  invocations. The fallback is `invoke_delegate` → `MulticastState` → `handle_multicast_step`;
+  single-target dispatch does not use it. The slice note defines admission and verification.
+- **Reflection fallback (2026-11-06).** Keep and correct the existing return continuation only
+  for reflection calls excluded from effects, including non-inline and tail-prefixed dispatch.
+  Admitted calls use transparent effects. The slice 3 note defines the fallback's lifetime,
+  initializer retry and verification requirements. This is an exception to deleting
+  `InvokeReturn`, not permission to transport excluded pointers or reject previously supported
+  invocations. Its only producers are the fallback for `MethodInfo.Invoke` and both
+  `ConstructorInfo.Invoke` overloads in `runtime_method_info_intrinsic_call`, and the fallback
+  for `Activator.CreateInstance(Type, object[])` in `intrinsic_activator_create_instance_type_args`.
+  The existing early rejection of unsupported declared byref returns remains.
+- **Monitor timeout fallback (2026-11-07).** For timed monitor calls excluded from effects,
+  use a frame-associated retry deadline rather than the shared host-thread-local deadline.
+  Admitted calls retain activation-owned deadlines. The slice 5 note specifies the record's
+  lifetime, cleanup and verification; pointer admission and monitor ownership are unchanged.
+- **Static initialization** uses the capturing `try_call` for field instructions, so outer filters
+  see `TypeInitializationException` rather than the inner exception, matching CLR. The scoped
+  legacy triggers `newobj`, eligible method dispatch through `prepare_method_initialization`,
+  and `RuntimeHelpers.RunClassConstructor` retain retry and unwind-time wrapping. The
+  [static initialization note](08-async-effects/slice-4-static-initialization.md) specifies
+  their timing and operand contracts.
 
 ## Terms
 
@@ -98,10 +99,14 @@ Out:
 
 `#[dotnet_intrinsic]` accepts `async fn(mut fx: VmEffects) -> NativeResult` and an optional
 `select = path` argument. If a body has several annotations, every one must name the same
-selector. `NativeResult = Result<(), NativeFailure>`.
+selector. In slice 1, each async registration also names a synchronous legacy handler with
+`fallback = path`; all annotations on one body name the same fallback. The fallback is independent
+of the selector, which remains optional. It uses the existing intrinsic handler convention and
+must preserve behavior for every call shape not admitted by the slice-1 driver.
+`NativeResult = Result<(), NativeFailure>`.
 
-The selector runs synchronously before anything is consumed. It receives the method, generic
-metadata and a read-only operand view, and returns one of:
+The selector runs synchronously before anything is consumed. It receives a shared host reference,
+the method, generic metadata and a read-only operand view, and returns one of:
 
 - `Async(entry)`: owned, already-validated scalars for the body (via `fx.invocation()`);
 - `Synchronous(handler)`: run an existing handler by the existing convention (direct fast
@@ -112,8 +117,8 @@ metadata and a read-only operand view, and returns one of:
 body starts with valid arguments. It throws only for failures that arise during its own work.
 
 ```rust,ignore
-#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select)]
-#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select)]
+#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = substring_sync)]
+#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = substring_sync)]
 async fn substring(mut fx: VmEffects) -> NativeResult {
     // The selector validated the range and chose async only for multi-chunk results.
     let SubstringRange { start, length } = fx.invocation().selected();
@@ -203,8 +208,14 @@ The future and control are `'static` and cannot hold branded values. The activat
 The generated synchronous entry calls one shared runtime helper (a vm-ops host trait method,
 e.g. `start_native`, that the `VesContext` implements). The helper:
 
-1. Runs the selector with a read-only operand view, without consuming anything. `Synchronous`
-   and `Reject` return here.
+1. Receives the dispatch mode as a parameter. For any mode other than an ordinary non-tail inline
+   `call` or `callvirt`, it invokes the registered fallback before selecting or consuming operands.
+   For an admitted mode it runs the optional selector with a read-only operand view; `Synchronous`
+   and `Reject` return here. With no selector the driver selects the async body with `start` and
+   `length` set to zero and `parameter_count` taken from the method signature (excluding the
+   receiver). The generated registration must provide the fallback even when there is no
+   selector; `Async` does not have to carry it. The macro and scanner reject a missing fallback
+   or inconsistent fallback annotations; code generation forwards it with the selector and mode.
 2. For `Async`, moves the whole receiver/argument window, in stack order, into the
    activation's operands, using the normal pop accounting. The caller stays at the call
    instruction, and the helper records the base after consumption.
@@ -271,15 +282,16 @@ without its future, is destroyed by the existing host panic policy. This design 
 
 The stop and fairness checks are the same for the first poll and every resumed poll. A
 requested yield is never re-polled within the same turn. The grant counter resets at the start
-of each turn.
+of each turn. After any yield from `vm()`, check the stop and collection conditions again before
+granting access; a still-pending condition requests another yield to the executor.
 
 ### Roots
 
 `RootedValue` wraps a private `DynamicRoot` to a locally allocated, immutable `Collect` cell
-holding a `StackValue`. The cell's trace goes through `ObjectRef::trace`, including its
-cross-arena branch (`dotnet-value/src/object/mod.rs`). A bare foreign handle stashed directly
-would bypass that branch. Each newly rooted reference value costs one GC allocation plus a
-root slot.
+holding a reference value or managed-pointer descriptor. The cell traces the reference or
+pointer origin, including cross-arena recording (`dotnet-value/src/object/mod.rs`). A bare foreign
+handle stashed directly would bypass that branch. Each newly rooted reference value or descriptor
+costs one GC allocation plus a root slot.
 
 A root belongs to its activation's set. Fetching uses gc-arena's set-checked `try_fetch`, and
 a mismatch is an internal error. Intrinsic authors get no raw fetch.
@@ -290,7 +302,7 @@ forward a child's `DynamicRoot` to a parent.
 
 MT tests must root a foreign reference obtained through the plan-06 helper, then collect.
 
-### Managed pointers (slice 3)
+### Managed pointers
 
 A retained managed pointer is a descriptor, resolved again inside each access: a heap owner
 plus offset, or a frame-home serial plus offset (frame-home serials are never reused). Static
@@ -309,21 +321,35 @@ commitment, and checks declared byref returns before any side effect.
    - Keep the finalizer deferral.
    - Delete the `NativeSubstringActivation` machinery.
    - No mailbox, frame IDs or segment isolation.
+   - Registration and dispatch tests cover a missing selector, an async selection and a synchronous
+     selection in admitted and unsupported modes. Unsupported modes invoke the registered legacy
+     handler with untouched operands; nested intrinsic dispatch must not inherit inline admission.
+     Stop tests cover repeated polls with a stop still pending and a real executor collection before
+     access resumes.
 2. **Multicast delegates through transparent `call`.** Adds:
    - the activation stack, `NativeId`s and a native return destination on frames;
    - the single-slot mailbox and reply generations;
    - exception search that respects native boundaries;
    - finalizer segment isolation (parked activations may now wait on managed work);
    - native calls from inside filters and handlers, on plan 07's nested segments;
-   - tail calls and `jmp` in children.
-3. **Reflection `Invoke` through transparent `call`.** Adds heap and frame-home byref
-   descriptors, boxing and write-through. Deletes `FrameReturnAction::InvokeReturn`.
+   - tail calls and `jmp` in children;
+   - heap and frame-home byref descriptors for admitted multicast arguments.
+3. **Reflection `Invoke` through transparent `call`.** Reuses the byref descriptors and adds
+   boxing and write-through. Retains corrected return handling only for the scoped fallback.
 4. **`ldsfld` through `ensure_initialized`.** Adds the instruction completion action and the
    MT wait-graph handoff.
 5. **`WaitForPendingFinalizers`, then `Monitor.Enter`,** through one condition-wait protocol.
 
-Each slice ends with its consumer on the new path and its tests enabled. Add facade operations
-only when a consumer needs them.
+Each slice ends with its consumer on the new path for admitted shapes and its tests enabled;
+slices 2 and 3 retain the scoped fallbacks above. Add facade operations only when a consumer
+needs them.
+
+Step 1.3 may span runs while remaining one integrated deliverable. Preserve safe, buildable
+in-scope changes and record tested behavior and remaining work; do not expose an incomplete
+driver as a working production path. The next run continues the same unticked step. A run that
+ends before completion stays pending; use blocked only for an actual condition under "Ask the
+maintainer only if" or a failed safety or design assumption. Completion still requires the real
+`VesContext` tests, both configurations and the full cleanup and scheduling contract.
 
 ## Done when
 
@@ -344,7 +370,119 @@ only when a consumer needs them.
 
 **Slices 2–5:** defined in each slice's note under `08-async-effects/` before the slice
 starts. At minimum: the consumer's fixtures pass, CLR comparisons cover any exception or filter
-ordering involved, and the listed bespoke mechanism is deleted.
+ordering involved, and the listed bespoke mechanism is deleted except for the scoped multicast
+and reflection fallbacks.
+
+## Slice 1 verification
+
+Pinned `nightly-2026-05-27` Miri with Tree Borrows, disabled isolation and leak checking
+ran each guarded exact singleton once: seven ST and eight MT, including bridge entry and panic
+reset, real-context collection, forgotten access, unregistered pending, changed caller, poll
+panic and the MT foreign-source copy. The p44 collection control also passed once in each
+configuration. No bridge finding was reported. Dependency integer-to-pointer casts emitted
+Miri warnings, limiting provenance detection; this is not strict-provenance evidence. The
+commands and guarded selectors are in the `miri-cross-arena` job and `docs/CI.md`. The
+final-branch audit reran `effects::tests::panic_resets_entry_and_installation` with the same
+pinned Tree Borrows flags: 1/1 passed in each configuration. The known static-reference
+alignment and atomic-provenance limitations are tracked in the [plans README](README.md#not-yet-planned);
+this bridge control does not cover static reference stores.
+
+### Throughput
+
+Four pairs compared `48f3c454` with `55109bee` on an AMD Ryzen 9 9900X, using
+`bench-fat`, separate target directories, copied and SHA-256-verified fixture DLLs, CPU 0,
+separate Criterion homes, ten samples, one-second warmup and a four-second measurement target.
+Launch order alternated. ST uses `--no-default-features`; MT uses the benchmark crate's default
+`multithreading`. [08-evidence.json](08-evidence.json) retains samples, estimates, hashes and
+diagnostic runs. Each percentage is the change between the two run mean point estimates, not
+a paired confidence interval.
+
+| Configuration / workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean pair change |
+|---|---:|---:|---:|---:|---:|
+| ST empty/small Substring | +2.09% | +0.96% | -0.10% | +0.95% | +0.97% |
+| ST multi-chunk Substring | -7.15% | -2.02% | -4.20% | -3.96% | -4.33% |
+| ST dispatch | +0.12% | +0.04% | -1.24% | -0.66% | -0.43% |
+| ST string | +1.23% | +0.29% | +0.98% | +0.12% | +0.65% |
+| MT empty/small Substring | +0.77% | +0.06% | +0.38% | +1.81% | +0.75% |
+| MT multi-chunk Substring | -1.25% | -3.56% | -1.83% | -1.93% | -2.14% |
+| MT dispatch | -1.68% | -1.51% | -2.07% | -1.01% | -1.57% |
+| MT string | +1.81% | +2.27% | +3.52% | +1.93% | +2.38% |
+
+The MT string control's repeatable slowdown warranted investigation. Three additional alternating
+pairs with `perf stat` reproduced +1.52%, +2.23% and +2.66% user cycles while instructions
+fell by 0.05–0.06% and branches by 0.01–0.02%. Cycle samples were concentrated in
+`intrinsic_string_is_null_or_white_space`; its hot Unicode loop's instructions were the same,
+but the function and loop occupied different addresses modulo 64 in the two binaries. Rebuilding
+both sides with `-C llvm-args=-align-all-functions=6` placed that function at the same modulo-64
+alignment. Four new alternating MT string pairs then measured +0.72%, +0.39%, -0.07% and
++0.46%. This explains the control regression as sensitive to optimized binary layout rather
+than increased executed work; it does not isolate a particular cache or front-end mechanism,
+and the diagnostic flag changes alignment throughout the executable, not just that loop. The
+primary table remains the unmodified `bench-fat` result. The other unaffected control, dispatch,
+showed no repeatable slowdown above 1%. Small Substring uses the changed selector path; its
+isolated >1% changes did not repeat across both orders.
+
+## Slice 2 throughput
+
+Four alternating baseline/candidate pairs compared `fb3484dc` with the multicast working tree
+on the same AMD Ryzen 9 9900X, pinned to CPU 0. Each used `bench-fat`, separate targets and
+Criterion homes, byte-identical copied fixture DLLs, ten samples, one-second warmup and a
+four-second measurement target. ST disables default features; MT uses defaults. Raw estimates,
+samples, fixture and production-source hashes are in [08-evidence.json](08-evidence.json).
+Numbers are changes between mean point estimates, not paired confidence intervals.
+
+| Configuration / workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean pair change |
+|---|---:|---:|---:|---:|---:|
+| ST empty/small Substring | +0.17% | -0.33% | -0.50% | +0.57% | -0.02% |
+| ST multi-chunk Substring | -1.61% | +3.16% | -3.47% | -0.12% | -0.51% |
+| ST dispatch | -0.10% | -1.08% | -0.46% | +0.52% | -0.28% |
+| ST string workload | -1.63% | -3.65% | -2.96% | -2.33% | -2.64% |
+| MT empty/small Substring | -0.23% | -1.97% | -0.21% | -0.36% | -0.69% |
+| MT multi-chunk Substring | +0.28% | +0.39% | +0.90% | -3.23% | -0.41% |
+| MT dispatch | +0.76% | -0.74% | -0.27% | -0.29% | -0.14% |
+| MT string workload | -7.42% | -7.27% | -7.65% | -6.63% | -7.24% |
+
+No unaffected control shows a repeatable slowdown above 1%. These controls do not measure
+multicast throughput; the observed string speedup is not attributed to a particular cause.
+
+## Final-branch throughput audit
+
+Four alternating pairs compared `48f3c454` (main) with `eb55b51d` plus documentation-only
+finalizer edits, using `bench-fat`, CPU 0 on an AMD Ryzen 9 9900X, separate targets and Criterion
+homes, identical SHA-256-verified fixture DLLs, ten samples, one-second warmup and a four-second
+measurement target. The percentages compare run mean point estimates; they are not paired
+confidence intervals. [08-final-evidence.json](08-final-evidence.json) retains the raw estimates,
+samples, fixture hashes and diagnostics.
+
+| Configuration / workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean pair change |
+|---|---:|---:|---:|---:|---:|
+| ST empty/small Substring | +3.37% | +2.40% | +4.17% | -2.50% | +1.86% |
+| ST multi-chunk Substring | -3.35% | -4.66% | -3.92% | -3.59% | -3.88% |
+| ST dispatch | +3.18% | +1.79% | +2.93% | +3.79% | +2.92% |
+| ST string | +1.70% | +2.81% | +1.04% | +1.06% | +1.66% |
+| MT empty/small Substring | -0.73% | +1.74% | +0.36% | +0.35% | +0.43% |
+| MT multi-chunk Substring | +0.41% | -1.76% | -1.00% | -1.23% | -0.90% |
+| MT dispatch | -2.96% | +2.98% | -5.36% | +3.99% | -0.34% |
+| MT string | -2.81% | +1.72% | +3.78% | +4.51% | +1.80% |
+
+The ST dispatch control repeatedly slowed; investigation identifies additional work in the
+interpreter rather than a Substring effect. Four whole-process `perf stat --test` pairs measured
+1.93–1.96% more user instructions and 2.14–2.16% more branches; those counts include metadata
+setup. An experimental build that disables the per-instruction pending-reflection check reduced
+instructions by 1.53–1.61% and branches by 2.33–2.36% relative to the candidate; four timing
+pairs changed dispatch by +0.54%, -2.72%, -3.08% and -2.17%. The ablation cannot be shipped:
+it disables the required reflection fallback, and it also changes binary layout and optimization.
+The measurements identify a concrete source of added work, not its exact contribution to elapsed
+time. The checks remain in place to preserve invocation ordering.
+
+String timing is sensitive to a change affecting optimized binary layout. A diagnostic that only marks that
+reflection check unlikely changed ST string timing by -5.65%, -3.45%, -5.78% and -3.79%; the
+unchanged whitespace function moved from offset 16 to 0 modulo 64. The hint was not applied.
+With all functions aligned to 64 bytes, ST dispatch still slowed +2.04%, +7.56%, +3.67% and
++3.32%, while MT string changed +3.05%, -0.36%, -4.58% and +1.57%. Global alignment affects the
+whole binary and does not isolate a cache or front-end mechanism. These diagnostics explain the
+extra interpreter work and demonstrate layout sensitivity without claiming an exact decomposition
+of the control timing changes. The primary results remain the unmodified builds.
 
 ## Ask the maintainer only if
 

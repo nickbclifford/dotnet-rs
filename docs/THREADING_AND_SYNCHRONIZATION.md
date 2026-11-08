@@ -113,10 +113,37 @@ This is not complete `System.Threading.Thread` compatibility. Unsupported cases 
 other constructors, `Start(object)`, timeout-bearing `Join` overloads, and ThreadStart
 delegates with an instance target (including capturing lambdas), non-static targets,
 parameters, or a non-`void` return type. Background, priority, culture, and other thread
-configuration APIs, ThreadPool scheduling, and full foreground-thread process-lifetime
-semantics are also outside this subset. In builds without `multithreading`, managed
+configuration APIs and ThreadPool scheduling are also outside this subset. In builds without
+`multithreading`, managed
 `Thread(ThreadStart)` construction and `Start()` explicitly report unsupported rather
 than spawning a worker.
+
+### Managed worker lifecycle and process exit
+
+`SharedGlobalState` owns the native worker handles, and one registry lock protects each worker's
+lifecycle and managed result. A worker follows
+`Running → Completed(outcome) → Retired ⇄ Finalizing`; shutdown transitions from `Retired` to
+`ShuttingDown`, then `Drained` or `Leaked`. A panic follows the existing drain-or-leak path.
+`Thread.Join` observes `Completed` and consumes the outcome without waiting for the native thread.
+After segment cleanup and publication, the completed owner stops ordinary managed execution, remains registered
+for GC and leases, and services coordinator commands on its own thread. After collection it may run
+only queued finalizer segments, then returns to the service loop. An abort interrupts a
+non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas) describes
+the collection-exclusion and exact-lease-drain ordering.
+
+After Main returns, `Executor::wait_for_foreground_workers` keeps the entry arena registered,
+services GC stops and its own finalizers, and waits for running workers and global finalizer work
+before reporting exit. All supported workers are foreground because `IsBackground` is
+unimplemented. `Thread::InternalFinalize` has no native handle to release because the registry
+owns those handles. The CLI and in-process harness explicitly call
+`SharedGlobalState::shutdown_workers` after dropping the entry executor; shutdown must not be
+deferred to shared-state destruction because worker executors hold that state. Shutdown signals
+retired owners and joins their native handles after they drain or deliberately leak their arenas.
+
+Retaining a completed worker costs one OS thread and its arena until VM shutdown. Arena IDs are
+monotonic and the process supports at most 65,535 IDs, so this policy deliberately trades bounded
+process-lifetime capacity and per-worker resources for correct retained references. The detailed
+design and acceptance checks are in the [retained-arena plan](plans/09-retired-arena-lifetime.md).
 
 ## Safe Points
 
@@ -146,7 +173,7 @@ When a `GcScopeGuard` is active (the `active_borrows` scope counter > 0), `VesCo
 
 The path to thread suspension:
 1. `VesContext::check_gc_safe_point()` first checks the `active_borrows` scope counter; if it is > 0 it returns `false` to prevent deadlocks (the thread cannot safely park while holding GC borrows). Otherwise it evaluates `ThreadManager::is_gc_stop_requested()`.
-2. If `true`, the instruction handler stops early (after completing a chunk of work) and yields, usually through `yield_and_retry` so the instruction re-runs after the pause.
+2. If `true`, the operation yields after bounded work. Legacy initializer triggers use `yield_and_retry`; native activations retain their progress and resume without replaying the instruction.
 3. The executor loop in `crates/dotnet-vm/src/executor.rs` sees the request after `mutate_root` returns and calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
 4. In `basic.rs`, `safe_point()` first short-circuits (returns immediately) if `is_gc_stop_requested()` is false or the thread-local `IS_PERFORMING_GC` flag is set; otherwise it sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
 5. While blocked, it may be woken up to process a `GCCommand` (via `execute_gc_command_for_current_thread`) before going back to sleep.
@@ -229,31 +256,21 @@ Current multithreaded call path:
 - Resume threads after collection
 
 ### Threading ↔ Static Initialization
-`StaticStorageManager::wait_for_init` takes both a `ThreadManagerOps` and a `GCCoordinator`. While waiting for another thread's `.cctor`, the waiting thread must:
-1. Check for GC safe point requests (so it doesn't block STW)
-2. Check if the initializing thread has completed
-This creates a three-way dependency: statics ↔ threading ↔ GC. This wait path exists only with `multithreading`: a single-threaded build cannot produce `StaticInitResult::Waiting`, so `wait_for_init` has no valid caller there and its wait arm panics if that invariant is violated.
 
-#### Wait-graph lifecycle invariant (`StaticStorageManager::wait_graph`)
+`StaticStorageManager::init` claims a constructor under its initialization mutex. Same-thread
+recursion and detected wait cycles follow the recursive-initialization policy; a single-threaded
+build cannot wait for another thread. An owned wait registration removes its particular edge on
+completion, cancellation or unwind. The graph can hold multiple edges from one arena because a
+finalizer or a suspended exception segment can have its own wait while another is parked. Cycle
+checking and insertion are atomic under the graph lock.
 
-The static-init deadlock detector is modeled as a per-thread edge map:
-- `wait_graph[waiter] = owner` means thread `waiter` is currently waiting on `owner` to finish `.cctor`.
-
-Lifecycle rules:
-- `StaticStorageManager::init` inserts the edge before returning `StaticInitResult::Waiting`.
-- `StaticStorageManager::wait_for_init` may refresh/update that edge as ownership changes while polling.
-- `StaticStorageManager::wait_for_init` owns the edge through a private `WaitGraphEdgeGuard`; dropping the guard removes `wait_graph[waiter]` on **every** return path.
-
-The remove-on-all-returns rule is mandatory because `init` uses `causes_cycle()` over `wait_graph` before admitting another wait edge. A stale edge can create false-positive cycle detection and incorrectly force `StaticInitResult::Recursive`. The guard is intentionally scoped so the wait-graph lock is only held for short insert/remove operations, never across the static-init mutex, condition-variable wait, or GC safe-point checks.
-
-Call path:
-- `VesContext::initialize_static_storage`
-- `StaticStorageManager::init` returns `Waiting`
-- `StaticStorageManager::wait_for_init` either:
-1. returns `true` (caller yields `StepResult::Yield` and retries), or
-2. returns `false` (caller re-checks final init state)
-
-In both branches, `wait_graph` cleanup must already be complete before control returns to `initialize_static_storage`.
+`VmEffects::ensure_initialized` runs a claimed constructor through a capturing call. Its claim
+publishes success or failure and wakes waiters; abandoning it publishes failure without running
+managed code. Wait registrations are held by the activation and block outside mutations in
+bounded intervals. `Executor` releases them before a GC stop or collection so the resumed effect
+probes and checks for a cycle again. Notifications make the waiter eligible to re-probe.
+`VesContext::initialize_static_storage` retains its existing in-mutation condition wait for
+legacy callers and releases its registration before returning or yielding.
 
 ### Threading ↔ Executor
 Each `Executor` owns a `GCArena`: directly in ST and via a private owner-qualified TLS slot in MT. Thread creation (`threading/basic.rs`) spawns a new OS thread, which creates its own `Executor` and registers with the `ThreadManager`. The arena ID serves as both the GC arena identifier and the managed thread ID.
@@ -300,14 +317,14 @@ an unqualified acquisition merely because another guard happens to be in scope.
 - `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
 - `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena`, `get_all_arenas`, `command_finished`).
 - `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
-- `StaticStorageManager::wait_for_init` must keep wait-graph cleanup RAII-owned (`WaitGraphEdgeGuard`) so `wait_graph[thread_id]` is removed before every return (including GC-yield returns) and stale-edge cycle false positives cannot persist.
+- A `StaticWaitRegistration` must retire its own wait-graph edge before a terminal return or a GC-stop retry; unrelated registrations on the same thread remain intact.
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
 - Callers of `SyncBlockManager::get_or_create_sync_block` must publish the returned sync-block index only after the call returns (after `blocks` is released).
 - `SyncBlock::state` must be dropped before any safe-point check (`is_gc_stop_requested` / `check_gc_safe_point`) to avoid blocking STW progress while waiting on monitor ownership.
 
 The trait-level inversion rules above are guarded by negative compile-time `AcquireAfter`
 assertions beside the DAG, including a separate assertion that
-`SyncBlockManager::next_index` is not root-acquirable. The `WaitGraphEdgeGuard` cleanup,
+`SyncBlockManager::next_index` is not root-acquirable. The wait-registration cleanup,
 sync-block-index publication, and `SyncBlock::state` safe-point rules are sequencing/lifetime
 invariants that are not expressible as trait edges; they remain enforced by the implementation
 structure and code review.

@@ -57,7 +57,7 @@ files and fails on drift.
 | Job | Source of truth |
 |---|---|
 | `doc-lint` | Its steps in `ci.yml`: `xtask verify-slots`, the pointer, selector, aggregate and cross-arena manifest script tests, `pointer_provenance.sh verify-batches`, `scripts/check_doc_drift.sh`, and the intra-doc-link check |
-| `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job's `multithreading` leg also runs the hang-probe filters listed in its YAML step. |
+| `format`, `clippy`, `test` | `cargo fmt`; `SHARED_FEATURE_MATRIX` in `xtask/src/main.rs` (`cargo run -p xtask -- matrix test-features`). The `test` job also runs the native-effects compile-fail doctests and `scripts/check_vm_effects_compile_fail.py` in no-features and multithreading, and the multithreading hang-probe filters listed in its YAML step. |
 | `clippy-release` | No features and `multithreading` with `--release`, so code under `cfg(not(debug_assertions))` is linted |
 | `provenance-lints` | `scripts/check_provenance_lints.sh` |
 | `loom` | `crates/dotnet-vm/tests/loom_stw.rs` |
@@ -85,7 +85,7 @@ diagnostics can still upload. Historical measurements are retained in git at com
 | `build-script-regression` | 20 min | Several clean builds |
 | `clippy-release` | 20 min | Release-profile workspace build per configuration |
 | `provenance-lints`, `test` | 30 min | Whole-workspace builds per configuration |
-| `miri-cross-arena` | 30 min library, 45 min VM | One VM Miri process per job, 1800 s per invocation |
+| `miri-cross-arena` | 30 min library, 45 min VM and native bridge | Exact guarded singletons, 1800 s per VM or bridge invocation |
 | `miri-pointer-controls` | 45 min | One VM Miri process per control |
 | `miri-pointer-batches` | 60 min | One support-library parse plus 10–11 controls in sequence |
 | `miri.yml` advisory shards | 70 min | Cold-cache assembly and VM singletons |
@@ -137,6 +137,10 @@ configuration.
   `bench-instrumentation`, `heap-diagnostics` and `deadlock-diagnostics` guards.
 
 Neither mode runs Miri, Loom, doc lint or fuzz replay, and neither selects by changed paths.
+In the fuzzing configuration, fixture cases that require native interop, including the
+console-writing multicast, nested-filter, substring and weak-reference cases, are ignored because the fuzzing
+sandbox denies P/Invoke. The multicast path-selection test is disabled in that configuration
+because it runs those same fixtures.
 
 ### Miri
 
@@ -146,6 +150,11 @@ Reproduce a library job with its selector from `ci.yml`, for example:
 cargo +"$NIGHTLY" miri test -p dotnet-value -- --test-threads=1
 cargo +"$NIGHTLY" miri test -p dotnet-vm-data --lib --no-default-features frame_alloc:: -- --test-threads=1
 ```
+
+The `miri-cross-arena` matrix also runs the native-effects bridge, byref-descriptor, activation,
+condition-wait, static-initializer failure/retirement, monitor heap and frame-home write-through and nested-call root-transfer singletons in both configurations. Multithreading
+also runs foreign-source Substring, byref, child-return and monitor-wait controls, and a local
+contended monitor frame-home collection control. Bridge rows use `dotnet-vm-ops`; activation rows use `dotnet-vm`.
 
 Reproduce one cross-arena row with its selector from the `miri-cross-arena` `include` list:
 

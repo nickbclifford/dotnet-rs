@@ -1,71 +1,141 @@
 # Plan 08 slice 3: reflection Invoke through transparent calls
 
-**Status:** Notes. Fill in Done-when and open questions before starting.
+**Status:** Complete
+**Outcome:** Admitted reflection calls use transparent native calls in ST and MT, return correctly
+boxed results and preserve byref write-through. Corrected legacy return handling remains only
+for reflection calls excluded from effects.
 
-## Consumer
+## Consumers and current path
 
-`dotnet-intrinsics-reflection/src/methods.rs` (`MethodInfo::Invoke`, `ConstructorInfo::Invoke`
-overloads): sets `FrameReturnAction::InvokeReturn`, which `stack/context.rs` applies on return.
+`runtime_method_info_intrinsic_call` handles `MethodInfo.Invoke` and both
+`ConstructorInfo.Invoke` overloads. `intrinsic_activator_create_instance_type_args` handles
+`Activator.CreateInstance(Type, object[])`. Admitted calls to each use transparent calls; the
+synchronous fallback for excluded shapes and non-inline dispatch sets `InvokeReturn` on the caller.
+`VesContext::return_frame` consumes that action to turn void into null, box value results or pass
+reference results through. `should_honor_tail_call` prevents replacement of that caller.
+`dispatch_pending_native_call` and `finish_synthetic_native_return` also account for the action
+when a synchronous intrinsic dispatches another target. The parameterless generic Activator
+intrinsic is a separate path, not this consumer.
 
-## Decided
+A synchronous target need not return a managed frame, so fallback return handling must cover
+both synchronous completion and managed returns. A later return or a caught exception must not
+consume an action belonging to another invocation. Initializers require
+particular care: the phase-2 pending-call retry keeps a `.cctor` return separate from the
+requested target and preserves an action across that retry. Correct the fallback's action
+handling without regressing nested multicast or initializer ordering.
 
-- Transparent calls. Exceptions propagate exactly as they do today, with no
-  `TargetInvocationException` wrapping (maintainer decision). Revisit only if a real
-  compatibility failure is observed.
+`unmarshal_invoke_params` constructs heap-owner byrefs: a value-type ref points into the
+existing boxed payload (a null argument gets a zeroed box written into the `object[]`), and a
+reference-type ref points into the original `object[]` slot. Writes are immediate, including
+on an exceptional return. These are byrefs to a value or an object reference, not pointers
+stored in the array: ECMA-335 §§II.14.4.2 and III.1.1.5.2 permit those targets but forbid a
+managed pointer to another managed pointer or a managed pointer stored in an array, field or
+static. The observed reflection marshalling does not require static or transient pointer
+transport. The phase-2 `RootedValue` descriptor supports heap, MT cross-arena and frame-home
+origins; use the actual origin rather than guessing from the address.
 
-## Verified facts and hazards (HEAD 069c8294, read from code, not reproduced)
+## Design
 
-- **Three** producers of `FrameReturnAction::InvokeReturn`: `methods.rs:400`
-  (`MethodInfo.Invoke`), `methods.rs:436` (`ConstructorInfo.Invoke`) and
-  `types/type_construction.rs:240` (`Activator.CreateInstance(Type, object[])`). All three are
-  in scope. The action is consumed in `return_frame` from the caller (`context.rs:419-448`)
-  and read in `should_honor_tail_call` (`call_ops_impl.rs:1030`).
-- **The action lingers.** When the target completes synchronously (an intrinsic, P/Invoke or
-  delegate path), nothing consumes it, and it fires at the caller's next frame return. When
-  the callee throws and the caller catches, nothing clears it. A `.cctor` triggered by
-  `reflection_dispatch_method` consumes it at the `.cctor`'s own return. `substring_fallback_42`
-  passes only because pop-and-push is a no-op for `String`. Add regressions for a value-type
-  result from an intrinsic target and for throw-then-catch.
-- Byrefs today use heap owners only (`methods.rs:859-1079`): value-type `ref` points into the
-  existing box (a null argument gets a zeroed box written back to the `object[]` slot);
-  reference-type `ref` points at the `object[]` element. No frame-home or static origin
-  appears, and no fixture passes a static-field byref. So slice 3 needs heap descriptors only.
-  Frame-home descriptors are added by whichever slice first has a consumer (`ReliableEnter`,
-  slice 5).
-- Constructors push the new instance below the arguments on the caller's stack
-  (`methods.rs:378-380,424`); `ConstructorInfo.Invoke` passes `HeapStorage::Obj` even for
-  value types. No fixture covers `ConstructorInfo`, `Activator` or `GetConstructor`; add them,
-  including a value-type constructor.
-- Existing fixtures: `reflection/reflection_invoke_42`, `invoke_byref_42`,
-  `invoke_byref_writethrough_42`, `reflection_getmethod_generic_arity_42`,
-  `reflection_method_via_attr_42`, `strings/substring_fallback_42`.
+Select before consuming operands, modifying the argument array, allocating a replacement box,
+running a constructor or dispatching a target. Check actual transport categories and the
+declared return layout, including rejecting unsupported byref returns before any side effect.
+Preserve existing behavior for excluded shapes under the main plan's legacy-path rules; do not
+turn a managed pointer into an `Unmanaged` pointer. Reuse the existing heap and frame-home
+root descriptors and their tracing, reconstruction and retired-home checks. The reflection
+consumer needs the heap-backed box and array-slot cases; MT also needs foreign owners covered
+through the production codec. Materialize byrefs immediately before the managed frame is pushed,
+inside the same mutation. Neither the future nor the mailbox retains a branded `ManagedPtr`.
+Preserve the original box and array-slot identity; deferred copy-in/copy-out is not equivalent.
 
-## Introduced here
+Call the resolved target through `fx.call`, retaining the existing virtual-dispatch and generic
+lookup behavior. Consume operands before the first call. The async body handles void, value and
+reference returns itself, with boxing performed while VM access is live; exceptions propagate
+unchanged, without `TargetInvocationException`. The current mailbox roots scalars, object
+references and supported byref descriptors, not arbitrary `StackValue::ValueType` aggregates:
+admission must establish that the declared result can be transported or provide a safe
+same-mutation boxing path before such a value crosses the boundary. Do not fail after the target
+has executed merely because its result cannot be rooted. Preserve synthetic-frame completion and
+the phase-2 pending-target/initializer protocol for managed and synchronous targets.
 
-- Managed-pointer descriptors for byref parameters: heap owner plus offset (box payload,
-  `object[]` slot). Frame-home serial plus offset only if a slice 3 consumer needs it;
-  otherwise slice 5 adds it. Each is enabled together with its tests:
-  conversion from `PointerOrigin`, tracing, reconstruction, invalidation on frame retirement.
-- Synthetic-frame completion action, if reflection dispatch goes through a frame.
+### Scoped reflection fallback
 
-## Carried from the archive
+The existing dispatch contract sends all non-inline modes, including a tail-prefixed intrinsic
+call, to the synchronous fallback before selection. Unsupported transport shapes also need a
+fallback. Deleting the sole caller-side return action while retaining those rules would lose the
+required reflection result transformation. Keep `InvokeReturn` and the frame continuation, or
+their corrected equivalents, only for those fallback calls. Do not route an excluded call to
+effects, retry it after commitment, or reject a previously supported call to avoid the fallback.
+The existing selector's early rejection of unsupported declared byref returns is unchanged.
 
-- Byrefs are materialized immediately before pushing the managed frame, inside the same
-  mutation. No branded `ManagedPtr` is stored in the future or mailbox.
-- Value-type refs address a box (keep the existing box identity; null gets a zeroed box).
-  Reference-type refs address the original `object[]` slot (write-through). No deferred
-  copy-out that changes aliasing or hides writes on exception.
-- Eligibility includes the declared return layout. Do not discover after a side effect that a
-  byref return cannot be transported.
+Correct the existing continuation so it belongs to the particular outstanding invocation, not
+the next arbitrary frame return. It must apply exactly once to that target's successful result,
+including a synchronous intrinsic or P/Invoke, and be cleared on a throw, dispatch or host error,
+abort and frame retirement. A caught exception must leave no action for a later call. If target
+dispatch starts a type initializer, keep the requested target and its arguments pending, retry
+the target after initialization, and never treat the initializer as the target's completion or
+repeat an already executed target. Nested reflection, multicast, native boundaries, filters and
+finalizer segments must not overwrite or consume another invocation's action. Trace any added
+GC-bearing state and preserve the caller and its tail-call guard until the pending work ends.
+Extending the existing continuation with invocation-specific state and initializer retry is
+authorized; it must not introduce an independent frame stack or scheduler. Use the existing
+native pending-target protocol where applicable. Keep exception propagation transparent and
+use managed errors for supported guest failures rather than panics.
 
-## Open questions
+### Constructor result rooting
 
-- Constructor result rooting for value-type constructors.
+For a newly constructed reference type, keep the allocated instance as an activation-owned
+`RootedValue` across the call and return that reference only after successful completion. For a
+value type, allocate a zero-initialized **boxed** instance with the resolved concrete generic
+layout, root the box in the activation before any suspension, and pass a heap-owner descriptor
+to its payload as `this`. Reconstruct that byref at dispatch, and return the rooted box after
+the void constructor completes. This both keeps reference fields traced and lets constructor
+writes update the result without retaining a branded value or a transient address. The existing
+`call_frame` canonicalizes an object receiver for value-type instance methods, but that does not
+itself root the result in a parked native activation; the explicit rooted owner does. For the
+overload given an existing receiver, preserve the existing receiver's identity rather than
+allocating a replacement.
 
-(Answered: no fixture needs static-field byref transport, so p12 does not block this slice.)
+Apply the runtime's normal boxing rules where the boxed representation requires normalization,
+notably `Nullable<T>` (ECMA-335 §I.8.2.4), and keep concrete generic lookup throughout. On a
+throw, release the activation and do not publish the constructor result. Do not run managed code
+in `Drop`. This design requires only the existing heap descriptor, not a new pointer category or
+an ECMA-forbidden container. A temporary simple value-type constructor probe passed on both VM
+configurations and CLR; it did not exercise collection, generic layout or nullable boxing.
 
-## Done when (draft)
+## Done when
 
-- Reflection fixtures pass. `FrameReturnAction::InvokeReturn` is deleted, or reduced if other
-  users remain.
-- Byref write-through visible after normal and exceptional return.
+- In ST and MT, admitted `MethodInfo.Invoke`, both `ConstructorInfo.Invoke` overloads and
+  `Activator.CreateInstance(Type, object[])` use transparent calls. Path-selection tests show
+  admission before commitment and rejection of unsupported origins and declared byref returns
+  before side effects; no supported guest failure is converted into a VM panic.
+- Heap byrefs to a box payload and to an `object[]` slot retain identity and aliasing across
+  collection and write through on normal and exceptional returns. Tests cover actual origin
+  conversion, tracing, reconstruction and invalidation for every enabled descriptor category,
+  including a production-decoded foreign owner in MT. Existing frame-home retirement tests stay
+  enabled. No branded pointer survives in a future or mailbox.
+- Value results, including a synchronous intrinsic target, are boxed; reference and void results
+  have the correct reflection shape. A throw followed by a catch does not leave return handling
+  behind. Exceptions remain transparent; CLR comparisons of throwing cases account for the
+  deliberately different wrapper policy. Initializer retries, virtual dispatch, nested multicast
+  and synthetic completion preserve target ordering and return values.
+- ConstructorInfo and Activator fixtures cover reference and value constructors, including a
+  value-type instance with a reference field kept alive across an actual collection while its
+  constructor is parked. Verify result contents, identity where applicable, generic layout,
+  supported nullable boxing and exceptional cleanup in both modes. Existing reflection and
+  substring fixtures stay green; applicable new fixtures have real-CLR `diff_test!` entries.
+- Prove the corrected continuation is reachable only from the reflection fallback and never
+  from an admitted call. Cover fallback success and throw/catch for managed and synchronous
+  targets, void/value/reference results, constructor results, initializer success and failure,
+  nested invocation, and later unrelated returns. Exercise a real tail-prefixed reflection
+  call, verify the emitted IL contains the prefix, and test it in ST and MT; a simulated
+  `Other` mode alone is insufficient. Include an unsupported transport shape that remains
+  supported on the fallback. Compare applicable results and initializer ordering with CLR,
+  accounting for the deliberate difference in exception wrapping.
+- Keep only the continuation, trace/reset, tail-call guard and phase-2 forwarding needed by
+  that fallback; audit all producers and consumers for the boundary above and update directly
+  affected runtime documentation. Keep the pending target and native-return protocols.
+- Build fixtures and inspect discovery and results for the affected filters in ST and MT; run
+  the full fixture set in both modes at phase end. Run the focused pointer and VM checks,
+  affected pinned Miri singletons, doctests where the facade changes, doc drift, and the required
+  fast and phase-end full checks. Record test counts, Miri limitations and any performance
+  evidence separately rather than treating one lane as proof of another.

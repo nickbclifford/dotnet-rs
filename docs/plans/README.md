@@ -10,17 +10,18 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Next |
+| 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Prerequisite of 08 static initialization effects |
+| 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | After 09 |
 | 06 | [Cross-arena collection fixture through production decoding](06-cross-arena-collection-fixture.md) | Prerequisite of 08 |
 | 07 | [Nested filters keep earlier suspended frames](07-nested-filter-suspension.md) | Prerequisite of 08 |
-| 08 | [Async/await VM effects](08-async-effects.md) | In progress; slice notes in [08-async-effects/](08-async-effects/) |
+| 08 | [Async/await VM effects](08-async-effects.md) | Slice notes in [08-async-effects/](08-async-effects/) |
 | 04 | [Native continuations: Substring proof](04-native-continuations.md) | Measured large-call cost accepted; scheduler contract and behavior controls retained for 08 slice 1 |
 | 03 | [Repair enum and named scalar frame homes](03-frame-home-enum-representation.md) | Done; scalar bounds, opcode/growth coverage and historical reproductions verified |
 | 02 | [Stable homes for addressable locals and arguments](02-stable-frame-homes.md) | Done; measured primitive cost accepted |
 | 01 | [Executor teardown ownership](01-executor-teardown-ownership.md) | Done; kept as a pointer to the contract |
 
-Plan IDs follow dependency order: a plan's prerequisites have lower IDs. Never reuse an ID; a
-repair or follow-up found while executing a plan gets the next free ID.
+Plan IDs normally follow dependency order. Never reuse an ID; a repair or prerequisite found
+while executing a plan gets the next free ID, even when it must precede that plan.
 
 ## Not yet planned
 
@@ -28,17 +29,30 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Unhandled worker exceptions:** CLR terminates the process when a managed thread's exception
+  goes unhandled; `Thread.Join` instead rethrows it as `InvalidOperationException`
+  (`threading_join_managed_thread` in `crates/dotnet-vm/src/stack/context_ops.rs`).
+- **Cross-thread GC handles:** `intrinsic_gchandle_internal_get` and related operations index the
+  calling arena's local handle table, so a `WeakReference` created on one thread cannot reliably
+  read its target from another, even while both arenas remain registered.
+- **`Thread.IsBackground`:** unimplemented, so every managed thread is treated as foreground at
+  exit (plan 09).
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
   so byref arithmetic that goes below the base or past the compact range (for example
   `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
   (`managed_offset_error` in `crates/dotnet-value/src/stack_value.rs`).
 - **Static field addresses:** `ldsflda; conv.u` writes and static payload alignment
   (`p12_ldsflda_convu_stind_static`).
+- **Instance field alignment:** `FieldStorage` uses `Vec<u8>`, which does not promise the
+  alignment required by `get_field_mut_local`; exception stack-trace writes can trip its
+  alignment assertion under Miri.
 - **Native call boundary:** payload addresses, ABI returns, by-ref/out copy-back and pinned
   lifetime for P/Invoke (R06/R07). The current cross-arena raw-escape and by-value
   managed-pointer aggregate rejections stay until this is done.
 - **Shared raw-memory access:** one protocol for competing plain, volatile, atomic, block and
   raw-alias accesses to shared storage (heap, statics) under `multithreading` (R09/R12).
+  `FieldStorage`'s aligned byte-to-integer atomic path also discards pointer provenance when
+  storing object references; a subsequent static-storage GC trace fails under Miri.
 - **Safe byte writes into reference slots:** `Vector::get_mut`, `FieldStorage::with_data_mut` and
   `ObjectRef::with_data_mut` hand out `&mut [u8]` over storage the collector traces, so safe code
   can write forged pointer bytes; `ObjectPtr::with_data_mut` also skips the owner barrier

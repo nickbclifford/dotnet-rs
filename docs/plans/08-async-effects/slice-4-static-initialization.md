@@ -1,70 +1,102 @@
-# Plan 08 slice 4: `ldsfld` through initialization effects
+# Plan 08 slice 4: static fields through initialization effects
 
-**Status:** Notes. Fill in Done-when and open questions before starting.
+**Status:** Complete
+**Outcome:** `ldsfld`, `stsfld` and `ldsflda` use `ensure_initialized` in both configurations
+where they currently initialize static storage, without replaying the field instruction. A failing
+initializer is captured and wrapped before an outer filter sees it. Other initialization
+triggers remain on their existing path.
 
-## Consumer
+Step 4.4 depends on [retaining arenas after managed thread exit](../09-retired-arena-lifetime.md):
+the original inner exception must remain accessible after its owner exits and through collection.
 
-`dotnet-vm/src/instructions/objects/fields.rs` (`ldsfld`, also `stsfld`/`ldsflda` callers of
-`initialize_static_storage`) and `dotnet-vm/src/statics.rs` (`StaticInitResult::{Execute,
-Initialized, Recursive, Failed, Waiting}`, `init`, `wait_for_init`).
+## Current paths and scope
 
-## Decided
+`ldsfld`, `stsfld` and `ldsflda` in `instructions/objects/fields.rs` resolve the field and its
+canonical static generic lookup before starting an `ensure_initialized` activation. `stsfld`
+retains its operand in the traced completion action; `ldsfld` bypasses initialization for
+intrinsic fields. The field operations preserve volatile ordering and generic-instantiation keying.
+`ldsflda` produces a `PointerOrigin::Static`, not a heap or frame-home byref.
 
-- `ensure_initialized` uses the capturing `try_call` (maintainer decision, 2026-11-05).
-  `try_call` is introduced in this slice on top of slice 2's native boundary and mailbox. The
-  child's handlers and cleanup run, Rust receives `Err(RootedException)`, publishes the failure,
-  and throws `TypeInitializationException(inner)`. Outer filters therefore see the TIE, as in
-  CLR. Today the wrap happens in `unwind_frame` (`stack/context.rs:466-497`) after the search
-  pass has already run filters against the inner exception (`dotnet-exceptions/src/lib.rs:672-679`).
-  This is an intended observable change; verify it with a CLR-diffed fixture that has a filter.
+The other callers stay **legacy** in this slice:
 
-## Verified facts (HEAD 069c8294, read from code, not reproduced)
+- `newobj` initializes before allocating the non-intrinsic object and pushing its constructor;
+  intrinsic constructor branches bypass this call. Its constructor operands and existing retry
+  behavior must remain intact.
+- `dispatch_method_with_mode`, through `prepare_method_initialization`, initializes before
+  eligible static, value-type instance and constructor calls only when the type is not
+  `beforefieldinit`. This includes pending targets of native calls, multicast and reflection;
+  preserve their initializer retry and return-action handling.
+- `RuntimeHelpers.RunClassConstructor` resolves its peeked `RuntimeTypeHandle`, initializes,
+  and pops the argument only after success. It keeps the synchronous intrinsic path and retry.
 
-- Callers of `initialize_static_storage`: `fields.rs:242` (`ldsfld`), `:283` (`stsfld`, before
-  popping the value), `:488` (`ldsflda`); `instructions/objects/mod.rs:245` (`newobj`);
-  `call_ops_impl.rs:557-571` (`dispatch_method`); `type_construction.rs:47`
-  (`RunClassConstructor`). Implementation: `context_ops.rs:834-923`.
-- Retry: after a `.cctor` push the IP is untouched and `handle_return` skips the increment for
-  `is_cctor` frames (`context.rs:295-298,337-339`); after a yield `back_up_ip`
-  (`context_ops.rs:925-934`) restores the snapshot taken at `dispatch/mod.rs:146-149`.
-- `WaitGraphEdgeGuard::disarm` (`statics.rs:138-142`) exists, is unused and is marked
-  `#[allow(dead_code)]`. It is the intended hook for handing the edge to a wait registration.
-  `wait_for_init` (`statics.rs:489-546`) blocks inside the mutation on a condvar with 10 ms
-  timeouts and is `unreachable!` in ST.
-- `beforefieldinit` is honored only in `dispatch_method`. Field access and `newobj` always
-  initialize on first access, so this slice changes no timing.
-- Fixtures (`statics/`): `cctor_failure_42`, `cctor_trigger_42`, `cctor_trigger_vt_42`,
-  `circular_init_42`, `circular_init_mt_42` (two executors over shared statics). Missing: a
-  non-cycle cross-thread `Waiting` that ends in success, one that ends in failure, and a TIE
-  seen by an outer filter.
+These triggers have different completion and operand contracts from field instructions. Moving
+them is not required for the field consumer and would expand the migration into method dispatch,
+constructor and intrinsic completion. Keep their existing initialization timing and semantics;
+the filter-order improvement is required for the migrated field-triggered path, not claimed for
+these legacy triggers. In particular, preserve the legacy late wrapping in `unwind_frame` and
+its `.cctor` return handling while those callers need them. Remove field-initialization replay,
+not shared `back_up_ip`, `yield_and_retry`, `RetryInstruction` or auto-invoked `.cctor` handling
+that the legacy callers still use. Do not let that legacy handling double-publish or rewrap an
+initializer owned by `ensure_initialized`.
 
-## Introduced here
+`StaticStorageManager::init` keys storage by type and generic lookup, returns `Execute`,
+`Initialized`, `Recursive`, `Failed` or an owned `Waiting` registration, and claims the
+initializer under its mutex. The effects handler runs owned initializers through `try_call`;
+its traced failure carrier and abandoned-claim cleanup are shared with legacy callers. MT
+waits use atomically checked wait-graph registrations, while legacy `wait_for_init` retains its
+in-mutation condvar wait. Effect waits run outside the mutation and re-probe after a GC stop.
+Same-thread recursion proceeds without waiting; in ST a `Waiting` result is unreachable.
+Field access and `newobj` currently initialize on access regardless of `beforefieldinit`.
 
-- Instruction completion action: the IP advances only after the load succeeds. Instructions
-  start activations through the same entry helper. The instruction macro is not changed.
-- `ensure_initialized(type, generics)` as a handler state machine: probe, claim, run the
-  .cctor as a managed child, publish success or failure, wake waiters.
+## Design
 
-## Carried from the archive (and current code)
+Use the instruction entry and completion action in the [main plan](../08-async-effects.md),
+without changing the instruction macro. Advance the instruction IP exactly once, only after its
+load, store or address operation succeeds. Preserve a store value across a suspended initializer
+in traced VM-owned storage, including supported value types and references; do not place a branded
+value in the future or replay the instruction. Preserve static-address origin and aliasing without
+transporting it through a native byref descriptor or manufacturing an unmanaged origin. An
+exception or host failure must discard the pending operation without a partial store or output.
 
-- MT wait graph (`statics.rs`, `wait_graph`, `WaitGraphEdgeGuard`). Hand the edge over to an
-  owned wait registration atomically. Re-run the cycle check before waiting again after a GC
-  stop removes the edge. A cycle follows the existing `Recursive` policy (ECMA-335 §II.10.5.3.3
-  deadlock rules).
-- An abandoned claim (abort, host error, cancellation) is published as failed, and waiters are
-  woken on every terminal path.
-- In ST, a same-thread `Waiting` remains unreachable, as today.
+`ensure_initialized(type, generics)` probes and claims through the static manager, executes an
+owned `.cctor` through capturing `try_call`, publishes success or a
+`TypeInitializationException` with its inner exception, and wakes waiters. A capturing boundary
+first lets the child's handlers, filters and cleanup run; after the child unwinds, Rust receives a
+rooted exception and publishes the wrapper before outer filters run. This is the maintainer's
+intended CLR-compatible change. The current `unwind_frame` wrap occurs after the exception search
+has already run outer filters on the inner exception.
 
-## Open questions
+A waiting activation owns its registration outside the mutation. Transfer the wait-graph edge
+atomically with `WaitGraphEdgeGuard::disarm`, remove it on every terminal path, and repeat the
+cycle check before waiting again after a GC stop removed the edge. A cycle follows the existing
+`Recursive` policy (ECMA-335 §II.10.5.3.3). An abandoned claim, including abort, cancellation or
+host failure, is published as failed and wakes waiters on every terminal path; Rust `Drop` does
+not execute managed code. Keep ST same-thread `Waiting` unreachable. Both effects-owned and
+legacy initializers share the static state and wait graph and must interoperate when nested or
+when one path waits for the other.
 
-- `newobj`, `dispatch_method` and `RunClassConstructor` also call `initialize_static_storage`.
-  Migrate each or list it explicitly as remaining on the legacy path; the retry path and the
-  late TIE wrap are deleted only if nothing else uses them.
+## Done when
 
-(Answered: `stsfld` and `ldsflda` migrate with `ldsfld`, since they share the helper and the
-retry path cannot be deleted otherwise. `beforefieldinit` implies no timing change; see above.)
-
-## Done when (draft)
-
-- Static-init fixtures pass in both configurations, including cross-thread init waits and an
-  init cycle. The `ldsfld` retry path is deleted.
+- In ST and MT, all three field instructions use the new initialization path where applicable,
+  including initial, already initialized, recursive, and failed cases. Their results, store operand lifetime,
+  generic static keys, volatile behavior, static-address aliasing, intrinsic-field behavior and
+  initialization timing remain correct. The field path no longer relies on instruction replay;
+  the explicitly listed legacy callers retain their required retry and late-wrap machinery.
+- Capturing `try_call` delivers a rooted exception only after child handlers and finally/fault
+  cleanup, including an unhandled child. Child filters run before capture and outer filters after
+  the wrapper is thrown. A CLR-diffed field-access fixture verifies that the outer filter sees
+  `TypeInitializationException` with the original inner exception, not the inner exception first.
+- Successful and failing cross-thread waits complete and wake all waiters, including mixed
+  effects/legacy triggers; a GC stop while waiting rechecks the graph, and circular initialization
+  retains the existing recursion policy. Tests cover success, failure and abandoned claims,
+  including cleanup on abort/host failure, with no stale edges or permanently initializing type.
+- Existing `cctor_*`, `circular_init*` and static-field fixtures remain green in ST and MT;
+  add enabled wait-success and wait-failure fixtures and the CLR comparison above. Preserve
+  multicast and reflection initializer-retry coverage and add focused mixed-path regressions.
+  Check fixture discovery and expected skips; build fixtures first and run the full fixture set
+  once in each configuration at phase end.
+- Run focused real-frame exception and initializer tests in both configurations, the affected
+  pinned Miri controls for any unsafe or pointer changes, doc drift, and `./check.sh --fast`.
+  Update the CI Miri manifest and its checker if new enumerated controls are added. Record native,
+  Miri, doctest and performance evidence separately; no benchmark result is implied by a fixture
+  pass.
