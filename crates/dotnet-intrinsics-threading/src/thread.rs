@@ -48,6 +48,17 @@ pub fn intrinsic_thread_join<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx.threading_join_managed_thread()
 }
 
+/// The worker registry owns native handles independently of the managed Thread object.
+#[dotnet_intrinsic("void System.Threading.Thread::InternalFinalize()")]
+pub fn intrinsic_thread_internal_finalize<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _ = ctx.pop_obj();
+    StepResult::Continue
+}
+
 /// System.Threading.Thread::Sleep(int millisecondsTimeout)
 ///
 /// Suspends the current thread for the specified number of milliseconds.

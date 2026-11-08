@@ -688,3 +688,221 @@ fn cross_arena_lease_holds_teardown_until_release_and_preserves_generation() {
         assert_eq!(state.active_leases.load(Ordering::Acquire), 0);
     });
 }
+
+/// Model the retired owner's wake predicate and shutdown exclusion against a collector.
+#[test]
+fn retired_owner_wakes_for_collection_and_shutdown() {
+    use loom::sync::{Condvar, Mutex};
+
+    #[derive(Default)]
+    struct State {
+        stop: bool,
+        parked: bool,
+        command: bool,
+        serviced: bool,
+        shutdown: bool,
+        registered: bool,
+    }
+    let mut builder = loom::model::Builder::new();
+    builder.max_threads = 3;
+    // Bound this model to four preemptions; the separate STW models remain unbounded.
+    builder.preemption_bound = Some(4);
+    builder.check(|| {
+        let state = Arc::new((
+            Mutex::new(State {
+                registered: true,
+                ..State::default()
+            }),
+            Condvar::new(),
+        ));
+        // Loom mutex try_lock can block on a competing lock operation; the CAS
+        // models the production lock's nonblocking success/failure instead.
+        let collection = Arc::new(AtomicBool::new(false));
+        let worker_state = state.clone();
+        let worker_collection = collection.clone();
+        let worker = thread::spawn(move || {
+            loop {
+                let (lock, wake) = &*worker_state;
+                let mut s = lock.lock().unwrap();
+                while !s.stop && !s.shutdown {
+                    s = wake.wait(s).unwrap();
+                }
+                if s.stop {
+                    s.parked = true;
+                    wake.notify_all();
+                    while s.stop {
+                        if s.command {
+                            s.command = false;
+                            s.serviced = true;
+                            wake.notify_all();
+                        }
+                        s = wake.wait(s).unwrap();
+                    }
+                    s.parked = false;
+                }
+                if s.shutdown {
+                    break;
+                }
+            }
+            // Production tries the collection lock and continues servicing stops while busy.
+            loop {
+                if worker_collection
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let (lock, wake) = &*worker_state;
+                    lock.lock().unwrap().registered = false;
+                    wake.notify_all();
+                    worker_collection.store(false, Ordering::Release);
+                    break;
+                }
+                let (lock, wake) = &*worker_state;
+                let mut s = lock.lock().unwrap();
+                if s.stop {
+                    s.parked = true;
+                    wake.notify_all();
+                    while s.stop {
+                        if s.command {
+                            s.command = false;
+                            s.serviced = true;
+                            wake.notify_all();
+                        }
+                        s = wake.wait(s).unwrap();
+                    }
+                    s.parked = false;
+                }
+                drop(s);
+                thread::yield_now();
+            }
+        });
+        let collector_state = state.clone();
+        let collector = thread::spawn(move || {
+            while collection
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                thread::yield_now();
+            }
+            let (lock, wake) = &*collector_state;
+            let mut s = lock.lock().unwrap();
+            if s.registered {
+                s.stop = true;
+                wake.notify_all();
+                while !s.parked {
+                    s = wake.wait(s).unwrap();
+                }
+                s.command = true;
+                wake.notify_all();
+                while !s.serviced {
+                    s = wake.wait(s).unwrap();
+                }
+                s.stop = false;
+                wake.notify_all();
+            }
+            drop(s);
+            collection.store(false, Ordering::Release);
+        });
+        {
+            let (lock, wake) = &*state;
+            lock.lock().unwrap().shutdown = true;
+            wake.notify_all();
+        }
+        collector.join().unwrap();
+        worker.join().unwrap();
+        assert!(!state.0.lock().unwrap().registered);
+    });
+}
+
+#[test]
+fn abort_excludes_new_finalizing_after_entry_teardown() {
+    loom::model(|| {
+        let aborted = Arc::new(AtomicBool::new(false));
+        let lifecycle = Arc::new(loom::sync::Mutex::new(false));
+        let torn_down = Arc::new(AtomicBool::new(false));
+        let worker_abort = aborted.clone();
+        let worker_lifecycle = lifecycle.clone();
+        let worker_torn_down = torn_down.clone();
+        let worker = thread::spawn(move || {
+            let mut finalizing = worker_lifecycle.lock().unwrap();
+            if !worker_abort.load(Ordering::Acquire) {
+                *finalizing = true;
+                drop(finalizing);
+                assert!(!worker_torn_down.load(Ordering::Acquire));
+                *worker_lifecycle.lock().unwrap() = false;
+            }
+        });
+        aborted.store(true, Ordering::Release);
+        let finalizing = lifecycle.lock().unwrap();
+        if !*finalizing {
+            torn_down.store(true, Ordering::Release);
+        }
+        drop(finalizing);
+        worker.join().unwrap();
+    });
+}
+
+#[test]
+fn shutdown_removes_registration_before_draining_leases() {
+    use loom::sync::{Condvar, Mutex};
+
+    #[derive(Default)]
+    struct State {
+        registered: bool,
+        leases: usize,
+        freed: bool,
+    }
+
+    let mut builder = loom::model::Builder::new();
+    builder.preemption_bound = Some(4);
+    builder.check(|| {
+        let shared = Arc::new((
+            Mutex::new(State {
+                registered: true,
+                leases: 1,
+                freed: false,
+            }),
+            Condvar::new(),
+        ));
+        let worker_shared = shared.clone();
+        let worker = thread::spawn(move || {
+            let (lock, wake) = &*worker_shared;
+            let mut state = lock.lock().unwrap();
+            state.registered = false;
+            wake.notify_all();
+            while state.leases != 0 {
+                state = wake.wait(state).unwrap();
+            }
+            state.freed = true;
+        });
+        let client_shared = shared.clone();
+        let client = thread::spawn(move || {
+            let (lock, wake) = &*client_shared;
+            let mut state = lock.lock().unwrap();
+            if state.registered {
+                state.leases += 1;
+                drop(state);
+                thread::yield_now();
+                let mut state = lock.lock().unwrap();
+                assert!(!state.freed);
+                state.leases -= 1;
+                wake.notify_all();
+            }
+        });
+        let (lock, wake) = &*shared;
+        let mut state = lock.lock().unwrap();
+        while state.registered {
+            state = wake.wait(state).unwrap();
+        }
+        assert!(!state.freed);
+        assert!(!state.registered);
+        state.leases -= 1;
+        wake.notify_all();
+        drop(state);
+        client.join().unwrap();
+        worker.join().unwrap();
+        let state = lock.lock().unwrap();
+        assert!(state.freed);
+        assert_eq!(state.leases, 0);
+        assert!(!state.registered);
+    });
+}

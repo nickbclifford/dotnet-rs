@@ -12,6 +12,7 @@ use dotnet_value::{StackValue, object::ObjectRef, string::CLRString};
 use dotnet_vm_data::{
     ExceptionState, HandlerAddress, SearchState, UnwindState, UnwindTarget, exceptions::HandlerKind,
 };
+use dotnet_vm_ops::VesInternals;
 
 impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     fn throw_argument_out_of_range(&mut self, param_name: &str) -> StepResult {
@@ -54,14 +55,11 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             self.register_new_object(&message_ref);
             // `Exception._message` is private BCL layout, so it is looked up by name and skipped if absent.
             obj_ref.as_object_mut(gc, |obj| {
-                if obj
+                if let Some(field) = obj
                     .instance_storage
-                    .has_field(base_exception_type.clone(), "_message")
+                    .field::<ObjectRef>(base_exception_type, "_message")
                 {
-                    let mut field = obj
-                        .instance_storage
-                        .get_field_mut_local(base_exception_type, "_message");
-                    message_ref.write(&mut field);
+                    field.write(message_ref);
                 }
             });
         }
@@ -88,27 +86,21 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);
             obj_ref.as_object_mut(gc, |obj| {
-                if obj
+                if let Some(field) = obj
                     .instance_storage
-                    .has_field(base_exception_type.clone(), "_message")
+                    .field::<ObjectRef>(base_exception_type.clone(), "_message")
                 {
-                    let mut field = obj
-                        .instance_storage
-                        .get_field_mut_local(base_exception_type.clone(), "_message");
-                    message_ref.write(&mut field);
+                    field.write(message_ref);
                 }
             });
         }
 
         obj_ref.as_object_mut(gc, |obj| {
-            if obj
+            if let Some(field) = obj
                 .instance_storage
-                .has_field(base_exception_type.clone(), "_innerException")
+                .field::<ObjectRef>(base_exception_type, "_innerException")
             {
-                let mut field = obj
-                    .instance_storage
-                    .get_field_mut_local(base_exception_type, "_innerException");
-                inner.write(&mut field);
+                field.write(inner);
             }
         });
 
@@ -118,12 +110,18 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult {
+        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
+            frame.monitor_retry = None;
+        }
         *self.exception_mode = ExceptionState::Throwing(exception, false);
         self.handle_exception()
     }
 
     #[inline]
     fn rethrow(&mut self) -> StepResult {
+        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
+            frame.monitor_retry = None;
+        }
         let Some(exception) = self.current_frame().exception_stack.last().cloned() else {
             return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
                 "rethrow without active exception".into(),
@@ -211,6 +209,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             .expect("active filter missing");
         self.evaluation_stack.restore_suspended();
         self.frame_stack.restore_suspended();
+        self.restore_suspended_native();
 
         if result == 1 {
             // Result is 1: This handler is the one. Begin unwinding towards it.

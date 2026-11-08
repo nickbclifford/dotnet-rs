@@ -78,8 +78,102 @@ macro_rules! diff_test_exit_code {
 // representation); and threading/threading_*_0 (exit-code-only comparison has no signal).
 // The original expression-compilation case is retained while the canonical set expands coverage.
 diff_test!(
+    statics_cctor_filter_matches_dotnet,
+    "tests/fixtures/statics/cctor_filter_42.cs"
+);
+diff_test!(
+    statics_cctor_field_operations_matches_dotnet,
+    "tests/fixtures/statics/cctor_field_operations_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    statics_cctor_wait_success_matches_dotnet,
+    "tests/fixtures/statics/cctor_wait_success_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    statics_cctor_wait_failure_matches_dotnet,
+    "tests/fixtures/statics/cctor_wait_failure_42.cs"
+);
+diff_test!(
+    reflection_invoke_reference_byref_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_reference_byref_42.cs"
+);
+diff_test!(
+    reflection_invoke_fallback_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_fallback_42.cs"
+);
+diff_test!(
+    reflection_invoke_constructors_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_constructors_42.cs"
+);
+diff_test!(
+    reflection_invoke_results_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_results_42.cs"
+);
+diff_test!(
+    reflection_invoke_intrinsic_value_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_intrinsic_value_42.cs"
+);
+diff_test!(
+    reflection_invoke_byref_gc_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_gc_42.cs"
+);
+diff_test!(
     fields_enum_frame_homes_42_matches_dotnet,
     "tests/fixtures/fields/enum_frame_homes_42.cs"
+);
+diff_test!(
+    delegates_multicast_static_ref_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_static_ref_42.cs"
+);
+diff_test!(
+    delegates_multicast_many_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_many_42.cs"
+);
+diff_test!(
+    delegates_multicast_scalar_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_scalar_42.cs"
+);
+diff_test!(
+    delegates_multicast_aggregate_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_aggregate_42.cs"
+);
+diff_test!(
+    delegates_multicast_nested_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_nested_42.cs"
+);
+diff_test!(
+    delegates_multicast_reflection_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_reflection_42.cs"
+);
+diff_test!(
+    delegates_multicast_finalizers_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_finalizers_42.cs"
+);
+diff_test!(
+    delegates_multicast_filters_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_filters_42.cs"
+);
+diff_test!(
+    delegates_multicast_static_ref_filters_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_static_ref_filters_42.cs"
+);
+diff_test!(
+    delegates_multicast_refs_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_refs_42.cs"
+);
+diff_test!(
+    delegates_multicast_ref_cctor_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_ref_cctor_42.cs"
+);
+diff_test!(
+    delegates_multicast_cctor_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_cctor_42.cs"
+);
+diff_test!(
+    delegates_multicast_static_ref_cctor_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_static_ref_cctor_42.cs"
 );
 diff_test!(
     strings_substring_chunks_42_matches_dotnet,
@@ -152,4 +246,78 @@ diff_test_exit_code!(
     exceptions_exception_filter_7_matches_dotnet,
     "tests/fixtures/exceptions/exception_filter_7.cs",
     7
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_monitor_contended_lock_42_matches_dotnet,
+    "tests/fixtures/threading/monitor_contended_lock_42.cs"
+);
+
+diff_test!(
+    threading_monitor_byref_origins_42_matches_dotnet,
+    "tests/fixtures/threading/monitor_byref_origins_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_foreground_worker_42_matches_dotnet,
+    "tests/fixtures/threading/foreground_worker_42.cs"
+);
+
+diff_test!(
+    weak_reference_liveness_matches_dotnet,
+    "tests/fixtures/gc/weak_reference_liveness_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    retired_arena_cycles_matches_dotnet,
+    "tests/fixtures/gc/retired_arena_cycles_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    retired_finalizer_matches_dotnet,
+    "tests/debug_fixtures/retired_finalizer_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    retired_finalizer_monitor_matches_dotnet,
+    "tests/debug_fixtures/retired_finalizer_monitor_42.cs"
+);
+diff_test!(
+    finalizer_collect_matches_dotnet,
+    "tests/fixtures/gc/finalizer_collect_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    retired_finalizer_collect_matches_dotnet,
+    "tests/debug_fixtures/retired_finalizer_collect_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    global_finalizer_wait_matches_dotnet,
+    "tests/debug_fixtures/global_finalizer_wait_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    live_finalizer_wait_matches_dotnet,
+    "tests/debug_fixtures/live_finalizer_wait_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    foreground_finalizer_wait_matches_dotnet,
+    "tests/debug_fixtures/foreground_finalizer_wait_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
+    thread_finalization_matches_dotnet,
+    "tests/debug_fixtures/thread_finalization_42.cs"
 );

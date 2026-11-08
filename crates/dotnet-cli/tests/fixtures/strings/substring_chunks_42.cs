@@ -74,10 +74,17 @@ public class Program {
         if (!ThrowsRange(() => source.Substring(source.Length, 1))) return 11;
         if (!ThrowsRange(() => source.Substring(int.MaxValue, int.MaxValue))) return 12;
         if (!ThrowsRange(() => source.Substring(1, int.MaxValue))) return 13;
+        if (!ThrowsRange(() => source.Substring(-1, -1))) return 16;
+        if (!ThrowsRange(() => source.Substring(source.Length + 1, -1))) return 17;
+        if (!ThrowsRange(() => source.Substring(int.MinValue))) return 18;
+        if (!ThrowsRange(() => source.Substring(0, int.MinValue))) return 19;
+        if (!ThrowsRange(() => source.Substring(int.MinValue, int.MaxValue))) return 20;
         string missing = null;
         try { missing.Substring(0); return 14; }
         catch (NullReferenceException) { }
         try { missing.Substring(0, 0); return 15; }
+        catch (NullReferenceException) { }
+        try { missing.Substring(-1, -1); return 21; }
         catch (NullReferenceException) { }
         return 42;
     }

@@ -5,7 +5,48 @@ use dotnet_types::error::PInvokeError;
 use gc_arena::static_collect;
 use libffi::middle::CodePtr;
 use libloading::{Library, Symbol};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
+};
+
+// System.Native starts detached process-wide threads (including its signal handler). Those
+// threads may start or continue running after a VM has dropped its P/Invoke cache. This cache
+// is process-wide even when each VM is single-threaded, so it needs a real host mutex.
+static SYSTEM_NATIVE_LIBRARIES: OnceLock<Mutex<HashMap<String, Library>>> = OnceLock::new();
+
+fn is_system_native(name: &str) -> bool {
+    let Some(name) = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    matches!(
+        name,
+        "System.Native"
+            | "libSystem.Native"
+            | "System.Native.dll"
+            | "libSystem.Native.so"
+            | "libSystem.Native.dylib"
+    )
+}
+
+fn retain_system_native(path: &str) -> Result<(), libloading::Error> {
+    let mut libraries = SYSTEM_NATIVE_LIBRARIES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !libraries.contains_key(path) {
+        // SAFETY: F11.NativeLibraryLoadTrusted — this is a second reference to the same
+        // host-permitted library that was successfully loaded by the caller. Retaining it
+        // prevents its detached threads from executing unmapped code after VM teardown.
+        let library = unsafe { Library::new(path)? };
+        libraries.insert(path.to_owned(), library);
+    }
+    Ok(())
+}
 
 pub struct NativeLibraries {
     root: PathBuf,
@@ -145,6 +186,11 @@ impl NativeLibraries {
             // are unchecked; failures are surfaced as `PInvokeError::LoadError`.
             match unsafe { Library::new(n) } {
                 Ok(l) => {
+                    if is_system_native(name) {
+                        retain_system_native(n).map_err(|error| {
+                            PInvokeError::LoadError(name.into(), error.to_string().into_boxed_str())
+                        })?;
+                    }
                     lib = Some(l);
                     break;
                 }
@@ -253,5 +299,45 @@ mod tests {
 
         fs::remove_dir_all(&root).expect("cleanup root");
         fs::remove_dir_all(&extra).expect("cleanup extra");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_native_remains_loaded_after_cache_drop() {
+        use libloading::os::unix::{Library, RTLD_NOW};
+        use std::process::Command;
+
+        // Use two independent test libraries so an existing runtime load cannot mask an unload.
+        let root = unique_temp_dir("lifetime");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("library.c");
+        fs::write(&source, "int test_symbol(void) { return 42; }\n").unwrap();
+        for name in ["libSystem.Native.so", "libordinary.so"] {
+            assert!(
+                Command::new("cc")
+                    .args(["-shared", "-fPIC", "-o"])
+                    .arg(root.join(name))
+                    .arg(&source)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let libraries = NativeLibraries::new(root.to_string_lossy());
+        libraries.get_library("libSystem.Native", None).unwrap();
+        libraries.get_library("libordinary", None).unwrap();
+        drop(libraries);
+
+        // Linux RTLD_NOLOAD (4) checks the loader's state without loading a new copy.
+        // SAFETY: F11.NativeLibraryLoadTrusted — both paths name the test libraries compiled
+        // above, whose only exported function has no initialization or finalization effects.
+        let retained =
+            unsafe { Library::open(Some(root.join("libSystem.Native.so")), RTLD_NOW | 4) };
+        assert!(retained.is_ok());
+        // SAFETY: F11.NativeLibraryLoadTrusted — same controlled test library contract.
+        let ordinary = unsafe { Library::open(Some(root.join("libordinary.so")), RTLD_NOW | 4) };
+        assert!(ordinary.is_err());
+        drop(retained);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -32,6 +32,81 @@ use syn::{
     punctuated::Punctuated,
 };
 
+/// Arguments shared by intrinsic macro expansion and the build scanner.
+pub struct IntrinsicArgs {
+    pub signature: syn::LitStr,
+    pub selector: Option<syn::Path>,
+    pub fallback: Option<syn::Path>,
+}
+
+impl Parse for IntrinsicArgs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let signature = input.parse()?;
+        let mut selector = None;
+        let mut fallback = None;
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let name: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let path = input.parse()?;
+            let slot = match name.to_string().as_str() {
+                "select" => &mut selector,
+                "fallback" => &mut fallback,
+                _ => {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        "expected `select` or `fallback`",
+                    ));
+                }
+            };
+            if slot.replace(path).is_some() {
+                return Err(syn::Error::new(name.span(), "duplicate intrinsic option"));
+            }
+        }
+        Ok(Self {
+            signature,
+            selector,
+            fallback,
+        })
+    }
+}
+
+/// Validate the options shared by all annotations on an intrinsic body.
+pub fn validate_intrinsic_options(args: &[IntrinsicArgs], is_async: bool) -> Result<()> {
+    if let Some(first) = args.first() {
+        for arg in args {
+            if !is_async && (arg.selector.is_some() || arg.fallback.is_some()) {
+                return Err(syn::Error::new_spanned(
+                    &arg.signature,
+                    "select and fallback require an async intrinsic",
+                ));
+            }
+            if is_async && arg.fallback.is_none() {
+                return Err(syn::Error::new_spanned(
+                    &arg.signature,
+                    "async intrinsic requires a fallback",
+                ));
+            }
+            if first.selector != arg.selector {
+                return Err(syn::Error::new_spanned(
+                    &arg.signature,
+                    "intrinsic annotations must name the same selector",
+                ));
+            }
+            if first.fallback != arg.fallback {
+                return Err(syn::Error::new_spanned(
+                    &arg.signature,
+                    "intrinsic annotations must name the same fallback",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct ParsedSignature {
     pub is_static: bool,
@@ -656,6 +731,28 @@ mod tests {
     use super::*;
     use quote::quote;
     use syn::parse_str;
+
+    #[test]
+    fn intrinsic_argument_syntax() {
+        let args: IntrinsicArgs =
+            syn::parse_str("\"static void X::M()\", select = super::choose,").unwrap();
+        assert_eq!(args.selector.unwrap(), syn::parse_quote!(super::choose));
+        let args: IntrinsicArgs =
+            syn::parse_str("\"s\", fallback = sync, select = choose,").unwrap();
+        assert_eq!(args.fallback.unwrap(), syn::parse_quote!(sync));
+        assert_eq!(args.selector.unwrap(), syn::parse_quote!(choose));
+        for text in [
+            "\"s\", fallback = one, fallback = two",
+            "\"s\", other = path",
+            "\"s\", select = path, select = other",
+            "\"s\", select = 3",
+        ] {
+            assert!(
+                syn::parse_str::<IntrinsicArgs>(text).is_err(),
+                "accepted {text}"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_simple_static() {

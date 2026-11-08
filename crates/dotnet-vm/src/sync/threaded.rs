@@ -13,6 +13,7 @@ struct SyncBlockState {
     owner_thread_id: ArenaId,
     /// Lock recursion count (for nested locks by the same thread)
     recursion_count: usize,
+    release_epoch: u64,
 }
 
 /// Represents a synchronization block for Monitor operations on .NET objects.
@@ -20,6 +21,11 @@ struct SyncBlockState {
 pub struct SyncBlock {
     state: OrderedMutex<levels::SyncState, SyncBlockState>,
     condvar: Condvar,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> = std::cell::RefCell::new(None);
 }
 
 enum EnterState<'a> {
@@ -33,9 +39,33 @@ impl SyncBlock {
             state: OrderedMutex::new(SyncBlockState {
                 owner_thread_id: ArenaId::INVALID,
                 recursion_count: 0,
+                release_epoch: 0,
             }),
             condvar: Condvar::new(),
         }
+    }
+
+    pub(crate) fn release_epoch(&self) -> u64 {
+        self.state.lock().release_epoch
+    }
+
+    pub(crate) fn wait_for_release(&self, epoch: u64, duration: std::time::Duration) {
+        let mut state = self.state.lock();
+        if state.release_epoch == epoch {
+            #[cfg(test)]
+            WAIT_TEST_HOOK.with(|hook| {
+                if let Some(callback) = hook.borrow_mut().as_mut() {
+                    callback();
+                }
+            });
+            self.condvar.wait_for(state.raw_mut(), duration);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn notify_spurious(&self) {
+        let _state = self.state.lock();
+        self.condvar.notify_all();
     }
 
     fn mark_entered(
@@ -232,7 +262,11 @@ impl super::SyncBlockOps for SyncBlock {
 
         if state.recursion_count == 0 {
             state.owner_thread_id = ArenaId::INVALID;
-            self.condvar.notify_one();
+            state.release_epoch = state
+                .release_epoch
+                .checked_add(1)
+                .expect("monitor release epoch exhausted");
+            self.condvar.notify_all();
         }
 
         true

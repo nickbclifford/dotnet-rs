@@ -79,7 +79,7 @@ assert_generated_support_slot_artifacts() {
 
 assert_clippy_skips_dotnet() {
     local log_file="$LOG_DIR/clippy-clean.log"
-    log_step "Probe 1/3: clean clippy should skip dotnet/MSBuild invocation paths"
+    log_step "Probe 1/4: clean clippy should skip dotnet/MSBuild invocation paths"
     cargo clean
     cargo clippy --workspace --all-targets 2>&1 | tee "$log_file"
 
@@ -94,7 +94,7 @@ assert_skip_toggle_invalidates_support_build() {
     local dll_path=""
     local size=""
 
-    log_step "Probe 2/3: DOTNET_SKIP_BUILD toggle must invalidate dotnet-assemblies output"
+    log_step "Probe 2/4: DOTNET_SKIP_BUILD toggle must invalidate dotnet-assemblies output"
     cargo clean
     DOTNET_SKIP_BUILD=1 cargo build -p dotnet-assemblies 2>&1 | tee "$skip_log"
 
@@ -125,7 +125,7 @@ assert_vm_directory_rerun_invalidation() {
     local probe_dir
     probe_dir="$(dirname "$probe_file")"
 
-    log_step "Probe 3/3: dotnet-vm rerun-if-changed should retrigger on add/remove under watched root"
+    log_step "Probe 3/4: dotnet-vm rerun-if-changed should retrigger on add/remove under watched root"
     cargo clean
     run_logged "$baseline_log" cargo build -p dotnet-vm --no-default-features -vv
 
@@ -147,6 +147,115 @@ EOF
     assert_vm_rerun_marker_present "$remove_log" "remove"
 }
 
+# Compile actual scanned handlers, including an external-crate selector with generic host bounds.
+assert_async_intrinsic_wiring() (
+    set -euo pipefail
+    local root="crates/dotnet-intrinsics-string/src"
+    local lib="$root/lib.rs" probe="$root/async_build_probe.rs"
+    local conflict="crates/dotnet-vm/src/intrinsics/.async_selector_conflict.rs"
+    local backup test_backup vm_backup test_file="crates/dotnet-vm/src/native_substring_tests.rs"
+    local vm_lib="crates/dotnet-vm/src/intrinsics/mod.rs" vm_probe="crates/dotnet-vm/src/intrinsics/async_nested_probe.rs"
+    backup="$(mktemp)"
+    test_backup="$(mktemp)"
+    vm_backup="$(mktemp)"
+    cp "$test_file" "$test_backup"
+    cp "$vm_lib" "$vm_backup"
+    [[ ! -e "$probe" && ! -e "$conflict" && ! -e "$vm_probe" ]] || fail "async probe path already exists"
+    cp "$lib" "$backup"
+    trap 'cp "$backup" "$lib"; cp "$test_backup" "$test_file"; cp "$vm_backup" "$vm_lib"; rm -f "$probe" "$conflict" "$vm_probe" "$backup" "$test_backup" "$vm_backup"' EXIT
+
+    log_step "Probe 4/4: async intrinsic scanner, selector and dispatch wiring"
+    run_logged "$LOG_DIR/async-baseline.log" cargo build -p dotnet-vm --no-default-features
+    local generated
+    generated="$(find target/debug/build -path '*/out/intrinsics_dispatch.rs' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+    sed -n '/pub fn dispatch_method_intrinsic/,/^}/p' "$generated" > "$LOG_DIR/async-baseline-arms"
+
+    printf '\npub mod async_build_probe;\n' >> "$lib"
+    printf '\nmod async_nested_probe;\n' >> "$vm_lib"
+    cat > "$vm_probe" <<'EOF'
+use crate::{StepResult, stack::ops::VesOps};
+use dotnet_macros::dotnet_intrinsic;
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnetdll::prelude::MethodMemberIndex;
+
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::Nested()")]
+pub fn nested<'gc, T: VesOps<'gc>>(ctx: &mut T, method: MethodDescription, generics: &GenericLookup) -> StepResult {
+    let index = method.parent.definition().methods.iter().position(|m| m.name == "Unselected").unwrap();
+    let target = MethodDescription::new(method.parent.clone(), method.parent_generics.clone(), method.resolution(), MethodMemberIndex::Method(index));
+    ctx.dispatch_method(target, generics.clone())
+}
+EOF
+    cat > "$probe" <<'EOF'
+use dotnet_macros::dotnet_intrinsic;
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_vm_ops::effects::{NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects};
+use crate::IntrinsicStringHost;
+
+pub fn sync<'gc, T: IntrinsicStringHost<'gc>>(
+    _ctx: &mut T, _method: MethodDescription, _generics: &GenericLookup,
+) -> dotnet_vm_data::StepResult { dotnet_vm_data::StepResult::Continue }
+pub fn choose<'gc, T: IntrinsicStringHost<'gc>>(
+    _ctx: &T, _operands: NativeOperandView<'_, 'gc>, _method: &MethodDescription, _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    NativeSelection::Async(NativeInvocation { start: 0, length: 0, parameter_count: 0 })
+}
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::First()", select = self::choose, fallback = self::sync)]
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::Second(int)", select = self::choose, fallback = self::sync)]
+pub async fn selected(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::Unselected()", fallback = self::sync)]
+pub async fn unselected(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
+EOF
+    cat scripts/tests/async_dispatch_probe.rs >> "$test_file"
+    for config in st mt; do
+        local -a features=(--no-default-features)
+        [[ "$config" == st ]] || features+=(--features multithreading)
+        run_logged "$LOG_DIR/async-$config.log" cargo build -p dotnet-vm "${features[@]}"
+        generated="$(find target/debug/build -path '*/out/intrinsics_dispatch.rs' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+        rg -q 'Some\(dotnet_intrinsics_string::async_build_probe::selected_native_selector\)' "$generated" || fail "missing selected wiring ($config)"
+        [[ "$(grep -c 'fn selector().*Some(dotnet_intrinsics_string::async_build_probe::selected_native_selector)' "$generated")" == 2 ]] || fail "expected two selector providers ($config)"
+        [[ "$(grep -c 'fn selector().*{ None }' "$generated")" == 1 ]] || fail "expected one unselected provider ($config)"
+        [[ "$(grep -c 'fn fallback().*async_build_probe::.*_native_fallback' "$generated")" == 3 ]] || fail "expected three fallback providers ($config)"
+        [[ "$(grep -c '=> dotnet_intrinsics_string::async_build_probe::selected_native_entry' "$generated")" == 2 ]] || fail "expected two selected arms ($config)"
+        rg -q 'unselected_native_entry::<T, NativeSelector_.*>\(ctx, method, generics, _mode\)' "$generated" || fail "missing unselected wiring ($config)"
+        sed -n '/pub fn dispatch_method_intrinsic/,/^}/p' "$generated" | grep -v 'DotnetRs_AsyncProbe_' > "$LOG_DIR/async-$config-arms"
+        cmp "$LOG_DIR/async-baseline-arms" "$LOG_DIR/async-$config-arms" || fail "existing dispatch arms changed ($config)"
+        run_logged "$LOG_DIR/async-dispatch-$config.log" cargo nextest run -p dotnet-vm "${features[@]}" async_probe_dispatch_modes
+        rg -q '1 test run: 1 passed' "$LOG_DIR/async-dispatch-$config.log" || fail "async dispatch probe did not pass exactly once ($config)"
+    done
+
+    # The unreferenced source is scanned by build.rs but never compiled as a module.
+    cat > "$conflict" <<'EOF'
+#[dotnet_intrinsic("static void DotnetRs.AsyncConflict::First()", select = one, fallback = sync)]
+#[dotnet_intrinsic("static void DotnetRs.AsyncConflict::Second()", select = two, fallback = sync)]
+async fn conflict(_fx: VmEffects) -> NativeResult { unreachable!() }
+EOF
+    for case in different missing; do
+        if [[ "$case" == missing ]]; then
+            sed -i 's/, select = two//' "$conflict"
+        fi
+        if cargo build -p dotnet-vm --no-default-features >"$LOG_DIR/async-conflict-$case.log" 2>&1; then
+            fail "$case selector mismatch accepted by scanner"
+        fi
+        rg -q 'async_selector_conflict.rs: intrinsic annotations must name the same selector' "$LOG_DIR/async-conflict-$case.log" || { print_log_excerpt "$LOG_DIR/async-conflict-$case.log"; fail "missing scanner conflict diagnostic ($case)"; }
+    done
+    for case in different missing; do
+        cat > "$conflict" <<'EOF'
+#[dotnet_intrinsic("static void DotnetRs.AsyncConflict::First()", fallback = one)]
+#[dotnet_intrinsic("static void DotnetRs.AsyncConflict::Second()", fallback = two)]
+async fn conflict(_fx: VmEffects) -> NativeResult { unreachable!() }
+EOF
+        local diagnostic='intrinsic annotations must name the same fallback'
+        if [[ "$case" == missing ]]; then
+            sed -i 's/, fallback = two//' "$conflict"
+            diagnostic='async intrinsic requires a fallback'
+        fi
+        if cargo build -p dotnet-vm --no-default-features >"$LOG_DIR/async-fallback-$case.log" 2>&1; then
+            fail "$case fallback accepted by scanner"
+        fi
+        rg -q "$diagnostic" "$LOG_DIR/async-fallback-$case.log" || { print_log_excerpt "$LOG_DIR/async-fallback-$case.log"; fail "missing scanner fallback diagnostic ($case)"; }
+    done
+)
+
 main() {
     require_cmd cargo
     require_cmd dotnet
@@ -158,6 +267,7 @@ main() {
     assert_clippy_skips_dotnet
     assert_skip_toggle_invalidates_support_build
     assert_vm_directory_rerun_invalidation
+    assert_async_intrinsic_wiring
 
     log_step "Build-script regression probes passed"
 }

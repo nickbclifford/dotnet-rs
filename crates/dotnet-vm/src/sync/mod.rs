@@ -26,6 +26,8 @@ mod threaded;
 #[cfg(not(feature = "multithreading"))]
 pub use single_threaded::{SyncBlock, SyncBlockManager};
 
+#[cfg(all(test, feature = "multithreading"))]
+pub(crate) use threaded::WAIT_TEST_HOOK;
 #[cfg(feature = "multithreading")]
 pub use threaded::{SyncBlock, SyncBlockManager};
 

@@ -15,6 +15,9 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     with_string,
 };
+use dotnet_vm_ops::effects::{
+    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
@@ -197,22 +200,45 @@ pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesI
     let _generation = ctx.pop_i32();
     ctx.heap().needs_full_collect.set(true);
     ctx.increment_ip();
-    ctx.yield_spin()
+    StepResult::Yield
 }
 
-#[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
-pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc> + VesInternals<'gc>>(
+/// Keep the self-wait on the existing retry path while a finalizer is executing.
+pub fn gc_wait_finalizers_select<'gc, T: MemoryOps<'gc>>(
+    ctx: &T,
+    _operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    if ctx.heap().processing_finalizer.get() {
+        NativeSelection::Synchronous(intrinsic_gc_wait_for_pending_finalizers::<T>)
+    } else {
+        NativeSelection::Async(NativeInvocation {
+            start: 0,
+            length: 0,
+            parameter_count: 0,
+        })
+    }
+}
+
+/// Preserve the legacy retry for self-waits and non-inline dispatch.
+pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    // If there are pending finalizers or we're currently processing one,
-    // yield to wait (this effectively spins until finalizers complete)
-    if !ctx.heap().pending_finalization.borrow().is_empty() || ctx.heap().processing_finalizer.get()
+    if ctx.has_global_pending_finalizers()
+        || !ctx.heap().pending_finalization.borrow().is_empty()
+        || ctx.heap().processing_finalizer.get()
     {
-        return ctx.yield_spin();
+        return StepResult::Yield;
     }
     StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()", select = gc_wait_finalizers_select, fallback = intrinsic_gc_wait_for_pending_finalizers)]
+pub async fn gc_wait_finalizers(mut fx: VmEffects) -> NativeResult {
+    fx.wait_finalizers().await
 }
 
 #[dotnet_intrinsic("static void System.GC::GetMemoryInfo(System.GCMemoryInfoData, int)")]
@@ -276,6 +302,22 @@ fn alloc_or_reuse_slot<T>(handles: &mut Vec<Option<T>>, value: T) -> usize {
     }
 }
 
+// CoreLib reserves the low two bits for WeakReference and GCHandle tags.
+// Each handle-table slot is larger than four bytes, so an allocated Vec's
+// byte-size limit also bounds the encoded index within isize::MAX.
+fn encode_gc_handle(index: usize) -> isize {
+    index
+        .checked_add(1)
+        .and_then(|value| value.checked_mul(4))
+        .and_then(|value| isize::try_from(value).ok())
+        .expect("GC handle table exceeds the representable address space")
+}
+
+fn decode_gc_handle(handle: isize) -> Option<usize> {
+    let value = usize::try_from(handle).ok()?;
+    (value != 0 && value % 4 == 0).then(|| value / 4 - 1)
+}
+
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)"
 )]
@@ -312,7 +354,7 @@ pub fn intrinsic_gchandle_internal_alloc<
             .trace_gc_handle(ctx.indent(), "ALLOC", &handle_type_str, addr);
     }
 
-    ctx.push_isize((index + 1) as isize);
+    ctx.push_isize(encode_gc_handle(index));
     StepResult::Continue
 }
 
@@ -343,8 +385,7 @@ pub fn intrinsic_gchandle_internal_free<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    if handle != 0 {
-        let index = (handle - 1) as usize;
+    if let Some(index) = decode_gc_handle(handle) {
         let mut handles = ctx.heap().gchandles.borrow_mut();
         if index < handles.len() {
             if let Some((obj, handle_type)) = handles[index]
@@ -382,15 +423,14 @@ pub fn intrinsic_gchandle_internal_get<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    let result = if handle == 0 {
-        ObjectRef(None)
-    } else {
-        let index = (handle - 1) as usize;
+    let result = if let Some(index) = decode_gc_handle(handle) {
         let handles = ctx.heap().gchandles.borrow();
         match handles.get(index) {
             Some(Some((obj, _))) => *obj,
             _ => ObjectRef(None),
         }
+    } else {
+        ObjectRef(None)
     };
     ctx.push_obj(result);
     StepResult::Continue
@@ -406,8 +446,7 @@ pub fn intrinsic_gchandle_internal_set<'gc, T: TypedStackOps<'gc> + MemoryOps<'g
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let handle = ctx.pop_isize();
-    if handle != 0 {
-        let index = (handle - 1) as usize;
+    if let Some(index) = decode_gc_handle(handle) {
         let mut handles = ctx.heap().gchandles.borrow_mut();
         if index < handles.len()
             && let Some(entry) = &mut handles[index]
@@ -434,10 +473,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_isize();
-    let addr = if handle == 0 {
-        0
-    } else {
-        let index = (handle - 1) as usize;
+    let addr = if let Some(index) = decode_gc_handle(handle) {
         let handles = ctx.heap().gchandles.borrow();
         if index < handles.len()
             && let Some(entry) = &handles[index]
@@ -455,6 +491,8 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
         } else {
             0
         }
+    } else {
+        0
     };
     ctx.push_isize(addr);
     StepResult::Continue
@@ -628,4 +666,21 @@ pub fn intrinsic_object_has_component_size<'gc, T: TypedStackOps<'gc>>(
     });
     ctx.push_i32(has_component_size as i32);
     StepResult::Continue
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::{decode_gc_handle, encode_gc_handle};
+
+    #[test]
+    fn gc_handle_slots_reserve_tag_bits_and_reject_invalid_values() {
+        for index in [0, 1, 2, 17, 1024] {
+            let handle = encode_gc_handle(index);
+            assert_eq!(handle & 3, 0);
+            assert_eq!(decode_gc_handle(handle), Some(index));
+        }
+        for invalid in [0, -4, 1, 2, 3, 5, 6, 7] {
+            assert_eq!(decode_gc_handle(invalid), None);
+        }
+    }
 }

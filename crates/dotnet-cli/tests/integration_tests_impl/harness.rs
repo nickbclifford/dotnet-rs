@@ -163,7 +163,7 @@ impl TestHarness {
         self.run_with_shared_timeout_observed(resolution, shared, timeout, |_, _, _| {})
     }
 
-    fn run_with_shared_timeout_observed<F>(
+    pub(super) fn run_with_shared_timeout_observed<F>(
         &self,
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
@@ -252,6 +252,19 @@ impl TestHarness {
         self.run_with_shared_internal(resolution, shared, |_, _, _| {}, |_| {})
     }
 
+    #[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+    pub fn run_with_shared_observed<O>(
+        &self,
+        resolution: ResolutionS,
+        shared: Arc<state::SharedGlobalState>,
+        observe: O,
+    ) -> ExecutionResult
+    where
+        O: FnOnce(&state::SharedGlobalState, TypeDescription, &ExecutionResult),
+    {
+        self.run_with_shared_internal(resolution, shared, observe, |_| {})
+    }
+
     #[cfg(feature = "multithreading")]
     pub fn run_with_shared_signal_then_wait<F>(
         &self,
@@ -313,6 +326,9 @@ impl TestHarness {
         if let Err(e) = executor.entrypoint(method) {
             let msg = format!("Entrypoint setup error: {:?}", e);
             eprintln!("{}", msg);
+            executor.wait_for_foreground_workers();
+            drop(executor);
+            shared.shutdown_workers();
             return ExecutionResult {
                 exit_code: 255,
                 stderr: Some(msg),
@@ -342,6 +358,8 @@ impl TestHarness {
             }
         };
 
+        executor.wait_for_foreground_workers();
+
         // Observe scalars before the executor or its arena is torn down. This callback
         // must never block: the executor is still registered with the GC coordinator.
         observe(&shared, td, &result);
@@ -367,6 +385,7 @@ impl TestHarness {
         // Executor::drop releases only its reservation; the thread-affine guard
         // independently owns storage and drains its exact registration below.
         drop(executor);
+        shared.shutdown_workers();
 
         on_complete(result.clone());
 

@@ -551,13 +551,11 @@ pub trait TypeLayoutOps {
 }
 
 pub trait VesInternals<'gc> {
+    /// Restore the instruction snapshot for a legacy static-initialization retry.
     fn back_up_ip(&mut self);
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
-    fn yield_spin(&mut self) -> StepResult {
-        StepResult::Yield
-    }
     fn state(&self) -> &MethodState;
     fn state_mut(&mut self) -> &mut MethodState;
 
@@ -573,7 +571,24 @@ pub trait VesInternals<'gc> {
     fn current_intrinsic(&self) -> Option<MethodDescription>;
     fn set_current_intrinsic(&mut self, method: Option<MethodDescription>);
 
+    /// Live native calls, ordered from oldest to newest, with caller depth and call-site IP.
+    fn native_boundaries(&self)
+    -> Vec<(usize, dotnet_vm_data::NativeId, MethodDescription, usize)>;
+    /// Find the innermost capturing call at an active caller depth.
+    fn native_capture_at(&self, depth: usize) -> Option<dotnet_vm_data::NativeReturnDestination>;
+    /// Deliver an escaping child exception after its frames have unwound.
+    fn capture_native_exception(
+        &mut self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+        exception: ObjectRef<'gc>,
+    ) -> Result<(), VmError>;
+    /// Retire native calls whose call site is in the specified active frame.
+    fn unwind_native_at(&mut self, frame_depth: usize);
     fn unwind_frame(&mut self);
+    /// Suspend calls whose caller is in or above the frame running a filter.
+    fn suspend_native_above(&mut self, frame_index: usize);
+    /// Restore calls after the filter's managed frames have been restored.
+    fn restore_suspended_native(&mut self);
 
     fn evaluation_stack_mut(&mut self) -> &mut dotnet_vm_data::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &dotnet_vm_data::FrameStack<'gc>;

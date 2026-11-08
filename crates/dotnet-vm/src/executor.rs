@@ -3,10 +3,7 @@ use crate::{
     dispatch::ExecutionEngine,
     error::{ExecutionError, VmError},
     gc::coordinator::*,
-    stack::{
-        CallStack, GCArena,
-        ops::{VesOps, VmCallOps},
-    },
+    stack::{CallStack, GCArena, ops::VmCallOps},
     state::{ArenaLocalState, SharedGlobalState},
     threading::ThreadManagerOps,
 };
@@ -34,6 +31,17 @@ use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 #[cfg(feature = "multithreading")]
 use crate::gc::arena::ArenaOwner;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
+enum NativeWaitSleep {
+    Monitor(Arc<crate::sync::SyncBlock>, u64, Option<std::time::Instant>),
+    Finalizers,
+    Initializer(Box<dyn dotnet_vm_ops::effects::NativeInitSleeper>),
+}
+
 /// Thread-affine execution owner. Neither Executor nor its extracted arena
 /// guard may be sent to or shared with another OS thread.
 pub struct Executor {
@@ -43,6 +51,7 @@ pub struct Executor {
     shared: Arc<SharedGlobalState>,
     /// Thread ID for this executor
     thread_id: ArenaId,
+    registered: bool,
     /// Owner-held registration; moved into `ArenaGuard` by `extract_arena`.
     #[cfg(feature = "multithreading")]
     registration: std::cell::RefCell<Option<dotnet_utils::gc::ArenaRegistration>>,
@@ -207,6 +216,7 @@ impl Executor {
             _affinity: std::marker::PhantomData,
             shared,
             thread_id,
+            registered: true,
             #[cfg(feature = "multithreading")]
             owner,
             #[cfg(feature = "multithreading")]
@@ -392,23 +402,87 @@ impl Executor {
     /// deliberately accepts no `ObjectRef`: the delegate and managed `Thread` object remain
     /// rooted in their parent arena, while the worker constructs its own arena around the shared
     /// VM-global state.
-    #[allow(
-        dead_code,
-        reason = "Only the multithreaded managed-Thread intrinsic calls this seam; it remains deliberately unavailable in no-MT builds"
-    )]
+    #[cfg(feature = "multithreading")]
     pub(crate) fn run_thread_start(
         shared: Arc<SharedGlobalState>,
         method: MethodDescription,
         generic_inst: dotnet_types::generics::GenericLookup,
-    ) -> ExecutorResult {
+        worker: crate::threading::workers::RunningWorker,
+    ) {
         let mut executor = Self::new(shared);
-        match executor.install_thread_start(method, generic_inst) {
+        let result = match executor.install_thread_start(method, generic_inst) {
             Ok(()) => executor.run(),
             Err(error) => ExecutorResult::Error(error),
+        };
+        // The finished segment cannot retain its stack or resume after publication.
+        let cleanup = executor.with_arena(|arena| {
+            arena.mutate_root(|_, c| {
+                c.retire_finalizer_segment();
+                let execution = &mut c.stack.execution;
+                execution
+                    .call_state
+                    .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);
+                *execution = crate::stack::context::ThreadContext::default();
+            });
+        });
+        let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
+        executor.serve_retired(worker.complete(result));
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn serve_retired(mut self, completed: crate::threading::workers::CompletedWorker) {
+        let retired = completed.retire();
+        let shared = self.shared.clone();
+        loop {
+            if shared.thread_manager.is_gc_stop_requested() {
+                shared
+                    .thread_manager
+                    .safe_point(self.thread_id, &shared.gc_coordinator);
+            }
+            let pending = self
+                .with_arena_ref(|arena| {
+                    arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+                })
+                .expect("retired owner must retain its arena");
+            if pending && retired.begin_finalizing(&shared) {
+                let result = self.run_inner(true);
+                retired.finish_finalizing();
+                if !matches!(result, ExecutorResult::Exited(_)) {
+                    shared.abort_signal().request_abort();
+                }
+            }
+            if shared.thread_manager.wait_retired() {
+                // INVARIANT: F1.RetiredCollectionExclusion — a collection may have
+                // queued work after the last probe, so recheck while excluding it.
+                let done = shared.gc_coordinator.try_exclude_collection(|| {
+                    let pending = self
+                        .with_arena_ref(|arena| {
+                            arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+                        })
+                        .expect("retired owner must retain its arena");
+                    if pending && !shared.is_abort_requested() {
+                        return false;
+                    }
+                    retired.begin_shutdown();
+                    self.unregister();
+                    true
+                });
+                if done == Some(true) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
         }
+        // Lease holders can need coordinator locks before releasing their leases.
+        let retained = self.owner.take().map(RetainedArena::new);
+        let registration = self.registration.get_mut().take();
+        let drained = retained.is_some_and(|arena| arena.drain(registration));
+        drop(self);
+        retired.finish_shutdown(drained);
     }
 
     /// Installs a `ThreadStart` target without applying CLI entrypoint argument rules.
+    #[cfg(feature = "multithreading")]
     fn install_thread_start(
         &mut self,
         method: MethodDescription,
@@ -473,8 +547,47 @@ impl Executor {
         })?
     }
 
+    /// Keep the entry arena participating in GC while foreground workers finish.
+    /// Call after the entry point returns and before dropping this executor.
+    pub fn wait_for_foreground_workers(&mut self) {
+        loop {
+            // Observe cancellation before the registry lock: a worker either published
+            // Finalizing under that lock or sees the cancellation before entering it.
+            let aborted = self.shared.is_abort_requested();
+            if !self.shared.workers.has_running()
+                && !self.shared.workers.has_finalizing()
+                && (aborted || !self.shared.has_pending_finalizers())
+            {
+                break;
+            }
+            #[cfg(feature = "multithreading")]
+            if self.shared.thread_manager.is_gc_stop_requested() {
+                self.shared
+                    .thread_manager
+                    .safe_point(self.thread_id, &self.shared.gc_coordinator);
+            }
+            if !self.shared.is_abort_requested()
+                && self
+                    .with_arena_ref(|arena| {
+                        arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+                    })
+                    .unwrap_or(false)
+            {
+                let result = self.run_inner(true);
+                if !matches!(result, ExecutorResult::Exited(_)) {
+                    self.shared.abort_signal().request_abort();
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
+        self.run_inner(false)
+    }
+
+    fn run_inner(&mut self, finalizers_only: bool) -> ExecutorResult {
         #[cfg(feature = "bench-instrumentation")]
         let metrics = self.shared.metrics.clone();
         #[cfg(feature = "bench-instrumentation")]
@@ -546,6 +659,9 @@ impl Executor {
             // - Long-running operations
             #[cfg(feature = "multithreading")]
             if self.shared.thread_manager.is_gc_stop_requested() {
+                if let Err(error) = self.release_initializer_waits() {
+                    break ExecutorResult::Error(error);
+                }
                 self.shared
                     .thread_manager
                     .safe_point(self.thread_id, &self.shared.gc_coordinator);
@@ -553,30 +669,118 @@ impl Executor {
 
             #[cfg(feature = "memory-validation")]
             let thread_id = self.thread_id;
-            if let Err(e) = self.with_arena(|arena| {
-                // Optimization: Only mutate the root to process finalizers if there are actually pending finalizers
-                let has_pending = arena.mutate(|_, c| {
-                    c.stack.execution.call_state.substring.is_none()
-                        && c.stack.local.heap.has_pending_finalizers()
-                });
-                if has_pending {
-                    let _ = arena.mutate_root(|gc, c| {
-                        let gc_handle = GCHandle::new(
-                            gc,
-                            #[cfg(feature = "multithreading")]
-                            // SAFETY: F1.GcHandleRooted — Finalizer processing runs inside this arena's mutate_root
-                            // closure, so the inner GC handle belongs to the same arena.
-                            unsafe {
-                                c.stack.arena_inner_gc()
-                            },
-                            #[cfg(feature = "memory-validation")]
-                            thread_id,
-                        );
-                        c.ves_context(gc_handle).process_pending_finalizers()
+            let wait = match self
+                .with_arena(|arena| {
+                    let (has_pending, mut wait) = arena.mutate(|_, c| {
+                        let has_pending = c.stack.local.heap.has_pending_finalizers();
+                        let processing = c.stack.local.heap.processing_finalizer.get();
+                        let wait = c.stack.execution.call_state.native.last().and_then(|work| {
+                            work.wait.as_ref().and_then(|wait| match wait {
+                                crate::stack::native_effects::PendingWait::Monitor(wait) => {
+                                    wait.epoch.map(|epoch| {
+                                        NativeWaitSleep::Monitor(
+                                            wait.block.clone(),
+                                            epoch,
+                                            wait.deadline,
+                                        )
+                                    })
+                                }
+                                crate::stack::native_effects::PendingWait::Finalizers(_)
+                                    if has_pending
+                                        || processing
+                                        || c.stack.shared.has_pending_finalizers() =>
+                                {
+                                    Some(NativeWaitSleep::Finalizers)
+                                }
+                                crate::stack::native_effects::PendingWait::Finalizers(_) => None,
+                                crate::stack::native_effects::PendingWait::Initializer(_, wait) => {
+                                    (!wait.ready())
+                                        .then(|| NativeWaitSleep::Initializer(wait.sleeper()))
+                                }
+                            })
+                        });
+                        (has_pending, wait)
                     });
+                    if has_pending {
+                        let result = arena.mutate_root(|gc, c| {
+                            let gc_handle = GCHandle::new(
+                                gc,
+                                #[cfg(feature = "multithreading")]
+                                // SAFETY: F1.GcHandleRooted — Finalizer processing runs inside this arena's mutate_root
+                                // closure, so the inner GC handle belongs to the same arena.
+                                unsafe {
+                                    c.stack.arena_inner_gc()
+                                },
+                                #[cfg(feature = "memory-validation")]
+                                thread_id,
+                            );
+                            c.process_pending_finalizers(gc_handle)
+                        });
+                        match result {
+                            StepResult::Error(error) => return Err(error),
+                            StepResult::FramePushed => wait = None,
+                            _ => {}
+                        }
+                        if matches!(wait, Some(NativeWaitSleep::Finalizers))
+                            && arena.mutate(|_, c| {
+                                !c.stack.local.heap.has_pending_finalizers()
+                                    && !c.stack.local.heap.processing_finalizer.get()
+                                    && !c.stack.shared.has_pending_finalizers()
+                            })
+                        {
+                            wait = None;
+                        }
+                    }
+                    Ok(wait)
+                })
+                .and_then(|result| result)
+            {
+                Ok(wait) => wait,
+                Err(error) => break ExecutorResult::Error(error),
+            };
+
+            if finalizers_only {
+                let done = match self.with_arena_ref(|arena| {
+                    arena.mutate(|_, c| {
+                        c.stack.parked_finalizer_caller.is_none()
+                            && !c.stack.local.heap.has_pending_finalizers()
+                    })
+                }) {
+                    Ok(done) => done,
+                    Err(error) => break ExecutorResult::Error(error),
+                };
+                if done {
+                    break ExecutorResult::Exited(0);
                 }
-            }) {
-                break ExecutorResult::Error(e);
+            }
+
+            // Finalizer work is scheduled first; the returned block contains no arena
+            // references, so the actual wait cannot keep a mutation or lease live.
+            if let Some(wait) = wait {
+                #[cfg(test)]
+                WAIT_TEST_HOOK.with(|hook| {
+                    if let Some(callback) = hook.borrow_mut().take() {
+                        callback();
+                    }
+                });
+                let interval = crate::sync::get_safe_point_yield_duration().clamp(
+                    std::time::Duration::from_millis(1),
+                    std::time::Duration::from_millis(10),
+                );
+                match wait {
+                    NativeWaitSleep::Monitor(block, epoch, deadline) => {
+                        let duration = deadline.map_or(interval, |deadline| {
+                            deadline
+                                .saturating_duration_since(std::time::Instant::now())
+                                .min(interval)
+                        });
+                        if !duration.is_zero() {
+                            block.wait_for_release(epoch, duration);
+                        }
+                    }
+                    NativeWaitSleep::Finalizers => std::thread::sleep(interval),
+                    NativeWaitSleep::Initializer(sleeper) => sleeper.wait(interval),
+                }
             }
 
             #[cfg(feature = "memory-validation")]
@@ -650,8 +854,20 @@ impl Executor {
 
         if let Err(error) = self.with_arena(|arena| {
             arena.mutate_root(|_, c| {
-                c.stack.execution.call_state.substring = None;
-                c.stack.execution.call_state.substring_eligible = false;
+                c.retire_finalizer_segment();
+                let execution = &mut c.stack.execution;
+                for frame in execution
+                    .frame_stack
+                    .frames
+                    .iter_mut()
+                    .chain(execution.frame_stack.suspended_frames.iter_mut())
+                    .chain(execution.frame_stack.pooled_frames.iter_mut())
+                {
+                    frame.monitor_retry = None;
+                }
+                execution
+                    .call_state
+                    .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);
             });
         }) {
             return ExecutorResult::Error(error);
@@ -662,8 +878,25 @@ impl Executor {
         result
     }
 
+    fn release_initializer_waits(&mut self) -> Result<(), VmError> {
+        self.with_arena(|arena| {
+            arena.mutate_root(|_, engine| {
+                engine
+                    .stack
+                    .execution
+                    .call_state
+                    .release_initializer_waits()?;
+                if let Some(parked) = engine.stack.parked_finalizer_caller.as_mut() {
+                    parked.call_state.release_initializer_waits()?;
+                }
+                Ok(())
+            })
+        })?
+    }
+
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) -> Result<(), VmError> {
+        self.release_initializer_waits()?;
         #[cfg(feature = "multithreading")]
         {
             use std::time::Instant;
@@ -781,7 +1014,7 @@ impl RetainedArena {
         Self(std::mem::ManuallyDrop::new(arena))
     }
 
-    fn drain(self, registration: Option<dotnet_utils::gc::ArenaRegistration>) {
+    fn drain(self, registration: Option<dotnet_utils::gc::ArenaRegistration>) -> bool {
         // INVARIANT: F1.ExecutorArenaRetained — only an exact, completed drain
         // disarms retention. Missing handles and interrupted drains leak.
         if let Some(registration) = registration {
@@ -789,8 +1022,10 @@ impl RetainedArena {
             ownership_checkpoint("drain");
             if registration.unregister_and_drain() == dotnet_utils::gc::TeardownOutcome::Drained {
                 drop(std::mem::ManuallyDrop::into_inner(self.0));
+                return true;
             }
         }
+        false
     }
 }
 
@@ -816,38 +1051,55 @@ impl Drop for ArenaGuard {
         #[cfg(test)]
         ownership_checkpoint("guard");
         if let Some(retained) = retained {
-            retained.drain(self.registration.take());
+            retained.0.mutate(|_, c| {
+                c.stack
+                    .shared
+                    .publish_finalizers(&c.stack.local.heap, false);
+            });
+            let _ = retained.drain(self.registration.take());
         }
+    }
+}
+
+impl Executor {
+    fn unregister(&mut self) {
+        if !self.registered {
+            return;
+        }
+        let _ = self.with_arena_ref(|arena| {
+            arena.mutate(|_, c| {
+                c.stack
+                    .shared
+                    .publish_finalizers(&c.stack.local.heap, false);
+            })
+        });
+        #[cfg(feature = "multithreading")]
+        self.shared.gc_coordinator.unregister_arena(self.thread_id);
+
+        crate::threading::IS_PERFORMING_GC.set(false);
+        clear_tracing_state();
+        self.shared.thread_manager.unregister_thread(self.thread_id);
+        self.registered = false;
     }
 }
 
 impl Drop for Executor {
     fn drop(&mut self) {
+        let _ = self.with_arena_ref(|arena| {
+            arena.mutate(|_, c| {
+                c.stack
+                    .shared
+                    .publish_finalizers(&c.stack.local.heap, false);
+            })
+        });
         #[cfg(feature = "multithreading")]
         let retained = self.owner.take().map(RetainedArena::new);
         #[cfg(all(test, feature = "multithreading"))]
         ownership_checkpoint("executor");
+        self.unregister();
         #[cfg(feature = "multithreading")]
-        {
-            // 1. Unregister from GC coordinator FIRST.
-            // This ensures no new STW collection will target this thread.
-            self.shared.gc_coordinator.unregister_arena(self.thread_id);
-        }
-
-        // 2. Clear other thread-locals.
-        crate::threading::IS_PERFORMING_GC.set(false);
-        clear_tracing_state();
-
-        // 3. Unregister from ThreadManager.
-        // This keeps the thread "visible" to any already-in-progress STW collections
-        // until we are mostly torn down, ensuring they wait for us to finish.
-        self.shared.thread_manager.unregister_thread(self.thread_id);
-
-        #[cfg(feature = "multithreading")]
-        {
-            if let Some(retained) = retained {
-                retained.drain(self.registration.get_mut().take());
-            }
+        if let Some(retained) = retained {
+            let _ = retained.drain(self.registration.get_mut().take());
         }
     }
 }

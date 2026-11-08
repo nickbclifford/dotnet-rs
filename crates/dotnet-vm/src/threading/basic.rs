@@ -2,7 +2,7 @@
 use crate::gc::coordinator::debug_assert_collection_lock_held;
 
 use crate::{
-    Executor, ExecutorResult, SharedGlobalState,
+    Executor, SharedGlobalState,
     gc::coordinator::{
         CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,
     },
@@ -44,9 +44,11 @@ pub(crate) fn spawn_thread_start(
     shared: Arc<SharedGlobalState>,
     method: dotnet_types::members::MethodDescription,
     lookup: dotnet_types::generics::GenericLookup,
-) -> Option<std::thread::JoinHandle<ExecutorResult>> {
-    Some(thread::spawn(move || {
-        Executor::run_thread_start(shared, method, lookup)
+) -> Option<super::workers::WorkerCompletion> {
+    let registry = &shared.workers;
+    let worker_shared = shared.clone();
+    Some(registry.spawn_owner(move |worker| {
+        Executor::run_thread_start(worker_shared, method, lookup, worker)
     }))
 }
 
@@ -215,6 +217,8 @@ pub struct ThreadManager {
     pub(super) threads: OrderedMutex<levels::ThreadRegistry, HashMap<ArenaId, Arc<ManagedThread>>>,
 
     gc_stop_requested: AtomicBool,
+    retired_wake: Mutex<bool>,
+    retired_signal: Condvar,
     /// Number of threads that have reached safe point during GC
     threads_at_safepoint: AtomicUsize,
     /// Condvar for notifying when all threads reach safe point
@@ -238,6 +242,8 @@ impl ThreadManager {
             threads: OrderedMutex::new(HashMap::new()),
 
             gc_stop_requested: AtomicBool::new(false),
+            retired_wake: Mutex::new(false),
+            retired_signal: Condvar::new(),
             threads_at_safepoint: AtomicUsize::new(0),
             all_threads_stopped: Condvar::new(),
             gc_coordination: OrderedMutex::new(()),
@@ -259,6 +265,19 @@ impl ThreadManager {
         {
             coordinator.notify_resume();
         }
+    }
+
+    pub(crate) fn shutdown_retired(&self) {
+        *self.retired_wake.lock() = true;
+        self.retired_signal.notify_all();
+    }
+
+    pub(crate) fn wait_retired(&self) -> bool {
+        let mut shutdown = self.retired_wake.lock();
+        while !*shutdown && !self.gc_stop_requested.load(Ordering::Acquire) {
+            self.retired_signal.wait(&mut shutdown);
+        }
+        *shutdown
     }
 
     pub fn set_coordinator(&self, coordinator: Weak<GCCoordinator>) {
@@ -454,7 +473,11 @@ impl super::ThreadManagerBackend for ThreadManager {
 
         // Signal all threads to stop.
         // Multiple threads might do this simultaneously, which is fine.
-        self.gc_stop_requested.store(true, Ordering::Release);
+        {
+            let _wake = self.retired_wake.lock();
+            self.gc_stop_requested.store(true, Ordering::Release);
+            self.retired_signal.notify_all();
+        }
 
         // Initiator thread may not pass through `safe_point`, so flush its
         // deferred write-barrier buffer explicitly before waiting for mark.

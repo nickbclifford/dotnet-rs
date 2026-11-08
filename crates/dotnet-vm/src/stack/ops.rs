@@ -175,8 +175,23 @@ pub trait VmLoaderOps: LoaderOps {
     fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
+#[derive(Clone)]
+pub enum StaticFieldKind {
+    Load { volatile: bool },
+    Store { volatile: bool },
+    Address,
+}
+
+#[derive(Clone)]
+pub struct StaticFieldAction {
+    pub field: FieldDescription,
+    pub generics: GenericLookup,
+    pub kind: StaticFieldKind,
+}
+
 pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
     fn statics(&self) -> &StaticStorageManager;
+    fn start_static_field(&mut self, action: StaticFieldAction) -> StepResult;
 }
 
 pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
@@ -232,16 +247,6 @@ pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
 
-    /// Dispatch from an ordinary call instruction with a resumable return contract.
-    fn unified_dispatch_direct(
-        &mut self,
-        target: UnifiedDispatchTarget<'_>,
-        this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_>>,
-    ) -> StepResult {
-        self.unified_dispatch(target, this_type, ctx)
-    }
-
     fn unified_dispatch_tail(
         &mut self,
         target: UnifiedDispatchTarget<'_>,
@@ -294,7 +299,8 @@ pub trait VmPInvokeContext<'gc>:
 }
 
 pub trait VesOps<'gc>:
-    PInvokeContext<'gc>
+    dotnet_vm_ops::effects::NativeIntrinsicHost<'gc>
+    + PInvokeContext<'gc>
     + VmStackOps<'gc>
     + VmRawMemoryOps<'gc>
     + VmManagedPtrDecodeCacheOps<'gc>
@@ -315,5 +321,4 @@ pub trait VesOps<'gc>:
     fn run(&mut self) -> StepResult;
     fn handle_return(&mut self) -> StepResult;
     fn handle_exception(&mut self) -> StepResult;
-    fn process_pending_finalizers(&mut self) -> StepResult;
 }

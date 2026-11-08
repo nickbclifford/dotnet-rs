@@ -145,7 +145,7 @@ pub fn run_cli() -> ExitCode {
         reason = "the no-MT CLI executor confines shared state to its run thread"
     )]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
-    let mut executor = vm::Executor::new(shared);
+    let mut executor = vm::Executor::new(shared.clone());
 
     let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
     let Some(method_index) = td
@@ -155,6 +155,8 @@ pub fn run_cli() -> ExitCode {
         .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
     else {
         eprintln!("Internal VM error: failed to locate entry method index");
+        drop(executor);
+        shared.shutdown_workers();
         return ExitCode::from(1);
     };
 
@@ -166,10 +168,16 @@ pub fn run_cli() -> ExitCode {
     );
     if let Err(e) = executor.entrypoint(entrypoint) {
         eprintln!("Internal VM error: {}", e);
+        executor.wait_for_foreground_workers();
+        drop(executor);
+        shared.shutdown_workers();
         return ExitCode::from(1);
     }
 
     let result = executor.run();
+    executor.wait_for_foreground_workers();
+    drop(executor);
+    shared.shutdown_workers();
     match result {
         ExecutorResult::Exited(i) => exit_fast(i as i32),
         ExecutorResult::Threw(exc) => {
@@ -185,9 +193,8 @@ pub fn run_cli() -> ExitCode {
 
 /// Flush stdio and exit without running destructors.
 ///
-/// Skipping Drop on arena / cache structures is pure overhead for a CLI process that is
-/// about to exit anyway.  The in-process integration-test harness never calls `run_cli`,
-/// so leaking is contained to real one-shot CLI subprocesses.
+/// The entry executor and workers have already shut down; remaining process-global caches
+/// need not be dropped in a one-shot CLI process. The in-process harness does not use this path.
 fn exit_fast(code: i32) -> ! {
     use std::io::Write as _;
     let _ = std::io::stdout().flush();

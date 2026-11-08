@@ -27,33 +27,146 @@ use std::ptr::NonNull;
 
 pub use dotnet_vm_data::{BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals};
 
-/// Traced progress for a substring copy suspended between executor turns.
+#[derive(Clone, Copy)]
+pub(crate) enum NativeOutput {
+    Void,
+    String,
+    Int32,
+    Int64,
+    NativeInt,
+    NativeFloat,
+    Object,
+    Unsupported,
+}
+
+pub(crate) struct NativeFutureOwner {
+    pub control: std::rc::Rc<dotnet_vm_ops::effects::NativeControl>,
+    pub future: Option<dotnet_vm_ops::effects::NativeFuture>,
+}
+
+impl Drop for NativeFutureOwner {
+    fn drop(&mut self) {
+        self.control.disable();
+        drop(self.future.take());
+    }
+}
+
 #[derive(Collect)]
 #[collect(no_drop, gc_lifetime = 'gc)]
-pub struct NativeSubstringActivation<'gc> {
-    pub source: ObjectRef<'gc>,
-    pub start: usize,
-    pub length: usize,
-    pub buffer: Vec<u16>,
-    pub offset: usize,
+pub(crate) struct NativeActivation<'gc> {
+    // Registrations retire before the future, and the future before its root set.
+    #[collect(require_static)]
+    pub wait: Option<super::native_effects::PendingWait>,
+    #[collect(require_static)]
+    pub owner: NativeFutureOwner,
+    #[collect(require_static)]
+    pub pending: Option<super::native_effects::PendingCall>,
+    pub ambient_exception: Option<ExceptionState<'gc>>,
+    pub roots: gc_arena::DynamicRootSet<'gc>,
+    pub operands: Vec<StackValue<'gc>>,
+    pub outputs: Vec<StackValue<'gc>>,
+    pub instruction: Option<InstructionCompletion<'gc>>,
+    pub id: dotnet_vm_data::NativeId,
+    pub method: crate::CollectableMethodDescription,
+    pub parent_destination: Option<dotnet_vm_data::NativeReturnDestination>,
     pub caller_depth: usize,
     pub caller_ip: usize,
-    /// Evaluation stack height after consuming the call operands.
     pub stack_height: crate::StackSlotIndex,
+    #[collect(require_static)]
+    pub output: NativeOutput,
+    pub synthetic_return: bool,
+    #[collect(require_static)]
+    pub reflection_actions: Vec<FrameReturnAction>,
+}
+
+#[derive(Collect)]
+#[collect(no_drop, gc_lifetime = 'gc)]
+pub(crate) struct InstructionCompletion<'gc> {
+    #[collect(require_static)]
+    pub action: super::ops::StaticFieldAction,
+    // INVARIANT: F1.GcHandleRooted — the traced activation retains a store value until completion.
+    pub operand: Option<StackValue<'gc>>,
 }
 
 #[derive(Collect, Default)]
 #[collect(no_drop, gc_lifetime = 'gc)]
 pub struct CallState<'gc> {
     pub arguments: Vec<StackValue<'gc>>,
-    pub substring: Option<Box<NativeSubstringActivation<'gc>>>,
-    pub substring_eligible: bool,
+    pub(crate) native: Vec<NativeActivation<'gc>>,
+    pub(crate) suspended_native: Vec<(usize, Vec<NativeActivation<'gc>>)>,
+    pub(crate) last_native_id: u64,
+    #[collect(require_static)]
+    pub(crate) reflection_arming: Vec<Option<FrameReturnAction>>,
+    #[collect(require_static)]
+    pub(crate) native_entry_depth: Option<std::rc::Rc<std::cell::Cell<usize>>>,
+}
+
+impl<'gc> CallState<'gc> {
+    pub(crate) fn release_initializer_waits(&mut self) -> Result<(), dotnet_types::error::VmError> {
+        for work in self.native.iter_mut().chain(
+            self.suspended_native
+                .iter_mut()
+                .flat_map(|(_, segment)| segment.iter_mut()),
+        ) {
+            if matches!(
+                work.wait,
+                Some(super::native_effects::PendingWait::Initializer(..))
+            ) {
+                let Some(super::native_effects::PendingWait::Initializer(generation, registration)) =
+                    work.wait.take()
+                else {
+                    unreachable!("initializer wait changed")
+                };
+                drop(registration);
+                work.owner.control.reply_initializer(generation)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn cleanup_native(
+        &mut self,
+        frames: &mut FrameStack<'gc>,
+        stack: &mut EvaluationStack<'gc>,
+    ) {
+        let suspended = std::mem::take(&mut self.suspended_native);
+        let had_suspended = !suspended.is_empty();
+        let mut retired = Vec::new();
+        while let Some(work) = self.native.pop() {
+            while frames.len() > work.caller_depth {
+                let frame = frames.pop().expect("native child frame");
+                stack.truncate(frame.base.arguments);
+                frames.recycle_frame(frame);
+            }
+            if frames.len() == work.caller_depth && !frames.is_empty() {
+                stack.truncate(work.stack_height);
+                let frame = frames.current_frame_mut();
+                frame.monitor_retry = None;
+                frame.stack_height = work
+                    .stack_height
+                    .checked_sub(frame.base.stack.as_usize())
+                    .expect("native stack base");
+            }
+            retired.push(work);
+        }
+        if had_suspended {
+            frames.clear_suspended();
+            stack.clear_suspended();
+        }
+        retired.extend(suspended.into_iter().flat_map(|(_, segment)| segment));
+        // A filter can suspend a child while an older activation remains active below it.
+        retired.sort_unstable_by_key(|work| std::cmp::Reverse(work.id.0));
+        for work in retired {
+            work.cleanup();
+        }
+    }
 }
 
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
     pub(crate) frame_stack: &'a mut FrameStack<'gc>,
+    pub(crate) parked_finalizer_caller: &'a Option<ThreadContext<'gc>>,
     pub(crate) shared: &'a Arc<SharedGlobalState>,
     pub(crate) local: &'a mut ArenaLocalState<'gc>,
     pub(crate) exception_mode: &'a mut ExceptionState<'gc>,
@@ -68,6 +181,7 @@ pub struct VesContext<'a, 'gc> {
 
 struct VesManagedPtrResolver<'a, 'gc> {
     frame_stack: &'a FrameStack<'gc>,
+    parked_finalizer_caller: &'a Option<ThreadContext<'gc>>,
     statics: &'a StaticStorageManager,
 }
 
@@ -85,7 +199,12 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver
         &self,
         serial: dotnet_value::pointer::FrameHomeSerial,
     ) -> Option<(NonNull<u8>, usize)> {
-        self.frame_stack.home_block(serial)
+        self.frame_stack.home_block(serial).or_else(|| {
+            self.parked_finalizer_caller
+                .as_ref()?
+                .frame_stack
+                .home_block(serial)
+        })
     }
 }
 
@@ -97,6 +216,7 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<ManagedPtrInfo<'gc>, dotnet_types::error::PointerDeserializationError> {
         let resolver = VesManagedPtrResolver {
             frame_stack: &*self.frame_stack,
+            parked_finalizer_caller: self.parked_finalizer_caller,
             statics: &self.shared.statics,
         };
         // SAFETY: F10.RawMemoryAccessValid — The field reader supplies one complete ManagedPtr encoding
@@ -115,6 +235,18 @@ impl<'a, 'gc> VmManagedPtrDecodeCacheOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn is_byref_home(
+        &self,
+        serial: dotnet_value::pointer::FrameHomeSerial,
+        offset: usize,
+    ) -> bool {
+        self.frame_stack.is_byref_home(serial, offset)
+            || self
+                .parked_finalizer_caller
+                .as_ref()
+                .is_some_and(|caller| caller.frame_stack.is_byref_home(serial, offset))
+    }
+
     #[inline]
     pub(crate) fn on_push(&mut self) {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
@@ -292,6 +424,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return StepResult::Return;
         }
 
+        let native_return = self.frame_stack.current_frame().native_return;
         let was_auto_invoked = {
             let frame = self.frame_stack.current_frame();
             frame.state.info_handle.is_cctor || frame.is_finalizer
@@ -311,6 +444,16 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         if !matches!(result, StepResult::Continue) {
             return result;
+        }
+        if native_return.is_some() {
+            return StepResult::Yield;
+        }
+        if was_auto_invoked
+            && self.call_state.native.last().is_some_and(|work| {
+                work.pending.is_some() && work.caller_depth == self.frame_stack.len()
+            })
+        {
+            return StepResult::Yield;
         }
 
         if self.frame_stack.is_empty() {
@@ -378,7 +521,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         self.trace_method_exit_for_frame(&frame);
 
-        if frame.state.info_handle.is_cctor {
+        if frame.state.info_handle.is_cctor
+            && !frame
+                .native_return
+                .is_some_and(|destination| self.is_capturing_native_return(destination))
+        {
             let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
             self.shared
                 .statics
@@ -403,6 +550,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         self.clear_evaluation_stack_from(frame.base.arguments);
 
+        let destination = frame.native_return.take();
+        let redirected =
+            destination.and_then(|destination| self.redirected_native_return(destination));
+        if let Some(destination) = destination.filter(|_| redirected.is_none()) {
+            self.frame_stack.recycle_frame(frame);
+            return match self.deliver_native_return(destination, return_value) {
+                Ok(()) => StepResult::Continue,
+                Err(error) => StepResult::Error(error),
+            };
+        }
+
         if let Some(return_value) = return_value {
             // Note: self.push() calls on_push() which increments stack_height,
             // so we must NOT manually increment stack_height here.
@@ -416,12 +574,45 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return StepResult::Error(error.into());
         }
 
-        let frame_continuation = self
-            .frame_stack
-            .current_frame_opt_mut()
-            .and_then(|caller| caller.frame_continuation.take());
+        let pending_initializer = frame.state.info_handle.is_cctor
+            && (self.call_state.native.last().is_some_and(|work| {
+                work.pending.is_some() && work.caller_depth == self.frame_stack.len()
+            }) || self
+                .frame_stack
+                .current_frame_opt_mut()
+                .is_some_and(|caller| caller.reflection_pending.is_some()));
+        let actions = if pending_initializer {
+            Vec::new()
+        } else {
+            self.frame_stack
+                .current_frame_opt_mut()
+                .map(|caller| std::mem::take(&mut caller.frame_continuation))
+                .unwrap_or_default()
+        };
+        if let Err(error) = self.apply_frame_return_actions(actions) {
+            self.frame_stack.recycle_frame(frame);
+            return StepResult::Error(error);
+        }
 
-        if let Some(FrameReturnAction::InvokeReturn(return_type)) = frame_continuation {
+        self.frame_stack.recycle_frame(frame);
+        if let (Some(destination), Some((has_return, base))) = (destination, redirected) {
+            if self.top_of_stack() != base + usize::from(has_return) {
+                return StepResult::internal_error("native call result shape mismatch");
+            }
+            let value = has_return.then(|| self.pop());
+            return match self.deliver_native_return(destination, value) {
+                Ok(()) => StepResult::Continue,
+                Err(error) => StepResult::Error(error),
+            };
+        }
+        StepResult::Continue
+    }
+
+    pub(crate) fn apply_frame_return_actions(
+        &mut self,
+        actions: Vec<FrameReturnAction>,
+    ) -> Result<(), crate::error::VmError> {
+        for FrameReturnAction::InvokeReturn(return_type) in actions {
             if matches!(return_type, RuntimeType::Void) {
                 self.push(StackValue::null());
             } else {
@@ -430,25 +621,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 let td = self
                     .shared
                     .loader
-                    .find_concrete_type(return_concrete.clone())
-                    .expect("Type must exist for return_frame");
-                if td
-                    .is_value_type(&self.current_context())
-                    .expect("Failed to check if return type is value type")
-                {
+                    .find_concrete_type(return_concrete.clone())?;
+                if td.is_value_type(&self.current_context())? {
                     let boxed =
-                        dotnet_vm_ops::ops::MemoryOps::box_value(self, &return_concrete, val)
-                            .expect("Failed to box return value");
+                        dotnet_vm_ops::ops::MemoryOps::box_value(self, &return_concrete, val)?;
                     self.push_obj(boxed);
                 } else {
-                    // already a reference type (or null)
                     self.push(val);
                 }
             }
         }
-
-        self.frame_stack.recycle_frame(frame);
-        StepResult::Continue
+        Ok(())
     }
 
     #[inline]
@@ -457,18 +640,47 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         dotnet_exceptions::ExceptionHandlingSystem.handle_exception(self, gc)
     }
 
+    pub(crate) fn unwind_native_at(&mut self, depth: usize) {
+        while self
+            .call_state
+            .native
+            .last()
+            .is_some_and(|work| work.caller_depth == depth)
+        {
+            if let ExceptionState::Unwinding(state) | ExceptionState::ExecutingHandler(state) =
+                *self.exception_mode
+                && let dotnet_vm_data::UnwindTarget::Native { destination, .. } = state.target
+                && self
+                    .call_state
+                    .native
+                    .last()
+                    .is_some_and(|work| work.id == destination.id)
+            {
+                break;
+            }
+            self.call_state
+                .native
+                .pop()
+                .expect("native boundary")
+                .cleanup();
+        }
+    }
+
     pub(crate) fn unwind_frame(&mut self) {
         let frame = self
             .frame_stack
             .pop()
             .expect("unwind_frame called with empty stack");
 
-        if frame.state.info_handle.is_cctor {
-            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
-            self.shared
-                .statics
-                .mark_failed(type_desc.clone(), &cctor_generics);
+        self.unwind_native_at(self.frame_stack.len());
 
+        // The capturing caller owns publication and wrapping of its requested initializer.
+        let capturing_initializer = matches!(
+            (*self.exception_mode, frame.native_return),
+            (ExceptionState::Unwinding(dotnet_vm_data::UnwindState { target: dotnet_vm_data::UnwindTarget::Native { destination, .. }, .. }), Some(child)) if destination == child
+        );
+        if frame.state.info_handle.is_cctor && !capturing_initializer {
+            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
             // Wrap exception in TypeInitializationException per ECMA-335 §II.10.5.3.3
             let current_exception = match *self.exception_mode {
                 ExceptionState::Throwing(ex, _) => Some(ex),
@@ -488,11 +700,28 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 // We use throw_by_name_with_inner which updates self.exception_mode to Throwing.
                 // This is safe because unwind_frame is called during the exception handling loop
                 // in dotnet-exceptions, and the next iteration will see the new Throwing state.
-                let _ = self.throw_by_name_with_inner(
+                let result = self.throw_by_name_with_inner(
                     "System.TypeInitializationException",
                     &message,
                     inner,
                 );
+                if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
+                    (result, *self.exception_mode)
+                {
+                    self.shared.statics.mark_failed_with_exception(
+                        type_desc.clone(),
+                        &cctor_generics,
+                        exception,
+                    );
+                } else {
+                    self.shared
+                        .statics
+                        .mark_failed(type_desc.clone(), &cctor_generics);
+                }
+            } else {
+                self.shared
+                    .statics
+                    .mark_failed(type_desc.clone(), &cctor_generics);
             }
         }
 
@@ -500,6 +729,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.local.heap.processing_finalizer.set(false);
         }
         self.clear_evaluation_stack_from(frame.base.arguments);
+        if let Some(caller) = self.frame_stack.current_frame_opt_mut() {
+            caller.frame_continuation.clear();
+            caller.reflection_pending = None;
+        }
         self.frame_stack.recycle_frame(frame);
     }
 
@@ -581,6 +814,21 @@ pub struct ThreadContext<'gc> {
     pub original_stack_height: crate::StackSlotIndex,
     pub continuation: dotnet_vm_data::VmContinuation<'gc>,
     pub call_state: CallState<'gc>,
+}
+
+impl Default for ThreadContext<'_> {
+    fn default() -> Self {
+        Self {
+            evaluation_stack: EvaluationStack::new(),
+            frame_stack: FrameStack::new(),
+            exception_mode: ExceptionState::None,
+            current_intrinsic: None,
+            original_ip: 0,
+            original_stack_height: crate::StackSlotIndex::new(0),
+            continuation: dotnet_vm_data::VmContinuation::None,
+            call_state: CallState::default(),
+        }
+    }
 }
 
 #[cfg(test)]

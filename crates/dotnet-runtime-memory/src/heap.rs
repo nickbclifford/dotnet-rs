@@ -33,6 +33,7 @@ pub struct HeapManager<'gc> {
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
     pub dependent_handles: RefCell<Vec<Option<(ObjectRef<'gc>, ObjectRef<'gc>)>>>,
     pub processing_finalizer: Cell<bool>,
+    pub finalizers_published: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
     /// Roots for objects in this arena that are referenced by other arenas.
     /// This is populated during the coordinated GC marking phase.
@@ -55,6 +56,7 @@ impl<'gc> HeapManager<'gc> {
             gchandles: RefCell::new(Vec::new()),
             dependent_handles: RefCell::new(Vec::new()),
             processing_finalizer: Cell::new(false),
+            finalizers_published: Cell::new(false),
             needs_full_collect: Cell::new(false),
             #[cfg(feature = "multithreading")]
             cross_arena_roots: RefCell::new(HashSet::new()),

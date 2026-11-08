@@ -23,7 +23,7 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
+use dotnet_utils::sync::{Arc, AtomicBool, AtomicUsize, Mutex, Ordering};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
@@ -38,9 +38,6 @@ use std::{
 };
 #[cfg(feature = "multithreading")]
 use {dotnet_metrics::ArenaGcPressureSnapshot, std::mem::size_of};
-
-#[cfg(feature = "multithreading")]
-use dotnet_utils::sync::AtomicUsize;
 
 pub use crate::statics::StaticStorageManager;
 
@@ -346,7 +343,7 @@ pub struct AbortSignal(Arc<AtomicBool>);
 impl AbortSignal {
     /// Requests that the associated executor stop at its next abort check.
     pub fn request_abort(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.store(true, Ordering::Release);
     }
 }
 
@@ -362,6 +359,8 @@ pub struct SharedGlobalState {
     pub pinvoke: NativeLibraries,
     pub sync_blocks: SyncBlockManager,
     pub thread_manager: Arc<ThreadManager>,
+    pub(crate) workers: crate::threading::workers::WorkerRegistry,
+    pending_finalizer_arenas: AtomicUsize,
     pub metrics: Arc<RuntimeMetrics>,
     pub tracer: Tracer,
     pub tracer_enabled: Arc<AtomicBool>,
@@ -449,6 +448,8 @@ impl SharedGlobalState {
             loader,
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(stw_in_progress.clone()),
+            workers: crate::threading::workers::WorkerRegistry::default(),
+            pending_finalizer_arenas: AtomicUsize::new(0),
             metrics,
             tracer,
             tracer_enabled,
@@ -479,6 +480,31 @@ impl SharedGlobalState {
         state
     }
 
+    /// Reap native workers after all executors that belong to this entry point have stopped.
+    /// Do not call while this thread is registered with the GC coordinator.
+    pub fn shutdown_workers(&self) {
+        #[cfg(feature = "multithreading")]
+        self.workers
+            .shutdown(|| self.thread_manager.shutdown_retired());
+        #[cfg(not(feature = "multithreading"))]
+        self.workers.shutdown();
+    }
+
+    pub(crate) fn has_pending_finalizers(&self) -> bool {
+        self.pending_finalizer_arenas.load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn publish_finalizers(&self, heap: &HeapManager<'_>, active: bool) {
+        // INVARIANT: F1.FinalizerPublication — only this arena's owner changes its contribution.
+        if heap.finalizers_published.replace(active) != active {
+            if active {
+                self.pending_finalizer_arenas.fetch_add(1, Ordering::AcqRel);
+            } else {
+                self.pending_finalizer_arenas.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+    }
+
     /// Returns the narrow thread-safe handle for requesting executor cancellation.
     pub fn abort_signal(&self) -> AbortSignal {
         AbortSignal(Arc::clone(&self.abort_requested))
@@ -486,7 +512,7 @@ impl SharedGlobalState {
 
     /// Returns whether an abort has been requested for this executor.
     pub(crate) fn is_abort_requested(&self) -> bool {
-        self.abort_requested.load(Ordering::Relaxed)
+        self.abort_requested.load(Ordering::Acquire)
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {
@@ -795,6 +821,26 @@ impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
 #[cfg(test)]
 mod abort_signal_tests {
     use super::*;
+
+    #[test]
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the test confines the loader to one thread"
+    )]
+    fn finalizer_publication_counts_arenas_once() {
+        let loader = AssemblyLoader::new_bare("finalizer-count-test".to_owned()).unwrap();
+        let shared = SharedGlobalState::new(Arc::new(loader));
+        let first = HeapManager::new();
+        let second = HeapManager::new();
+        shared.publish_finalizers(&first, true);
+        shared.publish_finalizers(&first, true);
+        shared.publish_finalizers(&second, true);
+        shared.publish_finalizers(&first, false);
+        assert!(shared.has_pending_finalizers());
+        shared.publish_finalizers(&first, false);
+        shared.publish_finalizers(&second, false);
+        assert!(!shared.has_pending_finalizers());
+    }
 
     #[test]
     fn cloned_signal_requests_abort_on_shared_flag() {

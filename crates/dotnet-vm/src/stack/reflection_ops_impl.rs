@@ -124,6 +124,10 @@ impl<'a, 'gc> VmStaticsOps<'gc> for VesContext<'a, 'gc> {
     fn statics(&self) -> &StaticStorageManager {
         &self.shared.statics
     }
+
+    fn start_static_field(&mut self, action: crate::stack::ops::StaticFieldAction) -> StepResult {
+        self.start_static_field_effect(action)
+    }
 }
 
 impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
@@ -160,6 +164,80 @@ impl<'a, 'gc> IntrinsicDispatchOps<'gc> for VesContext<'a, 'gc> {
         lookup: &GenericLookup,
     ) -> StepResult {
         crate::intrinsics::intrinsic_call(self, method, lookup)
+    }
+}
+
+impl<'gc> VesContext<'_, 'gc> {
+    pub(crate) fn retry_reflection_target(&mut self) -> StepResult {
+        let Some(pending) = self
+            .frame_stack
+            .current_frame_mut()
+            .reflection_pending
+            .take()
+        else {
+            return StepResult::internal_error("missing pending reflection target");
+        };
+        if self.top_of_stack() < pending.base {
+            return StepResult::internal_error("reflection argument base changed");
+        }
+        while self.top_of_stack() > pending.base {
+            self.pop();
+        }
+        for argument in &pending.arguments {
+            self.push(argument.clone());
+        }
+        let depth = self.frame_stack.len();
+        let saved_ip = *self.original_ip;
+        let saved_height = *self.original_stack_height;
+        *self.original_ip = self.frame_stack.state().ip;
+        *self.original_stack_height = self.top_of_stack();
+        let actions = std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
+        let arm_base = self.call_state.reflection_arming.len();
+        self.call_state
+            .reflection_arming
+            .extend(actions.into_iter().rev().map(Some));
+        let result = self.dispatch_method(pending.method.clone(), pending.generics.clone());
+        let actions = self
+            .call_state
+            .reflection_arming
+            .drain(arm_base..)
+            .rev()
+            .flatten()
+            .collect::<Vec<_>>();
+        self.frame_stack.frames[depth - 1]
+            .frame_continuation
+            .extend(actions);
+        *self.original_ip = saved_ip;
+        *self.original_stack_height = saved_height;
+        let initializer = matches!(result, StepResult::FramePushed)
+            && self.frame_stack.len() == depth + 1
+            && self.frame_stack.current_frame().state.info_handle.is_cctor
+            && self.frame_stack.current_frame().state.info_handle.source != pending.method;
+        if (initializer || matches!(result, StepResult::Yield))
+            && self.frame_stack.frames[depth - 1]
+                .reflection_pending
+                .is_none()
+        {
+            self.frame_stack.frames[depth - 1].reflection_pending = Some(pending);
+        }
+        match result {
+            StepResult::Continue | StepResult::Jump(_) => {
+                let actions =
+                    std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
+                match self.apply_frame_return_actions(actions) {
+                    Ok(()) => result,
+                    Err(error) => StepResult::Error(error),
+                }
+            }
+            StepResult::FramePushed | StepResult::NativeSuspended(_) | StepResult::Yield => result,
+            _ => {
+                self.frame_stack.frames[depth - 1]
+                    .frame_continuation
+                    .clear();
+                self.frame_stack.frames[depth - 1].reflection_pending = None;
+                result
+            }
+        }
     }
 }
 
@@ -236,6 +314,13 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
         method: MethodDescription,
         mut lookup: GenericLookup,
     ) -> StepResult {
+        // The continuation belongs to this dispatch, including nested synchronous dispatches.
+        let action = self
+            .frame_stack
+            .current_frame_mut()
+            .frame_continuation
+            .pop();
+        tracing::debug!(reflection_invoke_path = "fallback");
         let mut dispatch_method = method;
 
         if dispatch_method.signature().instance && dispatch_method.method().virtual_member {
@@ -269,7 +354,69 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
             }
         }
 
-        self.dispatch_method(dispatch_method, lookup)
+        let depth = self.frame_stack.len();
+        let count = dispatch_method.signature().parameters.len()
+            + usize::from(dispatch_method.signature().instance);
+        let Some(base) = self.top_of_stack().checked_sub(count) else {
+            return StepResult::internal_error("reflected target argument underflow");
+        };
+        let arguments = (0..count)
+            .rev()
+            .map(|offset| self.peek_stack_at(offset))
+            .collect();
+        let saved_ip = *self.original_ip;
+        let saved_height = *self.original_stack_height;
+        *self.original_ip = self.frame_stack.state().ip;
+        *self.original_stack_height = self.top_of_stack();
+        self.call_state.reflection_arming.push(action);
+        let result = self.dispatch_method(dispatch_method.clone(), lookup.clone());
+        let action = self
+            .call_state
+            .reflection_arming
+            .pop()
+            .expect("reflection dispatch scope");
+        *self.original_ip = saved_ip;
+        *self.original_stack_height = saved_height;
+        let initializer = matches!(result, StepResult::FramePushed)
+            && self.frame_stack.len() == depth + 1
+            && self.frame_stack.current_frame().state.info_handle.is_cctor
+            && self.frame_stack.current_frame().state.info_handle.source != dispatch_method;
+        let caller = &mut self.frame_stack.frames[depth - 1];
+        match result {
+            StepResult::FramePushed | StepResult::NativeSuspended(_) | StepResult::Yield => {
+                if let Some(action) = action {
+                    caller.frame_continuation.push(action);
+                }
+                if (initializer || matches!(result, StepResult::Yield))
+                    && !self.has_staged_native_call(depth)
+                    && self
+                        .call_state
+                        .native
+                        .last()
+                        .is_none_or(|work| work.caller_depth != depth)
+                    && self.frame_stack.frames[depth - 1]
+                        .reflection_pending
+                        .is_none()
+                {
+                    tracing::debug!(reflection_invoke_path = "retry");
+                    self.frame_stack.frames[depth - 1].reflection_pending =
+                        Some(Box::new(dotnet_vm_data::stack::ReflectionPending {
+                            method: dispatch_method,
+                            generics: lookup,
+                            arguments,
+                            base,
+                        }));
+                }
+                result
+            }
+            StepResult::Continue | StepResult::Jump(_) => {
+                match self.apply_frame_return_actions(action.into_iter().collect()) {
+                    Ok(()) => result,
+                    Err(error) => StepResult::Error(error),
+                }
+            }
+            _ => result,
+        }
     }
 
     fn set_frame_return_action(&mut self, action: dotnet_vm_data::FrameReturnAction) {

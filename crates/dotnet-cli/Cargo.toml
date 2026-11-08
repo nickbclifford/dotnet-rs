@@ -33,6 +33,8 @@ dotnetdll = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true }
 dotnet-value = { workspace = true }

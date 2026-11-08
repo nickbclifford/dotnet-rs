@@ -12,6 +12,9 @@ use dotnet_value::{
 };
 use dotnet_vm_data::{FrameReturnAction, StepResult};
 use dotnet_vm_ops::SupportSlotOps;
+use dotnet_vm_ops::effects::{
+    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
 use dotnet_vm_ops::ops::TypedStackOps;
 use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
@@ -138,7 +141,86 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
     }
 }
 
-#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])")]
+/// Resolve the same positional constructor as the synchronous Activator path, without side effects.
+pub fn resolve_activator_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    target: ObjectRef<'gc>,
+    parameters: ObjectRef<'gc>,
+) -> Option<(MethodDescription, GenericLookup)> {
+    target.0?;
+    let (td, lookup) = match crate::common::resolve_runtime_type(ctx, target).ok()? {
+        RuntimeType::Type(td) => (td, GenericLookup::default()),
+        RuntimeType::Generic(td, args) => {
+            let lookup = GenericLookup::new(
+                args.iter()
+                    .map(|arg| arg.to_concrete(ctx.loader().as_ref()))
+                    .collect(),
+            );
+            (td, lookup)
+        }
+        _ => return None,
+    };
+    let count = if parameters.0.is_none() {
+        0
+    } else {
+        parameters.as_heap_storage(|storage| match storage {
+            HeapStorage::Vec(vector) => Some(vector.layout.length),
+            _ => None,
+        })?
+    };
+    let method = td
+        .definition()
+        .methods
+        .iter()
+        .enumerate()
+        .find_map(|(index, method)| {
+            if method.name != ".ctor" {
+                return None;
+            }
+            let candidate = MethodDescription::new(
+                td.clone(),
+                lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(index),
+            );
+            let signature = candidate.signature();
+            (signature.instance && signature.parameters.len() == count).then_some(candidate)
+        })?;
+    Some((method, lookup))
+}
+
+pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    _method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    let fallback =
+        || NativeSelection::Synchronous(intrinsic_activator_create_instance_type_args::<T>);
+    let (StackValue::ObjectRef(target), StackValue::ObjectRef(parameters)) =
+        (operands.peek_at(1), operands.peek_at(0))
+    else {
+        return fallback();
+    };
+    let Some((method, lookup)) = resolve_activator_constructor(ctx, target, parameters) else {
+        return fallback();
+    };
+    if !crate::methods::invoke_arguments_supported(ctx, &method, &lookup, parameters) {
+        return fallback();
+    }
+    tracing::debug!(reflection_invoke_path = "async");
+    NativeSelection::Async(NativeInvocation {
+        start: 0,
+        length: 0,
+        parameter_count: 2,
+    })
+}
+
+#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])", select = activator_select, fallback = intrinsic_activator_create_instance_type_args)]
+pub async fn activator_async(fx: VmEffects) -> NativeResult {
+    crate::methods::run_reflection_call(fx).await
+}
+
 pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,

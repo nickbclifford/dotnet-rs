@@ -70,7 +70,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     };
 
     if let Some(targets_handle) = multicast_targets {
-        // Push a dummy frame for the current Invoke method
+        // The effects selector declined this multicast invocation; retain the fallback frame.
         let method_info = dotnet_vm_ops::vm_try!(ctx.delegate_method_info(invoke_method, _lookup));
         let args = std::mem::take(ctx.call_args_buffer_mut());
 
@@ -89,6 +89,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
             targets: targets_handle,
             next_index: 0,
             args,
+            retrying_initializer: false,
         });
 
         return StepResult::FramePushed;

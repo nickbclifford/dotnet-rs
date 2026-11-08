@@ -25,44 +25,8 @@ use dotnetdll::prelude::{MethodMemberIndex, MethodType};
 use std::ptr::NonNull;
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
-    /// Advances a bounded copy without retaining a heap borrow across a yield.
-    pub(crate) fn advance_native_substring(&mut self) -> StepResult {
-        let Some(mut work) = self.call_state.substring.take() else {
-            return StepResult::internal_error("missing native substring activation");
-        };
-        if self.frame_stack.len() != work.caller_depth
-            || self.frame_stack.is_empty()
-            || self.state().ip != work.caller_ip
-            || self.evaluation_stack.top_of_stack() != work.stack_height
-        {
-            return StepResult::internal_error("native substring caller changed");
-        }
-        {
-            let Some(handle) = work.source.0 else {
-                return StepResult::internal_error("native substring source is null");
-            };
-            let inner = handle.borrow();
-            let HeapStorage::Str(source) = &inner.storage else {
-                return StepResult::internal_error("native substring source changed type");
-            };
-            work.offset += dotnet_intrinsics_string::search::copy_substring_chunk(
-                source,
-                work.start,
-                work.length,
-                work.offset,
-                &mut work.buffer,
-            );
-        }
-        if work.offset < work.length {
-            self.call_state.substring = Some(work);
-            StepResult::Yield
-        } else {
-            self.push_string(dotnet_value::string::CLRString::new(work.buffer));
-            StepResult::Continue
-        }
-    }
-
     /// Yield to a GC safe point and retry the current instruction on resume.
+    /// Used by legacy static-initialization triggers, not by static field instructions.
     /// Marks `VmContinuation::RetryInstruction` when no traced continuation state is already
     /// queued, then restores the IP/stack snapshot. Existing handler-unwind state is preserved;
     /// the retry itself is encoded by `back_up_ip()`.
@@ -78,17 +42,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         StepResult::Yield
     }
 
-    /// Yield to a GC safe point with no state change.
-    /// For simple spinning yields (e.g., WaitForPendingFinalizers).
-    #[inline]
-    pub fn yield_spin(&mut self) -> StepResult {
-        StepResult::Yield
-    }
-
-    /// Set the frame return action before a reflection-dispatched call.
+    /// Set the frame return action before an excluded reflection invocation's fallback call.
     #[inline]
     pub fn set_frame_return_action(&mut self, action: FrameReturnAction) {
-        self.frame_stack.current_frame_mut().frame_continuation = Some(action);
+        self.frame_stack
+            .current_frame_mut()
+            .frame_continuation
+            .push(action);
     }
 
     /// Push a handler unwind state into `VmContinuation::HandlerUnwinds`.
@@ -358,44 +318,6 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
 }
 
 impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<'a, 'gc> {
-    fn offer_substring_continuation(
-        &mut self,
-        source: ObjectRef<'gc>,
-        start: usize,
-        length: usize,
-        operand_count: usize,
-    ) -> Option<StepResult> {
-        #[cfg(feature = "multithreading")]
-        {
-            let _ = (source, start, length, operand_count);
-            None
-        }
-        #[cfg(not(feature = "multithreading"))]
-        {
-            if !self.call_state.substring_eligible || self.frame_stack.is_empty() {
-                return None;
-            }
-            if self.call_state.substring.is_some() {
-                return Some(StepResult::internal_error(
-                    "native substring already active",
-                ));
-            }
-            let buffer = dotnet_intrinsics_string::search::substring_buffer(length);
-            self.drop_top(operand_count);
-            self.call_state.substring = Some(Box::new(super::context::NativeSubstringActivation {
-                source,
-                start,
-                length,
-                buffer,
-                offset: 0,
-                caller_depth: self.frame_stack.len(),
-                caller_ip: self.state().ip,
-                stack_height: self.evaluation_stack.top_of_stack(),
-            }));
-            Some(self.advance_native_substring())
-        }
-    }
-
     #[inline]
     fn string_intrinsic_as_span(
         &mut self,
@@ -445,7 +367,12 @@ impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
         &self,
         serial: dotnet_value::pointer::FrameHomeSerial,
     ) -> Option<(NonNull<u8>, usize)> {
-        self.frame_stack.home_block(serial)
+        self.frame_stack.home_block(serial).or_else(|| {
+            self.parked_finalizer_caller
+                .as_ref()?
+                .frame_stack
+                .home_block(serial)
+        })
     }
 }
 
@@ -592,6 +519,41 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         }
     }
 
+    fn monitor_retry_deadline(
+        &mut self,
+        method: &dotnet_types::members::MethodDescription,
+        timeout_ms: i32,
+    ) -> std::time::Instant {
+        let ip = self.state().ip;
+        let stack_top = self.top_of_stack();
+        let frame = self.frame_stack.current_frame_mut();
+        // Non-inline dispatch retains the target operands on this caller's stack across a stop.
+        if let Some(record) = &frame.monitor_retry
+            && record.ip == ip
+            && record.stack_top == stack_top
+            && record.method == *method
+        {
+            return record.deadline;
+        }
+        let duration = if timeout_ms < 0 {
+            std::time::Duration::from_secs(100 * 365 * 24 * 3600)
+        } else {
+            std::time::Duration::from_millis(timeout_ms as u64)
+        };
+        let deadline = std::time::Instant::now() + duration;
+        frame.monitor_retry = Some(Box::new(dotnet_vm_data::stack::MonitorRetry {
+            method: method.clone(),
+            ip,
+            stack_top,
+            deadline,
+        }));
+        deadline
+    }
+
+    fn monitor_clear_retry(&mut self) {
+        self.frame_stack.current_frame_mut().monitor_retry = None;
+    }
+
     #[inline]
     fn monitor_exit(&self, sync_block: &Self::SyncBlock, thread_id: dotnet_utils::ArenaId) -> bool {
         sync_block.exit(thread_id)
@@ -651,7 +613,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                     "System.PlatformNotSupportedException",
                     "Thread.Start() is supported only for Thread(ThreadStart) instances.",
                 )),
-                Some(record) if record.join_handle.is_some() => Err((
+                Some(record) if record.completion.is_some() => Err((
                     "System.InvalidOperationException",
                     "Thread.Start() may be called only once for a managed Thread.",
                 )),
@@ -685,14 +647,14 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             );
         }
 
-        let join_handle = crate::threading::spawn_thread_start(self.shared.clone(), method, lookup)
-            .expect("multithreaded ThreadStart spawn must produce a join handle");
+        let completion = crate::threading::spawn_thread_start(self.shared.clone(), method, lookup)
+            .expect("multithreaded ThreadStart spawn must produce a completion");
         self.local
             .managed_threads
             .records_write()
             .get_mut(&thread)
             .expect("managed Thread record remains registered until Join")
-            .join_handle = Some(join_handle);
+            .completion = Some(completion);
         StepResult::Continue
     }
 
@@ -711,9 +673,9 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             let records = self.local.managed_threads.records_read();
             records.get(&thread).map(|record| {
                 record
-                    .join_handle
+                    .completion
                     .as_ref()
-                    .map(std::thread::JoinHandle::is_finished)
+                    .map(crate::threading::workers::WorkerCompletion::is_finished)
             })
         };
 
@@ -740,16 +702,18 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
 
         let popped_thread = self.pop_obj();
         debug_assert_eq!(popped_thread, thread);
-        let join_handle = self
+        let completion = self
             .local
             .managed_threads
             .records_write()
             .get_mut(&thread)
             .expect("managed Thread record remains registered until Join")
-            .join_handle
+            .completion
             .take()
             .expect("managed Thread remains started until Join");
-        let worker_result = join_handle.join();
+        let worker_result = completion
+            .take_outcome()
+            .expect("completed worker published an outcome");
         self.local
             .managed_threads
             .records_write()
@@ -864,14 +828,14 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
             }
             Ok(crate::statics::StaticInitResult::Initialized)
             | Ok(crate::statics::StaticInitResult::Recursive) => StepResult::Continue,
-            Ok(crate::statics::StaticInitResult::Waiting) => {
+            Ok(crate::statics::StaticInitResult::Waiting(registration)) => {
                 #[cfg(feature = "multithreading")]
                 {
                     if self.shared.statics.wait_for_init(
                         description.clone(),
                         &type_generics,
                         self.shared.thread_manager.as_ref(),
-                        thread_id,
+                        registration,
                         &self.shared.gc_coordinator,
                     ) {
                         return self.yield_and_retry();
@@ -909,6 +873,14 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                         }
                     }
                 }
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    drop(registration);
+                    unreachable!(
+                        "single-threaded static initialization cannot wait for another thread"
+                    )
+                }
+                #[cfg(feature = "multithreading")]
                 StepResult::Continue
             }
             Ok(crate::statics::StaticInitResult::Failed) => {
@@ -951,11 +923,6 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn increment_ip(&mut self) {
         self.frame_stack.increment_ip();
-    }
-
-    #[inline]
-    fn yield_spin(&mut self) -> StepResult {
-        VesContext::yield_spin(self)
     }
 
     #[inline]
@@ -1005,6 +972,76 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn set_current_intrinsic(&mut self, method: Option<MethodDescription>) {
         *self.current_intrinsic = method.map(crate::CollectableMethodDescription);
+    }
+
+    fn native_boundaries(
+        &self,
+    ) -> Vec<(usize, dotnet_vm_data::NativeId, MethodDescription, usize)> {
+        self.call_state
+            .native
+            .iter()
+            .map(|work| {
+                (
+                    work.caller_depth,
+                    work.id,
+                    work.method.0.clone(),
+                    work.caller_ip,
+                )
+            })
+            .collect()
+    }
+
+    fn native_capture_at(&self, depth: usize) -> Option<dotnet_vm_data::NativeReturnDestination> {
+        self.call_state.native.iter().rev().find_map(|work| {
+            let pending = work.pending.as_ref()?;
+            (work.caller_depth == depth && pending.capture).then_some(
+                dotnet_vm_data::NativeReturnDestination {
+                    id: work.id,
+                    generation: pending.generation,
+                },
+            )
+        })
+    }
+
+    fn capture_native_exception(
+        &mut self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+        exception: ObjectRef<'gc>,
+    ) -> Result<(), dotnet_types::error::VmError> {
+        self.deliver_native_exception(destination, exception)
+    }
+
+    fn unwind_native_at(&mut self, depth: usize) {
+        self.unwind_native_at(depth);
+    }
+
+    fn suspend_native_above(&mut self, frame_index: usize) {
+        let first = self
+            .call_state
+            .native
+            .iter()
+            .position(|work| work.caller_depth > frame_index)
+            .unwrap_or(self.call_state.native.len());
+        let segment = self.call_state.native.split_off(first);
+        self.call_state
+            .suspended_native
+            .push((frame_index + 1, segment));
+    }
+
+    fn restore_suspended_native(&mut self) {
+        let (base, segment) = self
+            .call_state
+            .suspended_native
+            .pop()
+            .expect("native suspension underflow");
+        assert!(
+            self.call_state
+                .native
+                .last()
+                .is_none_or(|work| { work.caller_depth < base }),
+            "filter native call still active on restore"
+        );
+        self.call_state.native.extend(segment);
     }
 
     #[inline]
@@ -1139,21 +1176,21 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
     fn handle_exception(&mut self) -> StepResult {
         self.handle_exception()
     }
+}
 
-    #[inline]
-    fn process_pending_finalizers(&mut self) -> StepResult {
-        // A finite native copy owns the caller's stack until it publishes its result.
-        if self.call_state.substring.is_some() {
-            return StepResult::Continue;
-        }
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn prepare_pending_finalizer(
+        &mut self,
+    ) -> Result<
+        Option<(ObjectRef<'gc>, crate::MethodInfo<'static>, GenericLookup)>,
+        crate::error::VmError,
+    > {
         let _gc = self.gc;
         if self.local.heap.processing_finalizer.get() {
-            return StepResult::Continue;
+            return Ok(None);
         }
         let instance = self.local.heap.pending_finalization.borrow_mut().pop();
 
-        // Only run finalizers if we are at the bottom of the stack or in a safe state
-        // For now, let's just run them one by one
         if let Some(instance) = instance {
             self.local.heap.processing_finalizer.set(true);
             let ctx = self.current_context();
@@ -1215,26 +1252,19 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
 
             let Some((finalizer, generics)) = finalizer_data else {
                 self.local.heap.processing_finalizer.set(false);
-                return StepResult::Continue;
+                return Ok(None);
             };
 
-            let method_info = dotnet_vm_ops::vm_try!(self.shared.caches.get_method_info(
-                finalizer,
-                &generics,
-                self.shared.clone()
-            ));
-
-            // Push the object as 'this'
-            self.push(StackValue::ObjectRef(instance));
-
+            let method_info =
+                self.shared
+                    .caches
+                    .get_method_info(finalizer, &generics, self.shared.clone())?;
             if let Some(err) = self.managed_frame_abort_error(&method_info) {
-                return StepResult::Error(err);
+                return Err(err);
             }
-            dotnet_vm_ops::vm_try!(self.call_frame(method_info, generics));
-            self.current_frame_mut().is_finalizer = true;
-            return StepResult::FramePushed;
+            return Ok(Some((instance, method_info, generics)));
         }
 
-        StepResult::Continue
+        Ok(None)
     }
 }

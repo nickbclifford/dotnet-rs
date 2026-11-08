@@ -99,17 +99,131 @@ impl<'gc> ExecutionEngine<'gc> {
         self.stack.ves_context(gc)
     }
 
-    pub(crate) fn resume_native_substring(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        let result = self.ves_context(gc).advance_native_substring();
-        if result == StepResult::Continue {
-            self.stack.increment_ip();
+    pub(crate) fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.stack.parked_finalizer_caller.is_some() {
+            return StepResult::Continue;
         }
-        result
+        let prepared = match self.ves_context(gc).prepare_pending_finalizer() {
+            Ok(value) => value,
+            Err(error) => {
+                self.stack.local.heap.processing_finalizer.set(false);
+                self.stack.shared.publish_finalizers(
+                    &self.stack.local.heap,
+                    self.stack.local.heap.has_pending_finalizers(),
+                );
+                return StepResult::Error(error);
+            }
+        };
+        let Some((instance, info, generics)) = prepared else {
+            return StepResult::Continue;
+        };
+        let mut segment = crate::stack::context::ThreadContext::default();
+        // INVARIANT: F10.FrameHomeChecked — the segment continues the thread's serial sequence.
+        segment
+            .frame_stack
+            .inherit_home_serial(&self.stack.execution.frame_stack);
+        segment.call_state.last_native_id = self.stack.execution.call_state.last_native_id;
+        self.stack.parked_finalizer_caller =
+            Some(std::mem::replace(&mut self.stack.execution, segment));
+        let result = self.ves_context(gc).entrypoint_frame(
+            info,
+            generics,
+            vec![dotnet_value::StackValue::ObjectRef(instance)],
+        );
+        match result {
+            Ok(()) => {
+                self.stack
+                    .execution
+                    .frame_stack
+                    .current_frame_mut()
+                    .is_finalizer = true;
+                StepResult::FramePushed
+            }
+            Err(error) => self.finish_finalizer_segment(StepResult::Error(error.into())),
+        }
+    }
+
+    fn finish_finalizer_segment(&mut self, result: StepResult) -> StepResult {
+        if self.stack.parked_finalizer_caller.is_none()
+            || !matches!(
+                result,
+                StepResult::Return | StepResult::MethodThrew(_) | StepResult::Error(_)
+            )
+        {
+            return result;
+        }
+        self.retire_finalizer_segment();
+        if matches!(result, StepResult::Return) {
+            StepResult::Continue
+        } else {
+            result
+        }
+    }
+
+    pub(crate) fn retire_finalizer_segment(&mut self) {
+        let Some(mut caller) = self.stack.parked_finalizer_caller.take() else {
+            return;
+        };
+        let active = &mut self.stack.execution;
+        active
+            .call_state
+            .cleanup_native(&mut active.frame_stack, &mut active.evaluation_stack);
+        // INVARIANT: F10.FrameHomeChecked — serials issued by the finalizer remain retired after restoration.
+        caller.frame_stack.inherit_home_serial(&active.frame_stack);
+        caller.call_state.last_native_id = caller
+            .call_state
+            .last_native_id
+            .max(active.call_state.last_native_id);
+        self.stack.execution = caller;
+        self.stack.local.heap.processing_finalizer.set(false);
+        self.stack.shared.publish_finalizers(
+            &self.stack.local.heap,
+            self.stack.local.heap.has_pending_finalizers(),
+        );
+    }
+
+    fn native_runnable(&self) -> bool {
+        self.stack
+            .execution
+            .call_state
+            .native
+            .last()
+            .is_some_and(|work| {
+                work.pending.is_none()
+                    || (matches!(
+                        self.stack.execution.exception_mode,
+                        ExceptionState::None
+                            | ExceptionState::Filtering(_)
+                            | ExceptionState::ExecutingHandler(_)
+                    ) && work.caller_depth >= self.stack.execution.frame_stack.len())
+            })
+    }
+
+    fn resume_native_effect(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        match self.ves_context(gc).advance_native_effect() {
+            StepResult::Jump(target) => {
+                self.stack.branch(target);
+                StepResult::Continue
+            }
+            other => other,
+        }
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        if self.stack.execution.call_state.substring.is_some() {
-            return self.resume_native_substring(gc);
+        let result = self.step_inner(gc);
+        if matches!(
+            result,
+            StepResult::Exception | StepResult::MethodThrew(_) | StepResult::Error(_)
+        ) && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
+        {
+            frame.monitor_retry = None;
+        }
+        self.finish_finalizer_segment(result)
+    }
+
+    fn step_inner(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.native_runnable() {
+            return self.resume_native_effect(gc);
         }
         match self.stack.execution.exception_mode {
             ExceptionState::None
@@ -132,6 +246,20 @@ impl<'gc> ExecutionEngine<'gc> {
             return StepResult::Return;
         }
 
+        if self.stack.current_frame().reflection_pending.is_some() {
+            let result = self.ves_context(gc).retry_reflection_target();
+            return match result {
+                StepResult::Continue => {
+                    self.stack.increment_ip();
+                    StepResult::Continue
+                }
+                StepResult::Jump(target) => {
+                    self.stack.branch(target);
+                    StepResult::Continue
+                }
+                other => other,
+            };
+        }
         if self.stack.current_frame().multicast_state.is_some() {
             return self.handle_multicast_step(gc);
         }
@@ -208,8 +336,18 @@ impl<'gc> ExecutionEngine<'gc> {
 
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        if self.stack.execution.call_state.substring.is_some() {
-            return self.resume_native_substring(gc);
+        let result = self.run_inner(gc);
+        if matches!(result, StepResult::MethodThrew(_) | StepResult::Error(_))
+            && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
+        {
+            frame.monitor_retry = None;
+        }
+        self.finish_finalizer_segment(result)
+    }
+
+    fn run_inner(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.native_runnable() {
+            return self.resume_native_effect(gc);
         }
         // `RetryInstruction` records the reason for the previous safe-point yield. The actual
         // retry is already encoded in the restored IP/stack snapshot, so clear the marker once the
@@ -297,6 +435,9 @@ impl<'gc> ExecutionEngine<'gc> {
             };
 
             if res == StepResult::Exception {
+                if let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut() {
+                    frame.monitor_retry = None;
+                }
                 continue;
             }
 
@@ -311,8 +452,11 @@ impl<'gc> ExecutionEngine<'gc> {
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
-        self.ves_context(gc)
-            .unified_dispatch(UnifiedDispatchTarget::Source(source), this_type, ctx)
+        self.ves_context(gc).unified_dispatch_for_engine_api(
+            UnifiedDispatchTarget::Source(source),
+            this_type,
+            ctx,
+        )
     }
 
     pub fn dispatch_method(
@@ -343,8 +487,29 @@ impl<'gc> ExecutionEngine<'gc> {
 
         let mut ctx = self.stack.ves_context(gc);
 
-        // 1. Handle return from previous target
-        if ctx.frame_stack.current_frame().stack_height > StackSlotIndex::new(0) {
+        let retrying = ctx
+            .frame_stack
+            .current_frame()
+            .multicast_state
+            .as_ref()
+            .expect("multicast state must remain installed")
+            .retrying_initializer;
+        if retrying {
+            // Dispatch may have replaced the delegate receiver with the actual target's
+            // arguments before starting its initializer; rebuild from the retained values.
+            while ctx.frame_stack.current_frame().stack_height > StackSlotIndex::new(0) {
+                ctx.pop();
+            }
+            ctx.frame_stack
+                .current_frame_mut()
+                .multicast_state
+                .as_mut()
+                .expect("multicast state must remain installed")
+                .retrying_initializer = false;
+        }
+
+        // Handle the return from the previous target only after a completed dispatch.
+        if !retrying && ctx.frame_stack.current_frame().stack_height > StackSlotIndex::new(0) {
             let frame = ctx.frame_stack.current_frame();
             let invoke_method = frame.state.info_handle.source.clone();
             let has_return_value = invoke_method.signature().return_type.1.is_some();
@@ -369,7 +534,6 @@ impl<'gc> ExecutionEngine<'gc> {
                         .nth(index)
                         .expect("multicast targets vector storage must match vector length")
                 });
-                state.next_index += 1;
                 // Move the retained argument vector out only while preparing this target. It is
                 // restored before dispatch so later multicast targets reuse the same storage.
                 (Some(target), Some(std::mem::take(&mut state.args)))
@@ -387,6 +551,10 @@ impl<'gc> ExecutionEngine<'gc> {
                 .source
                 .clone();
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
+            let saved_ip = *ctx.original_ip;
+            let saved_height = *ctx.original_stack_height;
+            *ctx.original_ip = ctx.state().ip;
+            *ctx.original_stack_height = ctx.top_of_stack();
 
             ctx.push(dotnet_value::StackValue::ObjectRef(target_delegate));
             for arg in &args {
@@ -399,7 +567,34 @@ impl<'gc> ExecutionEngine<'gc> {
                 .expect("multicast state must remain installed while dispatching a target")
                 .args = args;
 
-            ctx.dispatch_method(invoke_method, lookup)
+            let depth = ctx.frame_stack.len();
+            let result = ctx.dispatch_method(invoke_method, lookup);
+            *ctx.original_ip = saved_ip;
+            *ctx.original_stack_height = saved_height;
+            let initializer = (matches!(result, StepResult::FramePushed)
+                && ctx.frame_stack.len() == depth + 1
+                && ctx.frame_stack.current_frame().state.info_handle.is_cctor)
+                || (matches!(result, StepResult::Yield) && ctx.frame_stack.len() == depth);
+            let reflection_pending = ctx.frame_stack.frames[depth - 1]
+                .reflection_pending
+                .is_some();
+            if let Some(state) = ctx
+                .frame_stack
+                .frames
+                .get_mut(depth - 1)
+                .and_then(|frame| frame.multicast_state.as_mut())
+            {
+                if initializer && !reflection_pending {
+                    state.retrying_initializer = true;
+                } else {
+                    state.next_index += 1;
+                }
+            }
+            if matches!(result, StepResult::Jump(_)) && ctx.frame_stack.len() == depth {
+                StepResult::Continue
+            } else {
+                result
+            }
         } else {
             // All targets called.
             ctx.handle_return()

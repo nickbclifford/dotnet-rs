@@ -422,7 +422,13 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
     if vm_likely!(metadata.is_some()) {
         let metadata = metadata.expect("metadata.is_some() checked above");
         ctx.set_current_intrinsic(Some(method.clone()));
-        let res = dispatch_method_intrinsic(metadata.handler, ctx, method, generics);
+        let res = dispatch_method_intrinsic(
+            metadata.handler,
+            ctx,
+            method,
+            generics,
+            dotnet_vm_ops::effects::NativeDispatchMode::Other,
+        );
         ctx.set_current_intrinsic(None);
         return res;
     }

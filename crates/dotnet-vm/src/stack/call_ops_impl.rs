@@ -204,6 +204,7 @@ fn try_redirect_expression_compile_to_interpreter(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResolvedMethodDispatchMode {
     VmContext,
+    InlineCall,
     ExecutionEngineApi,
 }
 
@@ -552,36 +553,7 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
     }
 
     fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
-        let _gc = self.gc;
-
-        // ECMA-335 §II.10.5.3.3: Types without beforefieldinit must be initialized on
-        // static method calls, instance calls for value types, and constructor calls.
-        if !method.parent.before_field_init() {
-            let is_static = !method.signature().instance;
-            let is_value_type = dotnet_vm_ops::vm_try!(
-                method.parent.clone().is_value_type(&self.current_context())
-            );
-            let is_constructor = method.method().name == ".ctor";
-
-            if is_static || is_value_type || is_constructor {
-                let res = self.initialize_static_storage(method.parent.clone(), lookup.clone());
-                if res != StepResult::Continue {
-                    return res;
-                }
-            }
-        }
-
-        if let Some(compile_bool_overload) = try_redirect_expression_compile_to_interpreter(&method)
-        {
-            // dotnet-rs does not implement DynamicMethod emission yet.
-            // Route parameterless Expression/Lambda Compile() through Compile(bool)
-            // with preferInterpretation=true so System.Linq.Expressions uses the
-            // interpreter path instead of Reflection.Emit.
-            self.push_i32(1);
-            return self.dispatch_method(compile_bool_overload, lookup);
-        }
-
-        self.dispatch_resolved_method(method, lookup)
+        self.dispatch_method_with_mode(method, lookup, ResolvedMethodDispatchMode::VmContext)
     }
 
     #[inline]
@@ -596,24 +568,8 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
             this_type,
             ctx,
             "unified_dispatch",
-            Self::dispatch_method,
+            Self::dispatch_method_inline,
         )
-    }
-
-    #[inline]
-    fn unified_dispatch_direct(
-        &mut self,
-        target: UnifiedDispatchTarget<'_>,
-        this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_>>,
-    ) -> StepResult {
-        #[cfg(not(feature = "multithreading"))]
-        {
-            self.call_state.substring_eligible = true;
-        }
-        let result = self.unified_dispatch(target, this_type, ctx);
-        self.call_state.substring_eligible = false;
-        result
     }
 
     #[inline]
@@ -673,6 +629,93 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
+    pub(crate) fn unified_dispatch_for_engine_api(
+        &mut self,
+        target: UnifiedDispatchTarget<'_>,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult {
+        self.unified_dispatch_common(
+            target,
+            this_type,
+            ctx,
+            "unified_dispatch",
+            Self::dispatch_method,
+        )
+    }
+
+    fn dispatch_method_with_mode(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+        mode: ResolvedMethodDispatchMode,
+    ) -> StepResult {
+        let _gc = self.gc;
+
+        let depth = self.frame_stack.len();
+        let initialized = if vm_unlikely!(self.has_staged_native_call(depth)) {
+            self.retain_nested_native_target(depth, &method, &lookup);
+            let saved_ip = *self.original_ip;
+            let saved_height = *self.original_stack_height;
+            *self.original_ip = self.frame_stack.state().ip;
+            *self.original_stack_height = self.top_of_stack();
+            let result = self.prepare_method_initialization(&method, &lookup);
+            *self.original_ip = saved_ip;
+            *self.original_stack_height = saved_height;
+            let initializer = matches!(result, StepResult::FramePushed)
+                && self.frame_stack.len() == depth + 1
+                && self.frame_stack.current_frame().state.info_handle.is_cctor;
+            if initializer || matches!(result, StepResult::Yield) {
+                self.retain_native_target_after_initializer(depth, &method, &lookup);
+            }
+            result
+        } else {
+            self.prepare_method_initialization(&method, &lookup)
+        };
+        if initialized != StepResult::Continue {
+            return initialized;
+        }
+
+        if let Some(compile_bool_overload) = try_redirect_expression_compile_to_interpreter(&method)
+        {
+            // dotnet-rs does not implement DynamicMethod emission yet.
+            // Route parameterless Expression/Lambda Compile() through Compile(bool)
+            // with preferInterpretation=true so System.Linq.Expressions uses the
+            // interpreter path instead of Reflection.Emit.
+            self.push_i32(1);
+            return self.dispatch_method(compile_bool_overload, lookup);
+        }
+
+        self.dispatch_resolved_method_with_mode(method, lookup, mode)
+    }
+
+    pub(crate) fn prepare_method_initialization(
+        &mut self,
+        method: &MethodDescription,
+        lookup: &GenericLookup,
+    ) -> StepResult {
+        // ECMA-335 §II.10.5.3.3: initialize before static, value-type instance,
+        // and constructor calls when the type is not beforefieldinit.
+        if !method.parent.before_field_init() {
+            let is_static = !method.signature().instance;
+            let is_value_type = dotnet_vm_ops::vm_try!(
+                method.parent.clone().is_value_type(&self.current_context())
+            );
+            if is_static || is_value_type || method.method().name == ".ctor" {
+                return self.initialize_static_storage(method.parent.clone(), lookup.clone());
+            }
+        }
+        StepResult::Continue
+    }
+
+    pub(crate) fn dispatch_method_inline(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_method_with_mode(method, lookup, ResolvedMethodDispatchMode::InlineCall)
+    }
+
     pub(crate) fn managed_frame_abort_error(
         &self,
         method: &MethodInfo<'static>,
@@ -689,18 +732,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .caches
             .get_method_info(method, lookup, self.shared.clone())
             .map_err(Into::into)
-    }
-
-    pub(crate) fn dispatch_resolved_method(
-        &mut self,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> StepResult {
-        self.dispatch_resolved_method_with_mode(
-            method,
-            lookup,
-            ResolvedMethodDispatchMode::VmContext,
-        )
     }
 
     pub(crate) fn dispatch_resolved_method_for_engine_api(
@@ -728,22 +759,19 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         );
         // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
         if vm_unlikely!(intrinsic_metadata.is_some()) {
-            // Reflection and delegate intrinsics can dispatch other methods internally.
-            self.call_state.substring_eligible = self.call_state.substring_eligible
-                && mode == ResolvedMethodDispatchMode::VmContext
-                && intrinsic_metadata
-                    .as_ref()
-                    .expect("intrinsic metadata exists")
-                    .handler
-                    .is_substring();
             return match mode {
-                ResolvedMethodDispatchMode::VmContext => {
+                ResolvedMethodDispatchMode::VmContext | ResolvedMethodDispatchMode::InlineCall => {
                     let metadata = intrinsic_metadata.expect("intrinsic metadata must exist");
                     crate::intrinsics::dispatch_method_intrinsic(
                         metadata.handler,
                         self,
                         method,
                         &lookup,
+                        if mode == ResolvedMethodDispatchMode::InlineCall {
+                            dotnet_vm_ops::effects::NativeDispatchMode::InlineCall
+                        } else {
+                            dotnet_vm_ops::effects::NativeDispatchMode::Other
+                        },
                     )
                 }
                 ResolvedMethodDispatchMode::ExecutionEngineApi => {
@@ -751,8 +779,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 }
             };
         }
-
-        self.call_state.substring_eligible = false;
 
         if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
@@ -770,6 +796,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 return result;
             }
 
+            if let Some(result) = self.try_start_multicast(
+                method.clone(),
+                &lookup,
+                mode != ResolvedMethodDispatchMode::InlineCall,
+            ) {
+                return result;
+            }
             if let Some(result) =
                 dotnet_intrinsics_delegates::try_delegate_dispatch(self, method.clone(), &lookup)
             {
@@ -1027,7 +1060,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if frame.state.info_handle.is_cctor
             || frame.is_finalizer
             || frame.multicast_state.is_some()
-            || frame.frame_continuation.is_some()
+            || frame.native_return.is_some()
+            || !frame.frame_continuation.is_empty()
+            || frame.reflection_pending.is_some()
             || frame.constructor_result.is_some()
         {
             return false;
@@ -1079,6 +1114,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 self,
                 method,
                 &lookup,
+                dotnet_vm_ops::effects::NativeDispatchMode::Other,
             );
         }
         if method.method().pinvoke.is_some() {
@@ -1226,6 +1262,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .current_frame_mut()
             .constructor_result
             .take();
+        let native_return = self.frame_stack.current_frame_mut().native_return.take();
 
         // Discard the current frame and its locals/eval stack
         let old_top = self.evaluation_stack.top_of_stack();
@@ -1254,6 +1291,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         dotnet_vm_ops::vm_try!(self.call_frame(info, lookup));
         self.frame_stack.current_frame_mut().constructor_result = constructor_result;
+        self.frame_stack.current_frame_mut().native_return = native_return;
         StepResult::FramePushed
     }
 }

@@ -25,12 +25,15 @@ pub struct BasePointer {
     pub stack: StackSlotIndex,
 }
 
+/// Continuation for multicast invocations excluded from native effects transport.
+/// Admitted invocations use the native activation stack instead.
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct MulticastState<'gc> {
     pub targets: ObjectHandle<'gc>,
     pub next_index: usize,
     pub args: Vec<StackValue<'gc>>,
+    pub retrying_initializer: bool,
 }
 
 pub const STACKFRAME_EXCEPTION_INLINE_CAPACITY: usize = 2;
@@ -40,13 +43,45 @@ pub const STACKFRAME_POOL_LIMIT: usize = 64;
 pub type ExceptionStack<'gc> = SmallVec<[ObjectRef<'gc>; STACKFRAME_EXCEPTION_INLINE_CAPACITY]>;
 pub type PinnedLocals = SmallVec<[bool; STACKFRAME_PINNED_LOCALS_INLINE_CAPACITY]>;
 
-/// Per-frame continuation action used when caller-side return handling must resume
-/// after a reflection-dispatched managed call returns.
-/// Replaces `awaiting_invoke_return: Option<RuntimeType>` on `StackFrame`.
+/// Caller-side return handling for reflection invocations excluded from native effects.
+/// Admitted invocations perform their return conversion in the native activation.
 #[derive(Debug, Clone)]
 pub enum FrameReturnAction {
     /// Box/coerce the dispatched method's return value using this type descriptor.
     InvokeReturn(RuntimeType),
+}
+
+/// A reflected target waiting for its declaring type's initializer.
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct ReflectionPending<'gc> {
+    #[collect(require_static)]
+    pub method: dotnet_types::members::MethodDescription,
+    #[collect(require_static)]
+    pub generics: GenericLookup,
+    pub arguments: Vec<StackValue<'gc>>,
+    pub base: StackSlotIndex,
+}
+
+/// Stable identity of a native activation within one thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
+#[collect(require_static)]
+pub struct NativeId(pub std::num::NonZeroU64);
+
+/// Address of the effect to receive a managed frame's return value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
+#[collect(require_static)]
+pub struct NativeReturnDestination {
+    pub id: NativeId,
+    pub generation: u64,
+}
+
+/// A timed intrinsic retry belongs to one invocation in this frame.
+pub struct MonitorRetry {
+    pub method: dotnet_types::members::MethodDescription,
+    pub ip: usize,
+    pub stack_top: StackSlotIndex,
+    pub deadline: std::time::Instant,
 }
 
 pub struct StackFrame<'gc> {
@@ -60,7 +95,10 @@ pub struct StackFrame<'gc> {
     pub pinned_locals: PinnedLocals,
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
-    pub frame_continuation: Option<FrameReturnAction>,
+    pub frame_continuation: Vec<FrameReturnAction>,
+    pub reflection_pending: Option<Box<ReflectionPending<'gc>>>,
+    pub monitor_retry: Option<Box<MonitorRetry>>,
+    pub native_return: Option<NativeReturnDestination>,
     /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
     /// `ldarga`.
     pub homes: FrameHomes,
@@ -84,7 +122,10 @@ impl<'gc> StackFrame<'gc> {
             pinned_locals,
             is_finalizer: false,
             multicast_state: None,
-            frame_continuation: None,
+            frame_continuation: Vec::new(),
+            reflection_pending: None,
+            monitor_retry: None,
+            native_return: None,
             homes: FrameHomes::default(),
             constructor_result: None,
         }
@@ -106,7 +147,10 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals = pinned_locals;
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.frame_continuation = None;
+        self.frame_continuation.clear();
+        self.reflection_pending = None;
+        self.monitor_retry = None;
+        self.native_return = None;
         self.constructor_result = None;
         self.homes.release();
     }
@@ -120,7 +164,10 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals.clear();
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.frame_continuation = None;
+        self.frame_continuation.clear();
+        self.reflection_pending = None;
+        self.monitor_retry = None;
+        self.native_return = None;
         self.constructor_result = None;
     }
 }
@@ -128,7 +175,9 @@ impl<'gc> StackFrame<'gc> {
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
 // `exception_stack` entries, optional `multicast_state`, and the references serialized in its
 // local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
-// no GC references. Constructor completion also carries only static metadata; its
+// no GC references. `reflection_pending` traces its arguments. The native return destination
+// contains only an ID and generation. Monitor retry state contains only static metadata and time.
+// Constructor completion also carries only static metadata; its
 // receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
@@ -136,6 +185,7 @@ unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
             exception.trace(cc);
         }
         self.multicast_state.trace(cc);
+        self.reflection_pending.trace(cc);
         self.homes.trace(cc);
     }
 }
@@ -657,6 +707,11 @@ impl<'gc> FrameStack<'gc> {
         let serial = FrameHomeSerial::new(self.last_home_serial).next();
         self.last_home_serial = serial.get();
         serial
+    }
+
+    /// Transfer the thread's home serial high-water mark between execution segments.
+    pub fn inherit_home_serial(&mut self, other: &Self) {
+        self.last_home_serial = self.last_home_serial.max(other.last_home_serial);
     }
 
     /// The base and length of the home block of the live frame with `serial`. Searches from

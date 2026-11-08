@@ -11,7 +11,8 @@ use dotnet_utils::{
     sync::{Arc, AtomicU8, AtomicU64, Condvar, OrderedMutex, Ordering, RwLock, levels},
 };
 use dotnet_value::{
-    layout::{FieldLayoutManager, HasLayout},
+    layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout, LayoutManager, Scalar},
+    object::ObjectRef,
     storage::FieldStorage,
 };
 use gc_arena::{Collect, collect::Trace};
@@ -37,6 +38,8 @@ pub struct StaticStorage {
     /// Storage for static fields. Access must use atomic operations
     /// for thread-safety.
     pub storage: FieldStorage,
+    /// Traced exception retained when initialization fails.
+    failure: RwLock<Option<FieldStorage>>,
     /// Condition variable to wait for initialization completion.
     pub(crate) init_cond: Arc<Condvar>,
     /// Mutex for use with init_cond.
@@ -55,19 +58,22 @@ impl Clone for StaticStorage {
             init_state: AtomicU8::new(self.init_state.load(Ordering::Acquire)),
             initializing_thread: AtomicU64::new(self.initializing_thread.load(Ordering::Acquire)),
             storage: self.storage.clone(),
+            failure: RwLock::new(self.failure.read().clone()),
             init_cond: self.init_cond.clone(),
             init_mutex: self.init_mutex.clone(),
         }
     }
 }
 
-// SAFETY: F5.TracesEveryGcRef — `StaticStorage::trace` traces its `storage` field, which contains all GC-managed
-// references. The atomic fields (`init_state`, `initializing_thread`) and synchronization
-// primitives (`init_cond`, `init_mutex`) contain no GC handles. `FieldStorage::trace` reads its
-// backing bytes only during the stop-the-world tracing phase, when mutators cannot modify them.
+// SAFETY: F5.TracesEveryGcRef — both field storage and the retained exception carrier
+// are traced; the atomics and synchronization primitives contain no GC handles.
+// FieldStorage is traced only during a stop-the-world pause, when mutators cannot modify it.
 unsafe impl<'gc> Collect<'gc> for StaticStorage {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.storage.trace(cc);
+        if let Some(failure) = self.failure.read().as_ref() {
+            failure.trace(cc);
+        }
     }
 }
 
@@ -88,68 +94,130 @@ pub struct StaticStorageManager {
     /// We use a striped lock table for better performance and to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
     shards: [RwLock<StaticMap>; 16],
-    /// Tracks which thread is waiting for which other thread to complete type initialization.
-    /// This is used to detect and avoid deadlocks in multi-threaded circular initialization.
-    /// wait_graph[T1] = T2 means T1 is waiting for T2.
-    ///
-    /// Lifecycle contract:
-    /// - `init()` inserts `wait_graph[waiter] = owner` before returning `StaticInitResult::Waiting`.
-    /// - `wait_for_init()` may refresh that edge while polling.
-    /// - `wait_for_init()` owns that edge through `WaitGraphEdgeGuard`, whose `Drop`
-    ///   implementation removes `wait_graph[waiter]` on every return path.
-    ///
-    /// The remove-on-all-returns rule is required because stale edges feed
-    /// `causes_cycle()`, which can falsely report recursion/cycles for later unrelated init calls.
-    wait_graph: OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
+    /// Active initialization dependencies, including independently parked segments on one thread.
+    wait_graph: OrderedMutex<levels::StaticWaitGraph, WaitGraph>,
 }
 
 const NUM_SHARDS: usize = 16;
 
-/// RAII guard for a single static-initialization wait-graph edge.
-///
-/// While armed, dropping this guard removes `wait_graph[waiter]`.
+#[derive(Default)]
+struct WaitGraph {
+    #[cfg(feature = "multithreading")]
+    next: u64,
+    edges: HashMap<u64, HashMap<u64, u64>>,
+}
+
+impl WaitGraph {
+    #[cfg(feature = "multithreading")]
+    fn insert(&mut self, waiter: u64, target: u64) -> u64 {
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("static wait identity exhausted");
+        self.edges
+            .entry(waiter)
+            .or_default()
+            .insert(self.next, target);
+        self.next
+    }
+
+    fn remove(&mut self, waiter: u64, id: u64) {
+        if let Some(edges) = self.edges.get_mut(&waiter) {
+            edges.remove(&id);
+            if edges.is_empty() {
+                self.edges.remove(&waiter);
+            }
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn causes_cycle(&self, start: u64, target: u64) -> bool {
+        let mut pending = vec![target];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = pending.pop() {
+            if current == start {
+                return true;
+            }
+            if visited.insert(current)
+                && let Some(edges) = self.edges.get(&current)
+            {
+                pending.extend(edges.values().copied());
+            }
+        }
+        false
+    }
+}
+
+/// Cleans up an inserted edge until ownership transfers to a registration.
+#[cfg(feature = "multithreading")]
 struct WaitGraphEdgeGuard<'a> {
-    wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
+    wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, WaitGraph>,
     waiter: u64,
+    id: u64,
     armed: bool,
 }
 
+#[cfg(feature = "multithreading")]
 impl<'a> WaitGraphEdgeGuard<'a> {
     fn new(
-        wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, HashMap<u64, u64>>,
+        wait_graph: &'a OrderedMutex<levels::StaticWaitGraph, WaitGraph>,
         waiter: u64,
+        id: u64,
     ) -> Self {
         Self {
             wait_graph,
             waiter,
+            id,
             armed: true,
         }
     }
-
-    fn update(&self, target: u64) {
-        if target == 0 || target == self.waiter {
-            return;
-        }
-
-        let mut wait_graph = self.wait_graph.lock();
-        wait_graph.insert(self.waiter, target);
-    }
-
-    /// Disarm cleanup when edge ownership is explicitly transferred elsewhere.
-    #[allow(dead_code)]
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
 
+#[cfg(feature = "multithreading")]
 impl Drop for WaitGraphEdgeGuard<'_> {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if self.armed {
+            self.wait_graph.lock().remove(self.waiter, self.id);
         }
+    }
+}
 
-        let mut wait_graph = self.wait_graph.lock();
-        wait_graph.remove(&self.waiter);
+/// Owns one dependency without borrowing the manager across a suspension.
+pub struct StaticWaitRegistration {
+    manager: Arc<StaticStorageManager>,
+    waiter: u64,
+    id: u64,
+}
+
+impl std::fmt::Debug for StaticWaitRegistration {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticWaitRegistration")
+            .field("waiter", &self.waiter)
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+impl StaticWaitRegistration {
+    #[cfg(feature = "multithreading")]
+    fn new(manager: Arc<StaticStorageManager>, waiter: u64, id: u64) -> Self {
+        let mut guard = WaitGraphEdgeGuard::new(&manager.wait_graph, waiter, id);
+        let registration = Self {
+            manager: manager.clone(),
+            waiter,
+            id,
+        };
+        guard.disarm();
+        registration
+    }
+}
+
+impl Drop for StaticWaitRegistration {
+    fn drop(&mut self) {
+        self.manager.wait_graph.lock().remove(self.waiter, self.id);
     }
 }
 
@@ -225,7 +293,7 @@ impl Debug for StaticStorageManager {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum StaticInitResult {
     /// This thread must execute the static constructor.
     Execute(MethodDescription),
@@ -236,14 +304,14 @@ pub enum StaticInitResult {
     /// Type initialization failed previously.
     Failed,
     /// Another thread is currently initializing this type.
-    Waiting,
+    Waiting(StaticWaitRegistration),
 }
 
 impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
-            wait_graph: OrderedMutex::new(HashMap::new()),
+            wait_graph: OrderedMutex::new(WaitGraph::default()),
         }
     }
 
@@ -321,6 +389,70 @@ impl StaticStorageManager {
         }
     }
 
+    pub(crate) fn failed_exception<'gc>(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+        _gc: dotnet_utils::gc::GCHandle<'gc>,
+    ) -> Option<ObjectRef<'gc>> {
+        let storage = self.get(description, generics);
+        // INVARIANT: F6.InitializerFailureRoot — the traced carrier and its owner remain live
+        // while this mutation decodes the reference into its GC-handle brand.
+        let failure = storage.failure.read();
+        failure.as_ref().map(|carrier| {
+            carrier
+                .field_at_offset::<ObjectRef<'gc>>(0)
+                .expect("exception carrier layout")
+                .read()
+        })
+    }
+
+    /// Publish a failed initializer and retain its exception through coordinated collections.
+    pub fn mark_failed_with_exception(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+        exception: ObjectRef<'_>,
+    ) {
+        let storage = self.get(description, generics);
+        let mut fields = hashbrown::HashMap::new();
+        fields.insert(
+            FieldKey {
+                owner: TypeDescription::NULL,
+                name: "exception".into(),
+            },
+            FieldLayout {
+                position: dotnet_utils::ByteOffset::new(0),
+                layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
+            },
+        );
+        let mut gc_desc = GcDesc::default();
+        gc_desc.set(0);
+        let carrier = FieldStorage::new(
+            Arc::new(FieldLayoutManager {
+                fields,
+                total_size: ObjectRef::SIZE,
+                alignment: 8,
+                gc_desc,
+                has_ref_fields: true,
+            }),
+            vec![0; ObjectRef::SIZE],
+        );
+        // INVARIANT: F6.InitializerFailureRoot — the current exception state or the
+        // native activation retains this object until the traced carrier is published.
+        carrier
+            .field_at_offset::<ObjectRef>(0)
+            .expect("exception carrier layout")
+            .write(exception);
+        let _lock = storage.init_mutex.lock();
+        *storage.failure.write() = Some(carrier);
+        storage
+            .init_state
+            .store(INIT_STATE_FAILED, Ordering::Release);
+        storage.initializing_thread.store(0, Ordering::Release);
+        storage.init_cond.notify_all();
+    }
+
     /// Initialize static storage for a type and determine if a .cctor needs to run.
     /// This implementation ensures that a type's static constructor is only assigned
     /// to exactly one thread for execution, even if multiple threads race to initialize
@@ -328,7 +460,7 @@ impl StaticStorageManager {
     ///
     /// Returns a `StaticInitResult` indicating what the calling thread should do.
     pub fn init(
-        &self,
+        self: &Arc<Self>,
         description: TypeDescription,
         context: &ResolutionContext,
         thread_id: dotnet_utils::ArenaId,
@@ -387,6 +519,7 @@ impl StaticStorageManager {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
                     initializing_thread: AtomicU64::new(0),
                     storage: FieldStorage::new(layout, data),
+                    failure: RwLock::new(None),
                     init_cond: Arc::new(Condvar::new()),
                     init_mutex,
                 });
@@ -431,7 +564,7 @@ impl StaticStorageManager {
 
         let cctor = cctor.expect("checked is_none() above and returned early");
 
-        let init_lock = storage.init_mutex.lock();
+        let _init_lock = storage.init_mutex.lock();
         match storage.init_state.load(Ordering::Acquire) {
             INIT_STATE_UNINITIALIZED => {
                 storage
@@ -445,17 +578,30 @@ impl StaticStorageManager {
             INIT_STATE_INITIALIZED => Ok(StaticInitResult::Initialized),
             INIT_STATE_FAILED => Ok(StaticInitResult::Failed),
             INIT_STATE_INITIALIZING => {
-                // Another thread is currently initializing
-                let target_thread = storage.initializing_thread.load(Ordering::Acquire);
-                if target_thread != 0 {
-                    let mut wait_graph = self.wait_graph.lock_after(init_lock.held_level());
-                    if self.causes_cycle(&wait_graph, thread_id.as_u64(), target_thread) {
-                        return Ok(StaticInitResult::Recursive);
-                    }
-                    // Atomic with cycle check: add the edge before returning Waiting
-                    wait_graph.insert(thread_id.as_u64(), target_thread);
+                let target = storage.initializing_thread.load(Ordering::Acquire);
+                assert_ne!(target, 0, "initializing type must have an owner");
+                if target == thread_id.as_u64() {
+                    return Ok(StaticInitResult::Recursive);
                 }
-                Ok(StaticInitResult::Waiting)
+                #[cfg(not(feature = "multithreading"))]
+                unreachable!(
+                    "single-threaded static initialization cannot wait for another thread"
+                );
+                #[cfg(feature = "multithreading")]
+                {
+                    let id = {
+                        let mut graph = self.wait_graph.lock_after(_init_lock.held_level());
+                        if graph.causes_cycle(thread_id.as_u64(), target) {
+                            return Ok(StaticInitResult::Recursive);
+                        }
+                        graph.insert(thread_id.as_u64(), target)
+                    };
+                    Ok(StaticInitResult::Waiting(StaticWaitRegistration::new(
+                        self.clone(),
+                        thread_id.as_u64(),
+                        id,
+                    )))
+                }
             }
             state => unreachable!("Invalid initialization state: {}", state),
         }
@@ -480,8 +626,7 @@ impl StaticStorageManager {
     /// Returns `true` when the caller should yield to a GC safe point and retry later,
     /// or `false` when initialization is no longer in progress.
     ///
-    /// Wait-graph invariant: the caller's `thread_id` edge must be removed before any return
-    /// from this method, including early return paths (such as a GC-yield request).
+    /// The registration's edge is removed before every return, including a GC-yield request.
     ///
     /// This method is only valid after [`StaticInitResult::Waiting`] is returned. A
     /// single-threaded build cannot produce that result, so it has no valid caller
@@ -491,12 +636,11 @@ impl StaticStorageManager {
         description: TypeDescription,
         generics: &GenericLookup,
         thread_manager: &impl ThreadManagerOps,
-        thread_id: dotnet_utils::ArenaId,
+        registration: StaticWaitRegistration,
         _gc_coordinator: &GCCoordinator,
     ) -> bool {
         let storage = self.get(description, generics);
         let mut should_yield = false;
-        let edge_guard = WaitGraphEdgeGuard::new(&self.wait_graph, thread_id.as_u64());
 
         #[allow(
             clippy::never_loop,
@@ -508,10 +652,6 @@ impl StaticStorageManager {
             if state != INIT_STATE_INITIALIZING {
                 break;
             }
-
-            // Ensure our wait edge is up-to-date
-            let target_thread = storage.initializing_thread.load(Ordering::Acquire);
-            edge_guard.update(target_thread);
 
             // Check for GC safe point before waiting
             if thread_manager.is_gc_stop_requested() {
@@ -541,20 +681,8 @@ impl StaticStorageManager {
             }
         }
 
-        drop(edge_guard);
+        drop(registration);
         should_yield
-    }
-
-    /// Helper to detect if adding start -> target edge would cause a cycle.
-    fn causes_cycle(&self, wait_graph: &HashMap<u64, u64>, start: u64, target: u64) -> bool {
-        let mut current = target;
-        while let Some(&next) = wait_graph.get(&current) {
-            if next == start {
-                return true;
-            }
-            current = next;
-        }
-        false
     }
 }
 
@@ -565,51 +693,54 @@ mod wait_graph_guard_tests {
 
     #[test]
     fn wait_graph_edge_guard_removes_edge_on_scope_exit() {
-        let wait_graph =
-            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
-
+        let graph = OrderedMutex::<levels::StaticWaitGraph, WaitGraph>::new(WaitGraph::default());
+        let id = graph.lock().insert(10, 20);
         {
-            let edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 10);
-            edge_guard.update(20);
-
-            {
-                let map = wait_graph.lock();
-                assert_eq!(map.get(&10), Some(&20));
-            }
+            let _guard = WaitGraphEdgeGuard::new(&graph, 10, id);
+            assert_eq!(graph.lock().edges[&10][&id], 20);
         }
-
-        let map = wait_graph.lock();
-        assert_eq!(map.get(&10), None);
+        assert!(graph.lock().edges.is_empty());
     }
 
     #[test]
     fn wait_graph_edge_guard_removes_edge_during_unwind() {
-        let wait_graph =
-            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
-
+        let graph = OrderedMutex::<levels::StaticWaitGraph, WaitGraph>::new(WaitGraph::default());
+        let id = graph.lock().insert(30, 40);
         let _ = catch_unwind(AssertUnwindSafe(|| {
-            let edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 30);
-            edge_guard.update(40);
+            let _guard = WaitGraphEdgeGuard::new(&graph, 30, id);
             panic!("forced unwind to verify wait-graph edge cleanup");
         }));
-
-        let map = wait_graph.lock();
-        assert_eq!(map.get(&30), None);
+        assert!(graph.lock().edges.is_empty());
     }
 
     #[test]
-    fn wait_graph_edge_guard_disarm_transfers_cleanup_responsibility() {
-        let wait_graph =
-            OrderedMutex::<levels::StaticWaitGraph, HashMap<u64, u64>>::new(HashMap::new());
+    fn owned_wait_registration_removes_transferred_edge_on_unwind() {
+        let manager = Arc::new(StaticStorageManager::new());
+        let id = manager.wait_graph.lock().insert(50, 60);
+        let registration = StaticWaitRegistration::new(manager.clone(), 50, id);
+        assert_eq!(manager.wait_graph.lock().edges[&50][&id], 60);
+        let _ = catch_unwind(AssertUnwindSafe(move || {
+            let _registration = registration;
+            panic!("forced unwind to verify owned wait cleanup");
+        }));
+        assert!(!manager.wait_graph.lock().edges.contains_key(&50));
+    }
 
-        {
-            let mut edge_guard = WaitGraphEdgeGuard::new(&wait_graph, 50);
-            edge_guard.update(60);
-            edge_guard.disarm();
-        }
-
-        let mut map = wait_graph.lock();
-        assert_eq!(map.get(&50), Some(&60));
-        map.remove(&50);
+    #[test]
+    fn wait_graph_preserves_nested_edges_and_detects_cycles() {
+        let manager = Arc::new(StaticStorageManager::new());
+        let (first, second) = {
+            let mut graph = manager.wait_graph.lock();
+            (graph.insert(1, 2), graph.insert(1, 3))
+        };
+        let first = StaticWaitRegistration::new(manager.clone(), 1, first);
+        let second = StaticWaitRegistration::new(manager.clone(), 1, second);
+        assert!(manager.wait_graph.lock().causes_cycle(2, 1));
+        assert!(manager.wait_graph.lock().causes_cycle(3, 1));
+        drop(second);
+        assert!(manager.wait_graph.lock().causes_cycle(2, 1));
+        assert!(!manager.wait_graph.lock().causes_cycle(3, 1));
+        drop(first);
+        assert!(manager.wait_graph.lock().edges.is_empty());
     }
 }

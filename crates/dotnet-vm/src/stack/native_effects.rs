@@ -1,0 +1,1760 @@
+use super::{
+    VesContext,
+    context::{InstructionCompletion, NativeActivation, NativeFutureOwner, NativeOutput},
+    ops::*,
+};
+use crate::StepResult;
+use crate::sync::SyncBlockOps;
+use crate::threading::ThreadManagerOps;
+use dotnet_intrinsics_threading::MonitorHost;
+use dotnet_runtime_resolver::resolution::TypeResolutionExt;
+use dotnet_types::{error::VmError, generics::GenericLookup, members::MethodDescription};
+use dotnet_value::{
+    CLRString, StackValue,
+    object::{HeapStorage, ObjectRef},
+};
+use dotnet_vm_ops::MemoryOps;
+use dotnet_vm_ops::effects::{
+    NativeBackend, NativeCall, NativeControl, NativeDispatchMode, NativeEffect, NativeFailure,
+    NativeFuture, NativeInitClaim, NativeInitProbe, NativeIntrinsicHost, NativeInvocation,
+    NativeOperandView, NativeRegion, NativeSelection, NativeSelector, NativeSyncHandler,
+    NativeValue, VmEffects, poll_native, poll_native_continuation,
+};
+use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
+use gc_arena::DynamicRootSet;
+use std::task::Poll;
+
+enum NativeEntry {
+    Intrinsic(fn(VmEffects) -> NativeFuture),
+    Instruction(StaticFieldAction),
+}
+
+pub(crate) struct PendingCall {
+    pub(super) generation: u64,
+    pub(super) capture: bool,
+    call: NativeCall,
+    staged: bool,
+    redirected: Option<(MethodDescription, GenericLookup)>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum WaitTestPoint {
+    Probed,
+    Registered,
+}
+
+#[cfg(test)]
+type WaitTestHook = Box<dyn FnMut(WaitTestPoint)>;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<WaitTestHook>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn wait_test_hook(point: WaitTestPoint) {
+    WAIT_TEST_HOOK.with(|hook| {
+        if let Some(callback) = hook.borrow_mut().as_mut() {
+            callback(point);
+        }
+    });
+}
+
+pub(crate) enum PendingWait {
+    Monitor(PendingMonitor),
+    Finalizers(u64),
+    Initializer(u64, Box<dyn dotnet_vm_ops::effects::NativeInitWait>),
+}
+
+pub(crate) struct PendingMonitor {
+    pub(crate) block: crate::sync::Arc<crate::sync::SyncBlock>,
+    pub(crate) epoch: Option<u64>,
+    pub(crate) deadline: Option<std::time::Instant>,
+    generation: u64,
+    // INVARIANT: F1.GcHandleRooted — the activation's traced root set retains this object while its monitor is pending.
+    _object: dotnet_vm_ops::effects::RootedValue,
+}
+
+struct InitializerClaim {
+    manager: crate::sync::Arc<crate::statics::StaticStorageManager>,
+    description: dotnet_types::TypeDescription,
+    generics: GenericLookup,
+    armed: bool,
+}
+
+impl NativeInitClaim for InitializerClaim {
+    fn succeed(&mut self) {
+        self.manager
+            .mark_initialized(self.description.clone(), &self.generics);
+        self.armed = false;
+    }
+
+    fn fail(&mut self, exception: ObjectRef<'_>) {
+        self.manager.mark_failed_with_exception(
+            self.description.clone(),
+            &self.generics,
+            exception,
+        );
+        self.armed = false;
+    }
+}
+
+impl Drop for InitializerClaim {
+    fn drop(&mut self) {
+        if self.armed {
+            self.manager
+                .mark_failed(self.description.clone(), &self.generics);
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+struct InitializerWait {
+    _edge: crate::statics::StaticWaitRegistration,
+    storage: crate::sync::Arc<crate::statics::StaticStorage>,
+}
+
+#[cfg(feature = "multithreading")]
+impl dotnet_vm_ops::effects::NativeInitWait for InitializerWait {
+    fn ready(&self) -> bool {
+        self.storage
+            .init_state
+            .load(dotnet_utils::sync::Ordering::Acquire)
+            != crate::statics::INIT_STATE_INITIALIZING
+    }
+    fn sleeper(&self) -> Box<dyn dotnet_vm_ops::effects::NativeInitSleeper> {
+        Box::new(InitializerSleeper(self.storage.clone()))
+    }
+}
+
+#[cfg(feature = "multithreading")]
+struct InitializerSleeper(crate::sync::Arc<crate::statics::StaticStorage>);
+
+#[cfg(feature = "multithreading")]
+impl dotnet_vm_ops::effects::NativeInitSleeper for InitializerSleeper {
+    fn wait(&self, duration: std::time::Duration) {
+        let mut lock = self.0.init_mutex.lock();
+        if self
+            .0
+            .init_state
+            .load(dotnet_utils::sync::Ordering::Acquire)
+            == crate::statics::INIT_STATE_INITIALIZING
+        {
+            let _ = self.0.init_cond.wait_for(lock.raw_mut(), duration);
+        }
+    }
+}
+
+struct Adapter<'a, 'b, 'gc> {
+    context: &'a mut VesContext<'b, 'gc>,
+    operands: &'a mut Vec<StackValue<'gc>>,
+    outputs: &'a mut Vec<StackValue<'gc>>,
+}
+
+impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
+    fn stop_requested(&self) -> bool {
+        self.context.shared.thread_manager.is_gc_stop_requested()
+            || self.context.local.heap.needs_full_collect.get()
+            || self.context.gc.needs_collection()
+    }
+    fn active_scope_depth(&self) -> usize {
+        self.context.local.active_borrows.get()
+    }
+    fn probe_initializer(
+        &mut self,
+        description: dotnet_types::TypeDescription,
+        generics: &GenericLookup,
+    ) -> Result<NativeInitProbe<'gc>, VmError> {
+        let arity = description.definition().generic_parameters.len();
+        let generics =
+            GenericLookup::new(generics.type_generics.iter().take(arity).cloned().collect());
+        let manager = self.context.shared.statics.clone();
+        let thread_id = self.context.thread_id.get();
+        let result = manager.init(
+            description.clone(),
+            &self.context.with_generics(&generics),
+            thread_id,
+        )?;
+        Ok(match result {
+            crate::statics::StaticInitResult::Initialized
+            | crate::statics::StaticInitResult::Recursive => NativeInitProbe::Complete,
+            crate::statics::StaticInitResult::Failed => NativeInitProbe::Failed(
+                manager.failed_exception(description, &generics, self.context.gc),
+            ),
+            crate::statics::StaticInitResult::Execute(method) => {
+                let claim = InitializerClaim {
+                    manager,
+                    description,
+                    generics: generics.clone(),
+                    armed: true,
+                };
+                NativeInitProbe::Execute(
+                    NativeCall {
+                        method,
+                        generics,
+                        arguments: Vec::new(),
+                    },
+                    Box::new(claim),
+                )
+            }
+            crate::statics::StaticInitResult::Waiting(registration) => {
+                #[cfg(feature = "multithreading")]
+                {
+                    let storage = manager.get(description, &generics);
+                    let edge = registration;
+                    NativeInitProbe::Waiting(Box::new(InitializerWait {
+                        _edge: edge,
+                        storage,
+                    }))
+                }
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    drop(registration);
+                    unreachable!(
+                        "single-threaded static initialization cannot wait for another thread"
+                    )
+                }
+            }
+        })
+    }
+    fn wrap_initializer_failure(
+        &mut self,
+        description: &dotnet_types::TypeDescription,
+        inner: Option<ObjectRef<'gc>>,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        let message = format!(
+            "The type initializer for '{}' threw an exception.",
+            description.type_name()
+        );
+        let previous = *self.context.exception_mode;
+        let result = match inner {
+            Some(inner) => self.context.throw_by_name_with_inner(
+                "System.TypeInitializationException",
+                &message,
+                inner,
+            ),
+            None => self
+                .context
+                .throw_by_name_with_message("System.TypeInitializationException", &message),
+        };
+        let current = *self.context.exception_mode;
+        *self.context.exception_mode = previous;
+        match (result, current) {
+            (StepResult::Exception, dotnet_vm_data::ExceptionState::Throwing(exception, _)) => {
+                Ok(exception)
+            }
+            (StepResult::Error(error), _) => Err(error),
+            _ => Err(dotnet_types::error::ExecutionError::InternalError(
+                "failed to create initializer exception".into(),
+            )
+            .into()),
+        }
+    }
+    fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
+        self.operands
+    }
+    fn push_new_string(&mut self, chars: Vec<u16>) -> Result<(), VmError> {
+        let value = ObjectRef::new(self.context.gc, HeapStorage::Str(CLRString::new(chars)));
+        self.context.register_new_object(&value);
+        self.outputs.push(StackValue::ObjectRef(value));
+        Ok(())
+    }
+    unsafe fn write_monitor_flag(
+        &mut self,
+        pointer: StackValue<'gc>,
+        value: bool,
+    ) -> Result<(), VmError> {
+        use dotnet_vm_ops::ops::RawMemoryOps;
+        let StackValue::ManagedPtr(pointer) = pointer else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "invalid monitor flag pointer".into(),
+            )
+            .into());
+        };
+        // SAFETY: F10.RawMemoryAccessValid — the caller supplies synchronized bool storage;
+        // write_bytes checks the entire one-byte range against its live frame or heap owner.
+        unsafe {
+            self.context.write_bytes(
+                pointer.origin().clone(),
+                pointer.byte_offset(),
+                &[u8::from(value)],
+            )?
+        };
+        Ok(())
+    }
+    fn frame_home_block(
+        &self,
+        serial: dotnet_value::pointer::FrameHomeSerial,
+    ) -> Option<(std::ptr::NonNull<u8>, usize)> {
+        self.context.frame_stack.home_block(serial).or_else(|| {
+            self.context
+                .parked_finalizer_caller
+                .as_ref()?
+                .frame_stack
+                .home_block(serial)
+        })
+    }
+    fn multicast_target(
+        &mut self,
+        receiver: StackValue<'gc>,
+        index: usize,
+    ) -> Result<Option<dotnet_vm_ops::effects::NativeTarget<'gc>>, VmError> {
+        let StackValue::ObjectRef(delegate @ ObjectRef(Some(_))) = receiver else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "invalid multicast receiver".into(),
+            )
+            .into());
+        };
+        let targets =
+            dotnet_intrinsics_delegates::helpers::get_multicast_targets_ref(self.context, delegate)
+                .ok_or_else(|| {
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "missing multicast list".into(),
+                    )
+                })?;
+        let target = targets.as_vector(|vector| {
+            vector
+                .object_ref_elements(self.context.gc.mutation())
+                .nth(index)
+        });
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        let (receiver, index) =
+            dotnet_intrinsics_delegates::helpers::get_delegate_info(self.context, target);
+        let (method, generics) =
+            dotnet_intrinsics_delegates::DelegateInvokeHost::delegate_lookup_method_by_index(
+                self.context,
+                index,
+            );
+        let receiver = (method.signature().instance || receiver.0.is_some())
+            .then_some(StackValue::ObjectRef(receiver));
+        Ok(Some(dotnet_vm_ops::effects::NativeTarget {
+            method,
+            generics,
+            receiver,
+        }))
+    }
+    fn reflection_call(
+        &mut self,
+    ) -> Result<dotnet_vm_ops::effects::NativePreparedCall<'gc>, VmError> {
+        let (mut method, mut generics, receiver, parameters) = match self.operands.as_slice() {
+            [
+                StackValue::ObjectRef(target),
+                StackValue::ObjectRef(parameters),
+            ] => {
+                let (method, generics) =
+                    dotnet_intrinsics_reflection::types::resolve_activator_constructor(
+                        self.context,
+                        *target,
+                        *parameters,
+                    )
+                    .ok_or_else(|| {
+                        dotnet_types::error::ExecutionError::InternalError(
+                            "invalid Activator operands".into(),
+                        )
+                    })?;
+                (method, generics, None, *parameters)
+            }
+            [
+                StackValue::ObjectRef(obj),
+                receiver,
+                _,
+                _,
+                StackValue::ObjectRef(parameters),
+                _,
+            ] => {
+                let (method, generics) =
+                    dotnet_intrinsics_reflection::common::resolve_runtime_method(
+                        self.context,
+                        *obj,
+                    )?;
+                (method, generics, Some(receiver.clone()), *parameters)
+            }
+            [
+                StackValue::ObjectRef(obj),
+                _,
+                _,
+                StackValue::ObjectRef(parameters),
+                _,
+            ] => {
+                let (method, generics) =
+                    dotnet_intrinsics_reflection::common::resolve_runtime_method(
+                        self.context,
+                        *obj,
+                    )?;
+                (method, generics, None, *parameters)
+            }
+            _ => {
+                return Err(dotnet_types::error::ExecutionError::InternalError(
+                    "invalid reflection operands".into(),
+                )
+                .into());
+            }
+        };
+        let is_constructor = method.method().name == ".ctor";
+        let mut constructor_result = None;
+        let receiver = if is_constructor && receiver.is_none() {
+            let instance = dotnet_intrinsics_reflection::ResolutionContextHost::reflection_new_object_with_lookup(self.context, method.parent.clone(), &generics)?;
+            let is_value_type = method
+                .parent
+                .is_value_type(&self.context.current_context())?;
+            let storage = if is_value_type {
+                HeapStorage::Boxed(Box::new(instance))
+            } else {
+                HeapStorage::Obj(Box::new(instance))
+            };
+            let owner = ObjectRef::new(self.context.gc, storage);
+            self.context.register_new_object(&owner);
+            constructor_result = Some(StackValue::ObjectRef(owner));
+            if is_value_type {
+                // INVARIANT: F6.NativePointerDescriptor — this address is used only to form
+                // an owner-backed descriptor; dispatch reconstructs it from the rooted box.
+                let data = owner.as_heap_storage(|storage| match storage {
+                    HeapStorage::Boxed(value) => value
+                        .instance_storage
+                        .with_data(|data| data.as_ptr() as *mut u8),
+                    _ => unreachable!("new value constructor owner is boxed"),
+                });
+                Some(StackValue::managed_ptr_with_owner(
+                    data,
+                    method.parent.clone(),
+                    Some(owner),
+                    false,
+                    None,
+                ))
+            } else {
+                Some(StackValue::ObjectRef(owner))
+            }
+        } else {
+            if is_constructor {
+                constructor_result = receiver.clone();
+            }
+            receiver
+        };
+        if method.signature().instance
+            && method.method().virtual_member
+            && let Some(StackValue::ObjectRef(this_obj)) = &receiver
+            && this_obj.0.is_some()
+        {
+            let this_type = self.context.get_heap_description(*this_obj)?;
+            method = self.context.resolver().resolve_virtual_method(
+                method,
+                this_type,
+                &generics,
+                &self.context.current_context(),
+            )?;
+            let arity = method.parent.definition().generic_parameters.len();
+            if arity == 0 {
+                generics.set_type_generics(Vec::new().into());
+            } else if method.parent_generics.type_generics.len() == arity {
+                generics.set_type_generics(method.parent_generics.type_generics.clone());
+            } else {
+                generics.set_type_generics(
+                    generics
+                        .type_generics
+                        .iter()
+                        .take(arity)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+            }
+        }
+        let gc = self.context.gc;
+        let mut arguments = dotnet_intrinsics_reflection::methods::unmarshal_invoke_params(
+            self.context,
+            &gc,
+            &method,
+            &generics,
+            parameters,
+            true,
+        )
+        .map_err(|step| match step {
+            StepResult::Error(error) => error,
+            _ => dotnet_types::error::ExecutionError::InternalError(
+                "unexpected reflection marshalling result".into(),
+            )
+            .into(),
+        })?;
+        if method.signature().instance {
+            arguments.insert(
+                0,
+                receiver.ok_or_else(|| {
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "missing reflection receiver".into(),
+                    )
+                })?,
+            );
+        }
+        Ok(dotnet_vm_ops::effects::NativePreparedCall {
+            method,
+            generics,
+            arguments,
+            constructor_result,
+        })
+    }
+    fn reflection_result(
+        &mut self,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+        value: Option<StackValue<'gc>>,
+    ) -> Result<StackValue<'gc>, VmError> {
+        let Some(ParameterType::Value(ty)) = &method.signature().return_type.1 else {
+            return Ok(StackValue::null());
+        };
+        let concrete = generics.make_concrete(
+            method.resolution(),
+            ty.clone(),
+            self.context.loader().as_ref(),
+        )?;
+        let description = self.context.loader().find_concrete_type(concrete.clone())?;
+        let value = value.ok_or_else(|| {
+            dotnet_types::error::ExecutionError::InternalError(
+                "missing reflected return value".into(),
+            )
+        })?;
+        if description.is_value_type(&self.context.current_context())? {
+            let boxed = self.context.box_value(&concrete, value)?;
+            Ok(StackValue::ObjectRef(boxed))
+        } else {
+            Ok(value)
+        }
+    }
+    fn reflection_constructor_result(
+        &mut self,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+        value: StackValue<'gc>,
+    ) -> Result<StackValue<'gc>, VmError> {
+        if method.parent.type_name() != "System.Nullable`1" {
+            return Ok(value);
+        }
+        let runtime_args = generics
+            .type_generics
+            .iter()
+            .map(|arg| {
+                dotnet_types::runtime::runtime_type_from_concrete(
+                    self.context.loader().as_ref(),
+                    arg,
+                )
+                .ok_or(dotnet_types::error::TypeResolutionError::InvalidHandle)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let concrete =
+            dotnet_types::runtime::RuntimeType::Generic(method.parent.clone(), runtime_args)
+                .to_concrete(self.context.loader().as_ref());
+        let StackValue::ObjectRef(owner @ ObjectRef(Some(_))) = value else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "invalid constructed value".into(),
+            )
+            .into());
+        };
+        let instance = owner
+            .as_heap_storage(|storage| match storage {
+                HeapStorage::Boxed(instance) => Some((**instance).clone()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError("invalid constructed box".into())
+            })?;
+        let boxed = self
+            .context
+            .box_value(&concrete, StackValue::ValueType(instance))?;
+        Ok(StackValue::ObjectRef(boxed))
+    }
+    fn push_output(&mut self, value: StackValue<'gc>) -> Result<(), VmError> {
+        self.outputs.push(value);
+        Ok(())
+    }
+}
+
+fn multicast_value_shape(
+    ctx: &VesContext<'_, '_>,
+    method: &MethodDescription,
+    generics: &GenericLookup,
+    ty: &MethodType,
+) -> NativeOutput {
+    let Ok(concrete) =
+        generics.make_concrete(method.resolution(), ty.clone(), ctx.loader().as_ref())
+    else {
+        return NativeOutput::Unsupported;
+    };
+    if matches!(concrete.get(), BaseType::Type { .. })
+        && let Ok(description) = ctx.loader().find_concrete_type(concrete.clone())
+        && let Some(underlying) = description.is_enum()
+    {
+        let underlying: MethodType = underlying.clone().into();
+        return multicast_value_shape(ctx, method, generics, &underlying);
+    }
+    let Ok(concrete) = ctx.current_context().normalize_type(concrete) else {
+        return NativeOutput::Unsupported;
+    };
+    match concrete.get() {
+        BaseType::Boolean
+        | BaseType::Char
+        | BaseType::Int8
+        | BaseType::UInt8
+        | BaseType::Int16
+        | BaseType::UInt16
+        | BaseType::Int32
+        | BaseType::UInt32 => NativeOutput::Int32,
+        BaseType::Int64 | BaseType::UInt64 => NativeOutput::Int64,
+        BaseType::IntPtr | BaseType::UIntPtr => NativeOutput::NativeInt,
+        BaseType::Float32 | BaseType::Float64 => NativeOutput::NativeFloat,
+        _ if concrete.is_class(ctx.loader().as_ref()) => NativeOutput::Object,
+        _ => NativeOutput::Unsupported,
+    }
+}
+
+fn multicast_output(
+    ctx: &VesContext<'_, '_>,
+    method: &MethodDescription,
+    generics: &GenericLookup,
+) -> NativeOutput {
+    match &method.signature().return_type.1 {
+        None => NativeOutput::Void,
+        Some(ParameterType::Value(ty)) => multicast_value_shape(ctx, method, generics, ty),
+        _ => NativeOutput::Unsupported,
+    }
+}
+
+fn multicast_argument_supported(shape: NativeOutput, value: &StackValue<'_>) -> bool {
+    matches!(
+        (shape, value),
+        (NativeOutput::Int32, StackValue::Int32(_))
+            | (NativeOutput::Int64, StackValue::Int64(_))
+            | (NativeOutput::NativeInt, StackValue::NativeInt(_))
+            | (NativeOutput::NativeFloat, StackValue::NativeFloat(_))
+            | (NativeOutput::Object, StackValue::ObjectRef(_))
+    )
+}
+
+async fn multicast_body(mut fx: VmEffects) -> dotnet_vm_ops::effects::NativeResult {
+    let (receiver, arguments) = {
+        let mut vm = fx.vm().await?;
+        vm.prepare_multicast()?
+    };
+    let mut last = NativeValue::Void;
+    let mut index = 0;
+    loop {
+        let call = {
+            let mut vm = fx.vm().await?;
+            vm.multicast_call(&receiver, &arguments, index)?
+        };
+        let Some(call) = call else {
+            break;
+        };
+        last = fx.call(call).await?;
+        index += 1;
+    }
+    let mut vm = fx.vm().await?;
+    vm.push_value(last)
+}
+
+fn multicast_entry(fx: VmEffects) -> NativeFuture {
+    Box::pin(multicast_body(fx))
+}
+
+fn multicast_fallback<'gc>(
+    ctx: &mut VesContext<'_, 'gc>,
+    method: MethodDescription,
+    lookup: &GenericLookup,
+) -> StepResult {
+    dotnet_intrinsics_delegates::try_delegate_dispatch(ctx, method, lookup)
+        .unwrap_or_else(|| StepResult::internal_error("delegate dispatch unavailable"))
+}
+
+impl NativeActivation<'_> {
+    pub(crate) fn cleanup(mut self) {
+        drop(self.wait.take());
+        drop(self);
+    }
+}
+
+impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
+    fn start_native(
+        &mut self,
+        method: MethodDescription,
+        mode: NativeDispatchMode,
+        generics: &GenericLookup,
+        selector: Option<NativeSelector<'gc, Self>>,
+        fallback: NativeSyncHandler<Self>,
+        entry: fn(VmEffects) -> NativeFuture,
+    ) -> StepResult {
+        if mode != NativeDispatchMode::InlineCall {
+            return fallback(self, method, generics);
+        }
+        self.start_native_inner(
+            method,
+            generics,
+            selector,
+            NativeEntry::Intrinsic(entry),
+            false,
+        )
+    }
+}
+
+impl<'gc> VesContext<'_, 'gc> {
+    pub(crate) fn start_static_field_effect(&mut self, action: StaticFieldAction) -> StepResult {
+        let method = self.state().info_handle.source.clone();
+        let generics = action.generics.clone();
+        self.start_native_inner(
+            method,
+            &generics,
+            None,
+            NativeEntry::Instruction(action),
+            false,
+        )
+    }
+
+    fn start_native_inner(
+        &mut self,
+        method: MethodDescription,
+        generics: &GenericLookup,
+        selector: Option<NativeSelector<'gc, Self>>,
+        entry: NativeEntry,
+        synthetic_return: bool,
+    ) -> StepResult {
+        let signature = method.signature();
+        let count = match &entry {
+            NativeEntry::Instruction(action) => {
+                usize::from(matches!(action.kind, StaticFieldKind::Store { .. }))
+            }
+            NativeEntry::Intrinsic(_) => {
+                signature.parameters.len() + usize::from(signature.instance)
+            }
+        };
+        if self.frame_stack.is_empty()
+            || self.frame_stack.current_frame().stack_height.as_usize() < count
+        {
+            return StepResult::internal_error("native call operand underflow");
+        }
+        let parent_destination = match self.call_state.native.last() {
+            Some(parent) if parent.caller_depth == self.frame_stack.len() => {
+                let Some(pending) = parent.pending.as_ref().filter(|pending| pending.staged) else {
+                    return StepResult::internal_error("native activation already live at caller");
+                };
+                Some(dotnet_vm_data::NativeReturnDestination {
+                    id: parent.id,
+                    generation: pending.generation,
+                })
+            }
+            Some(parent) if parent.caller_depth > self.frame_stack.len() => {
+                return StepResult::internal_error("native caller changed");
+            }
+            _ => None,
+        };
+        let invocation = match selector {
+            Some(selector) => match selector(self, NativeOperandView::new(self), &method, generics)
+            {
+                NativeSelection::Async(invocation) => invocation,
+                NativeSelection::Synchronous(handler) => return handler(self, method, generics),
+                NativeSelection::Reject(error) => return StepResult::Error(error),
+            },
+            None => NativeInvocation {
+                start: 0,
+                length: 0,
+                parameter_count: signature.parameters.len(),
+            },
+        };
+        let output = if matches!(entry, NativeEntry::Instruction(_)) {
+            NativeOutput::Void
+        } else if method.body().is_none() && method.method().name == "Invoke" {
+            multicast_output(self, &method, generics)
+        } else {
+            match &signature.return_type.1 {
+                None => NativeOutput::Void,
+                Some(ParameterType::Value(MethodType::Base(base))) => match base.as_ref() {
+                    BaseType::Boolean => NativeOutput::Int32,
+                    BaseType::String => NativeOutput::String,
+                    BaseType::Object => NativeOutput::Object,
+                    _ => NativeOutput::Unsupported,
+                },
+                _ => NativeOutput::Unsupported,
+            }
+        };
+        let control = NativeControl::new();
+        let fx = match control.effects(invocation) {
+            Ok(fx) => fx,
+            Err(error) => return StepResult::Error(error),
+        };
+        let Some(next_id) = self.call_state.last_native_id.checked_add(1) else {
+            return StepResult::internal_error("native activation identity exhausted");
+        };
+        let roots = DynamicRootSet::new(self.gc.mutation());
+        let mut reflection_actions = if matches!(entry, NativeEntry::Instruction(_)) {
+            Vec::new()
+        } else {
+            self.call_state
+                .reflection_arming
+                .iter_mut()
+                .rev()
+                .filter_map(Option::take)
+                .collect::<Vec<_>>()
+        };
+        if synthetic_return && !reflection_actions.is_empty() {
+            let caller_index = self.frame_stack.len() - 2;
+            let caller = &mut self.frame_stack.frames[caller_index];
+            caller.frame_continuation.append(&mut reflection_actions);
+        }
+        let mut operands = self.pop_multiple(count);
+        let (future, instruction) = match entry {
+            NativeEntry::Instruction(action) => {
+                let description = action.field.parent.clone();
+                let generics = action.generics.clone();
+                let future: NativeFuture = Box::pin(async move {
+                    let mut fx = fx;
+                    fx.ensure_initialized(description, generics).await
+                });
+                let operand = operands.pop();
+                (future, Some(InstructionCompletion { action, operand }))
+            }
+            NativeEntry::Intrinsic(entry) => (entry(fx), None),
+        };
+        self.call_state.last_native_id = next_id;
+        self.call_state.native.push(NativeActivation {
+            ambient_exception: None,
+            owner: NativeFutureOwner {
+                control,
+                future: Some(future),
+            },
+            pending: None,
+            wait: None,
+            roots,
+            id: dotnet_vm_data::NativeId(
+                std::num::NonZeroU64::new(next_id).expect("native identity is nonzero"),
+            ),
+            parent_destination,
+            method: crate::CollectableMethodDescription(method.clone()),
+            operands,
+            outputs: Vec::new(),
+            instruction,
+            caller_depth: self.frame_stack.len(),
+            caller_ip: self.state().ip,
+            stack_height: self.top_of_stack(),
+            output,
+            synthetic_return,
+            reflection_actions,
+        });
+        if parent_destination.is_some() {
+            let child_id = dotnet_vm_data::NativeId(
+                std::num::NonZeroU64::new(next_id).expect("native identity is nonzero"),
+            );
+            let depth = self
+                .call_state
+                .native_entry_depth
+                .get_or_insert_with(Default::default)
+                .clone();
+            if depth.get() >= 32 {
+                return StepResult::NativeSuspended(child_id);
+            }
+            depth.set(depth.get() + 1);
+            struct EntryDepth(std::rc::Rc<std::cell::Cell<usize>>);
+            impl Drop for EntryDepth {
+                fn drop(&mut self) {
+                    self.0.set(self.0.get() - 1);
+                }
+            }
+            let _entry = EntryDepth(depth);
+            match self.advance_native_effect_once(true) {
+                StepResult::Continue => StepResult::NativeSuspended(child_id),
+                other => other,
+            }
+        } else {
+            self.advance_native_effect()
+        }
+    }
+}
+
+impl<'gc> VesContext<'_, 'gc> {
+    pub(crate) fn is_capturing_native_return(
+        &self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+    ) -> bool {
+        self.call_state.native.last().is_some_and(|work| {
+            work.id == destination.id
+                && work.pending.as_ref().is_some_and(|pending| {
+                    pending.capture && pending.generation == destination.generation
+                })
+        })
+    }
+
+    pub(crate) fn redirected_native_return(
+        &self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+    ) -> Option<(bool, crate::StackSlotIndex)> {
+        let work = self.call_state.native.last()?;
+        let pending = work.pending.as_ref()?;
+        if work.id != destination.id
+            || pending.generation != destination.generation
+            || pending.redirected.is_none()
+        {
+            return None;
+        }
+        Some((
+            pending.call.method.signature().return_type.1.is_some(),
+            work.stack_height,
+        ))
+    }
+
+    pub(crate) fn has_staged_native_call(&self, depth: usize) -> bool {
+        self.call_state.native.last().is_some_and(|work| {
+            work.caller_depth == depth
+                && work.pending.as_ref().is_some_and(|pending| pending.staged)
+        })
+    }
+
+    pub(crate) fn retain_nested_native_target(
+        &mut self,
+        caller_depth: usize,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+    ) {
+        if let Some(work) = self.call_state.native.last_mut()
+            && work.caller_depth == caller_depth
+            && let Some(pending) = work.pending.as_mut().filter(|pending| pending.staged)
+            && pending.call.method != *method
+        {
+            pending.redirected = Some((method.clone(), generics.clone()));
+        }
+    }
+
+    pub(crate) fn retain_native_target_after_initializer(
+        &mut self,
+        caller_depth: usize,
+        method: &MethodDescription,
+        generics: &GenericLookup,
+    ) {
+        if let Some(work) = self.call_state.native.last_mut()
+            && work.caller_depth == caller_depth
+            && let Some(pending) = work.pending.as_mut().filter(|pending| pending.staged)
+        {
+            pending.redirected = Some((method.clone(), generics.clone()));
+        }
+    }
+
+    pub(crate) fn try_start_multicast(
+        &mut self,
+        method: MethodDescription,
+        generics: &GenericLookup,
+        synthetic: bool,
+    ) -> Option<StepResult> {
+        let signature = method.signature();
+        let count = signature.parameters.len();
+        if method.method().name != "Invoke"
+            || !signature.instance
+            || self.frame_stack.is_empty()
+            || self.frame_stack.current_frame().stack_height.as_usize() < count + 1
+            || dotnet_intrinsics_delegates::helpers::cached_delegate_dispatch_kind(self, &method)
+                != dotnet_intrinsics_delegates::DelegateDispatchKind::Invoke
+        {
+            return None;
+        }
+        let StackValue::ObjectRef(receiver @ ObjectRef(Some(_))) = self.peek_stack_at(count) else {
+            return None;
+        };
+        let targets =
+            dotnet_intrinsics_delegates::helpers::get_multicast_targets_ref(self, receiver)?;
+        let multicast = targets.as_vector(|vector| {
+            vector.layout.length > 1
+                || (vector.layout.length == 1
+                    && vector.object_ref_elements(self.gc.mutation()).next() != Some(receiver))
+        });
+        if !multicast {
+            return None;
+        }
+        if matches!(
+            multicast_output(self, &method, generics),
+            NativeOutput::Unsupported
+        ) {
+            tracing::debug!(
+                multicast_path = "fallback",
+                reason = "return",
+                "multicast selection"
+            );
+            return None;
+        }
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            let value = self.peek_stack_at(count - index - 1);
+            let supported = match &parameter.1 {
+                ParameterType::Value(ty) => multicast_argument_supported(
+                    multicast_value_shape(self, &method, generics, ty),
+                    &value,
+                ),
+                ParameterType::Ref(ty) => match value {
+                    StackValue::ManagedPtr(pointer)
+                        if generics
+                            .make_concrete(method.resolution(), ty.clone(), self.loader().as_ref())
+                            .ok()
+                            .and_then(|concrete| {
+                                self.current_context()
+                                    .resolver()
+                                    .type_layout_cached_with_lookup(
+                                        concrete,
+                                        method.resolution(),
+                                        generics,
+                                    )
+                                    .ok()
+                            })
+                            .is_some_and(|layout| !layout.has_managed_ptrs()) =>
+                    {
+                        match pointer.origin() {
+                            dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
+                            | dotnet_value::pointer::PointerOrigin::FrameHome(_) => true,
+                            #[cfg(feature = "multithreading")]
+                            dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => true,
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                },
+                ParameterType::TypedReference => false,
+            };
+            if !supported {
+                tracing::debug!(
+                    multicast_path = "fallback",
+                    reason = "argument",
+                    "multicast selection"
+                );
+                return None;
+            }
+        }
+        tracing::debug!(multicast_path = "async", "multicast selection");
+        if !synthetic {
+            return Some(self.start_native(
+                method,
+                NativeDispatchMode::InlineCall,
+                generics,
+                None,
+                multicast_fallback,
+                multicast_entry,
+            ));
+        }
+        let values: Vec<_> = (0..=count)
+            .rev()
+            .map(|offset| self.peek_stack_at(offset))
+            .collect();
+        let info = match dotnet_intrinsics_delegates::DelegateInvokeHost::delegate_method_info(
+            self,
+            method.clone(),
+            generics,
+        ) {
+            Ok(info) => info,
+            Err(error) => return Some(StepResult::Error(error.into())),
+        };
+        let parent_destination = self.call_state.native.last().and_then(|parent| {
+            (parent.caller_depth == self.frame_stack.len())
+                .then_some(parent)
+                .and_then(|parent| {
+                    parent
+                        .pending
+                        .as_ref()
+                        .filter(|pending| pending.staged)
+                        .map(|pending| dotnet_vm_data::NativeReturnDestination {
+                            id: parent.id,
+                            generation: pending.generation,
+                        })
+                })
+        });
+        if let Err(error) = self.call_frame(info, generics.clone()) {
+            return Some(StepResult::Error(error.into()));
+        }
+        self.frame_stack.current_frame_mut().native_return = parent_destination;
+        for value in values {
+            self.push(value);
+        }
+        Some(self.start_native_inner(
+            method,
+            generics,
+            None,
+            NativeEntry::Intrinsic(multicast_entry),
+            true,
+        ))
+    }
+
+    pub(crate) fn advance_native_effect(&mut self) -> StepResult {
+        for completed in 0..32 {
+            let result = self.advance_native_effect_once(completed == 0);
+            if result != StepResult::Continue {
+                if matches!(result, StepResult::Error(_)) {
+                    self.call_state
+                        .cleanup_native(self.frame_stack, self.evaluation_stack);
+                }
+                return result;
+            }
+        }
+        StepResult::Yield
+    }
+
+    fn advance_monitor(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        mut wait: PendingMonitor,
+    ) -> StepResult {
+        if self.shared.thread_manager.is_gc_stop_requested()
+            || self.local.heap.needs_full_collect.get()
+            || self.gc.needs_collection()
+        {
+            work.wait = Some(PendingWait::Monitor(wait));
+            self.call_state.native.push(work);
+            return StepResult::Yield;
+        }
+        let thread_id = self.thread_id();
+        let mut result = wait.block.try_enter(thread_id).then_some(true);
+        if result.is_none()
+            && wait
+                .deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            result = Some(false);
+        }
+        if result.is_none() {
+            #[cfg(test)]
+            wait_test_hook(WaitTestPoint::Probed);
+            // Capture the release epoch before rechecking; a concurrent release either
+            // makes the probe succeed or changes the epoch observed by the sleeper.
+            wait.epoch = Some(wait.block.release_epoch());
+            #[cfg(test)]
+            wait_test_hook(WaitTestPoint::Registered);
+            result = wait.block.try_enter(thread_id).then_some(true);
+            if result.is_none()
+                && wait
+                    .deadline
+                    .is_some_and(|d| std::time::Instant::now() >= d)
+            {
+                result = Some(false);
+            }
+        }
+        if let Some(acquired) = result {
+            if let Err(error) = work.owner.control.reply_monitor(wait.generation, acquired) {
+                return StepResult::Error(error);
+            }
+            self.call_state.native.push(work);
+            StepResult::Continue
+        } else {
+            work.wait = Some(PendingWait::Monitor(wait));
+            self.call_state.native.push(work);
+            StepResult::Yield
+        }
+    }
+
+    fn advance_finalizers(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        generation: u64,
+    ) -> StepResult {
+        let ready = || {
+            !self.shared.thread_manager.is_gc_stop_requested()
+                && !self.local.heap.needs_full_collect.get()
+                && !self.gc.needs_collection()
+                && !self.shared.has_pending_finalizers()
+                && !self.local.heap.processing_finalizer.get()
+                && self.local.heap.pending_finalization.borrow().is_empty()
+        };
+        if !ready() {
+            work.wait = Some(PendingWait::Finalizers(generation));
+            // Recheck after registration without moving a branded queue outside the mutation.
+            if !ready() {
+                self.call_state.native.push(work);
+                return StepResult::Yield;
+            }
+            drop(work.wait.take());
+        }
+        if let Err(error) = work.owner.control.reply_finalizers(generation) {
+            return StepResult::Error(error);
+        }
+        self.call_state.native.push(work);
+        StepResult::Continue
+    }
+
+    fn advance_initializer(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        generation: u64,
+        wait: Box<dyn dotnet_vm_ops::effects::NativeInitWait>,
+    ) -> StepResult {
+        let stopped = self.shared.thread_manager.is_gc_stop_requested()
+            || self.local.heap.needs_full_collect.get()
+            || self.gc.needs_collection();
+        if !stopped && !wait.ready() {
+            work.wait = Some(PendingWait::Initializer(generation, wait));
+            self.call_state.native.push(work);
+            return StepResult::Yield;
+        }
+        // Removing the edge before resuming forces the next probe to repeat the cycle check.
+        drop(wait);
+        if let Err(error) = work.owner.control.reply_initializer(generation) {
+            return StepResult::Error(error);
+        }
+        self.call_state.native.push(work);
+        if stopped {
+            StepResult::Yield
+        } else {
+            StepResult::Continue
+        }
+    }
+
+    fn advance_native_effect_once(&mut self, new_turn: bool) -> StepResult {
+        let Some(mut work) = self.call_state.native.pop() else {
+            return StepResult::internal_error("missing native activation");
+        };
+        if self.frame_stack.len() != work.caller_depth
+            || self.frame_stack.is_empty()
+            || self.state().ip != work.caller_ip
+            || (work.pending.is_none() && self.top_of_stack() != work.stack_height)
+        {
+            work.cleanup();
+            return StepResult::internal_error("native caller changed");
+        }
+        if let Some(wait) = work.wait.take() {
+            return match wait {
+                PendingWait::Monitor(wait) => self.advance_monitor(work, wait),
+                PendingWait::Finalizers(generation) => self.advance_finalizers(work, generation),
+                PendingWait::Initializer(generation, wait) => {
+                    self.advance_initializer(work, generation, wait)
+                }
+            };
+        }
+        if work.pending.is_some() {
+            if self.shared.thread_manager.is_gc_stop_requested()
+                || self.local.heap.needs_full_collect.get()
+                || self.gc.needs_collection()
+            {
+                self.call_state.native.push(work);
+                return StepResult::Yield;
+            }
+            return self.dispatch_pending_native_call(work);
+        }
+        let mut future = work
+            .owner
+            .future
+            .take()
+            .expect("native activation must own its future");
+        let gc = self.gc;
+        let poll = {
+            let mut adapter = Adapter {
+                context: self,
+                operands: &mut work.operands,
+                outputs: &mut work.outputs,
+            };
+            let mut region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+            if new_turn {
+                poll_native(&work.owner.control, future.as_mut(), &mut region)
+            } else {
+                poll_native_continuation(&work.owner.control, future.as_mut(), &mut region)
+            }
+        };
+        work.owner.future = Some(future);
+        match poll {
+            Ok(Poll::Pending) => match work.owner.control.take_effect() {
+                Some(NativeEffect::Yield) => {
+                    self.call_state.native.push(work);
+                    StepResult::Yield
+                }
+                Some(NativeEffect::Finalizers(generation)) if work.operands.is_empty() => {
+                    if let Err(error) = work.owner.control.take_finalizers(generation) {
+                        return StepResult::Error(error);
+                    }
+                    self.advance_finalizers(work, generation)
+                }
+                Some(NativeEffect::Initializer(generation)) if work.operands.is_empty() => {
+                    let wait = match work.owner.control.take_initializer(generation) {
+                        Ok(wait) => wait,
+                        Err(error) => return StepResult::Error(error),
+                    };
+                    self.advance_initializer(work, generation, wait)
+                }
+                Some(NativeEffect::Monitor(generation)) if work.operands.is_empty() => {
+                    let (object, deadline) = match work.owner.control.take_monitor(generation) {
+                        Ok(request) => request,
+                        Err(error) => return StepResult::Error(error),
+                    };
+                    let value = {
+                        let mut adapter = Adapter {
+                            context: self,
+                            operands: &mut work.operands,
+                            outputs: &mut work.outputs,
+                        };
+                        let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+                        match region.fetch(&object) {
+                            Ok(value) => value,
+                            Err(error) => return StepResult::Error(error),
+                        }
+                    };
+                    let StackValue::ObjectRef(object_ref @ ObjectRef(Some(_))) = value else {
+                        return StepResult::internal_error("invalid monitor object");
+                    };
+                    let block = self.monitor_get_or_create_sync_block_for_object(object_ref, gc);
+                    self.advance_monitor(
+                        work,
+                        PendingMonitor {
+                            block,
+                            epoch: None,
+                            deadline,
+                            generation,
+                            _object: object,
+                        },
+                    )
+                }
+                Some(NativeEffect::Call(generation)) if work.operands.is_empty() => {
+                    let (call, capture) = match work.owner.control.take_call(generation) {
+                        Ok(call) => call,
+                        Err(error) => return StepResult::Error(error),
+                    };
+                    // A captured exception must resume the interrupted filter or handler.
+                    work.ambient_exception = capture.then_some(*self.exception_mode);
+                    work.pending = Some(PendingCall {
+                        generation,
+                        capture,
+                        call,
+                        staged: false,
+                        redirected: None,
+                    });
+                    if self.shared.thread_manager.is_gc_stop_requested()
+                        || self.local.heap.needs_full_collect.get()
+                        || self.gc.needs_collection()
+                    {
+                        self.call_state.native.push(work);
+                        StepResult::Yield
+                    } else {
+                        self.dispatch_pending_native_call(work)
+                    }
+                }
+                _ => StepResult::internal_error("invalid native effect or unconsumed operands"),
+            },
+            Ok(Poll::Ready(Ok(()))) => {
+                let valid = work.operands.is_empty()
+                    && match work.output {
+                        NativeOutput::Void => work.outputs.is_empty(),
+                        NativeOutput::String => {
+                            matches!(work.outputs.as_slice(), [StackValue::ObjectRef(ObjectRef(Some(obj)))] if matches!(obj.borrow().storage, HeapStorage::Str(_)))
+                        }
+                        NativeOutput::Int32 => {
+                            matches!(work.outputs.as_slice(), [StackValue::Int32(_)])
+                        }
+                        NativeOutput::Int64 => {
+                            matches!(work.outputs.as_slice(), [StackValue::Int64(_)])
+                        }
+                        NativeOutput::NativeInt => {
+                            matches!(work.outputs.as_slice(), [StackValue::NativeInt(_)])
+                        }
+                        NativeOutput::NativeFloat => {
+                            matches!(work.outputs.as_slice(), [StackValue::NativeFloat(_)])
+                        }
+                        NativeOutput::Object => {
+                            matches!(work.outputs.as_slice(), [StackValue::ObjectRef(_)])
+                        }
+                        NativeOutput::Unsupported => false,
+                    };
+                if !valid {
+                    work.cleanup();
+                    return StepResult::internal_error("native result does not match signature");
+                }
+                if let Some(instruction) = work.instruction.take() {
+                    if let Some(value) = instruction.operand {
+                        self.push(value);
+                    }
+                    let result = crate::instructions::objects::fields::complete_static_field(
+                        self,
+                        instruction.action,
+                    );
+                    let next = work.caller_ip + 1;
+                    work.cleanup();
+                    return if result == StepResult::Continue {
+                        StepResult::Jump(next)
+                    } else {
+                        result
+                    };
+                }
+                if let Some(destination) = work.parent_destination {
+                    if !work.reflection_actions.is_empty() {
+                        for value in work.outputs.drain(..) {
+                            self.push(value);
+                        }
+                        let actions = std::mem::take(&mut work.reflection_actions);
+                        if let Err(error) = self.apply_frame_return_actions(actions) {
+                            work.cleanup();
+                            return StepResult::Error(error);
+                        }
+                        let value = Some(self.pop());
+                        let result = self.deliver_native_return(destination, value);
+                        work.cleanup();
+                        return match result {
+                            Ok(()) => StepResult::Yield,
+                            Err(error) => StepResult::Error(error),
+                        };
+                    }
+                    // INVARIANT: F6.NativeRootTransfer — fetch from the child's set, copy
+                    // into the parent's set, then release the child's root.
+                    let output = work.outputs.pop();
+                    let rooted = {
+                        let mut adapter = Adapter {
+                            context: self,
+                            operands: &mut work.operands,
+                            outputs: &mut work.outputs,
+                        };
+                        let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+                        match output.map(|value| region.root(value)).transpose() {
+                            Ok(value) => value,
+                            Err(error) => return StepResult::Error(error),
+                        }
+                    };
+                    let value = {
+                        let mut adapter = Adapter {
+                            context: self,
+                            operands: &mut work.operands,
+                            outputs: &mut work.outputs,
+                        };
+                        let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+                        match rooted.as_ref().map(|value| region.fetch(value)).transpose() {
+                            Ok(value) => value,
+                            Err(error) => return StepResult::Error(error),
+                        }
+                    };
+                    let result = self.deliver_native_return(destination, value);
+                    drop(rooted);
+                    work.cleanup();
+                    return match result {
+                        Ok(()) => StepResult::Yield,
+                        Err(error) => StepResult::Error(error),
+                    };
+                }
+                for value in work.outputs.drain(..) {
+                    self.push(value);
+                }
+                let actions = std::mem::take(&mut work.reflection_actions);
+                if let Err(error) = self.apply_frame_return_actions(actions) {
+                    work.cleanup();
+                    return StepResult::Error(error);
+                }
+                let next = work.caller_ip + 1;
+                let synthetic_return = work.synthetic_return;
+                work.cleanup();
+                if synthetic_return {
+                    self.finish_synthetic_native_return()
+                } else {
+                    StepResult::Jump(next)
+                }
+            }
+            Ok(Poll::Ready(Err(NativeFailure::Host(error)))) | Err(error) => {
+                work.cleanup();
+                StepResult::Error(error)
+            }
+            Ok(Poll::Ready(Err(NativeFailure::Managed(exception)))) => {
+                let fetched = {
+                    let mut adapter = Adapter {
+                        context: self,
+                        operands: &mut work.operands,
+                        outputs: &mut work.outputs,
+                    };
+                    NativeRegion::new(gc.mutation(), work.roots, &mut adapter).fetch(&exception)
+                };
+                let result = match fetched {
+                    Ok(StackValue::ObjectRef(exception @ ObjectRef(Some(_)))) => {
+                        self.throw(exception)
+                    }
+                    Ok(_) => StepResult::internal_error("invalid native exception"),
+                    Err(error) => StepResult::Error(error),
+                };
+                drop(exception);
+                work.cleanup();
+                result
+            }
+        }
+    }
+    fn finish_synthetic_native_return(&mut self) -> StepResult {
+        let destination = self.frame_stack.current_frame_mut().native_return.take();
+        if let Some(destination) = destination {
+            // A synchronous intrinsic may have installed a caller-side return action
+            // before dispatching this Invoke. Apply it before replying to that intrinsic's
+            // native caller, rather than delivering the unboxed target result directly.
+            let result = self.return_frame();
+            if result != StepResult::Continue {
+                return result;
+            }
+            let Some(parent) = self.call_state.native.last() else {
+                return StepResult::internal_error("missing native return destination");
+            };
+            let Some(pending) = parent.pending.as_ref() else {
+                return StepResult::internal_error("missing native call request");
+            };
+            let has_return = pending.call.method.signature().return_type.1.is_some();
+            let expected = parent.stack_height + usize::from(has_return);
+            if self.top_of_stack() != expected {
+                return StepResult::internal_error("native call result shape mismatch");
+            }
+            let value = if has_return { Some(self.pop()) } else { None };
+            return match self.deliver_native_return(destination, value) {
+                Ok(()) => StepResult::Yield,
+                Err(error) => StepResult::Error(error),
+            };
+        }
+        match self.handle_return() {
+            StepResult::Continue => StepResult::Jump(self.state().ip),
+            other => other,
+        }
+    }
+
+    fn dispatch_pending_native_call(&mut self, mut work: NativeActivation<'gc>) -> StepResult {
+        let preflight = work
+            .pending
+            .as_ref()
+            .filter(|pending| !pending.staged && pending.call.method.method().name != ".cctor")
+            .map(|pending| (pending.call.method.clone(), pending.call.generics.clone()));
+        if let Some((method, generics)) = preflight {
+            let id = work.id;
+            let depth = self.frame_stack.len();
+            self.call_state.native.push(work);
+            let saved_ip = *self.original_ip;
+            let saved_height = *self.original_stack_height;
+            *self.original_ip = self.state().ip;
+            *self.original_stack_height = self.top_of_stack();
+            let result = self.prepare_method_initialization(&method, &generics);
+            *self.original_ip = saved_ip;
+            *self.original_stack_height = saved_height;
+            match result {
+                StepResult::Continue => {
+                    work = self.call_state.native.pop().expect("pending native call");
+                }
+                StepResult::FramePushed if self.frame_stack.len() == depth + 1 => {
+                    return StepResult::NativeSuspended(id);
+                }
+                other => return other,
+            }
+        }
+        let pending = work.pending.as_mut().expect("pending native call");
+        let signature = pending.call.method.signature();
+        let expected = signature.parameters.len() + usize::from(signature.instance);
+        if pending.redirected.is_none() && pending.call.arguments.len() != expected {
+            return StepResult::internal_error("native call argument count mismatch");
+        }
+        if !pending.staged {
+            let gc = self.gc;
+            // INVARIANT: F6.NativeRootTransfer — source roots stay live until their
+            // fetched values enter the traced evaluation stack in this mutation.
+            let values = {
+                let mut adapter = Adapter {
+                    context: self,
+                    operands: &mut work.operands,
+                    outputs: &mut work.outputs,
+                };
+                let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+                pending
+                    .call
+                    .arguments
+                    .iter()
+                    .map(|argument| region.fetch(argument))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            let values = match values {
+                Ok(values) => values,
+                Err(error) => return StepResult::Error(error),
+            };
+            for value in values {
+                self.push(value);
+            }
+            pending.staged = true;
+        }
+        let depth = self.frame_stack.len();
+        let (method, generics) = pending
+            .redirected
+            .clone()
+            .unwrap_or_else(|| (pending.call.method.clone(), pending.call.generics.clone()));
+        let has_return = method.signature().return_type.1.is_some();
+        let generation = pending.generation;
+        let id = work.id;
+        // Keep the activation rooted while dispatch may allocate or enter another native body.
+        self.call_state.native.push(work);
+        let saved_ip = *self.original_ip;
+        let saved_height = *self.original_stack_height;
+        *self.original_ip = self.state().ip;
+        *self.original_stack_height = self.top_of_stack();
+        let result = self.dispatch_method_inline(method.clone(), generics);
+        *self.original_ip = saved_ip;
+        *self.original_stack_height = saved_height;
+        match result {
+            StepResult::FramePushed if self.frame_stack.len() == depth + 1 => {
+                let child = self.frame_stack.current_frame_mut();
+                let source = &child.state.info_handle.source;
+                let requested = source.parent == method.parent
+                    && source.method_resolution == method.method_resolution
+                    && source.method_member_index == method.method_member_index;
+                // An initializer for another target returns before dispatch is retried.
+                if !child.state.info_handle.is_cctor || requested {
+                    child.native_return =
+                        Some(dotnet_vm_data::NativeReturnDestination { id, generation });
+                }
+                StepResult::NativeSuspended(id)
+            }
+            StepResult::Continue => {
+                let work = self.call_state.native.last().expect("pending native call");
+                let has_return = work
+                    .pending
+                    .as_ref()
+                    .and_then(|pending| pending.redirected.as_ref())
+                    .map_or(has_return, |(target, _)| {
+                        target.signature().return_type.1.is_some()
+                    });
+                let expected_top = work.stack_height + usize::from(has_return);
+                if self.top_of_stack() != expected_top {
+                    return StepResult::internal_error("native call result shape mismatch");
+                }
+                let destination = dotnet_vm_data::NativeReturnDestination { id, generation };
+                let final_return = if let Some((final_return, base)) =
+                    self.redirected_native_return(destination)
+                {
+                    let actions = std::mem::take(
+                        &mut self.frame_stack.current_frame_mut().frame_continuation,
+                    );
+                    if let Err(error) = self.apply_frame_return_actions(actions) {
+                        return StepResult::Error(error);
+                    }
+                    if self.top_of_stack() != base + usize::from(final_return) {
+                        return StepResult::internal_error("native call result shape mismatch");
+                    }
+                    final_return
+                } else {
+                    has_return
+                };
+                let value = if final_return { Some(self.pop()) } else { None };
+                match self.deliver_native_return(
+                    dotnet_vm_data::NativeReturnDestination { id, generation },
+                    value,
+                ) {
+                    Ok(()) => StepResult::Continue,
+                    Err(error) => StepResult::Error(error),
+                }
+            }
+            StepResult::NativeSuspended(_) => StepResult::Yield,
+            StepResult::Yield
+                if self.frame_stack.len() == depth
+                    && self
+                        .call_state
+                        .native
+                        .last()
+                        .is_some_and(|work| work.id == id && work.pending.is_some()) =>
+            {
+                let work = self
+                    .call_state
+                    .native
+                    .last_mut()
+                    .expect("pending native call");
+                if work
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.redirected.is_some())
+                {
+                    return StepResult::Yield;
+                }
+                let base = work.stack_height;
+                work.pending.as_mut().expect("pending native call").staged = false;
+                self.evaluation_stack.truncate(base);
+                let frame = self.frame_stack.current_frame_mut();
+                frame.stack_height = base.saturating_sub_idx(frame.base.stack);
+                StepResult::Yield
+            }
+            other => other,
+        }
+    }
+
+    pub(crate) fn deliver_native_exception(
+        &mut self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+        exception: ObjectRef<'gc>,
+    ) -> Result<(), VmError> {
+        let mut work = self
+            .call_state
+            .native
+            .pop()
+            .expect("missing native capture destination");
+        if work.id != destination.id
+            || !work.pending.as_ref().is_some_and(|pending| {
+                pending.capture && pending.generation == destination.generation
+            })
+        {
+            work.cleanup();
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "stale native capture destination".into(),
+            )
+            .into());
+        }
+        self.evaluation_stack.truncate(work.stack_height);
+        let frame = self.frame_stack.current_frame_mut();
+        frame.stack_height = work.stack_height.saturating_sub_idx(frame.base.stack);
+        frame.frame_continuation.clear();
+        frame.reflection_pending = None;
+        let gc = self.gc;
+        // INVARIANT: F6.NativeRootTransfer — the exception remains traced by the
+        // unwind state until it is copied into the waiting activation's root set.
+        let root = {
+            let mut adapter = Adapter {
+                context: self,
+                operands: &mut work.operands,
+                outputs: &mut work.outputs,
+            };
+            NativeRegion::new(gc.mutation(), work.roots, &mut adapter)
+                .root(StackValue::ObjectRef(exception))?
+        };
+        work.owner
+            .control
+            .reply_exception(destination.generation, root)?;
+        work.pending = None;
+        *self.exception_mode = work
+            .ambient_exception
+            .take()
+            .unwrap_or(dotnet_vm_data::ExceptionState::None);
+        self.call_state.native.push(work);
+        Ok(())
+    }
+
+    pub(crate) fn deliver_native_return(
+        &mut self,
+        destination: dotnet_vm_data::NativeReturnDestination,
+        value: Option<StackValue<'gc>>,
+    ) -> Result<(), VmError> {
+        let Some(mut work) = self.call_state.native.pop() else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "missing native return destination".into(),
+            )
+            .into());
+        };
+        if work.id != destination.id
+            || work.pending.as_ref().map(|p| p.generation) != Some(destination.generation)
+        {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "stale native return destination".into(),
+            )
+            .into());
+        }
+        let gc = self.gc;
+        // INVARIANT: F6.NativeRootTransfer — the frame result is copied into the waiting
+        // activation's set in the same mutation, before a collection can intervene.
+        let value = {
+            let mut adapter = Adapter {
+                context: self,
+                operands: &mut work.operands,
+                outputs: &mut work.outputs,
+            };
+            let region = NativeRegion::new(gc.mutation(), work.roots, &mut adapter);
+            value.map(|value| region.root(value)).transpose()?
+        };
+        work.owner.control.reply_call(
+            destination.generation,
+            match value {
+                Some(value) => NativeValue::Value(value),
+                None => NativeValue::Void,
+            },
+        )?;
+        work.pending = None;
+        if matches!(*self.exception_mode, dotnet_vm_data::ExceptionState::None)
+            && let Some(ambient) = work.ambient_exception.take()
+        {
+            *self.exception_mode = ambient;
+        }
+        work.ambient_exception = None;
+        self.call_state.native.push(work);
+        Ok(())
+    }
+}

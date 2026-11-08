@@ -70,6 +70,13 @@ pub trait MonitorHost<'gc> {
         deadline: Instant,
     ) -> MonitorLockResult;
 
+    fn monitor_retry_deadline(
+        &mut self,
+        method: &dotnet_types::members::MethodDescription,
+        timeout_ms: i32,
+    ) -> Instant;
+    fn monitor_clear_retry(&mut self);
+
     fn monitor_exit(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;
 }
 

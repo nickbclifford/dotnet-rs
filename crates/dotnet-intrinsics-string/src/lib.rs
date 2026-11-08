@@ -22,7 +22,7 @@
 use dotnet_types::{
     TypeDescription, error::IntrinsicError, generics::GenericLookup, members::MethodDescription,
 };
-use dotnet_value::object::{Object, ObjectRef};
+use dotnet_value::object::Object;
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::{NULL_REF_MSG, ops::StringIntrinsicHost as VmStringIntrinsicHost};
 
@@ -33,18 +33,6 @@ pub mod search;
 pub(crate) mod simd;
 
 pub trait IntrinsicStringHost<'gc>: VmStringIntrinsicHost<'gc> {
-    /// Offer a validated large substring to the host before its operands are consumed.
-    /// Returning `None` declines the offer and leaves the synchronous path in control.
-    fn offer_substring_continuation(
-        &mut self,
-        _source: ObjectRef<'gc>,
-        _start: usize,
-        _length: usize,
-        _operand_count: usize,
-    ) -> Option<StepResult> {
-        None
-    }
-
     fn string_intrinsic_as_span(
         &mut self,
         method: MethodDescription,

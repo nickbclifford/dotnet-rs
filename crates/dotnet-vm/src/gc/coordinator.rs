@@ -165,6 +165,11 @@ impl GCCoordinator {
         handle.bind_needs_any_collection_flag(Arc::clone(&self.needs_any_collection));
     }
 
+    pub(crate) fn try_exclude_collection<R>(&self, f: impl FnOnce() -> R) -> Option<R> {
+        let _lock = self.collection_lock.try_lock()?;
+        Some(f())
+    }
+
     /// Register a thread-local arena with the coordinator.
     pub fn register_arena(&self, handle: ArenaHandle) {
         self.bind_collection_pressure_flag(&handle);
@@ -356,6 +361,9 @@ impl GCCoordinator {
     pub(crate) fn notify_resume(&self) {
         let arenas = self.arenas.lock();
         for handle in arenas.values() {
+            // Pair the resume predicate with the waiter's command mutex so the
+            // notification cannot pass between its check and condvar wait.
+            let _command = handle.current_command().lock_after(arenas.held_level());
             handle.command_signal().notify_all();
         }
     }

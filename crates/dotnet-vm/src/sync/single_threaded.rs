@@ -22,6 +22,14 @@ impl SyncBlock {
             recursion_count: AtomicUsize::new(0),
         }
     }
+
+    pub(crate) fn release_epoch(&self) -> u64 {
+        0
+    }
+
+    pub(crate) fn wait_for_release(&self, _epoch: u64, duration: std::time::Duration) {
+        std::thread::sleep(duration);
+    }
 }
 
 impl super::SyncBlockOps for SyncBlock {

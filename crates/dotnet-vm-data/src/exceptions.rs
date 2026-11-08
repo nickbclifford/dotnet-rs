@@ -64,6 +64,13 @@ pub enum UnwindTarget {
     Handler(HandlerAddress),
     /// Unwinding because of a `leave` instruction to a specific IP.
     Instruction(usize),
+    /// Unwind child frames before returning the exception to a native caller.
+    Native {
+        depth: usize,
+        destination: crate::NativeReturnDestination,
+    },
+    /// An unhandled exception must unwind through live native boundaries.
+    Unhandled,
 }
 
 /// The current state of the exception handling mechanism.

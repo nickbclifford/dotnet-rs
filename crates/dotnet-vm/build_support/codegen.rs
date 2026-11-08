@@ -98,27 +98,6 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
     }
     dispatch_code.push_str("}\n\n");
 
-    // Select the retained operation by generated ID, avoiding allocating a type name per call.
-    let mut substring_variants: Vec<_> = sorted_entries
-        .iter()
-        .filter(|entry| {
-            !entry.is_field
-                && entry.original_handler_path
-                    == "dotnet_intrinsics_string::search::intrinsic_string_substring"
-        })
-        .map(|entry| format!("Self::{}", entry.variant_name))
-        .collect();
-    substring_variants.sort();
-    substring_variants.dedup();
-    assert_eq!(
-        substring_variants.len(),
-        2,
-        "both Substring overloads must be registered"
-    );
-    dispatch_code.push_str(&format!(
-        "impl MethodIntrinsicId {{ pub(crate) fn is_substring(self) -> bool {{ matches!(self, {}) }} }}\n\n",
-        substring_variants.join(" | ")));
-
     dispatch_code.push_str("#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]\n");
     dispatch_code.push_str("#[allow(non_camel_case_types)]\n");
     dispatch_code.push_str("pub enum FieldIntrinsicId {\n");
@@ -135,12 +114,33 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
     }
     dispatch_code.push_str("}\n\n");
 
+    let mut async_entries: Vec<_> = sorted_entries
+        .iter()
+        .filter(|entry| entry.is_async)
+        .collect();
+    async_entries.sort_by(|left, right| left.variant_name.cmp(&right.variant_name));
+    async_entries.dedup_by(|left, right| left.variant_name == right.variant_name);
+    for entry in async_entries {
+        let selector = entry.selector.as_ref().map_or_else(
+            || "None".to_string(),
+            |_| format!("Some({}_native_selector)", entry.original_handler_path),
+        );
+        dispatch_code.push_str(&format!(
+            "#[allow(non_camel_case_types)] struct NativeSelector_{};\n\
+             impl<'gc, T: crate::stack::ops::VesOps<'gc>> dotnet_vm_ops::effects::NativeSelectorProvider<'gc, T> for NativeSelector_{} {{\n\
+             fn selector() -> Option<dotnet_vm_ops::effects::NativeSelector<'gc, T>> {{ {} }}\n\
+             fn fallback() -> dotnet_vm_ops::effects::NativeSyncHandler<T> {{ {}_native_fallback }}\n}}\n",
+            entry.variant_name, entry.variant_name, selector, entry.original_handler_path
+        ));
+    }
+
     dispatch_code
         .push_str("pub fn dispatch_method_intrinsic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
     dispatch_code.push_str("    id: MethodIntrinsicId,\n");
     dispatch_code.push_str("    ctx: &mut T,\n");
     dispatch_code.push_str("    method: dotnet_types::members::MethodDescription,\n");
     dispatch_code.push_str("    generics: &dotnet_types::generics::GenericLookup,\n");
+    dispatch_code.push_str("    _mode: dotnet_vm_ops::effects::NativeDispatchMode,\n");
     dispatch_code.push_str(") -> crate::StepResult {\n");
     dispatch_code.push_str("    match id {\n");
     dispatch_code.push_str("        MethodIntrinsicId::Missing => crate::intrinsics::missing_intrinsic_handler(ctx, method, generics),\n");
@@ -156,10 +156,17 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
             .iter()
             .find(|entry| !entry.is_field && entry.variant_name == *variant)
             .unwrap();
-        dispatch_code.push_str(&format!(
-            "        MethodIntrinsicId::{} => {}(ctx, method, generics),\n",
-            variant, entry.original_handler_path
-        ));
+        if entry.is_async {
+            dispatch_code.push_str(&format!(
+                "        MethodIntrinsicId::{} => {}_native_entry::<T, NativeSelector_{}>(ctx, method, generics, _mode),\n",
+                variant, entry.original_handler_path, variant
+            ));
+        } else {
+            dispatch_code.push_str(&format!(
+                "        MethodIntrinsicId::{} => {}(ctx, method, generics),\n",
+                variant, entry.original_handler_path
+            ));
+        }
     }
     dispatch_code.push_str("    }\n");
     dispatch_code.push_str("}\n\n");

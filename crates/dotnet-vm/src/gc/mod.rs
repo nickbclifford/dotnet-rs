@@ -28,6 +28,11 @@ pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {
         c.stack
             .local
             .heap
-            .finalize_check(fc, c.stack.shared.as_ref(), c.stack.indent())
+            .finalize_check(fc, c.stack.shared.as_ref(), c.stack.indent());
+        let heap = &c.stack.local.heap;
+        c.stack.shared.publish_finalizers(
+            heap,
+            heap.has_pending_finalizers() || c.stack.parked_finalizer_caller.is_some(),
+        );
     });
 }

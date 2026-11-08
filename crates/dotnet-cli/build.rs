@@ -210,6 +210,19 @@ fn main() {
             .next()
             .and_then(|c| c.as_os_str().to_str())
             .is_some_and(|c| c == "pinvoke");
+        let uses_console_in_fuzzing = is_fuzzing_enabled
+            && (test_name.starts_with("delegates_delegate_multicast_")
+                || test_name.starts_with("exceptions_nested_filter_")
+                || test_name == "statics_cctor_filter_42"
+                || matches!(
+                    test_name.as_str(),
+                    "strings_substring_fallback_42"
+                        | "strings_substring_chunks_42"
+                        | "gc_weak_reference_liveness_42"
+                ))
+            && std::fs::read_to_string(&path)
+                .expect("fixture source must be readable")
+                .contains("Console.");
 
         if !dll_path.exists() {
             if use_prebuilt_fixtures() {
@@ -217,7 +230,9 @@ fn main() {
             }
             ignore_prefix = "#[ignore] ".to_string();
         } else if is_fuzzing_enabled
-            && (is_pinvoke_fixture || test_name == "memory_nullable_boxing_42")
+            && (is_pinvoke_fixture
+                || uses_console_in_fuzzing
+                || test_name == "memory_nullable_boxing_42")
         {
             // Fuzzing mode hardens native interop paths by denying P/Invoke, so
             // fixtures that rely on libc/libm entry points (and console code paths
@@ -225,8 +240,13 @@ fn main() {
             // are expected to fail.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
-            || file_name == "circular_init_mt_42")
-            && !is_multithreading_enabled
+            || file_name == "monitor_contended_lock_42"
+            || file_name == "foreground_worker_42"
+            || file_name == "retired_arena_cycles_42"
+            || file_name == "circular_init_mt_42"
+            || file_name == "cctor_wait_success_42"
+            || file_name == "cctor_wait_failure_42")
+            && (!is_multithreading_enabled || (is_fuzzing_enabled && matches!(file_name, "foreground_worker_42" | "retired_arena_cycles_42")))
             // generic_constraints_fail_0 deliberately tests constraint-violation rejection;
             // that logic only exists under the generic-constraint-validation feature.
             || (file_name == "generic_constraints_fail_0"
@@ -246,10 +266,12 @@ fn main() {
             _ => None,
         };
 
-        // This fixture exercises two managed Threads within one CLI execution, so it needs
-        // the custom cfg-gated `run_cli` registration in integration_tests_impl/fixtures.rs.
-        // Keep it in the normal fixture list above for build, hash, and prebuilt validation.
-        let is_manually_registered = file_name == "pinvoke_last_error_isolation_42";
+        // These fixtures exercise two managed Threads within one CLI execution and use
+        // custom cfg-gated registrations. Keep them in the fixture list for prebuilt validation.
+        let is_manually_registered = matches!(
+            file_name,
+            "pinvoke_last_error_isolation_42" | "invoke_byref_foreign_42"
+        );
 
         let source_path = path.strip_prefix(manifest_dir).unwrap().to_str().unwrap();
 

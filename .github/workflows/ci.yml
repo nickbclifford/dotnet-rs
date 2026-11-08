@@ -398,6 +398,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
+      - name: Check native effects compile-fail doctests
+        if: ${{ matrix.features == '' || matrix.features == 'multithreading' }}
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --doc -p dotnet-vm-ops --no-default-features
+            python3 scripts/check_vm_effects_compile_fail.py
+          else
+            cargo test --doc -p dotnet-vm-ops --no-default-features --features multithreading
+            python3 scripts/check_vm_effects_compile_fail.py multithreading
+          fi
+
       - name: Build (${{ matrix.features || 'no features' }})
         run: |
           if [ -z "${{ matrix.features }}" ]; then
@@ -440,6 +451,41 @@ jobs:
             "integration_tests_impl::fixtures::test_stw_stress"; do
             cargo test "${FEATURES_ARGS[@]}" -p dotnet-cli --test integration_tests "$test" \
               -- --test-threads=1 --nocapture || FAIL=1
+          done
+          python3 scripts/ci_diagnostics.py run --dir "$RUNNER_TEMP/retired-arena-diag" --phase execute --case retired-arena --features multithreading --timeout 90 \
+            --require "test result: ok. 1 passed; 0 failed; 0 ignored;" -- \
+            cargo test -p dotnet-cli --test integration_tests --no-default-features --features multithreading \
+              integration_tests_impl::fixtures::retired_arena_static_survives_join_and_collection -- --exact --test-threads=1 || FAIL=1
+          for test in \
+            integration_tests_impl::diff_harness::statics_cctor_wait_success_matches_dotnet \
+            integration_tests_impl::diff_harness::statics_cctor_wait_failure_matches_dotnet \
+            integration_tests_impl::diff_harness::retired_arena_cycles_matches_dotnet \
+            integration_tests_impl::diff_harness::retired_finalizer_matches_dotnet \
+            integration_tests_impl::diff_harness::retired_finalizer_collect_matches_dotnet \
+            integration_tests_impl::diff_harness::retired_finalizer_monitor_matches_dotnet \
+            integration_tests_impl::diff_harness::global_finalizer_wait_matches_dotnet \
+            integration_tests_impl::diff_harness::live_finalizer_wait_matches_dotnet \
+            integration_tests_impl::diff_harness::foreground_finalizer_wait_matches_dotnet \
+            integration_tests_impl::diff_harness::thread_finalization_matches_dotnet \
+            integration_tests_impl::fixtures::shutdown_waits_for_active_retired_finalizer \
+            integration_tests_impl::fixtures::harness_timeout_aborts_and_reaps_retired_finalizer \
+            integration_tests_impl::fixtures::retired_finalizer_observes_abort \
+            integration_tests_impl::fixtures::retired_finalizer_shutdown_observes_abort \
+            integration_tests_impl::fixtures::retired_finalizer_keeps_entry_arena_until_completion; do
+            python3 scripts/ci_diagnostics.py run --dir "$RUNNER_TEMP/finalizer-diag" --phase execute --case "$(echo "$test" | tr : _)" --features multithreading --timeout 30 \
+              --require "test result: ok. 1 passed; 0 failed; 0 ignored;" -- \
+              cargo test -p dotnet-cli --test integration_tests --no-default-features --features multithreading \
+                "$test" -- --exact --test-threads=1 || FAIL=1
+          done
+          for test in \
+            executor::executor_teardown_tests::retired_shutdown_waits_for_inflight_collection_and_lease \
+            executor::executor_teardown_tests::worker_panic_drains_lease_before_shutdown \
+            executor::executor_teardown_tests::retired_self_held_lease_leaks_storage_at_shutdown \
+            executor::executor_teardown_tests::worker_start_failure_retires_and_shutdown_reaps; do
+            python3 scripts/ci_diagnostics.py run --dir "$RUNNER_TEMP/shutdown-diag" --phase execute --case "$(echo "$test" | tr : _)" --features multithreading --timeout 90 \
+              --require "test result: ok. 1 passed; 0 failed; 0 ignored;" -- \
+              cargo test -p dotnet-vm --lib --no-default-features --features multithreading \
+                "$test" -- --exact --test-threads=1 || FAIL=1
           done
           exit $FAIL
 
@@ -670,6 +716,11 @@ jobs:
           - { configuration: no-features, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
           - { configuration: multithreading, group: library, shard: main, job_timeout: 30, invocation_timeout: 900, selector: unused }
           - { configuration: no-features, group: vm-teardown, shard: control, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_single_arena_cleanup_control }
+          - { configuration: multithreading, group: vm-teardown, shard: retired, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::retired_owner_keeps_registration_until_shutdown }
+          - { configuration: multithreading, group: vm-teardown, shard: retired-collection, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::retired_shutdown_waits_for_inflight_collection_and_lease }
+          - { configuration: multithreading, group: vm-teardown, shard: worker-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::worker_panic_drains_lease_before_shutdown }
+          - { configuration: multithreading, group: vm-teardown, shard: retired-self-held, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::retired_self_held_lease_leaks_storage_at_shutdown }
+          - { configuration: multithreading, group: vm-teardown, shard: worker-start-failure, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::worker_start_failure_retires_and_shutdown_reaps }
           - { configuration: multithreading, group: vm-teardown, shard: normal, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_normal_teardown_active_lease }
           - { configuration: multithreading, group: vm-teardown, shard: extracted, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_extracted_teardown_active_lease }
           - { configuration: multithreading, group: vm-teardown, shard: unwind, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::executor_unwind_teardown_active_lease }
@@ -684,6 +735,62 @@ jobs:
           - { configuration: multithreading, group: vm-teardown, shard: owner-first, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::owner_first_guard_does_not_touch_successor }
           - { configuration: multithreading, group: vm-teardown, shard: self-held-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::self_held_drain_panic_and_no_diagnostic }
           - { configuration: multithreading, group: vm-teardown, shard: warning-panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::executor_teardown_tests::ownership::drain_warning_panic_retains_arena }
+          - { configuration: no-features, group: native-bridge, shard: home-pointer, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::rooted_frame_home_descriptor_preserves_aliases_and_rejects_retired_home }
+          - { configuration: no-features, group: native-bridge, shard: heap-pointer, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::rooted_heap_pointer_descriptor_keeps_owner_alive }
+          - { configuration: no-features, group: native-bridge, shard: nested, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::nested_entry_rejected }
+          - { configuration: no-features, group: native-bridge, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::panic_resets_entry_and_installation }
+          - { configuration: no-features, group: native-bridge, shard: wait-replies, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::condition_replies_require_matching_effect_and_generation }
+          - { configuration: no-features, group: native-bridge, shard: initializer-replies, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::initializer_replies_require_matching_effect_and_generation }
+          - { configuration: no-features, group: vm-native, shard: collection, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_real_context_and_collection }
+          - { configuration: no-features, group: vm-native, shard: finalizer-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::finalizer_segment_resolves_parked_homes_and_preserves_serials }
+          - { configuration: no-features, group: vm-native, shard: monitor-heap-stop, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_heap_byref_survives_stop_before_dispatch }
+          - { configuration: no-features, group: vm-native, shard: monitor-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_byref_dispatch_writes_frame_home }
+          - { configuration: no-features, group: vm-native, shard: finalizer-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_executor_runs_pending_finalizer_before_resuming }
+          - { configuration: no-features, group: vm-native, shard: finalizer-self-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::finalizer_wait_self_wait_retains_legacy_retry_in_finalizer_segment }
+          - { configuration: no-features, group: vm-native, shard: filter-segment, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::finalizer_preserves_filter_and_suspended_native_context }
+          - { configuration: no-features, group: vm-native, shard: capture, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_capture_filters_and_child_cleanup_precede_outer_search }
+          - { configuration: no-features, group: vm-native, shard: initializer-failure, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_initializer_failure_is_published_with_original_inner }
+          - { configuration: no-features, group: vm-native, shard: static-store, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::static_store_operand_released_after_abandonment }
+          - { configuration: no-features, group: vm-native, shard: call-return, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_nested_return_is_copied }
+          - { configuration: no-features, group: vm-native, shard: nested-call, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_calls_suspending_intrinsic }
+          - { configuration: no-features, group: vm-native, shard: wrong-root, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_rejects_reply_from_wrong_root_set }
+          - { configuration: no-features, group: vm-native, shard: forgotten, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_forgotten_access_is_terminal }
+          - { configuration: no-features, group: vm-native, shard: pending, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_unregistered_pending_is_terminal }
+          - { configuration: no-features, group: vm-native, shard: caller, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_rejects_each_changed_caller_component }
+          - { configuration: no-features, group: vm-native, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_poll_panic_unwinds_and_releases_roots }
+          - { configuration: multithreading, group: native-bridge, shard: home-pointer, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::rooted_frame_home_descriptor_preserves_aliases_and_rejects_retired_home }
+          - { configuration: multithreading, group: native-bridge, shard: heap-pointer, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::rooted_heap_pointer_descriptor_keeps_owner_alive }
+          - { configuration: multithreading, group: native-bridge, shard: nested, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::nested_entry_rejected }
+          - { configuration: multithreading, group: native-bridge, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::panic_resets_entry_and_installation }
+          - { configuration: multithreading, group: native-bridge, shard: wait-replies, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::condition_replies_require_matching_effect_and_generation }
+          - { configuration: multithreading, group: native-bridge, shard: initializer-replies, job_timeout: 45, invocation_timeout: 1800, selector: effects::tests::initializer_replies_require_matching_effect_and_generation }
+          - { configuration: multithreading, group: vm-native, shard: collection, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_real_context_and_collection }
+          - { configuration: multithreading, group: vm-native, shard: finalizer-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::finalizer_segment_resolves_parked_homes_and_preserves_serials }
+          - { configuration: multithreading, group: vm-native, shard: monitor-heap-stop, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_heap_byref_survives_stop_before_dispatch }
+          - { configuration: multithreading, group: vm-native, shard: monitor-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_byref_dispatch_writes_frame_home }
+          - { configuration: multithreading, group: vm-native, shard: finalizer-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_executor_runs_pending_finalizer_before_resuming }
+          - { configuration: multithreading, group: vm-native, shard: finalizer-self-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::finalizer_wait_self_wait_retains_legacy_retry_in_finalizer_segment }
+          - { configuration: multithreading, group: vm-native, shard: filter-segment, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::finalizer_preserves_filter_and_suspended_native_context }
+          - { configuration: multithreading, group: vm-native, shard: capture, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_capture_filters_and_child_cleanup_precede_outer_search }
+          - { configuration: multithreading, group: vm-native, shard: initializer-failure, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_initializer_failure_is_published_with_original_inner }
+          - { configuration: multithreading, group: vm-native, shard: static-store, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::static_store_operand_released_after_abandonment }
+          - { configuration: multithreading, group: vm-native, shard: initializer-retired, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_initializer_failure_survives_owner_retirement_and_collection }
+          - { configuration: multithreading, group: vm-native, shard: initializer-cycle, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_initializer_wait_rechecks_cycle_after_real_collection }
+          - { configuration: multithreading, group: vm-native, shard: call-return, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_nested_return_is_copied }
+          - { configuration: multithreading, group: vm-native, shard: nested-call, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_calls_suspending_intrinsic }
+          - { configuration: multithreading, group: vm-native, shard: wrong-root, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_rejects_reply_from_wrong_root_set }
+          - { configuration: multithreading, group: vm-native, shard: foreign-call, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_foreign_child_return_survives_collection }
+          - { configuration: multithreading, group: vm-native, shard: foreign-byref, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_foreign_byref_owner_survives_collection_and_child_call }
+          - { configuration: multithreading, group: vm-native, shard: cross-origin-byref, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_cross_arena_byref_owner_survives_collection_and_child_call }
+          - { configuration: multithreading, group: vm-native, shard: forgotten, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_forgotten_access_is_terminal }
+          - { configuration: multithreading, group: vm-native, shard: pending, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_unregistered_pending_is_terminal }
+          - { configuration: multithreading, group: vm-native, shard: caller, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_rejects_each_changed_caller_component }
+          - { configuration: multithreading, group: vm-native, shard: panic, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::native_activation_poll_panic_unwinds_and_releases_roots }
+          - { configuration: multithreading, group: vm-native, shard: foreign, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::foreign_source_survives_coordinated_collections_between_chunks }
+          - { configuration: multithreading, group: vm-native, shard: monitor-heap, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_heap_byref_survives_collection_and_writes_owner }
+          - { configuration: multithreading, group: vm-native, shard: monitor-contended-home, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::monitor_byref_contended_dispatch_survives_collection }
+          - { configuration: multithreading, group: vm-native, shard: monitor-wait, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_deadline_survives_real_collection }
+          - { configuration: multithreading, group: vm-native, shard: foreign-monitor, job_timeout: 45, invocation_timeout: 1800, selector: executor::native_substring_tests::condition_wait_tests::condition_wait_foreign_monitor_owner_survives_collection }
           - { configuration: no-features, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: multithreading, group: vm-collection, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
           - { configuration: no-features, group: vm-stress, shard: main, job_timeout: 45, invocation_timeout: 1800, selector: unused }
@@ -735,6 +842,8 @@ jobs:
           if [ '${{ matrix.group }}' = library ]; then
             crates=(dotnet-value)
             if [ '${{ matrix.configuration }}' = multithreading ]; then crates+=(dotnet-utils); fi
+          elif [ '${{ matrix.group }}' = native-bridge ]; then
+            crates=(dotnet-vm-ops)
           else
             crates=(dotnet-vm)
           fi
@@ -778,6 +887,12 @@ jobs:
                   singleton "registry-$name" dotnet-utils "gc::cross_arena::tests::arena_identity_registry_$name"
                 done
               fi
+              ;;
+            native-bridge)
+              singleton "bridge-${{ matrix.shard }}" dotnet-vm-ops '${{ matrix.selector }}'
+              ;;
+            vm-native)
+              singleton "native-${{ matrix.shard }}" dotnet-vm '${{ matrix.selector }}'
               ;;
             vm-teardown)
               singleton "teardown-${{ matrix.shard }}" dotnet-vm '${{ matrix.selector }}'

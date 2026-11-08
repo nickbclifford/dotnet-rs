@@ -268,7 +268,22 @@ impl ExceptionHandlingSystem {
                 ));
             }
 
-            for frame in ctx.frame_stack().frames.iter().rev() {
+            let boundaries = ctx.native_boundaries();
+            for (_, id, method, ip) in boundaries
+                .iter()
+                .rev()
+                .filter(|(depth, _, _, _)| *depth == ctx.frame_stack().len())
+            {
+                trace.push_str(&format!(
+                    "   at {}.{}({}) [Native {}] in IP {}\n",
+                    method.parent.type_name(),
+                    method.method().name,
+                    format_params(method),
+                    id.0,
+                    ip
+                ));
+            }
+            for (index, frame) in ctx.frame_stack().frames.iter().enumerate().rev() {
                 let method = &frame.state.info_handle.source;
                 let type_name = method.parent.type_name();
                 let method_name = method.method().name.to_string();
@@ -278,6 +293,20 @@ impl ExceptionHandlingSystem {
                     "   at {}.{}({}) in IP {}\n",
                     type_name, method_name, params, ip
                 ));
+                for (_, id, method, ip) in boundaries
+                    .iter()
+                    .rev()
+                    .filter(|(depth, _, _, _)| *depth == index)
+                {
+                    trace.push_str(&format!(
+                        "   at {}.{}({}) [Native {}] in IP {}\n",
+                        method.parent.type_name(),
+                        method.method().name,
+                        format_params(method),
+                        id.0,
+                        ip
+                    ));
+                }
             }
 
             exception.as_object(|obj| {
@@ -338,6 +367,22 @@ impl ExceptionHandlingSystem {
 
         // Search from the cursor's frame down to the stop frame
         for frame_index in (stop_frame..=cursor.frame_index).rev() {
+            if let Some(destination) = ctx.native_capture_at(frame_index + 1) {
+                *ctx.exception_mode_mut() = ExceptionState::Unwinding(UnwindState {
+                    exception: Some(exception),
+                    target: UnwindTarget::Native {
+                        depth: frame_index + 1,
+                        destination,
+                    },
+                    cursor: HandlerAddress {
+                        frame_index: ctx.frame_stack().len() - 1,
+                        section_index: 0,
+                        handler_index: 0,
+                    },
+                    nested_filter: None,
+                });
+                return self.handle_exception(ctx, gc);
+            }
             let frame = &ctx.frame_stack().frames[frame_index];
             let ip = frame.state.ip;
             let exceptions = frame.state.info_handle.exceptions.clone();
@@ -432,6 +477,7 @@ impl ExceptionHandlingSystem {
 
                             // To run the filter, we must suspend the frames and stack above it.
                             let stack_base = ctx.frame_stack().frames[frame_index].base.stack;
+                            ctx.suspend_native_above(frame_index);
                             ctx.evaluation_stack_mut().suspend_above(stack_base);
                             ctx.frame_stack_mut().suspend_above(frame_index);
 
@@ -477,6 +523,20 @@ impl ExceptionHandlingSystem {
             return self.handle_exception(ctx, gc);
         }
 
+        if !ctx.native_boundaries().is_empty() {
+            *ctx.exception_mode_mut() = ExceptionState::Unwinding(UnwindState {
+                exception: Some(exception),
+                target: UnwindTarget::Unhandled,
+                cursor: HandlerAddress {
+                    frame_index: ctx.frame_stack().len() - 1,
+                    section_index: 0,
+                    handler_index: 0,
+                },
+                nested_filter: None,
+            });
+            return self.handle_exception(ctx, gc);
+        }
+
         let managed_exc = extract_managed_exception(&gc, exception, ctx);
 
         *ctx.exception_mode_mut() = ExceptionState::None;
@@ -490,7 +550,9 @@ impl ExceptionHandlingSystem {
 
         match target {
             // When unwinding to a catch/filter, any 'try' block we were in is being exited.
-            UnwindTarget::Handler(_) => in_try,
+            UnwindTarget::Handler(_) | UnwindTarget::Unhandled | UnwindTarget::Native { .. } => {
+                in_try
+            }
             // When unwinding due to 'leave', we check if the target is outside the try block.
             UnwindTarget::Instruction(target_ip) => {
                 let mut in_handler = false;
@@ -528,6 +590,7 @@ impl ExceptionHandlingSystem {
         assert_eq!(ctx.frame_stack_mut().active_filters.pop(), Some(nested));
         ctx.evaluation_stack_mut().restore_suspended();
         ctx.frame_stack_mut().restore_suspended();
+        ctx.restore_suspended_native();
 
         // Restore state of the frame where filter ran
         let frame = &mut ctx.frame_stack_mut().frames[nested.handler.frame_index];
@@ -562,6 +625,8 @@ impl ExceptionHandlingSystem {
     ) -> StepResult {
         let target_frame = match target {
             UnwindTarget::Handler(h) => h.frame_index,
+            UnwindTarget::Unhandled => 0,
+            UnwindTarget::Native { depth, .. } => depth,
             UnwindTarget::Instruction(_) => {
                 if let Some(nested) = nested_filter {
                     nested.handler.frame_index
@@ -669,7 +734,7 @@ impl ExceptionHandlingSystem {
 
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
-            if frame_index > target_frame {
+            if frame_index > target_frame || matches!(target, UnwindTarget::Native { .. }) {
                 ctx.unwind_frame();
 
                 // If unwinding the frame triggered a new exception (e.g. wrapping a .cctor failure),
@@ -678,6 +743,22 @@ impl ExceptionHandlingSystem {
                     return self.handle_exception(ctx, gc);
                 }
             }
+        }
+
+        if let UnwindTarget::Native { depth, destination } = target {
+            ctx.unwind_native_at(depth);
+            return match ctx.capture_native_exception(
+                destination,
+                exception.expect("native capture without exception"),
+            ) {
+                Ok(()) => StepResult::Yield,
+                Err(error) => StepResult::Error(error),
+            };
+        }
+
+        // A synchronous native child can throw without installing a managed frame.
+        if exception.is_some() {
+            ctx.unwind_native_at(target_frame + 1);
         }
 
         // We have successfully unwound to the target!
@@ -727,6 +808,14 @@ impl ExceptionHandlingSystem {
 
                 // Continue execution at the handler
                 StepResult::Exception
+            }
+            UnwindTarget::Native { .. } => unreachable!("native capture completed above"),
+            UnwindTarget::Unhandled => {
+                let managed_exc =
+                    extract_managed_exception(&gc, exception.expect("unhandled exception"), ctx);
+                ctx.frame_stack_mut().clear();
+                ctx.evaluation_stack_mut().clear();
+                StepResult::MethodThrew(managed_exc)
             }
             UnwindTarget::Instruction(target_ip) => {
                 if target_ip == usize::MAX {

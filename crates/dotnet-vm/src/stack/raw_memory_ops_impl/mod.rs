@@ -162,7 +162,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // ldind.i/stind.i on a byref variable transfer the full managed-pointer
                 // encoding, preserving its origin rather than copying only a native word.
                 let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))
-                    && self.frame_stack.is_byref_home(serial, offset.as_usize())
+                    && self.is_byref_home(serial, offset.as_usize())
                 {
                     &LayoutManager::Scalar(Scalar::ManagedPtr)
                 } else {
@@ -261,7 +261,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 // ldind.i/stind.i on a byref variable transfer the full managed-pointer
                 // encoding, preserving its origin rather than copying only a native word.
                 let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))
-                    && self.frame_stack.is_byref_home(serial, offset.as_usize())
+                    && self.is_byref_home(serial, offset.as_usize())
                 {
                     &LayoutManager::Scalar(Scalar::ManagedPtr)
                 } else {

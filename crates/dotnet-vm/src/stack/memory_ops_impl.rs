@@ -6,4 +6,8 @@ impl<'a, 'gc> MemoryOps<'gc> for VesContext<'a, 'gc> {
     fn heap(&self) -> &dotnet_runtime_memory::heap::HeapManager<'gc> {
         &self.local.heap
     }
+
+    fn has_global_pending_finalizers(&self) -> bool {
+        self.shared.has_pending_finalizers()
+    }
 }

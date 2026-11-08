@@ -47,7 +47,7 @@ pub fn call<'gc, T: VmCallOps<'gc>>(
     if tail_call {
         ctx.unified_dispatch_tail(UnifiedDispatchTarget::Source(param0), None, None)
     } else {
-        ctx.unified_dispatch_direct(UnifiedDispatchTarget::Source(param0), None, None)
+        ctx.unified_dispatch(UnifiedDispatchTarget::Source(param0), None, None)
     }
 }
 
@@ -88,7 +88,7 @@ fn dispatch_callvirt<'gc, T: VesOps<'gc>>(
             None,
         )
     } else {
-        ctx.unified_dispatch_direct(
+        ctx.unified_dispatch(
             UnifiedDispatchTarget::Resolved(base_method, lookup),
             Some(this_type),
             None,

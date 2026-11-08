@@ -29,21 +29,20 @@ pub use exceptions::{
     UnwindState, UnwindTarget,
 };
 pub use stack::{
-    BasePointer, EvaluationStack, FrameReturnAction, FrameStack, MulticastState, PinnedLocals,
-    StackFrame,
+    BasePointer, EvaluationStack, FrameReturnAction, FrameStack, MulticastState, NativeId,
+    NativeReturnDestination, PinnedLocals, StackFrame,
 };
 
 /// A `Collect`-able unified encoding of cross-GC-safe-point VM resumption state.
-/// Stored as `ThreadContext::continuation` so yield/resume state survives between
-/// `mutate_root` calls without escaping `'gc`.
-/// Replaces the ad-hoc combination of `suspended_handler_unwinds` and the
-/// undocumented `back_up_ip + Yield` idiom.
+/// Stored as `ThreadContext::continuation` so interpreter retry and handler-unwind state
+/// survives between `mutate_root` calls without escaping `'gc`. Native effects retain their
+/// progress separately in the activation stack.
 #[derive(Collect)]
 #[collect(no_drop, gc_lifetime = 'gc)]
 pub enum VmContinuation<'gc> {
     /// No pending cross-safe-point state; normal execution.
     None,
-    /// The current instruction yielded for a GC-safe-point retry.
+    /// A legacy static-initialization trigger yielded for a GC-safe-point retry.
     /// `back_up_ip` was called before yielding; IP is already restored. This marker is cleared
     /// when the executor re-enters the VM because the retry is encoded in the restored frame state.
     RetryInstruction,
@@ -131,6 +130,8 @@ pub enum StepResult {
     Jump(usize),
     /// A callee frame was pushed. The dispatch loop does not advance the current frame IP.
     FramePushed,
+    /// A native activation is parked while its managed child runs.
+    NativeSuspended(NativeId),
     /// The current frame returned. The dispatch loop pops the frame.
     Return,
     /// The current frame did not handle this exception. The dispatch loop propagates it.

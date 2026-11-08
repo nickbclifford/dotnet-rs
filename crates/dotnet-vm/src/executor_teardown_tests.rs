@@ -42,6 +42,16 @@ fn allocate_witness(executor: &mut Executor, drops: StdArc<AtomicUsize>) {
         .unwrap();
 }
 
+#[cfg(feature = "multithreading")]
+struct ShutdownOnDrop(Arc<SharedGlobalState>);
+
+#[cfg(feature = "multithreading")]
+impl Drop for ShutdownOnDrop {
+    fn drop(&mut self) {
+        self.0.shutdown_workers();
+    }
+}
+
 #[cfg(not(feature = "multithreading"))]
 #[test]
 fn executor_single_arena_cleanup_control() {
@@ -51,6 +61,287 @@ fn executor_single_arena_cleanup_control() {
     assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
     drop(executor);
     assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_owner_keeps_registration_until_shutdown() {
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::time::Duration;
+
+    let state = shared();
+    let worker_state = state.clone();
+    let drops = StdArc::new(AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    let (ready, receiver) = std::sync::mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        allocate_witness(&mut executor, worker_drops);
+        ready.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+    });
+    let id = match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(id) => id,
+        Err(error) => {
+            state.shutdown_workers();
+            panic!("worker did not become ready: {error}");
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !completion.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let finished = completion.is_finished();
+    let lease = try_acquire_lease(id);
+    let alive = lease.is_some();
+    let before_shutdown = drops.load(AtomicOrdering::SeqCst);
+    let shutdown_state = state.clone();
+    let shutdown = std::thread::spawn(move || shutdown_state.shutdown_workers());
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while lease.as_ref().is_some_and(|lease| lease.is_valid())
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::yield_now();
+    }
+    let removed = lease.as_ref().is_some_and(|lease| !lease.is_valid());
+    let collection_lock_available = state.gc_coordinator.try_exclude_collection(|| ()).is_some();
+    let during_drain = drops.load(AtomicOrdering::SeqCst);
+    let phase_during_drain = completion.phase();
+    // Release before joining or asserting, including on a failed observation.
+    drop(lease);
+    shutdown.join().unwrap();
+    assert!(finished);
+    assert!(alive);
+    assert_eq!(before_shutdown, 0);
+    assert!(removed);
+    assert!(
+        collection_lock_available,
+        "lease drain must not hold the collection lock"
+    );
+    assert_eq!(during_drain, 0);
+    assert_eq!(phase_during_drain, "shutting down");
+    assert_eq!(completion.phase(), "drained");
+    assert!(try_acquire_lease(id).is_none());
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_shutdown_waits_for_inflight_collection_and_lease() {
+    use crate::{
+        gc::coordinator::GcCycleGuard, test_utils::worker::Worker, threading::ThreadManagerOps,
+    };
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{sync::mpsc, time::Duration};
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let executor = Executor::new(worker_state);
+        ready_tx.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+    });
+    let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !completion.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let completed = completion.is_finished();
+    let collector = Executor::new(state.clone());
+    let (lease_ready_tx, lease_ready_rx) = mpsc::channel();
+    let (probe_tx, probe_rx) = mpsc::channel();
+    let (removed_tx, removed_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        // This host thread is not a GC participant and never crosses a safepoint.
+        let lease = try_acquire_lease(id).unwrap();
+        lease_ready_tx.send(()).unwrap();
+        if probe_rx.recv_timeout(Duration::from_secs(30)).is_ok() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while lease.is_valid() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let _ = removed_tx.send(!lease.is_valid());
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
+        }
+        drop(lease);
+    });
+    let holder = Worker::new(holder, (probe_tx, release_tx));
+    lease_ready_rx
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    let shutdown;
+    let coordinator = state.gc_coordinator.clone();
+    let session = coordinator.begin_collection().unwrap();
+    let stw = state.thread_manager.request_stop_the_world();
+    let cycle = GcCycleGuard::new(session, stw);
+
+    let (signaled_tx, signaled_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let shutdown_state = state.clone();
+    let shutdown_thread = std::thread::spawn(move || {
+        shutdown_state.workers.shutdown(|| {
+            shutdown_state.thread_manager.shutdown_retired();
+            signaled_tx.send(()).unwrap();
+        });
+        let _ = done_tx.send(());
+    });
+    shutdown = Worker::new(shutdown_thread, holder);
+    let signaled = signaled_rx.recv_timeout(Duration::from_secs(30)).is_ok();
+    let valid_during_collection = try_acquire_lease(id).is_some();
+    cycle.collect_all_arenas(collector.thread_id);
+    drop(cycle);
+    let _ = shutdown.resources().resources().0.send(());
+    let removed = removed_rx
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or(false);
+    let rejected = try_acquire_lease(id).is_none();
+    let held_up_shutdown = done_rx.try_recv().is_err();
+    let phase_during_drain = completion.phase();
+    let _ = shutdown.resources().resources().1.send(());
+    shutdown.finish().unwrap();
+    drop(collector);
+    assert!(completed);
+    assert!(signaled);
+    assert!(valid_during_collection);
+    assert!(removed);
+    assert!(rejected);
+    assert!(held_up_shutdown);
+    assert_eq!(phase_during_drain, "shutting down");
+    assert_eq!(completion.phase(), "drained");
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn worker_panic_drains_lease_before_shutdown() {
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{sync::mpsc, time::Duration};
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let drops = StdArc::new(AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    let worker_state = state.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (start_tx, start_rx) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |_running| {
+        let mut executor = Executor::new(worker_state);
+        allocate_witness(&mut executor, worker_drops);
+        ready_tx.send(executor.thread_id).unwrap();
+        let _ = start_rx.recv_timeout(Duration::from_secs(30));
+        panic!("worker failed while owning an arena");
+    });
+    let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let lease = try_acquire_lease(id).unwrap();
+    start_tx.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while lease.is_valid() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let removed = !lease.is_valid();
+    let rejected = try_acquire_lease(id).is_none();
+    let alive = drops.load(AtomicOrdering::SeqCst) == 0;
+    let shutdown_state = state.clone();
+    let shutdown = std::thread::spawn(move || shutdown_state.shutdown_workers());
+    drop(lease);
+    shutdown.join().unwrap();
+    assert!(removed && rejected && alive);
+    assert_eq!(completion.phase(), "leaked");
+    assert!(matches!(completion.take_outcome(), Some(Err(_))));
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_self_held_lease_leaks_storage_at_shutdown() {
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{sync::mpsc, time::Duration};
+
+    let state = shared();
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let drops = StdArc::new(AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    let worker_state = state.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        let mut executor = Executor::new(worker_state);
+        allocate_witness(&mut executor, worker_drops);
+        let lease = try_acquire_lease(executor.thread_id).unwrap();
+        ready_tx.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+        drop(lease);
+    });
+    let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    state.shutdown_workers();
+    assert_eq!(completion.phase(), "leaked");
+    assert!(try_acquire_lease(id).is_none());
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn worker_start_failure_retires_and_shutdown_reaps() {
+    use crate::test_utils::parameterless_i32_signature;
+    use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+    use dotnetdll::{prelude::*, resolved::members::Method};
+    use std::time::Duration;
+
+    let loader = AssemblyLoader::new_bare("worker-start-failure".into()).unwrap();
+    let (mut res, _, ty) = make_test_assembly!("InvalidStart.dll", "InvalidStart", "Worker");
+    let index = res.push_method(
+        ty,
+        Method::new(
+            Accessibility::Public,
+            parameterless_i32_signature(),
+            "Start",
+            Some(make_test_method!(
+                max_stack: 1,
+                instructions: vec![Instruction::LoadConstantInt32(0), Instruction::Return],
+                locals: vec![LocalVariable::Variable {
+                    custom_modifiers: vec![],
+                    pinned: false,
+                    by_ref: false,
+                    var_type: MethodType::MethodGeneric(42),
+                }]
+            )),
+        ),
+    );
+    let res = loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res.clone(), ty);
+    let index = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[index]))
+        .unwrap();
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(index),
+    );
+    let state = Arc::new(SharedGlobalState::new(Arc::new(loader)));
+    let _cleanup = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let completion = state.workers.spawn_owner(move |running| {
+        Executor::run_thread_start(worker_state, method, GenericLookup::default(), running);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !completion.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let outcome = completion.take_outcome();
+    state.shutdown_workers();
+    assert_eq!(completion.phase(), "drained");
+    match outcome {
+        Some(Ok(ExecutorResult::Error(error))) => assert!(
+            format!("{error:?}").contains("GenericIndexOutOfBounds"),
+            "unexpected startup error: {error:?}"
+        ),
+        other => panic!("expected startup failure, got {other:?}"),
+    }
 }
 
 #[cfg(feature = "multithreading")]

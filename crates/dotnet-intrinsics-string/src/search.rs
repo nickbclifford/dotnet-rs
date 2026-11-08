@@ -12,7 +12,10 @@ use dotnet_value::{
     with_string,
 };
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::ops::{ExceptionOps, RawMemoryOps, TypedStackOps};
+use dotnet_vm_ops::{
+    effects::{NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects},
+    ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
+};
 
 /// System.String::IndexOf(char)
 /// System.String::IndexOf(char, int)
@@ -121,9 +124,292 @@ pub fn copy_substring_chunk(
     count
 }
 
+/// Validate the signed arguments before calculating a bounded substring range.
+fn substring_range(
+    start: i32,
+    length: Option<i32>,
+    source_len: usize,
+) -> Result<(usize, usize), &'static str> {
+    if start < 0 || start as usize > source_len {
+        return Err("startIndex");
+    }
+    let start = start as usize;
+    let length = match length {
+        None => source_len - start,
+        Some(length) => {
+            if length < 0 || length as usize > source_len - start {
+                return Err("length");
+            }
+            length as usize
+        }
+    };
+    Ok((start, length))
+}
+
+/// Choose the bounded native copy only after validating the unconsumed operands.
+pub fn substring_select<'gc, T: IntrinsicStringHost<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    let parameter_count = method.signature().parameters.len();
+    if !(1..=2).contains(&parameter_count) {
+        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+    }
+    let length = if parameter_count == 2 {
+        match operands.peek_at(0) {
+            StackValue::Int32(length) => Some(length),
+            _ => return NativeSelection::Synchronous(intrinsic_string_substring::<T>),
+        }
+    } else {
+        None
+    };
+    let StackValue::Int32(start) = operands.peek_at(parameter_count - 1) else {
+        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+    };
+    let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(parameter_count) else {
+        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+    };
+    let inner = handle.borrow();
+    let HeapStorage::Str(source) = &inner.storage else {
+        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+    };
+    match substring_range(start, length, source.len()) {
+        Ok((start, length)) if length > SUBSTRING_CHUNK_SIZE => {
+            NativeSelection::Async(NativeInvocation {
+                start,
+                length,
+                parameter_count,
+            })
+        }
+        _ => NativeSelection::Synchronous(intrinsic_string_substring::<T>),
+    }
+}
+
+/// Copy a selector-validated substring without retaining a heap borrow across a yield.
+#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = intrinsic_string_substring)]
+#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = intrinsic_string_substring)]
+pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
+    let invocation = fx.invocation();
+    let source = {
+        let mut vm = fx.vm().await?;
+        vm.discard_scalars(invocation.parameter_count)?;
+        vm.pop_string()?
+    };
+    let mut buffer = substring_buffer(invocation.length);
+    while buffer.len() < invocation.length {
+        {
+            let mut vm = fx.vm().await?;
+            vm.with(|region| {
+                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring source invalid".into(),
+                    )
+                    .into());
+                };
+                let inner = handle.borrow();
+                let HeapStorage::Str(chars) = &inner.storage else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring source invalid".into(),
+                    )
+                    .into());
+                };
+                if invocation
+                    .start
+                    .checked_add(invocation.length)
+                    .is_none_or(|end| end > chars.len())
+                {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring range invalid".into(),
+                    )
+                    .into());
+                }
+                copy_substring_chunk(
+                    chars,
+                    invocation.start,
+                    invocation.length,
+                    buffer.len(),
+                    &mut buffer,
+                );
+                Ok::<(), dotnet_types::error::VmError>(())
+            })??;
+        }
+        if buffer.len() < invocation.length {
+            fx.yield_now().await?;
+        }
+    }
+    fx.vm().await?.push_new_string(buffer)
+}
+
 #[cfg(test)]
 mod substring_chunk_tests {
-    use super::{SUBSTRING_CHUNK_SIZE, copy_substring_chunk};
+    use super::{SUBSTRING_CHUNK_SIZE, copy_substring_chunk, substring_async, substring_range};
+    use dotnet_types::error::VmError;
+    use dotnet_utils::{ArenaId, gc::ThreadSafeLock};
+    use dotnet_value::{
+        StackValue,
+        object::{HeapStorage, ObjectInner, ObjectRef},
+        string::CLRString,
+    };
+    use dotnet_vm_ops::effects::{
+        NativeBackend, NativeControl, NativeEffect, NativeInvocation, NativeRegion, poll_native,
+    };
+    use gc_arena::{Arena, Collect, DynamicRootSet, Gc, GcWeak, Rootable};
+    use std::task::Poll;
+
+    #[derive(Collect)]
+    #[collect(no_drop)]
+    struct Roots<'gc> {
+        roots: DynamicRootSet<'gc>,
+        weak: GcWeak<'gc, ThreadSafeLock<ObjectInner<'gc>>>,
+    }
+
+    #[derive(Default)]
+    struct Mock<'gc> {
+        operands: Vec<StackValue<'gc>>,
+        outputs: Vec<Vec<u16>>,
+        stop: bool,
+    }
+    impl<'gc> NativeBackend<'gc> for Mock<'gc> {
+        fn stop_requested(&self) -> bool {
+            self.stop
+        }
+        fn active_scope_depth(&self) -> usize {
+            0
+        }
+        fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
+            &mut self.operands
+        }
+        fn push_new_string(&mut self, chars: Vec<u16>) -> Result<(), VmError> {
+            self.outputs.push(chars);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn async_body_preserves_source_and_progress_across_collections() {
+        let length = 2 * SUBSTRING_CHUNK_SIZE + 17;
+        let chars: Vec<u16> = (0..length + 2).map(|i| i as u16).collect();
+        for parameter_count in [1, 2] {
+            #[cfg(feature = "bench-instrumentation")]
+            super::substring_metrics::reset();
+            let mut arena = Arena::<Rootable![Roots<'_>]>::new(|mc| {
+                let source = Gc::new(
+                    mc,
+                    ThreadSafeLock::new(ObjectInner::new(
+                        HeapStorage::Str(CLRString::new(chars.clone())),
+                        ArenaId::new(1),
+                    )),
+                );
+                Roots {
+                    roots: DynamicRootSet::new(mc),
+                    weak: Gc::downgrade(source),
+                }
+            });
+            let control = NativeControl::new();
+            let fx = control
+                .effects(NativeInvocation {
+                    start: 2,
+                    length,
+                    parameter_count,
+                })
+                .unwrap();
+            let mut future = Box::pin(substring_async(fx));
+            arena.mutate(|mc, roots| {
+                let mut backend = Mock::default();
+                backend.operands.push(StackValue::ObjectRef(ObjectRef(Some(
+                    roots.weak.upgrade(mc).unwrap(),
+                ))));
+                backend.operands.push(StackValue::Int32(2));
+                if parameter_count == 2 {
+                    backend.operands.push(StackValue::Int32(length as i32));
+                }
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+                assert!(backend.operands.is_empty());
+                assert!(backend.outputs.is_empty());
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            #[cfg(feature = "bench-instrumentation")]
+            assert_eq!(
+                super::substring_metrics::snapshot().copied_units,
+                SUBSTRING_CHUNK_SIZE
+            );
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                assert!(roots.weak.upgrade(mc).is_some());
+                let mut backend = Mock {
+                    stop: true,
+                    ..Default::default()
+                };
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+                assert!(backend.outputs.is_empty());
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            #[cfg(feature = "bench-instrumentation")]
+            assert_eq!(
+                super::substring_metrics::snapshot().copied_units,
+                SUBSTRING_CHUNK_SIZE
+            );
+            arena.mutate(|mc, roots| {
+                let mut backend = Mock::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+                assert!(backend.outputs.is_empty());
+            });
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            #[cfg(feature = "bench-instrumentation")]
+            assert_eq!(
+                super::substring_metrics::snapshot().copied_units,
+                2 * SUBSTRING_CHUNK_SIZE
+            );
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| {
+                assert!(roots.weak.upgrade(mc).is_some());
+                let mut backend = Mock::default();
+                let mut region = NativeRegion::new(mc, roots.roots, &mut backend);
+                assert!(matches!(
+                    poll_native(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Ready(Ok(())))
+                ));
+                assert_eq!(backend.outputs, vec![chars[2..2 + length].to_vec()]);
+            });
+            #[cfg(feature = "bench-instrumentation")]
+            {
+                let metrics = super::substring_metrics::snapshot();
+                assert_eq!(metrics.copied_units, length);
+                assert_eq!(metrics.buffer_allocations, 1);
+                assert_eq!(metrics.buffer_reallocations, 0);
+            }
+            drop(future);
+            arena.finish_cycle();
+            arena.mutate(|mc, roots| assert!(roots.weak.upgrade(mc).is_none()));
+        }
+    }
+
+    #[test]
+    fn validates_ranges_and_parameter_order() {
+        assert_eq!(substring_range(0, None, 5), Ok((0, 5)));
+        assert_eq!(substring_range(5, None, 5), Ok((5, 0)));
+        assert_eq!(substring_range(5, Some(0), 5), Ok((5, 0)));
+        assert_eq!(substring_range(1, Some(4), 5), Ok((1, 4)));
+        assert_eq!(substring_range(-1, Some(-1), 5), Err("startIndex"));
+        assert_eq!(substring_range(6, Some(-1), 5), Err("startIndex"));
+        assert_eq!(substring_range(1, Some(-1), 5), Err("length"));
+        assert_eq!(substring_range(1, Some(i32::MAX), 5), Err("length"));
+        assert_eq!(substring_range(i32::MAX, None, 5), Err("startIndex"));
+    }
 
     #[test]
     fn copies_bounded_chunks_without_altering_utf16() {
@@ -143,8 +429,6 @@ mod substring_chunk_tests {
 
 /// System.String::Substring(int)
 /// System.String::Substring(int, int)
-#[dotnet_intrinsic("string System.String::Substring(int)")]
-#[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -162,7 +446,7 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
     let val = ctx.peek_stack_at(if length.is_some() { 2 } else { 1 });
 
     let result_vec = match val {
-        StackValue::ObjectRef(source @ ObjectRef(Some(handle))) => {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
             let s_len = {
                 let inner = handle.borrow();
                 match &inner.storage {
@@ -176,28 +460,10 @@ pub fn intrinsic_string_substring<'gc, T: IntrinsicStringHost<'gc>>(
                 }
             };
 
-            if start_at < 0 || start_at as usize > s_len {
-                return ctx.throw_argument_out_of_range("startIndex");
-            }
-
-            let start_at = start_at as usize;
-            let l = match length {
-                None => s_len - start_at,
-                Some(l) => {
-                    if l < 0 || l as usize > s_len - start_at {
-                        return ctx.throw_argument_out_of_range("length");
-                    }
-                    l as usize
-                }
+            let (start_at, l) = match substring_range(start_at, length, s_len) {
+                Ok(range) => range,
+                Err(parameter) => return ctx.throw_argument_out_of_range(parameter),
             };
-
-            let operand_count = if length.is_some() { 3 } else { 2 };
-            if l > SUBSTRING_CHUNK_SIZE
-                && let Some(result) =
-                    ctx.offer_substring_continuation(source, start_at, l, operand_count)
-            {
-                return result;
-            }
 
             let mut result_vec = substring_buffer(l);
             let mut offset = 0;

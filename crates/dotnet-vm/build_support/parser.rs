@@ -1,7 +1,8 @@
 use crate::build_support::scanner::SourceScanRoot;
 use dotnet_build_tools::hash_value_u64;
 use dotnet_macros_core::{
-    InstructionMapping, ParsedFieldSignature, ParsedInstruction, ParsedSignature,
+    InstructionMapping, IntrinsicArgs, ParsedFieldSignature, ParsedInstruction, ParsedSignature,
+    validate_intrinsic_options,
 };
 use std::{collections::BTreeMap, fs, path::Path};
 use syn::{
@@ -22,6 +23,8 @@ pub struct IntrinsicEntry {
     pub arity: u16,
     pub is_static: bool,
     pub is_field: bool,
+    pub is_async: bool,
+    pub selector: Option<String>,
     pub original_handler_path: String,
     pub filter_name: Option<String>,
     pub variant_name: String,
@@ -114,11 +117,23 @@ pub fn process_intrinsic_file(
     for item in file.items {
         if let Item::Fn(item_fn) = item {
             let func_name = item_fn.sig.ident.to_string();
+            let args: Vec<IntrinsicArgs> = item_fn
+                .attrs
+                .iter()
+                .filter(|attr| attr.path().is_ident("dotnet_intrinsic"))
+                .map(|attr| {
+                    attr.parse_args()
+                        .expect("Failed to parse dotnet_intrinsic args")
+                })
+                .collect();
+            validate_intrinsic_options(&args, item_fn.sig.asyncness.is_some())
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             for attr in &item_fn.attrs {
                 if attr.path().is_ident("dotnet_intrinsic") {
-                    let sig_str: LitStr = attr
+                    let args: IntrinsicArgs = attr
                         .parse_args()
                         .expect("Failed to parse dotnet_intrinsic args");
+                    let sig_str = args.signature;
                     let parsed: ParsedSignature =
                         syn::parse_str(&sig_str.value()).expect("Failed to parse signature");
                     let mut arity = parsed.parameters.len() as u16;
@@ -143,6 +158,8 @@ pub fn process_intrinsic_file(
                         arity,
                         is_static: parsed.is_static,
                         is_field: false,
+                        is_async: item_fn.sig.asyncness.is_some(),
+                        selector: args.selector.map(|path| quote::quote!(#path).to_string()),
                         original_handler_path: format!("{}::{}", mod_path, func_name),
                         filter_name: Some(format!("{}::{}", mod_path, filter_name)),
                         variant_name,
@@ -166,6 +183,8 @@ pub fn process_intrinsic_file(
                         arity: 0,
                         is_static: parsed.is_static,
                         is_field: true,
+                        is_async: false,
+                        selector: None,
                         original_handler_path: format!("{}::{}", mod_path, func_name),
                         filter_name: None,
                         variant_name,

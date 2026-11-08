@@ -6,7 +6,7 @@ use crate::{
     },
     layout::instance_field_layout_cached,
     resolution::ValueResolution,
-    stack::ops::VesOps,
+    stack::ops::{StaticFieldAction, StaticFieldKind, VesOps},
     sync::Ordering as AtomicOrdering,
 };
 use dotnet_types::{generics::GenericLookup, members::FieldDescription};
@@ -239,11 +239,19 @@ pub fn ldsfld<'gc, T: VesOps<'gc>>(
         return ctx.execute_intrinsic_field(field, type_generics, false);
     }
 
-    let res = ctx.initialize_static_storage(field.parent.clone(), static_lookup.clone());
-    if res != StepResult::Continue {
-        return res;
-    }
+    ctx.start_static_field(StaticFieldAction {
+        field,
+        generics: static_lookup,
+        kind: StaticFieldKind::Load { volatile },
+    })
+}
 
+fn complete_load<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    field: FieldDescription,
+    static_lookup: GenericLookup,
+    volatile: bool,
+) -> StepResult {
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent.clone(), &static_lookup);
@@ -280,11 +288,19 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
     let (field, lookup): (_, GenericLookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
     let static_lookup = canonical_static_lookup(&field, &lookup);
 
-    let res = ctx.initialize_static_storage(field.parent.clone(), static_lookup.clone());
-    if res != StepResult::Continue {
-        return res;
-    }
+    ctx.start_static_field(StaticFieldAction {
+        field,
+        generics: static_lookup,
+        kind: StaticFieldKind::Store { volatile },
+    })
+}
 
+fn complete_store<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    field: FieldDescription,
+    static_lookup: GenericLookup,
+    volatile: bool,
+) -> StepResult {
     let value = vm_pop!(ctx);
     let name = &field.field().name;
     let res_ctx = ctx
@@ -485,11 +501,18 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     let (field, lookup): (_, GenericLookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
     let static_lookup = canonical_static_lookup(&field, &lookup);
 
-    let res = ctx.initialize_static_storage(field.parent.clone(), static_lookup.clone());
-    if res != StepResult::Continue {
-        return res;
-    }
+    ctx.start_static_field(StaticFieldAction {
+        field,
+        generics: static_lookup,
+        kind: StaticFieldKind::Address,
+    })
+}
 
+fn complete_address<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    field: FieldDescription,
+    static_lookup: GenericLookup,
+) -> StepResult {
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent.clone(), &static_lookup);
@@ -524,4 +547,19 @@ pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRe
     ));
 
     StepResult::Continue
+}
+
+pub(crate) fn complete_static_field<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    action: StaticFieldAction,
+) -> StepResult {
+    match action.kind {
+        StaticFieldKind::Load { volatile } => {
+            complete_load(ctx, action.field, action.generics, volatile)
+        }
+        StaticFieldKind::Store { volatile } => {
+            complete_store(ctx, action.field, action.generics, volatile)
+        }
+        StaticFieldKind::Address => complete_address(ctx, action.field, action.generics),
+    }
 }

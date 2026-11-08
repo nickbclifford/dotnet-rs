@@ -18,9 +18,10 @@ const STEP_RESULT_SIZE_MATRIX: [(bool, usize); 2] = [
 
 #[cfg(target_pointer_width = "64")]
 const EXCEPTION_STATE_SIZE_MATRIX: [(bool, usize); 2] = [
+    // FilterState carries a suspension depth for nested filter restoration.
     // (multithreading, expected_size)
-    (false, 136),
-    (true, 136),
+    (false, 144),
+    (true, 144),
 ];
 
 #[cfg(target_pointer_width = "64")]
@@ -29,9 +30,11 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // FrameAllocations adds an 8-byte usage counter to the previous Vec storage.
     // Frame homes add a 48-byte FrameHomes and an 8-byte MethodInfo layout handle.
     // Runtime temporary homes add a 24-byte Vec and an 8-byte completion handle.
+    // Native return destinations add a stable identity and generation.
+    // Reflection continuations and monitor retry metadata are heap-backed.
     // (multithreading, expected_size)
-    (false, 616),
-    (true, 616),
+    (false, 568),
+    (true, 568),
 ];
 
 #[cfg(target_pointer_width = "64")]

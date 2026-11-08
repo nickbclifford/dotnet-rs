@@ -5,7 +5,8 @@
 extern crate proc_macro;
 
 use dotnet_macros_core::{
-    InstructionMapping, ParsedInstruction, ParsedSignature, expand_trait_aliases,
+    InstructionMapping, IntrinsicArgs, ParsedInstruction, ParsedSignature, expand_trait_aliases,
+    validate_intrinsic_options,
 };
 use proc_macro::TokenStream;
 use quote::quote;
@@ -112,26 +113,74 @@ fn generate_intrinsic_filter_fn(
     }
 }
 
+fn expand_intrinsic(
+    args: IntrinsicArgs,
+    mut func: ItemFn,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let is_async = func.sig.asyncness.is_some();
+    let mut annotations = vec![args];
+    if is_async {
+        let mut retained = Vec::new();
+        for attr in func.attrs {
+            if attr.path().is_ident("dotnet_intrinsic") {
+                annotations.push(attr.parse_args()?);
+            } else {
+                retained.push(attr);
+            }
+        }
+        func.attrs = retained;
+    }
+    validate_intrinsic_options(&annotations, is_async)?;
+    let func_name = &func.sig.ident;
+    let filters = annotations
+        .iter()
+        .map(|attr| {
+            let parsed: ParsedSignature = syn::parse_str(&attr.signature.value())?;
+            Ok(generate_intrinsic_filter_fn(func_name, &parsed))
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    let entry = if is_async {
+        let entry_name = syn::Ident::new(&format!("{}_native_entry", func_name), func_name.span());
+        let selector_alias = annotations[0].selector.as_ref().map(|selector| {
+            let name = syn::Ident::new(&format!("{}_native_selector", func_name), func_name.span());
+            quote! { #[doc(hidden)] pub use #selector as #name; }
+        });
+        let fallback = annotations[0]
+            .fallback
+            .as_ref()
+            .expect("validated fallback");
+        let fallback_name =
+            syn::Ident::new(&format!("{}_native_fallback", func_name), func_name.span());
+        quote! {
+            #selector_alias
+            #[doc(hidden)] pub use #fallback as #fallback_name;
+            #[doc(hidden)]
+            pub fn #entry_name<'gc, T, S>(
+                ctx: &mut T,
+                method: dotnet_types::members::MethodDescription,
+                generics: &dotnet_types::generics::GenericLookup,
+                mode: dotnet_vm_ops::effects::NativeDispatchMode,
+            ) -> dotnet_vm_data::StepResult
+            where
+                T: dotnet_vm_ops::effects::NativeIntrinsicHost<'gc>,
+                S: dotnet_vm_ops::effects::NativeSelectorProvider<'gc, T>,
+            {
+                ctx.start_native(method, mode, generics, S::selector(), S::fallback(), |fx| Box::pin(#func_name(fx)))
+            }
+        }
+    } else {
+        quote! {}
+    };
+    Ok(quote! { #func #(#filters)* #entry })
+}
+
 #[proc_macro_attribute]
 pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr_str = parse_macro_input!(attr as LitStr);
+    let args = parse_macro_input!(attr as IntrinsicArgs);
     let func = parse_macro_input!(item as ItemFn);
-    let func_name = &func.sig.ident;
-
-    let sig_str = attr_str.value();
-    let parsed: ParsedSignature = match syn::parse_str(&sig_str) {
-        Ok(s) => s,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    let filter_fn = generate_intrinsic_filter_fn(func_name, &parsed);
-
-    let output = quote! {
-        #func
-        #filter_fn
-    };
-
-    output.into()
+    expand_intrinsic(args, func)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 #[proc_macro_attribute]
@@ -218,6 +267,148 @@ mod tests {
             },
             _ => panic!("expected filter tail statement to be a literal expression"),
         }
+    }
+
+    #[test]
+    fn async_intrinsic_expands_once_for_stacked_annotations() {
+        let args: IntrinsicArgs = syn::parse_quote!(
+            "static void Test.Type::First()",
+            select = self::choose,
+            fallback = self::sync
+        );
+        let func: ItemFn = syn::parse_quote! {
+            #[dotnet_intrinsic("static void Test.Type::Second(int)", select = self::choose, fallback = self::sync)]
+            pub async fn work(mut fx: VmEffects) -> NativeResult { let _ = &mut fx; Ok(()) }
+        };
+        let file: syn::File = syn::parse2(expand_intrinsic(args, func).unwrap()).unwrap();
+        let functions: Vec<_> = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Fn(f) => Some(f.sig.ident.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            functions
+                .iter()
+                .filter(|name| name.starts_with("work_filter_"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            functions
+                .iter()
+                .filter(|name| *name == "work_native_entry")
+                .count(),
+            1
+        );
+        let output = quote!(#file).to_string();
+        assert!(output.contains("start_native"));
+        assert!(output.contains("work_native_selector"));
+        assert!(output.contains("work_native_fallback"));
+    }
+
+    #[test]
+    fn async_intrinsic_rejects_mismatched_selectors() {
+        let args: IntrinsicArgs = syn::parse_quote!(
+            "static void Test.Type::First()",
+            select = one,
+            fallback = sync
+        );
+        for attr in [
+            syn::parse_quote!(#[dotnet_intrinsic("static void Test.Type::Second()", select = two, fallback = sync)]),
+            syn::parse_quote!(#[dotnet_intrinsic("static void Test.Type::Second()", fallback = sync)]),
+        ] {
+            let mut func: ItemFn = syn::parse_quote!(
+                async fn work(fx: VmEffects) -> NativeResult {
+                    Ok(())
+                }
+            );
+            func.attrs.push(attr);
+            assert!(
+                expand_intrinsic(
+                    syn::parse_quote!(
+                        "static void Test.Type::First()",
+                        select = one,
+                        fallback = sync
+                    ),
+                    func
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("same selector")
+            );
+        }
+        let sync: ItemFn = syn::parse_quote!(
+            fn work() {}
+        );
+        assert!(
+            expand_intrinsic(args, sync)
+                .unwrap_err()
+                .to_string()
+                .contains("require an async")
+        );
+    }
+
+    #[test]
+    fn async_intrinsic_requires_consistent_fallbacks() {
+        for (other, expected) in [
+            (
+                syn::parse_quote!(#[dotnet_intrinsic("static void X::B()", fallback = other)]),
+                "same fallback",
+            ),
+            (
+                syn::parse_quote!(#[dotnet_intrinsic("static void X::B()")]),
+                "requires a fallback",
+            ),
+        ] {
+            let mut func: ItemFn = syn::parse_quote!(
+                async fn work(fx: VmEffects) -> NativeResult {
+                    Ok(())
+                }
+            );
+            func.attrs.push(other);
+            let args = syn::parse_quote!("static void X::A()", fallback = sync);
+            assert!(
+                expand_intrinsic(args, func)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+        let args = syn::parse_quote!("static void X::A()");
+        let func: ItemFn = syn::parse_quote!(
+            async fn work(fx: VmEffects) -> NativeResult {
+                Ok(())
+            }
+        );
+        assert!(
+            expand_intrinsic(args, func)
+                .unwrap_err()
+                .to_string()
+                .contains("requires a fallback")
+        );
+    }
+
+    #[test]
+    fn async_intrinsic_without_selector_and_sync_entry_shape() {
+        let args: IntrinsicArgs =
+            syn::parse_quote!("static void Test.Type::First()", fallback = sync);
+        let func: ItemFn = syn::parse_quote!(
+            async fn work(fx: VmEffects) -> NativeResult {
+                Ok(())
+            }
+        );
+        let output = expand_intrinsic(args, func).unwrap().to_string();
+        assert!(output.contains("work_native_entry"));
+        assert!(!output.contains("work_native_selector"));
+        let args: IntrinsicArgs = syn::parse_quote!("static void Test.Type::First()");
+        let func: ItemFn = syn::parse_quote!(
+            pub fn work() {}
+        );
+        let output = expand_intrinsic(args, func).unwrap().to_string();
+        assert!(!output.contains("native_entry"));
     }
 
     #[test]

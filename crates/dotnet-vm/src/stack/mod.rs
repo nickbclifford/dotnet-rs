@@ -71,6 +71,7 @@ mod context_ops;
 mod exception_ops_impl;
 mod managed_ptr_decode_cache;
 mod memory_ops_impl;
+pub(crate) mod native_effects;
 pub mod ops;
 mod raw_memory_ops_impl;
 mod reflection_ops_impl;
@@ -99,6 +100,7 @@ pub(crate) fn receiver_object_generics(receiver: ObjectRef<'_>) -> GenericLookup
 
 pub struct CallStack<'gc> {
     pub execution: ThreadContext<'gc>,
+    pub(crate) parked_finalizer_caller: Option<ThreadContext<'gc>>,
     pub shared: Arc<SharedGlobalState>,
     pub local: ArenaLocalState<'gc>,
     pub(crate) heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache<'gc>,
@@ -111,7 +113,7 @@ pub struct CallStack<'gc> {
 }
 
 // SAFETY: F5.TracesEveryGcRef — `trace` visits every field that can hold a `Gc` handle of
-// this arena: `execution` (frames and evaluation stack), `heap_managed_ptr_decode_cache`
+// this arena: `execution` and `parked_finalizer_caller` (frames and evaluation stack), `heap_managed_ptr_decode_cache`
 // (its cached handles stay live until `GCArena::finish_cycle` invalidates the cache),
 // `local`, and `shared.statics` (static field storage). The remaining fields hold no `Gc`
 // handles: `thread_id`, `arena_identity` and `arena` are plain identifiers and registry
@@ -123,6 +125,7 @@ unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
         // NOT here. Setting/clearing it here would interfere with gc-arena's
         // deferred work list processing (StackValue traces happen AFTER this returns).
         self.execution.trace(cc);
+        self.parked_finalizer_caller.trace(cc);
         self.heap_managed_ptr_decode_cache.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
@@ -192,16 +195,8 @@ impl GCArena {
 impl<'gc> CallStack<'gc> {
     pub fn new(shared: Arc<SharedGlobalState>, local: ArenaLocalState<'gc>) -> Self {
         Self {
-            execution: ThreadContext {
-                evaluation_stack: EvaluationStack::new(),
-                frame_stack: FrameStack::new(),
-                exception_mode: ExceptionState::None,
-                current_intrinsic: None,
-                original_ip: 0,
-                original_stack_height: dotnet_utils::StackSlotIndex::new(0),
-                continuation: dotnet_vm_data::VmContinuation::None,
-                call_state: context::CallState::default(),
-            },
+            execution: ThreadContext::default(),
+            parked_finalizer_caller: None,
             shared,
             local,
             heap_managed_ptr_decode_cache: HeapManagedPtrDecodeCache::default(),
@@ -231,6 +226,7 @@ impl<'gc> CallStack<'gc> {
             gc,
             evaluation_stack: &mut self.execution.evaluation_stack,
             frame_stack: &mut self.execution.frame_stack,
+            parked_finalizer_caller: &self.parked_finalizer_caller,
             shared: &self.shared,
             local: &mut self.local,
             exception_mode: &mut self.execution.exception_mode,

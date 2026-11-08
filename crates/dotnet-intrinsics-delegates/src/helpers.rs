@@ -63,6 +63,21 @@ where
         .any(|(ancestor, _)| candidate_matches(&ancestor))
 }
 
+/// Classify a bodyless method using the VM's resolved-method cache.
+pub fn cached_delegate_dispatch_kind<
+    'gc,
+    T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>,
+>(
+    ctx: &T,
+    method: &MethodDescription,
+) -> DelegateDispatchKind {
+    ctx.delegate_dispatch_kind(method).unwrap_or_else(|| {
+        let kind = classify_delegate_dispatch(ctx, method);
+        ctx.cache_delegate_dispatch_kind(method.clone(), kind);
+        kind
+    })
+}
+
 /// Try to dispatch a delegate runtime method. Returns Some(result) if handled.
 pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
     ctx: &mut T,
@@ -74,13 +89,7 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
         return None;
     }
 
-    let dispatch_kind = ctx.delegate_dispatch_kind(&method).unwrap_or_else(|| {
-        let kind = classify_delegate_dispatch(ctx, &method);
-        ctx.cache_delegate_dispatch_kind(method.clone(), kind);
-        kind
-    });
-
-    match dispatch_kind {
+    match cached_delegate_dispatch_kind(ctx, &method) {
         DelegateDispatchKind::Invoke => Some(invoke_delegate(ctx, method, lookup)),
         DelegateDispatchKind::Constructor => None, // Constructor is handled by support library stub
         DelegateDispatchKind::BeginOrEndInvoke => Some(ctx.throw_by_name_with_message(
@@ -290,7 +299,7 @@ pub fn set_delegate_multicast_targets<'gc, T: LoaderOps + MemoryOps<'gc>>(
     DelegateViewMut::new(ctx, obj).set_multicast_targets(targets);
 }
 
-pub(super) fn get_multicast_targets_ref<'gc, T: LoaderOps + ResolutionOps<'gc>>(
+pub fn get_multicast_targets_ref<'gc, T: LoaderOps + ResolutionOps<'gc>>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> Option<ObjectRef<'gc>> {

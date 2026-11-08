@@ -81,6 +81,22 @@ impl<'gc> GCHandle<'gc> {
         }
     }
 
+    /// Whether this arena has requested a collection due to allocation pressure.
+    pub fn needs_collection(&self) -> bool {
+        #[cfg(feature = "memory-validation")]
+        self.validate_thread();
+        #[cfg(feature = "multithreading")]
+        {
+            self.arena
+                .needs_collection
+                .load(crate::sync::Ordering::Acquire)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            false
+        }
+    }
+
     /// Record an allocation of the given size in the arena.
     ///
     /// Returns `true` when this call flipped `needs_collection` from `false` to `true`.

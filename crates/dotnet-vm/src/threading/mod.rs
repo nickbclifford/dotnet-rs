@@ -68,6 +68,7 @@ mod basic;
 pub(crate) mod local;
 #[cfg(not(feature = "multithreading"))]
 mod stub;
+pub(crate) mod workers;
 
 thread_local! {
     /// Flag indicating if this thread is currently performing GC

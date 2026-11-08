@@ -46,6 +46,7 @@ generic-constraint-validation = [
     "dotnet-intrinsics-reflection/generic-constraint-validation",
 ]
 multithreading = [
+    "dotnet-intrinsics-threading/multithreading",
     "dotnet-intrinsics-span/multithreading",
     "dotnet-intrinsics-unsafe/multithreading",
     "dotnet-runtime-resolver/multithreading",

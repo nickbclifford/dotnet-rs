@@ -16,6 +16,8 @@ use dotnetdll::{
 use gc_arena::Mutation;
 
 #[cfg(feature = "multithreading")]
+pub(crate) mod foreign_reference;
+#[cfg(feature = "multithreading")]
 pub(crate) mod worker;
 
 /// Constructs a handle for a test arena's rooted engine.

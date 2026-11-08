@@ -234,6 +234,7 @@ dependencies = [
  "dotnet-vm-data",
  "dotnet-vm-ops",
  "dotnetdll",
+ "tracing",
 ]
 
 [[package]]
@@ -496,6 +497,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm-data",
  "dotnetdll",
+ "gc-arena",
 ]
 
 [[package]]
