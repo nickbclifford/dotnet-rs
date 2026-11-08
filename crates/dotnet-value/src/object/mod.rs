@@ -889,16 +889,33 @@ impl<'gc> ObjectRef<'gc> {
         inner.sync_block_index()
     }
 
-    pub fn set_sync_block_index(&self, gc: GCHandle<'gc>, new_index: SyncBlockIndex) {
+    /// Returns the object's sync block index, assigning the one `assign` creates if it has none.
+    ///
+    /// An index is assigned at most once and never replaced. The check and the assignment happen
+    /// under the object's write lock, so threads racing to lock a fresh object agree on one index
+    /// and `assign` runs at most once per object.
+    pub fn get_or_assign_sync_block_index(
+        &self,
+        gc: GCHandle<'gc>,
+        assign: impl FnOnce() -> SyncBlockIndex,
+    ) -> SyncBlockIndex {
+        if let Some(index) = self.sync_block_index() {
+            return index;
+        }
         let ObjectRef(Some(o)) = &self else {
             panic!(
-                "NullReferenceException: called ObjectRef::set_sync_block_index on NULL object reference"
+                "NullReferenceException: called ObjectRef::get_or_assign_sync_block_index on NULL object reference"
             )
         };
         let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         inner.validate_arena_id();
-        inner.set_sync_block_index(new_index);
+        if let Some(index) = inner.sync_block_index() {
+            return index;
+        }
+        let index = assign();
+        inner.set_sync_block_index(index);
+        index
     }
 
     /// Safely accesses the object's data as a byte slice.

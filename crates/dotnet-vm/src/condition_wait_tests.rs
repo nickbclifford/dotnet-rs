@@ -1884,3 +1884,39 @@ fn monitor_retry_record_is_removed_on_managed_throw() {
         })
         .unwrap();
 }
+
+#[test]
+fn sync_block_is_assigned_once_per_object() {
+    use crate::sync::SyncManagerOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    let mut executor = executor();
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+                assert_eq!(object.sync_block_index(), None);
+
+                let first = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+                let index = object
+                    .sync_block_index()
+                    .expect("first lookup assigns an index");
+                let second = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+                assert!(Arc::ptr_eq(&first, &second));
+                assert_eq!(object.sync_block_index(), Some(index));
+
+                // An assigned index is never replaced: a later assignment attempt must not even
+                // create a block.
+                let assigned = object.get_or_assign_sync_block_index(gc, || {
+                    panic!("an object with a sync block must not be assigned another")
+                });
+                assert_eq!(assigned, index);
+                let (unrelated, _block) = ctx.shared.sync_blocks.create_sync_block();
+                assert_ne!(unrelated, index);
+                assert_eq!(object.sync_block_index(), Some(index));
+            })
+        })
+        .unwrap();
+}

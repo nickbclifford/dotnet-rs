@@ -448,27 +448,19 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         object: ObjectRef<'gc>,
         gc: GCHandle<'gc>,
     ) -> Self::SyncBlock {
-        let current_index = object.sync_block_index();
-        let (new_index, new_block) = self
-            .shared()
-            .sync_blocks
-            .get_or_create_sync_block(current_index);
-
-        match current_index {
-            Some(existing_index) if existing_index != new_index => {
-                if let Some(existing_block) =
-                    self.shared().sync_blocks.get_sync_block(existing_index)
-                {
-                    return existing_block;
-                }
-                object.set_sync_block_index(gc, new_index);
-                new_block
-            }
-            None => {
-                object.set_sync_block_index(gc, new_index);
-                new_block
-            }
-            _ => new_block,
+        let blocks = &self.shared().sync_blocks;
+        let mut created = None;
+        let index = object.get_or_assign_sync_block_index(gc, || {
+            let (index, block) = blocks.create_sync_block();
+            created = Some(block);
+            index
+        });
+        match created {
+            Some(block) => block,
+            // Sync blocks are never removed, so an index published on an object always resolves.
+            None => blocks
+                .get_sync_block(index)
+                .expect("published sync block index has no block"),
         }
     }
 

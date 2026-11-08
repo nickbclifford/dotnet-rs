@@ -302,17 +302,8 @@ impl SyncBlockManager {
 impl super::SyncManagerOps for SyncBlockManager {
     type Block = SyncBlock;
 
-    fn get_or_create_sync_block(
-        &self,
-        current_index: Option<NonZeroUsize>,
-    ) -> (NonZeroUsize, Arc<Self::Block>) {
+    fn create_sync_block(&self) -> (NonZeroUsize, Arc<Self::Block>) {
         let mut blocks = self.blocks.lock();
-
-        if let Some(index) = current_index
-            && let Some(block) = blocks.get(&index)
-        {
-            return (index, block.clone());
-        }
 
         let index = {
             let mut next = self.next_index.lock_after(blocks.held_level());
@@ -587,17 +578,20 @@ mod tests {
     #[test]
     fn sync_block_manager_allocates_non_zero_indices() {
         let manager = SyncBlockManager::new();
-        let (index, _block) = manager.get_or_create_sync_block(None);
+        let (index, _block) = manager.create_sync_block();
         assert_ne!(index.get(), 0);
     }
 
     #[test]
-    fn sync_block_manager_reuses_existing_sync_block() {
+    fn sync_block_manager_resolves_created_sync_block() {
         let manager = SyncBlockManager::new();
-        let (index, first) = manager.get_or_create_sync_block(None);
-        let (same_index, second) = manager.get_or_create_sync_block(Some(index));
+        let (index, first) = manager.create_sync_block();
+        let (other_index, _other) = manager.create_sync_block();
+        let second = manager
+            .get_sync_block(index)
+            .expect("created block resolves");
 
-        assert_eq!(same_index, index);
+        assert_ne!(other_index, index);
         assert!(Arc::ptr_eq(&first, &second));
     }
 }

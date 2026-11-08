@@ -71,14 +71,12 @@ pub trait SyncBlockOps {
 pub trait SyncManagerOps {
     type Block: SyncBlockOps;
 
-    /// Returns an existing sync block for `current_index` when available.
-    /// Otherwise creates a new sync block and returns its newly allocated index.
+    /// Creates a sync block under a fresh index. Indices are never reused and blocks are never
+    /// removed, so a published index always resolves through `get_sync_block`.
     ///
-    /// Callers are responsible for publishing the returned index to object state.
-    fn get_or_create_sync_block(
-        &self,
-        current_index: Option<NonZeroUsize>,
-    ) -> (NonZeroUsize, Arc<Self::Block>);
+    /// Callers publish the index with `ObjectRef::get_or_assign_sync_block_index`, which assigns
+    /// at most one index per object.
+    fn create_sync_block(&self) -> (NonZeroUsize, Arc<Self::Block>);
 
     fn get_sync_block(&self, index: NonZeroUsize) -> Option<Arc<Self::Block>>;
 

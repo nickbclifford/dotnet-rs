@@ -241,6 +241,7 @@ fn main() {
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
             || file_name == "monitor_contended_lock_42"
+            || file_name == "monitor_fresh_object_race_42"
             || file_name == "foreground_worker_42"
             || file_name == "retired_arena_cycles_42"
             || file_name == "circular_init_mt_42"
