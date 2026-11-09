@@ -20,7 +20,7 @@ intrinsic is a separate path, not this consumer.
 A synchronous target need not return a managed frame, so fallback return handling must cover
 both synchronous completion and managed returns. A later return or a caught exception must not
 consume an action belonging to another invocation. Initializers require
-particular care: the phase-2 pending-call retry keeps a `.cctor` return separate from the
+particular care: the slice 2 pending-call retry keeps a `.cctor` return separate from the
 requested target and preserves an action across that retry. Correct the fallback's action
 handling without regressing nested multicast or initializer ordering.
 
@@ -31,7 +31,7 @@ on an exceptional return. These are byrefs to a value or an object reference, no
 stored in the array: ECMA-335 §§II.14.4.2 and III.1.1.5.2 permit those targets but forbid a
 managed pointer to another managed pointer or a managed pointer stored in an array, field or
 static. The observed reflection marshalling does not require static or transient pointer
-transport. The phase-2 `RootedValue` descriptor supports heap, MT cross-arena and frame-home
+transport. The slice 2 `RootedValue` descriptor supports heap, MT cross-arena and frame-home
 origins; use the actual origin rather than guessing from the address.
 
 ## Design
@@ -44,18 +44,24 @@ turn a managed pointer into an `Unmanaged` pointer. Reuse the existing heap and 
 root descriptors and their tracing, reconstruction and retired-home checks. The reflection
 consumer needs the heap-backed box and array-slot cases; MT also needs foreign owners covered
 through the production codec. Materialize byrefs immediately before the managed frame is pushed,
-inside the same mutation. Neither the future nor the mailbox retains a branded `ManagedPtr`.
+inside the same mutation. Neither the future nor the effect-control state retains a branded `ManagedPtr`.
 Preserve the original box and array-slot identity; deferred copy-in/copy-out is not equivalent.
+
+The selector's box check is a snapshot. In multithreaded builds, another mutator can replace an
+`object[]` value box before preparation; `unmarshal_invoke_params` checks the box again and raises
+a managed `System.ArgumentException` for a mismatch. `NativePrepareError::Managed` carries that
+exception into the activation root set before the VM dispatches it, matching the CLR rather than
+turning the race into a host error.
 
 Call the resolved target through `fx.call`, retaining the existing virtual-dispatch and generic
 lookup behavior. Consume operands before the first call. The async body handles void, value and
 reference returns itself, with boxing performed while VM access is live; exceptions propagate
-unchanged, without `TargetInvocationException`. The current mailbox roots scalars, object
+unchanged, without `TargetInvocationException`. The current facade roots scalars, object
 references and supported byref descriptors, not arbitrary `StackValue::ValueType` aggregates:
 admission must establish that the declared result can be transported or provide a safe
 same-mutation boxing path before such a value crosses the boundary. Do not fail after the target
 has executed merely because its result cannot be rooted. Preserve synthetic-frame completion and
-the phase-2 pending-target/initializer protocol for managed and synchronous targets.
+the slice 2 pending-target/initializer protocol for managed and synchronous targets.
 
 ### Scoped reflection fallback
 
@@ -112,7 +118,7 @@ configurations and CLR; it did not exercise collection, generic layout or nullab
   collection and write through on normal and exceptional returns. Tests cover actual origin
   conversion, tracing, reconstruction and invalidation for every enabled descriptor category,
   including a production-decoded foreign owner in MT. Existing frame-home retirement tests stay
-  enabled. No branded pointer survives in a future or mailbox.
+  enabled. No branded pointer survives in a future or the effect-control state.
 - Value results, including a synchronous intrinsic target, are boxed; reference and void results
   have the correct reflection shape. A throw followed by a catch does not leave return handling
   behind. Exceptions remain transparent; CLR comparisons of throwing cases account for the
@@ -131,11 +137,26 @@ configurations and CLR; it did not exercise collection, generic layout or nullab
   `Other` mode alone is insufficient. Include an unsupported transport shape that remains
   supported on the fallback. Compare applicable results and initializer ordering with CLR,
   accounting for the deliberate difference in exception wrapping.
-- Keep only the continuation, trace/reset, tail-call guard and phase-2 forwarding needed by
+- Keep only the continuation, trace/reset, tail-call guard and slice 2 forwarding needed by
   that fallback; audit all producers and consumers for the boundary above and update directly
   affected runtime documentation. Keep the pending target and native-return protocols.
 - Build fixtures and inspect discovery and results for the affected filters in ST and MT; run
-  the full fixture set in both modes at phase end. Run the focused pointer and VM checks,
+  the full fixture set in both modes as final verification. Run the focused pointer and VM checks,
   affected pinned Miri singletons, doctests where the facade changes, doc drift, and the required
-  fast and phase-end full checks. Record test counts, Miri limitations and any performance
+  fast and full checks. Record test counts, Miri limitations and any performance
   evidence separately rather than treating one lane as proof of another.
+
+## Verification (2026-11-09)
+
+- Native: the reflection filter selections passed 39/39 ST and 42/42 MT; the vm-ops and
+  reflection-crate tests passed 19/19 ST and 20/20 MT. The MT-only CLR-diffed admission-race
+  regression was discovered and passed 1/1 (316 filtered); it is correctly absent in ST because
+  the race requires concurrent mutators. Fixture build passed.
+- CLR: the admission-race fixture matched the real CLR. Its racer uses a bounded volatile-work
+  loop because the attempted `Thread.SpinWait` QCall is unsupported by the VM.
+- Native matrix: `NEXTEST_TEST_THREADS=1 ./check.sh --fast` passed 811/811 ST, 1002/1002 MT
+  and 1017/1017 MT+validation tests (14/7/9 existing skips).
+- Miri: not run for the admission-race change; it changed no unsafe code. Doctests: vm-ops
+  passed 6/6 in each configuration. Performance: not measured; no throughput claim.
+- Documentation: doc drift passed 56/56; intra-doc-link rustdoc, formatting and diff checks
+  passed. Rustdoc reported the existing private-link warning in `managed_ptr_decode_cache.rs`.

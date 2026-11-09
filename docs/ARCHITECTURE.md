@@ -12,7 +12,7 @@ That section also documents the host-error (`VmError`) vs managed-exception (`Ma
 
 The `// SAFETY:` predicates for layout, evaluation-stack, raw-memory and P/Invoke code are stated
 in the [invariant registry](INVARIANT_REGISTRY.md): `F2.DescriptorMatchesEcmaLayout`,
-`F3.StackSlotMatchesView`, `F3.StableFrameHomes`, `F10.RawMemoryAccessValid`,
+`F3.StableFrameHomes`, `F10.RawMemoryAccessValid`,
 `F10.RawAllocationOwnership`, `F10.BorrowedStorageStable`, `F10.ArchIntrinsicPrecondition`,
 `F11.CliLoadKindMatchesStorage`, `F11.PInvokeAbiAgreement` and `F11.NativeLibraryLoadTrusted`.
 

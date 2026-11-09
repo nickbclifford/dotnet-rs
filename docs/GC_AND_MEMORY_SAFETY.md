@@ -302,8 +302,8 @@ contributing arena once. Collection publishes newly queued work before the stop-
 ends; finalizer-segment retirement and arena teardown update the same contribution. Ordinary
 `GC.WaitForPendingFinalizers` completes only when no live or retired arena has pending or active
 finalizer work. Its effects path waits outside an arena mutation and rechecks the global count while
-servicing GC stops. A call made from within a finalizer retains the synchronous self-wait path, so
-it waits on its own in-progress finalizer just as the CLR does. `F1.FinalizerPublication` records
+servicing GC stops. A call made from within a finalizer returns immediately through the synchronous
+selector and legacy fallback; it does not clear `processing_finalizer`. `F1.FinalizerPublication` records
 the publication invariant and its falsifiers.
 
 ```mermaid
@@ -426,8 +426,9 @@ The aligned static-reference atomic path has a known provenance limitation under
      acquisition occurs inside a fresh mutation. `Executor::run` schedules finalizers first and
      waits without a mutation or arena lease, in bounded intervals so GC stops are serviced.
      Ordinary finalizer waits check the global pending-or-active arena count using this protocol;
-     self-waits and non-inline calls keep the
-     legacy retry. Admitted monitor calls use the same condition driver; excluded shapes retain their legacy paths.
+     calls made while `processing_finalizer` is set return immediately through both the selector
+     and the legacy fallback, while other non-inline calls retain their legacy retry. Admitted
+     monitor calls use the same condition driver; excluded shapes retain their legacy paths.
 3. **Resume with return-value post-processing after a managed call returns**
    - Uses per-frame `FrameReturnAction` on `StackFrame<'gc>`.
    - Covers excluded reflection calls using the synchronous fallback; admitted calls transform

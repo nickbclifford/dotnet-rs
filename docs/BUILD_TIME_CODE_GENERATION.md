@@ -84,9 +84,36 @@ Intrinsic implementations are annotated in VM-local and extracted intrinsic crat
 - `src/intrinsics/**/*.rs` (`dotnet-vm` local handlers and registry/metadata helpers)
 - `../dotnet-intrinsics-*/src/**/*.rs` (handler crates)
 
+Synchronous handlers keep the existing convention: a generic VM context, method metadata,
+generic metadata and a `StepResult` result. For example:
+
 ```rust
-#[dotnet_intrinsic("System.Math::Abs(System.Int32)")]
-fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_vm_data::StepResult;
+use dotnet_vm_ops::ops::TypedStackOps;
+
+#[dotnet_intrinsic("static int System.Math::Abs(int)")]
+pub fn intrinsic_math_abs_int<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop_i32();
+    ctx.push_i32(value.abs());
+    StepResult::Continue
+}
+```
+
+An async-intrinsic crate must list direct dependencies on `dotnet-vm-ops`, `dotnet-vm-data`
+and `dotnet-types`: the generated entry refers to the effects API, its return type and the
+method/generic metadata by those crate paths. Extracted intrinsic crates conventionally keep
+the feature-bearing VM dependencies' defaults disabled so the VM selects the configuration:
+
+```toml
+[dependencies]
+dotnet-types = { workspace = true }
+dotnet-vm-data = { workspace = true, default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
 ```
 
 ### Build Process
@@ -104,13 +131,22 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
 3. Extracts type, member, arity, staticness, handler path, async status and selector.
    An async body has signature `async fn(VmEffects) -> NativeResult`, requires a
    `fallback = path` handler and may specify `select = path`. Stacked annotations must
-   agree on both paths, which must be public for the generated re-exports. The selector
+   agree on both paths, which must be public for the generated re-exports. The scanner
+   diagnoses non-public local function definitions; Rust checks visibility for imported,
+   conditional and cross-module paths. Async handlers inside inline modules are rejected:
+   place them in separate module files so the scanner can register them. The selector
    receives a shared host reference, a `NativeOperandView`, method and generic metadata and
    returns `NativeSelection`. The host reference is for read-only resolution before commitment.
-   The generated entry passes the dispatch mode, selector, fallback and boxed body to
-   `NativeIntrinsicHost::start_native`. Only ordinary non-tail calls admit suspension; other
-   modes use the fallback without selecting or consuming operands. Synchronous arms retain
-   their existing calling convention.
+   The proc macro emits a `*_native_entry` wrapper and hidden public aliases for the selector
+   (when present) and fallback. The build script emits a `NativeSelector_<variant>` provider
+   for each async registration; it implements `NativeSelectorProvider` and supplies those
+   paths to the wrapper. The generated method dispatcher accepts `NativeDispatchMode` and
+   sends async arms through the wrapper, while synchronous arms retain their existing
+   `(ctx, method, generics)` handler call. The wrapper passes the mode, provider selector and
+   fallback, and a boxed body to `NativeIntrinsicHost::start_native`. For inline calls, the
+   selector can choose an async invocation, a synchronous handler or rejection, all before
+   operands are consumed. Only ordinary non-tail calls admit suspension; other modes go
+   directly to the fallback without selecting or consuming operands.
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
 5. `generate_intrinsic_phf` creates:
     - `intrinsics_dispatch.rs`: Contains `MethodIntrinsicId` and `FieldIntrinsicId` enums and their respective `dispatch_*` functions.
@@ -207,20 +243,49 @@ pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(
 pub enum MethodIntrinsicId {
     Missing,
     System_Math_Abs_1a2b3c4d,
+    System_String_Substring_5e6f7788,
     // ...
 }
 
-pub fn dispatch_method_intrinsic<'gc, T: VesOps<'gc>>(
+// One provider is generated for each async registration.
+#[allow(non_camel_case_types)]
+struct NativeSelector_String_Substring;
+impl<'gc, T: crate::stack::ops::VesOps<'gc>>
+    dotnet_vm_ops::effects::NativeSelectorProvider<'gc, T> for NativeSelector_String_Substring
+{
+    fn selector() -> Option<dotnet_vm_ops::effects::NativeSelector<'gc, T>> {
+        Some(dotnet_intrinsics_string::search::substring_async_native_selector)
+    }
+    fn fallback() -> dotnet_vm_ops::effects::NativeSyncHandler<T> {
+        dotnet_intrinsics_string::search::substring_async_native_fallback
+    }
+}
+
+pub fn dispatch_method_intrinsic<'gc, T: crate::stack::ops::VesOps<'gc>>(
     id: MethodIntrinsicId,
     ctx: &mut T,
-    // ...
-) -> StepResult {
+    method: dotnet_types::members::MethodDescription,
+    generics: &dotnet_types::generics::GenericLookup,
+    _mode: dotnet_vm_ops::effects::NativeDispatchMode,
+) -> crate::StepResult {
     match id {
-        MethodIntrinsicId::System_Math_Abs_1a2b3c4d => dotnet_intrinsics_core::math::math_abs_i32(ctx, ...),
+        MethodIntrinsicId::System_Math_Abs_1a2b3c4d => {
+            dotnet_intrinsics_core::math::intrinsic_math_abs_int(ctx, method, generics)
+        }
+        MethodIntrinsicId::System_String_Substring_5e6f7788 => {
+            dotnet_intrinsics_string::search::substring_async_native_entry::<
+                T,
+                NativeSelector_String_Substring,
+            >(ctx, method, generics, _mode)
+        }
         // ...
     }
 }
 ```
+
+The example is schematic: generated selector-provider and intrinsic-ID identifiers include
+signature-derived suffixes. `mode` is forwarded only to async entries; ordinary synchronous
+handlers keep the three-argument call.
 
 **3. `intrinsics_phf.rs`**
 ```rust

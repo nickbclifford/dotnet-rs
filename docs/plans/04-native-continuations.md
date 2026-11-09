@@ -1,6 +1,6 @@
 # Native continuations: resumable Substring
 
-**Status:** Complete (measured large-call cost accepted)
+**Status:** Complete (initial continuation slice; runtime path superseded by plan 08)
 
 Retained copy progress, rooting, managed finalizer execution and dispatch refusal
 controls pass. Resource counters and process-heap profiling are implemented;
@@ -9,6 +9,11 @@ the maintainer accepted the measured large-call cost.
 **Outcome:** Both `System.String.Substring` overloads retain copy progress across real
 single-threaded GC safepoints, consume operands once and copy each requested UTF-16
 code unit once.
+
+This document records the first Substring continuation implementation and its evidence,
+not the current runtime wiring. The continuation was removed when plan 08 moved Substring
+to `substring_async` and the native activation stack. Plan 08 describes the current path,
+including finalizer segment isolation.
 
 ## Direction
 
@@ -66,9 +71,10 @@ with CLR comparisons. Share validation and bounded-copy helpers between paths.
   activation and produces an internal error.
 - End every source borrow before yielding. Observe the real single-threaded full-GC
   request without consuming it; acknowledgment belongs to executor collection.
-- Retain queued finalizers while native work is pending, but defer starting their
-  frames. Resume finalizer processing after completion and before the next guest
-  instruction. Preserve ambient handler/filter and suspended handler-unwind state.
+- The initial continuation implementation retained queued finalizers while native work
+  was pending and deferred their frames. Plan 08 superseded this scheduling with isolated
+  finalizer segments that can run while a native activation is parked. Preserve ambient
+  handler/filter and suspended handler-unwind state.
 - Clear the activation on terminal abort, budget exhaustion, VM failure and executor
   teardown, including early returns from `Executor::run`. Add no lifetime erasure,
   poll-local context slot or new unsafe code.
@@ -110,11 +116,14 @@ evidence is recorded; and eligible calls use the continuation by default. The la
 async/await effects redesign remains a separate outcome using this scheduler contract
 and its behavior tests.
 
-## Current validation and remaining work
+## Initial implementation validation
 
-The boxed `CallState` representation is enabled for eligible calls; it retains a
-traced source, output buffer, offset and caller identity separately from handler
-unwind state. No unsafe lifetime erasure or managed re-entry was added. Native tests
+The initial implementation used a boxed `CallState` continuation for eligible calls;
+it retained a traced source, output buffer, offset and caller identity separately from
+handler unwind state. Plan 08 later removed that continuation in favor of
+`substring_async` and native activations. The measurements and tests below describe the
+initial implementation at their recorded commits, not the current runtime path. No
+unsafe lifetime erasure or managed re-entry was added. Native tests
 cover real collection between chunks, exact progress, stable buffer storage, one
 completion, weak-source survival/reclamation, abort/budget cleanup, call-site mismatch,
 queue deferral and teardown. p44 (shard 44, batch 3) passed pinned Tree Borrows Miri
@@ -136,20 +145,17 @@ completion conditions are satisfied.
 
 ## Completion controls
 
-`pending_finalizer_waits_until_copy_completes` now queues a real object, runs two
-actual collections while native work is parked, dispatches its virtual managed
-`Finalize` method and executes its body through return. The caller remains at its
-post-copy IP with exactly one string result. This is a deterministic scheduler
-control using a minimal corlib, rather than a CLR finalizer timing comparison.
+`pending_finalizer_runs_in_separate_segment_during_copy` queues a real object while native
+work is parked, runs its virtual managed `Finalize` method in an isolated segment and returns
+to the parked caller with the expected result. This deterministic scheduler control exercises
+the plan 08 segment-isolation behavior, rather than a CLR finalizer timing comparison.
 
-`dispatch_entry_controls_substring_eligibility` executes both overloads through
-ordinary, direct, tail and engine-API dispatch. Only direct admission parks;
-engine-API dispatch also refuses a deliberately stale admission flag. The runtime
-has no registered `calli` handler: `indirect_opcode_refuses_without_consuming_operands`
-executes normal and tail-prefixed `calli` through the production registry, verifies
-`NotImplemented`, and verifies intact operands, caller IP and absent activation.
-Supporting indirect calls remains outside this slice; generic dispatch is not
-claimed as proof of an indirect-call fallback.
+`substring_dispatch_admits_only_inline_calls` executes both overloads through inline, tail
+and engine-API dispatch; only the inline path is admitted. The runtime has no registered
+`calli` handler: `indirect_opcode_refuses_without_consuming_operands` executes normal and
+tail-prefixed `calli` through the production registry, verifies `NotImplemented`, and verifies
+intact operands, caller IP and absent activation. Supporting indirect calls remains outside this
+slice; generic dispatch is not claimed as proof of an indirect-call fallback.
 
 The existing `bench-instrumentation` feature now enables per-thread substring
 counters at buffer allocation and actual chunk append boundaries on both paths.
@@ -249,7 +255,7 @@ Exposed-provenance warnings still limit Miri detection. For p44 run
 | Registration scanner ignored `cfg` and deduplicated IDs | Select the chosen signatures explicitly before arguments are consumed; leave unrelated registrations alone. |
 | ST thread-manager stop predicate was a stub | Use the real heap collection request; test against real collections, not mock flags. |
 | Safepoint acknowledgment needed branded state | Restore roots, leave the suspending mutation, run outer checks, then acknowledge in the next mutation. |
-| Finalizers disturbed a parked caller | For a finite ST operation, keep queued finalizer work rooted and defer new finalizer frames until the call finishes. |
+| Finalizers disturbed a parked caller | The initial continuation deferred finalizer frames; plan 08 later added isolated segments so finalizers can run while native work is parked. |
 | Ordinary and indirect calls have different return contracts | Fall back to the legacy path before consuming operands for any call shape not yet implemented. |
 | Polling `Ready` depends on completion handling | Build them together. |
 | Prototype costs excluded real context/root work | Measure the real path, including retained allocations. |

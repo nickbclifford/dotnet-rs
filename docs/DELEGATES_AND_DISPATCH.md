@@ -39,6 +39,7 @@ The `StepResult` enum (defined in `crates/dotnet-vm-data`; canonical path: `dotn
 - `Continue`: Instruction executed successfully; advance IP to the next instruction.
 - `Jump(usize)`: Branch to the specified IP (used by `br`, `brtrue`, `brfalse`, etc.).
 - `FramePushed`: A new method call frame has been pushed to the stack. Do not advance the IP (the newly pushed frame's IP starts at 0).
+- `NativeSuspended(NativeId)`: A native activation is parked while its managed child call runs; the ID identifies the activation that resumes after the child returns.
 - `Return`: The current method has completed. Pop the frame and resume the caller.
 - `MethodThrew(ManagedException)`: Used internally when an exception propagates unhandled out of a frame.
 - `Exception`: An exception was thrown (either by a CIL instruction or explicitly). The dispatch loop must call `handle_exception`.
@@ -61,7 +62,7 @@ Delegate invocation and intrinsics such as `Delegate.Target` and `Delegate.Metho
 
 ### Special Dispatch Path: `try_delegate_dispatch`
 
-`try_delegate_dispatch` runs *inside* the resolved-method dispatcher (`dispatch_resolved_method`), not as a pre-call intercept. It only engages for body-less methods on delegate types:
+`try_delegate_dispatch` runs inside `VesContext::dispatch_resolved_method_with_mode`, after method resolution, not as a pre-call intercept. It only engages for body-less methods on delegate types:
 - It bails out immediately unless `method.body()` is `None` and `is_delegate_type` reports the parent inherits from `System.Delegate`.
 - For `Invoke` it dispatches the delegate (single or multicast); `.ctor` returns `None` and is handled by the support-library stub; `BeginInvoke`/`EndInvoke` throw `System.NotSupportedException`.
 - Returns `Some(StepResult)` if handled, `None` to fall through to normal dispatch.

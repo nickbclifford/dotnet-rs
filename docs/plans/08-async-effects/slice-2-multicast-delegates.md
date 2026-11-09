@@ -24,7 +24,7 @@ the multicast completion validator checks the declared transportable result shap
 
 ## Design
 
-Use the activation stack, monotonic `NativeId`, generation-addressed single-slot mailbox and
+Use the activation stack, monotonic `NativeId`, generation-addressed effect-control state and
 transparent `call` effect described in the [main plan](../08-async-effects.md). Assign each
 effect's reply generation on its first poll. Put the native
 return destination on the **managed child `StackFrame`**, next to `frame_continuation`; it
@@ -106,7 +106,7 @@ Transparent `call` suffices; `try_call` is not needed here.
   a multicast `ref` argument into a caller local is supported today and both targets can update
   it. Preserve supported argument and return shapes, including write-through, while applying the
   main plan's managed-pointer and out-of-scope rules. Never retain a branded pointer in the future
-  or mailbox, and do not use an unmanaged origin for a managed pointer. Exercise the actual
+  or effect-control state, and do not use an unmanaged origin for a managed pointer. Exercise the actual
   origins needed by the consumer rather than assuming all byrefs are heap pointers. Route
   out-of-scope shapes to the retained continuation before committing operands.
 - Finalizer isolation must protect an interrupted filter or handler as well as parked native

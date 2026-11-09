@@ -4,12 +4,13 @@
 **Outcome:** `String.Substring`, admitted multicast delegate invocation, reflection `Invoke`, static
 field initialization, `GC.WaitForPendingFinalizers` and `Monitor.Enter` run as async native
 bodies in both configurations for admitted shapes. Their existing fixtures pass. The bespoke
-mechanisms they replace are deleted, except the scoped multicast, reflection, static-initializer
-and wait fallbacks described below.
+mechanisms they replace are deleted, except the scoped multicast continuation, reflection return
+handling, legacy static-initializer triggers and timed monitor retry described below.
 
 Builds on the explicit Substring continuation ([plan 04](04-native-continuations.md)) and keeps
 its scheduling and rooting contract. Detailed notes for slices 2–5 are in
-[`08-async-effects/`](08-async-effects/). Fill each one in before starting its slice.
+[`08-async-effects/`](08-async-effects/); they describe the completed implementations and their
+verification.
 
 ## Problem
 
@@ -51,9 +52,8 @@ Out:
   has approved it. Run it under pinned Tree Borrows Miri. Record any Miri finding against the
   bridge and raise it with the maintainer; a finding does not by itself block a slice.
 - **MT waits on plan 06**, not on a foreign-source fallback.
-- **Finalizers.** Slice 1 keeps the current deferral: finalizers wait until a parked native
-  operation completes. Segment isolation arrives with the first slice where a parked
-  activation waits on managed work (slice 2).
+- **Finalizers.** Slice 2 added isolated managed segments, so finalizers can run while a native
+  activation is parked without resuming or overwriting its caller, filter or handler context.
 - **Reflection** uses transparent calls (slice 3).
 - **Multicast fallback (2026-11-06).** Preserve the existing continuation for invocation shapes
   that effects cannot safely transport, including static-field byrefs. Route supported shapes
@@ -74,18 +74,19 @@ Out:
   use a frame-associated retry deadline rather than the shared host-thread-local deadline.
   Admitted calls retain activation-owned deadlines. The slice 5 note specifies the record's
   lifetime, cleanup and verification; pointer admission and monitor ownership are unchanged.
-- **Static initialization** uses the capturing `try_call` for field instructions, so outer filters
-  see `TypeInitializationException` rather than the inner exception, matching CLR. The scoped
-  legacy triggers `newobj`, eligible method dispatch through `prepare_method_initialization`,
-  and `RuntimeHelpers.RunClassConstructor` retain retry and unwind-time wrapping. The
-  [static initialization note](08-async-effects/slice-4-static-initialization.md) specifies
-  their timing and operand contracts.
+- **Static initialization** uses the capturing `try_call` for field instructions. The
+  CLR-diffed `statics/cctor_filter_42.cs` shape observes a `TypeInitializationException` in its
+  filter; see the [slice 4 note](08-async-effects/slice-4-static-initialization.md) for scope.
+  The scoped legacy triggers—`newobj`, eligible method dispatch through
+  `prepare_method_initialization`, and `RuntimeHelpers.RunClassConstructor`—retain retry and
+  unwind-time wrapping. The [static initialization note](08-async-effects/slice-4-static-initialization.md)
+  specifies their timing and operand contracts.
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
-| activation | One native body's VM-owned state: header, root set, operands, outputs and future. One per entered intrinsic or instruction. Nested async helpers share their caller's activation. |
+| activation | One async body's VM-owned state: method and return identity, caller and stack ownership, roots, operands, outputs and future. One per entered intrinsic or instruction; nested async helpers share their caller's activation. |
 | capability (`VmEffects`, `fx`) | The body's handle for requesting effects. Static, `!Send`, created only by the driver. |
 | access (`VmAccess<'fx>`) | An exclusive borrow of `fx` granting synchronous VM operations. Holds no heap borrow, lock or lease. |
 | region | The branded context lent to the synchronous `vm.with(\|region\| …)` callback for one call. |
@@ -97,13 +98,11 @@ Out:
 
 ## Authoring contract
 
-`#[dotnet_intrinsic]` accepts `async fn(mut fx: VmEffects) -> NativeResult` and an optional
-`select = path` argument. If a body has several annotations, every one must name the same
-selector. In slice 1, each async registration also names a synchronous legacy handler with
-`fallback = path`; all annotations on one body name the same fallback. The fallback is independent
-of the selector, which remains optional. It uses the existing intrinsic handler convention and
-must preserve behavior for every call shape not admitted by the slice-1 driver.
-`NativeResult = Result<(), NativeFailure>`.
+`#[dotnet_intrinsic]` accepts `async fn(mut fx: VmEffects) -> NativeResult`, an optional
+`select = path`, and a required synchronous `fallback = path`. If a body has several annotations,
+all selectors, when present, and all fallbacks must agree. The fallback is independent of the
+optional selector and uses the existing intrinsic handler convention for non-inline dispatch and
+call shapes not admitted by the selector. `NativeResult = Result<(), NativeFailure>`.
 
 The selector runs synchronously before anything is consumed. It receives a shared host reference,
 the method, generic metadata and a read-only operand view, and returns one of:
@@ -117,29 +116,59 @@ the method, generic metadata and a read-only operand view, and returns one of:
 body starts with valid arguments. It throws only for failures that arise during its own work.
 
 ```rust,ignore
-#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = substring_sync)]
-#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = substring_sync)]
-async fn substring(mut fx: VmEffects) -> NativeResult {
-    // The selector validated the range and chose async only for multi-chunk results.
-    let SubstringRange { start, length } = fx.invocation().selected();
+/// Copy a selector-validated substring without retaining a heap borrow across a yield.
+#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = intrinsic_string_substring)]
+#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = intrinsic_string_substring)]
+pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
+    let invocation = fx.invocation();
     let source = {
         let mut vm = fx.vm().await?;
-        vm.discard_scalars(fx.invocation().parameter_count())?;
+        vm.discard_scalars(invocation.parameter_count)?;
         vm.pop_string()?
     };
-    let mut buffer = Vec::with_capacity(length);
-    while buffer.len() < length {
+    let mut buffer = substring_buffer(invocation.length);
+    while buffer.len() < invocation.length {
         {
             let mut vm = fx.vm().await?;
-            vm.string(&source).copy_chunk(start, length, &mut buffer)?;
+            vm.with(|region| {
+                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring source invalid".into(),
+                    )
+                    .into());
+                };
+                let inner = handle.borrow();
+                let HeapStorage::Str(chars) = &inner.storage else {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring source invalid".into(),
+                    )
+                    .into());
+                };
+                if invocation
+                    .start
+                    .checked_add(invocation.length)
+                    .is_none_or(|end| end > chars.len())
+                {
+                    return Err(dotnet_types::error::ExecutionError::InternalError(
+                        "native substring range invalid".into(),
+                    )
+                    .into());
+                }
+                copy_substring_chunk(
+                    chars,
+                    invocation.start,
+                    invocation.length,
+                    buffer.len(),
+                    &mut buffer,
+                );
+                Ok::<(), dotnet_types::error::VmError>(())
+            })??;
         }
-        if buffer.len() < length {
+        if buffer.len() < invocation.length {
             fx.yield_now().await?;
         }
     }
-    let mut vm = fx.vm().await?;
-    vm.push_new_string(buffer)?;
-    Ok(())
+    fx.vm().await?.push_new_string(buffer)
 }
 ```
 
@@ -188,20 +217,14 @@ implemented by the vm adapter. Generic callback methods live on the concrete fac
 trait object. Narrow existing helper bounds rather than implementing retry or dispatch traits
 on the region.
 
-Activation layout (slice 1 needs only one optional activation; slice 2 makes it a stack):
-
-```text
-NativeActivation<'gc>            #[derive(Collect)] #[collect(no_drop)]
-  header: NativeHeader           caller depth, call-site IP, operand base, completion action
-  roots: DynamicRootSet<'gc>
-  operands: Vec<StackValue<'gc>>
-  outputs: Vec<StackValue<'gc>>
-  #[collect(require_static)] future: Pin<Box<dyn Future<Output = NativeResult>>>
-  #[collect(require_static)] control: Rc<NativeControl>
-```
-
-The future and control are `'static` and cannot hold branded values. The activation's
-`DynamicRootSet` is what keeps root cells reachable.
+`CallState` in `ThreadContext` owns the active `Vec<NativeActivation>` and the suspended
+native segments. A `NativeActivation` stores its pending wait and call, `NativeFutureOwner`
+(control and future), ambient exception, dynamic roots, operands and outputs, optional
+instruction completion, native identity and method, caller depth/IP and stack height, output
+shape, synthetic-return state and reflection return actions. These are the shipped fields in
+`stack/context.rs`. The future and control are
+`'static` and cannot hold branded values. The activation's `DynamicRootSet` keeps root cells
+reachable.
 
 ### Entry and operand ownership
 
@@ -216,12 +239,15 @@ e.g. `start_native`, that the `VesContext` implements). The helper:
    receiver). The generated registration must provide the fallback even when there is no
    selector; `Async` does not have to carry it. The macro and scanner reject a missing fallback
    or inconsistent fallback annotations; code generation forwards it with the selector and mode.
-2. For `Async`, moves the whole receiver/argument window, in stack order, into the
-   activation's operands, using the normal pop accounting. The caller stays at the call
-   instruction, and the helper records the base after consumption.
-3. Installs the activation and polls it once within the same mutation.
+2. For `Async`, classifies the declared return before commitment. Unsupported return shapes are
+   rejected without entering the body or consuming operands. The multicast selector routes its
+   unsupported shapes to the existing fallback before reaching this check.
+3. Moves the whole receiver/argument window, in stack order, into the activation's operands,
+   using the normal pop accounting. The caller stays at the call instruction, and the helper
+   records the base after consumption.
+4. Installs the activation and polls it once within the same mutation.
 
-Failures before step 2 leave the operands untouched. After step 2 the activation is committed:
+Failures before operand transfer leave the operands untouched. After transfer the activation is committed:
 every outcome is completion, a managed throw or a host error. Legacy fallback and replay are
 not possible after commitment.
 
@@ -244,15 +270,18 @@ On a managed throw, the driver discards operands and outputs, moves the exceptio
 exception state while the activation's roots are still live, then starts SEH at the original
 call site. A host failure releases the activation and returns the existing `VmError`.
 
-All terminal paths use one cleanup path: stop scheduling, deregister waits, retire children,
-disable the bridge, drop the future and control, then release roots and storage. Every early
-exit from `Executor::run` goes through it (today's substring clear in `executor.rs` is where it
-hooks in). Rust `Drop` never runs managed code.
+All terminal paths use `CallState::cleanup_native`: stop scheduling, deregister waits, retire
+children, disable the bridge, drop the future and control, then release roots and storage.
+Executor and dispatch error/exit paths call this shared cleanup. Rust `Drop` never runs managed
+code.
 
 ### Poll bridge
 
 `NativeControl` holds a nullable erased adapter pointer, an access counter, an entered flag,
-a grant counter for the 32-grant budget and, from slice 2, a single-slot mailbox. It is
+a grant counter for the 32-grant budget and a `ControlState` protocol value. `NativeControl::transition`
+handles issuance, idle access, effect registration and extraction, generation-matched replies,
+poll validation and permanent revocation. Requests and replies are owned by mutually exclusive
+states; rejected events preserve the state. It is
 `!Send`/`!Sync`, and only the driver creates it.
 
 For one poll, the driver:
@@ -273,7 +302,7 @@ reborrowed types are identical, access is unique (entered flag), the pointer is 
 When the poll returns, the driver accepts:
 - `Pending` only with exactly one registered effect, no live `VmAccess`, a zero access counter
   and no outstanding storage scope;
-- `Ready` only with the same exclusion checks.
+- `Ready` only in the idle protocol state, with the same exclusion checks.
 
 Anything else, including an access leaked with `mem::forget`, is a terminal internal error that
 goes through cleanup. A poll panic unwinds through the reset guard. The activation, now
@@ -318,17 +347,16 @@ commitment, and checks declared byref returns before any side effect.
      invalid arguments go to the synchronous handler, unsupported call shapes go legacy.
    - Driver, bridge, `RootedValue`, a single optional activation, `vm()`, `yield_now()`,
      inline-call completion and cleanup, in ST and MT.
-   - Keep the finalizer deferral.
+   - Slice 2 adds finalizer segment isolation while native work is parked.
    - Delete the `NativeSubstringActivation` machinery.
-   - No mailbox, frame IDs or segment isolation.
-   - Registration and dispatch tests cover a missing selector, an async selection and a synchronous
-     selection in admitted and unsupported modes. Unsupported modes invoke the registered legacy
-     handler with untouched operands; nested intrinsic dispatch must not inherit inline admission.
-     Stop tests cover repeated polls with a stop still pending and a real executor collection before
-     access resumes.
+   - No reply state, frame IDs or segment isolation.
+   - `substring_selector_preserves_operands_and_selects_only_large_valid_ranges` and
+     `substring_dispatch_admits_only_inline_calls` cover selection, operand preservation and
+     unsupported dispatch modes. Stop tests cover repeated polls with a stop still pending and a
+     real executor collection before access resumes.
 2. **Multicast delegates through transparent `call`.** Adds:
    - the activation stack, `NativeId`s and a native return destination on frames;
-   - the single-slot mailbox and reply generations;
+   - the single-slot request/reply state and reply generations;
    - exception search that respects native boundaries;
    - finalizer segment isolation (parked activations may now wait on managed work);
    - native calls from inside filters and handlers, on plan 07's nested segments;
@@ -340,23 +368,19 @@ commitment, and checks declared byref returns before any side effect.
    MT wait-graph handoff.
 5. **`WaitForPendingFinalizers`, then `Monitor.Enter`,** through one condition-wait protocol.
 
-Each slice ends with its consumer on the new path for admitted shapes and its tests enabled;
-slices 2 and 3 retain the scoped fallbacks above. Add facade operations only when a consumer
+Each slice ends with its consumer on the new path for admitted shapes and its tests enabled.
+The four scoped legacy paths are the multicast continuation, reflection return handling, legacy
+static-initializer triggers and timed monitor retries. Add facade operations only when a consumer
 needs them.
-
-Step 1.3 may span runs while remaining one integrated deliverable. Preserve safe, buildable
-in-scope changes and record tested behavior and remaining work; do not expose an incomplete
-driver as a working production path. The next run continues the same unticked step. A run that
-ends before completion stays pending; use blocked only for an actual condition under "Ask the
-maintainer only if" or a failed safety or design assumption. Completion still requires the real
-`VesContext` tests, both configurations and the full cleanup and scheduling contract.
 
 ## Done when
 
 **Slice 1**
 - Every test in `native_substring_tests.rs` passes against the async path, in both
-  configurations. `dispatch_entry_controls_substring_eligibility` becomes a selector test.
-  `pending_finalizer_waits_until_copy_completes` keeps its assertion.
+  configurations. `substring_selector_preserves_operands_and_selects_only_large_valid_ranges`
+  and `substring_dispatch_admits_only_inline_calls` cover selection and dispatch.
+  `pending_finalizer_runs_in_separate_segment_during_copy` confirms finalizer work runs in an
+  isolated segment while the native copy remains parked.
 - MT: copy progress survives coordinated stops between chunks, with a foreign source string
   from the plan-06 helper rooted only through the activation.
 - Compile-fail tests: a branded value, region, access or view escaping into the future or
@@ -364,14 +388,13 @@ maintainer only if" or a failed safety or design assumption. Completion still re
   mismatched caller, a panic during a poll.
 - The bridge has run under pinned Tree Borrows Miri, with results recorded.
 - Deleted: `NativeSubstringActivation`, `offer_substring_continuation`, `substring_eligible`,
-  `unified_dispatch_direct` (if nothing else uses it), and the `is_substring` codegen.
+  `unified_dispatch_direct` and the `is_substring` codegen.
 - Paired ST and MT release runs for small and multi-chunk Substring and ordinary dispatch.
   Investigate repeatable regressions above 1% on unaffected controls.
 
-**Slices 2–5:** defined in each slice's note under `08-async-effects/` before the slice
-starts. At minimum: the consumer's fixtures pass, CLR comparisons cover any exception or filter
-ordering involved, and the listed bespoke mechanism is deleted except for the scoped multicast
-and reflection fallbacks.
+**Slices 2–5:** described in each completed note under `08-async-effects/`. The consumer's
+fixtures pass, CLR comparisons cover applicable exception or filter ordering, and the listed
+bespoke mechanisms are removed except for the four scoped legacy paths above.
 
 ## Slice 1 verification
 

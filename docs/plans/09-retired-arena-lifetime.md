@@ -51,8 +51,9 @@ Match CLR rather than encode new deviations in the shutdown protocol:
   `new Thread` is foreground by default. When Main returns, the VM waits for every running
   worker to complete before shutdown; with `IsBackground` unimplemented, every worker counts as
   foreground. Shutdown never aborts a running worker except on a user/timeout abort request.
-- **`GC.WaitForPendingFinalizers`** waits until no arena, live or retired, has a pending or
-  in-progress finalizer. A finalizer waiting on its waiter deadlocks, as in CLR.
+- **`GC.WaitForPendingFinalizers`** ordinarily waits until no arena, live or retired, has a pending
+  or in-progress finalizer. A call from a currently running finalizer returns immediately rather
+  than waiting on its own in-progress work, matching the CLR.
 - **Panicked workers** keep the existing drain-or-leak path rather than retiring.
 
 ### Worker lifecycle state machine
@@ -65,37 +66,33 @@ combining flags. Owner-side transitions use typestate where possible (`serve_ret
 `Completed` token). Introduce only the states each slice needs; do not build the full machine
 up front. Each legal transition gets a test; illegal ones are rejected or leak the arena.
 
-### Slices
+### Delivered work
 
-Tracked as steps 4.3 and 4.6–4.9 of the `supervised/async-effects` checklist:
+The completed implementation comprises these connected deliverables:
 
-1. VM-owned worker registry, Join without native join, foreground exit wait, explicit shutdown
-   wired into the CLI and harness (workers still exit as today). Done when: a CLR-diffed fixture
-   whose Main returns before an unjoined worker finishes prints the worker's output, and a test
-   shows Join returning while the native thread is still held.
-2. Retirement service loop; Loom for the service handshake; record the accepted resource cost in
-   the threading contract. Done when: `retired_arena_static_survives_join_and_collection` is
-   enabled and passes in MT.
-3. Retired-owner finalizers and global `WaitForPendingFinalizers`. Done when: a CLR-diffed
-   fixture observes, from Main, a finalizer that ran on a retired owner.
-4. Cross-arena graph fixture and shutdown-race tests across the transition table. Done when: the
-   cycle fixture matches CLR, the unrooted control is reclaimed, and each listed race test
-   completes under an external timeout.
-5. Contract documentation, resource-cost record, full checks. Done when: `./check.sh --fast`
-   passes in all three feature configs, the contract is recorded in the GC, threading and invariant
-   documents, and this plan is marked Complete.
+- A VM-owned worker registry, managed-completion `Join`, foreground-exit wait and explicit
+  shutdown in the CLI and harness; CLR comparison and a test cover the worker completing after
+  Main returns and Join completing while the native thread remains held.
+- A retirement service loop with Loom coverage, the accepted resource cost in the threading
+  contract and the enabled MT `retired_arena_static_survives_join_and_collection` regression.
+- Retired-owner finalization and global `WaitForPendingFinalizers`, with a CLR comparison that
+  observes a finalizer run on a retired owner.
+- Cross-arena graph and shutdown-race coverage, including the cycle fixture, unrooted control and
+  timeout-bounded race tests.
+- GC, threading and invariant documentation, resource-cost evidence and the completed feature
+  matrix checks.
 
 ## Delivery and checks
 
-Implement this as a working runtime change before using the retained failure cache in plan 08.
-Use production object encoding and decoding and actual managed worker termination in regressions:
+This completed prerequisite supports the static-initialization paths in plan 08. Regressions use
+production object encoding and decoding and actual managed worker termination:
 
 - A worker stores an object in a static, terminates and is joined; another thread reads the same
   object after repeated coordinated collections, matching CLR behavior.
 - References across multiple retired and live arenas survive fixed-point tracing, including
   cycles, while an unrooted control is reclaimed and finalization remains correct.
 - A failed initializer's original exception and identity survive owner termination and collection;
-  multiple waiters receive the cached failure once step 4.4 is implemented.
+  multiple waiters observe the published failure through the static-initialization path.
 - Join, collection, worker termination and shutdown races complete without deadlock, including
   failures and unwinding; fresh accesses after actual unregister remain rejected and in-flight
   leases drain before reclamation.
@@ -103,10 +100,9 @@ Use production object encoding and decoding and actual managed worker terminatio
   Miri controls for changed pointer and lifetime paths, Loom for changed synchronization, and
   `./check.sh --fast`. Record discovered tests and evidence limits.
 
-Update the GC, threading and invariant contracts and resume plan 08 step 4.4 only after the
-lifetime prerequisite is established. The worker-per-arena resource cost and shutdown semantics
-are accepted for this design; changing them requires a plan revision. Never silently discard the
-inner exception.
+The GC, threading and invariant contracts record the established lifetime prerequisite. The
+worker-per-arena resource cost and shutdown semantics are accepted for this design; changing them
+requires a plan revision. Never silently discard the inner exception.
 
 ## Baseline regression
 
@@ -126,6 +122,6 @@ executor; owner-side retirement coordinates collection exclusion and lease drain
 
 Plan 09 establishes the arena lifetime and global-finalizer prerequisite. Failed-initializer
 identity is verified separately by the [static initialization slice](08-async-effects/slice-4-static-initialization.md).
-Worker lifecycle, resource cost and final verification evidence are recorded in the GC and
-threading contracts and the closeout session entry in `AGENT_MEMORY.md`. The bounded Loom model
-does not cover every shutdown interleaving, as recorded in the lifecycle test evidence.
+Worker lifecycle and resource cost are recorded in the GC and threading contracts; verification
+and evidence limits are summarized in this plan and the lifecycle test documentation. The bounded
+Loom model does not cover every shutdown interleaving, as recorded in the lifecycle test evidence.

@@ -152,9 +152,12 @@ cargo +"$NIGHTLY" miri test -p dotnet-vm-data --lib --no-default-features frame_
 ```
 
 The `miri-cross-arena` matrix also runs the native-effects bridge, byref-descriptor, activation,
-condition-wait, static-initializer failure/retirement, monitor heap and frame-home write-through and nested-call root-transfer singletons in both configurations. Multithreading
-also runs foreign-source Substring, byref, child-return and monitor-wait controls, and a local
-contended monitor frame-home collection control. Bridge rows use `dotnet-vm-ops`; activation rows use `dotnet-vm`.
+condition-wait, reflection collection retry, static-initializer failure/retirement and legacy-frame
+disposal/pooling, monitor heap and frame-home write-through and nested-call root-transfer
+singletons in both configurations. Multithreading also runs finalizer-wait registration and
+retired-owner pending-queue controls, legacy initializer worker host-error waiter completion,
+foreign-source Substring, byref, child-return and monitor-wait controls, and a local contended
+monitor frame-home collection control. Bridge rows use `dotnet-vm-ops`; activation rows use `dotnet-vm`.
 
 Reproduce one cross-arena row with its selector from the `miri-cross-arena` `include` list:
 

@@ -11,23 +11,29 @@ Ordinary inline `GC.WaitForPendingFinalizers` calls use `wait_finalizers`, which
 global pending and in-progress finalizer count, including the current arena's queue and processing flag. In `Executor::run`,
 pending finalizers are scheduled before an outside-mutation wait; `process_pending_finalizers`
 parks the caller in a separate segment while a finalizer runs, and `retire_finalizer_segment`
-clears the flag. A wait called from that finalizer stays on the legacy retry path until its
-self-wait semantics are defined by a CLR fixture; it never clears the flag to manufacture
-readiness. Non-inline dispatch also keeps the legacy fallback. `intrinsic_gc_collect_2` yields
-after advancing the IP, independently of the finalizer wait.
+clears the flag. A call made while `processing_finalizer` is set returns immediately: the selector
+uses the synchronous handler for inline dispatch, and the legacy fallback makes the same check for
+non-inline calls. Neither path clears the flag. `intrinsic_gc_collect_2` yields after advancing
+the IP, independently of the finalizer wait.
 
 Admitted inline monitor calls use `monitor_enter` with an activation-owned deadline.
 The synchronous monitor handlers remain fallbacks for excluded byrefs and non-inline dispatch.
 Timed fallback calls keep a frame-associated retry deadline. `TryEnter_FastPath` and `Exit`
 remain synchronous. In MT, monitor release notifies waiters; ST counts recursion and enters
-immediately. Timeout results, recursion, ownership and existing exception behavior are preserved.
-The contended-lock fixture initializes its shared gate on the main arena.
+immediately. Timeout results, recursion and ownership are preserved. `select_monitor` admits only
+non-null objects, false `lockTaken` values and integer timeouts of at least -1; invalid arguments
+select the synchronous handler before operand commitment. The handlers repeat those checks before
+acquisition, then throw `ArgumentException`, `ArgumentOutOfRangeException` or
+`ArgumentNullException` as appropriate; a null-object failure leaves `lockTaken` unchanged. The
+core-library `ReliableEnterTimeout` and `TryEnter_FastPath_WithTimeout` paths share the timed
+handler. The contended-lock fixture initializes its shared gate on the main arena.
 
 The [main plan](../08-async-effects.md) excludes static, transient and unmanaged pointer
 transport and tail-prefixed async dispatch. Select unsupported byref shapes before committing
 operands and keep their existing legacy behavior; do not turn a managed pointer into an
-unmanaged origin. The self-finalizer exception above also stays legacy. Delete the retry paths
-for admitted calls, not the behavior required by these exclusions.
+unmanaged origin. A self-finalizer wait completes synchronously and does not widen the async
+admission set. Delete the retry paths for admitted calls, not the behavior required by these
+exclusions.
 
 ## Frame-home decision
 
@@ -51,14 +57,17 @@ transport silently.
 
 ## Condition-wait design
 
-Use one probe, register, recheck protocol for the two consumers. Registrations belong to the
-driver and are deregistered on every terminal path, not by a future destructor. Address replies
-by activation and effect generation; stale notifications and replies must not resume another
-wait. Notifications only mark a registration eligible: the owning executor rechecks the real
-condition inside a fresh mutation. Probe again after registration so an intervening notification
-cannot be lost. A wake for a monitor means only retry the probe; acquisition occurs synchronously
-on that probe, so there is no acquired-but-undelivered state. Recursion increments exactly once,
-and cancellation never performs an implicit `Monitor.Exit`. Once acquisition succeeds, the guest
+Use one probe, register, recheck protocol for the two consumers. Condition-wait registrations
+belong to the driver and are deregistered on every terminal path; a native future's destructor
+does not own them. The legacy initializer path has a separate `InitializerClaim` on its `.cctor`
+frame: dropping it only publishes failure and notifies waiters, and runs no managed code. Address
+condition-wait replies by activation and effect generation; stale notifications and replies must
+not resume another wait. Notifications only mark a registration eligible: the owning executor
+rechecks the real condition inside a fresh mutation. Probe again after registration so an
+intervening notification cannot be lost. A wake for a monitor means only retry the probe;
+acquisition occurs synchronously on that probe, so there is no acquired-but-undelivered state.
+Recursion increments exactly once, and cancellation never performs an implicit `Monitor.Exit`.
+Once acquisition succeeds, the guest
 owns the monitor even if later native work fails.
 
 Wait outside the mutation, with bounded wake intervals and MT GC-stop participation. Use an
@@ -92,7 +101,8 @@ not expand pointer transport or alter monitor ownership. Add real-dispatch deter
 for a static-byref timeout spanning a GC stop, non-inline timeout retry, independent nested
 finalizer timeout, and cleanup on terminal paths and frame reuse. Verify the excluded pointer's
 write-through and the existing exception and operand behavior. These tests supplement the
-existing phase-end requirements; this decision is not an implementation or verification claim.
+full fixture and runtime verification requirements; this decision is not an implementation or
+verification claim.
 
 ## Done when
 
@@ -113,18 +123,21 @@ existing phase-end requirements; this decision is not an implementation or verif
   activations do not share them. ST runs available managed/finalizer work before sleeping,
   does not spin or invent readiness, and preserves existing blocking/deadlock semantics.
 - Pending and running finalizers finish before an ordinary wait returns, including work scheduled
-  while a caller is parked. A wait from within a finalizer uses the legacy path and never clears
-  `processing_finalizer` to return. Verify cleanup and caller-segment restoration on normal and
-  exceptional terminal paths.
+  while a caller is parked. A wait from within a finalizer returns immediately through both the
+  selector and legacy fallback and never clears `processing_finalizer`. Verify cleanup and
+  caller-segment restoration on normal and exceptional terminal paths.
 - Monitor tests cover uncontended, contended, recursive, successful and expired timeout cases,
   stop while waiting, release/notification races and ownership after success or cancellation.
   `lockTaken` is written once with the correct result through a freshly resolved frame-home or
   heap byref, including collection, aliasing and retired-home rejection. Add a contended
   `Enter(object, bool&)`/C# `lock` fixture with a real CLR comparison; retain the existing
   monitor timeout and cross-arena fixtures. Verify selector/fallback behavior for excluded shapes.
+  A CLR-diffed argument-validation fixture covers pre-set `lockTaken`, invalid int and TimeSpan
+  timeouts, and null objects across the public Enter/TryEnter overloads.
 - Build fixtures and run the finalization and monitor selections in both configurations, then the
-  full fixture set once in each at phase end. Confirm discovery and expected skips. Run focused
-  deterministic executor tests in both configurations, affected pinned Miri controls for pointer
+  full fixture set once in each configuration as final verification. Confirm discovery and
+  expected skips. Run focused deterministic executor tests in both configurations, affected pinned
+  Miri controls for pointer
   or unsafe changes, `./check.sh --fast`, `./check.sh --full` and doc drift; update CI selectors
   and their manifest checker when adding enumerated tests. Record native, Miri, doctest and
   performance evidence separately, and grep for the removed symbols and retry paths.

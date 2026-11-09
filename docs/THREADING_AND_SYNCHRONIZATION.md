@@ -132,13 +132,18 @@ non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-wor
 the collection-exclusion and exact-lease-drain ordering.
 
 After Main returns, `Executor::wait_for_foreground_workers` keeps the entry arena registered,
-services GC stops and its own finalizers, and waits for running workers and global finalizer work
-before reporting exit. All supported workers are foreground because `IsBackground` is
+services GC stops and its own finalizers, and waits until no worker is running or finalizing and no
+finalizer is pending, observed under one registry lock (`WorkerRegistry::is_quiescent`), before
+reporting exit. All supported workers are foreground because `IsBackground` is
 unimplemented. `Thread::InternalFinalize` has no native handle to release because the registry
 owns those handles. The CLI and in-process harness explicitly call
-`SharedGlobalState::shutdown_workers` after dropping the entry executor; shutdown must not be
-deferred to shared-state destruction because worker executors hold that state. Shutdown signals
-retired owners and joins their native handles after they drain or deliberately leak their arenas.
+`SharedGlobalState::shutdown_workers` after dropping the entry executor, but keep the entry arena's
+storage (`Executor::extract_arena`) until it returns; shutdown must not be deferred to shared-state
+destruction because worker executors hold that state. Shutdown first waits until no worker is
+running or finalizing, then signals retired owners and joins native handles until none remain,
+including workers a finalizer started after the signal. A retired owner only unregisters and frees
+its arena once the registry is quiescent and no finalizer is pending (or an abort abandoned them),
+because a collection traces references into every arena and must not outlive any of them.
 
 Retaining a completed worker costs one OS thread and its arena until VM shutdown. Arena IDs are
 monotonic and the process supports at most 65,535 IDs, so this policy deliberately trades bounded
@@ -161,8 +166,16 @@ pending request:
 - **Long-running operations.** Chunked intrinsics and handlers (string, span, `Unsafe`/`Buffer`
   block operations, `cpblk`/`initblk`, array operations, some reflection) call the scope-aware
   `RawMemoryOps::check_gc_safe_point` on `VesContext` between chunks and yield.
-- **Waits.** Monitor waits (`enter_safe`) and static-constructor waits (`wait_for_init`) check
-  for a pending stop while blocked; see below.
+- **Waits.** Admitted native-effect calls use driver-owned condition waits: `monitor_enter` for
+  supported `Monitor` calls, `wait_finalizers` for `GC.WaitForPendingFinalizers`, and the
+  initializer registration created by `ensure_initialized`. The executor sleeps outside a
+  mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
+  and pending finalizers are scheduled before an ordinary finalizer wait sleeps. Excluded monitor
+  calls retain the safe-point-aware synchronous handlers (`enter_safe` and
+  `enter_with_timeout_safe`); legacy static-initializer waiters use
+  `StaticStorageManager::wait_for_init` and periodically check for a pending stop. See the
+  [condition-wait design](plans/08-async-effects/slice-5-condition-waits.md) and
+  [static-initialization design](plans/08-async-effects/slice-4-static-initialization.md).
 
 There are two `check_gc_safe_point` methods. `CallStack::check_gc_safe_point` is a bare
 `is_gc_stop_requested()` load. `VesContext`'s `RawMemoryOps::check_gc_safe_point`
@@ -306,7 +319,7 @@ an unqualified acquisition merely because another guard happens to be in scope.
 | Thread registry under collection | `GCCoordinator::collection_lock` → `ThreadManager::threads` | Thread-registry reads while a `CollectionSession` holds the collection lock |
 | GC command routing | `GCCoordinator::collection_lock` → `GCCoordinator::arenas` → `ArenaHandle::current_command` | `CollectionSession::{send_command_to_all_and_wait,wait_on_other_arenas,enqueue_command_for_arena}` |
 | GC cross-arena table | `GCCoordinator::collection_lock` → `GCCoordinator::cross_arena_refs` | `CollectionSession::collect_all_arenas` |
-| Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`INIT_STATE_INITIALIZING` branch) |
+| Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`InitState::Initializing` branch) |
 | Monitor metadata allocation | `SyncBlockManager::blocks` → `SyncBlockManager::next_index` | `SyncBlockManager::get_or_create_sync_block` |
 | Per-monitor ownership | `SyncBlock::state` is a leaf lock | `SyncBlock::{enter,enter_safe,exit}` |
 
@@ -315,7 +328,7 @@ an unqualified acquisition merely because another guard happens to be in scope.
 - For any path that needs both locks, acquire `GCCoordinator::collection_lock` before `ThreadManager::gc_coordination` (never the reverse).
 - `ThreadManager::threads` must never be held while trying to acquire `ThreadManager::gc_coordination`.
 - `GCCoordinator::arenas` or `ArenaHandle::current_command` must never be held while trying to acquire `GCCoordinator::collection_lock`.
-- `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena`, `get_all_arenas`, `command_finished`).
+- `ArenaHandle::current_command` must never be held while calling paths that take `GCCoordinator::arenas` (for example `get_arena` and `command_finished`).
 - `StaticStorageManager::wait_graph` must never be held while acquiring `StaticStorage::init_mutex` (keep `wait_graph` updates short and non-blocking).
 - A `StaticWaitRegistration` must retire its own wait-graph edge before a terminal return or a GC-stop retry; unrelated registrations on the same thread remain intact.
 - `SyncBlockManager::next_index` must never be acquired before `SyncBlockManager::blocks`.
