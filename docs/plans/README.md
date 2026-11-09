@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Not started; same-frame `try`/`lock` inside `finally` fails, worker exceptions are catchable through `Join` |
 | 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Establishes the retained-arena lifecycle contract |
 | 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Validates typed field and memory-operation premises |
 | 06 | [Cross-arena collection fixture through production decoding](06-cross-arena-collection-fixture.md) | Fixtures use production storage decoding |
@@ -33,9 +34,6 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Managed threading falls through to QCalls:** `Thread.Yield` and `Thread.SpinWait` reach the
   `QCall` native library and fail with `DllNotFoundException`. Stub these higher-level threading
   intrinsics (and likely `Thread.Sleep` neighbors) rather than individual QCalls.
-- **Unhandled worker exceptions:** CLR terminates the process when a managed thread's exception
-  goes unhandled; `Thread.Join` instead rethrows it as `InvalidOperationException`
-  (`threading_join_managed_thread` in `crates/dotnet-vm/src/stack/context_ops.rs`).
 - **Reflection compatibility and validation:** reflection calls remain transparent (guest
   exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
   rejected, both deliberate CLR deviations in the
@@ -65,10 +63,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   thread identity, so they can re-enter monitors it holds or observe an in-progress `.cctor`
   through recursion. The resurrection and weak-handle fixtures also disagree with the CLR and
   may be timing-dependent; resolving these behaviors requires separate GC/finalizer work.
-- **Control flow and filters:** a `try/finally` nested inside a `finally` fails, including a
-  `lock` in a `finally`. An exception escaping a filter must be intercepted and make the filter
-  return `exception_continue_search` (ECMA-335 §III.3.34); filter exceptions currently replace
-  the original exception.
 - **`Thread.IsBackground`:** unimplemented, so every managed thread is treated as foreground at
   exit (plan 09).
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
@@ -95,10 +89,21 @@ Evidence and IDs (p01…, R01…) are defined in the
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
 - **Retired-worker resource cost:** each completed worker retains one OS thread and one arena
   until VM shutdown; process-wide arena IDs are capped at 65,535. Earlier safe retirement remains unplanned.
-- **Thread-pool scheduling:** `ThreadPool.UnsafeQueueUserWorkItem` is an accepted no-op
-  (`dotnet-intrinsics-threading/src/thread.rs`), so guest code whose continuations need the
-  thread pool (`Task.Run`, timers, `Task.Delay`) cannot complete. Guest `async`/`await` that
-  completes synchronously or through `TaskCompletionSource` works (fixtures under
+- **Task and thread-pool integration:** guest `Task` scheduling is outside plan 08. The BCL's
+  `Task`, `AsyncTaskMethodBuilder` and `TaskCompletionSource` already run as managed code; what
+  is missing is the host layer under them: a work queue (`ThreadPool.UnsafeQueueUserWorkItem`
+  is a no-op, so `Task.Run` and `ConfigureAwait` continuations never run), timers
+  (`Task.Delay`, `CancelAfter` need a host deadline source in the scheduler, which also gives
+  deadlock detection when every thread is parked and no deadline remains), and blocking waits
+  (`Task.Wait`/`.Result` go through `ManualResetEventSlim`, which needs `Monitor.Wait`/`Pulse`
+  and `Thread.Yield`/`SpinWait`). Shim the managed abstraction (`ThreadPool` work queue, timer
+  queue) rather than individual QCalls. Prefer a small fixed set of background managed worker
+  threads that wait on the queue through the slice-5 condition-wait protocol; this reuses the
+  multithreaded arena machinery and avoids the retired-worker cost above. Green tasks on the
+  effect scheduler would be deterministic but need a scheduler mechanism plan 08 does not have.
+  Prerequisites: `Thread.IsBackground`, the `Monitor.Wait`/`Pulse` and threading stubs above,
+  and plan 11 (a thrown pool work item must be fatal, not swallowed). Guest `async`/`await` that
+  completes synchronously or through `TaskCompletionSource` already works (fixtures under
   `crates/dotnet-cli/tests/fixtures/async/`).
 - **Other missing or incorrect runtime behavior:** `[MethodImpl(Synchronized)]` is ignored
   (including its effect on concurrent `Console.WriteLine`); `Monitor.Wait`, `Pulse`,
