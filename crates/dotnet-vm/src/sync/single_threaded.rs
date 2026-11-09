@@ -11,6 +11,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MONITOR_TEST_CONTENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Debug)]
 pub struct SyncBlock {
     recursion_count: AtomicUsize,
@@ -34,6 +39,10 @@ impl SyncBlock {
 
 impl super::SyncBlockOps for SyncBlock {
     fn try_enter(&self, _thread_id: ArenaId) -> bool {
+        #[cfg(test)]
+        if MONITOR_TEST_CONTENDED.with(std::cell::Cell::get) {
+            return false;
+        }
         self.recursion_count.fetch_add(1, Ordering::Relaxed);
         true
     }

@@ -181,8 +181,8 @@ mod tests {
             let gc_handle = GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                // SAFETY: F3.StackSlotMatchesView — The CallStack is the root of this test arena and retains
-                // its arena handle for the complete mutation closure.
+                // SAFETY: F1.GcHandleRooted — The rooted CallStack retains its arena handle
+                // for the complete mutation closure.
                 unsafe {
                     engine.stack.arena_inner_gc()
                 },

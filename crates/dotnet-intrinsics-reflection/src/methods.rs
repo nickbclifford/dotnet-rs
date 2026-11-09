@@ -1037,6 +1037,15 @@ fn make_concrete_param<'gc, T: ReflectionIntrinsicHost<'gc>>(
     Ok((concrete_param_type, td, is_value_type))
 }
 
+// A box admitted by the selector may be replaced before marshalling; that remains invalid guest
+// input, not a VM type mismatch that should escape as a host failure.
+fn changed_invoke_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(ctx: &mut T) -> StepResult {
+    ctx.throw_by_name_with_message(
+        "System.ArgumentException",
+        "Object array element does not match the parameter type.",
+    )
+}
+
 fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     arg: ObjectRef<'gc>,
@@ -1044,7 +1053,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
     byref_slot: Option<InvokeByRefSlot<'gc>>,
-    validate_byref_box: bool,
+    validate_argument_box: bool,
 ) -> Result<UnboxedInvokeArg<'gc>, StepResult> {
     match param_type {
         ParameterType::TypedReference => {
@@ -1084,8 +1093,8 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
             if is_value_type {
                 if arg.0.is_none() {
-                    if validate_byref_box {
-                        return Err(type_mismatch("boxed value", "null"));
+                    if validate_argument_box {
+                        return Err(changed_invoke_argument(ctx));
                     }
                     Ok(UnboxedInvokeArg {
                         stack_value: StackValue::null(),
@@ -1094,7 +1103,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 } else {
                     let val = match arg.as_heap_storage(|s| {
                         if let HeapStorage::Boxed(o) = s {
-                            if validate_byref_box && o.description != td {
+                            if validate_argument_box && o.description != td {
                                 return Err(format!("boxed {}", o.description.type_name()));
                             }
                             Ok(o.instance_storage
@@ -1104,6 +1113,9 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                         }
                     }) {
                         Ok(v) => v,
+                        Err(_actual) if validate_argument_box => {
+                            return Err(changed_invoke_argument(ctx));
+                        }
                         Err(actual) => {
                             return Err(type_mismatch("boxed value", actual));
                         }
@@ -1148,7 +1160,7 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 let data_ptr = match arg_obj.as_heap_storage(|s| {
                     if let HeapStorage::Boxed(o) = s {
                         // Another thread can replace an array element after admission.
-                        if validate_byref_box && o.description != td {
+                        if validate_argument_box && o.description != td {
                             return Err(format!("boxed {}", o.description.type_name()));
                         }
                         Ok(o.instance_storage
@@ -1158,6 +1170,9 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     }
                 }) {
                     Ok(v) => v,
+                    Err(_actual) if validate_argument_box => {
+                        return Err(changed_invoke_argument(ctx));
+                    }
                     Err(actual) => {
                         return Err(type_mismatch("boxed value", actual));
                     }
@@ -1216,7 +1231,7 @@ pub fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
     method: &MethodDescription,
     lookup: &GenericLookup,
     parameters_obj: ObjectRef<'gc>,
-    validate_byref_boxes: bool,
+    validate_argument_boxes: bool,
 ) -> Result<Vec<StackValue<'gc>>, StepResult> {
     let mut args = Vec::new();
 
@@ -1250,7 +1265,7 @@ pub fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 param_type,
                 lookup,
                 Some(byref_slot),
-                validate_byref_boxes,
+                validate_argument_boxes,
             )?;
 
             if let Some(owner) = arg.replacement_box {

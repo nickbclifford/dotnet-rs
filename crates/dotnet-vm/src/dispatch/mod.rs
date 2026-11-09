@@ -553,7 +553,8 @@ impl<'gc> ExecutionEngine<'gc> {
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
             let saved_ip = *ctx.original_ip;
             let saved_height = *ctx.original_stack_height;
-            *ctx.original_ip = ctx.state().ip;
+            let ip_before = ctx.state().ip;
+            *ctx.original_ip = ip_before;
             *ctx.original_stack_height = ctx.top_of_stack();
 
             ctx.push(dotnet_value::StackValue::ObjectRef(target_delegate));
@@ -574,7 +575,10 @@ impl<'gc> ExecutionEngine<'gc> {
             let initializer = (matches!(result, StepResult::FramePushed)
                 && ctx.frame_stack.len() == depth + 1
                 && ctx.frame_stack.current_frame().state.info_handle.is_cctor)
-                || (matches!(result, StepResult::Yield) && ctx.frame_stack.len() == depth);
+                // A yield that advanced the IP is a completed `GC.Collect`, not an initializer retry.
+                || (matches!(result, StepResult::Yield)
+                    && ctx.frame_stack.len() == depth
+                    && ctx.state().ip == ip_before);
             let reflection_pending = ctx.frame_stack.frames[depth - 1]
                 .reflection_pending
                 .is_some();

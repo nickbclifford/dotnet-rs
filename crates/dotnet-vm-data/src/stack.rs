@@ -84,6 +84,16 @@ pub struct MonitorRetry {
     pub deadline: std::time::Instant,
 }
 
+/// A synchronization-only obligation owned by a legacy initializer frame.
+///
+/// # Safety
+/// Implementations must contain no GC references: frames do not trace this interface.
+/// Dropping an implementation must never execute managed code.
+pub unsafe trait InitializerClaim: std::fmt::Debug {
+    fn succeed(&mut self);
+    fn fail(&mut self);
+}
+
 pub struct StackFrame<'gc> {
     pub stack_height: StackSlotIndex,
     pub base: BasePointer,
@@ -99,6 +109,8 @@ pub struct StackFrame<'gc> {
     pub reflection_pending: Option<Box<ReflectionPending<'gc>>>,
     pub monitor_retry: Option<Box<MonitorRetry>>,
     pub native_return: Option<NativeReturnDestination>,
+    // INVARIANT: F6.InitializerClaimLifetime — frame disposal and pooling drop the synchronization-only obligation.
+    pub initializer_claim: Option<Box<dyn InitializerClaim>>,
     /// Homes of the locals and arguments this frame's method addresses with `ldloca` and
     /// `ldarga`.
     pub homes: FrameHomes,
@@ -126,6 +138,7 @@ impl<'gc> StackFrame<'gc> {
             reflection_pending: None,
             monitor_retry: None,
             native_return: None,
+            initializer_claim: None,
             homes: FrameHomes::default(),
             constructor_result: None,
         }
@@ -151,6 +164,7 @@ impl<'gc> StackFrame<'gc> {
         self.reflection_pending = None;
         self.monitor_retry = None;
         self.native_return = None;
+        self.initializer_claim = None;
         self.constructor_result = None;
         self.homes.release();
     }
@@ -168,6 +182,7 @@ impl<'gc> StackFrame<'gc> {
         self.reflection_pending = None;
         self.monitor_retry = None;
         self.native_return = None;
+        self.initializer_claim = None;
         self.constructor_result = None;
     }
 }
@@ -176,7 +191,8 @@ impl<'gc> StackFrame<'gc> {
 // `exception_stack` entries, optional `multicast_state`, and the references serialized in its
 // local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
 // no GC references. `reflection_pending` traces its arguments. The native return destination
-// contains only an ID and generation. Monitor retry state contains only static metadata and time.
+// contains only an ID and generation. Initializer claims contain synchronization state only;
+// monitor retry state contains only static metadata and time.
 // Constructor completion also carries only static metadata; its
 // receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {

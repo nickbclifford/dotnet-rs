@@ -521,15 +521,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
         self.trace_method_exit_for_frame(&frame);
 
-        if frame.state.info_handle.is_cctor
-            && !frame
-                .native_return
-                .is_some_and(|destination| self.is_capturing_native_return(destination))
-        {
-            let (type_desc, cctor_generics) = Self::cctor_type_desc_and_lookup(&frame);
-            self.shared
-                .statics
-                .mark_initialized(type_desc, &cctor_generics);
+        if let Some(mut claim) = frame.initializer_claim.take() {
+            claim.succeed();
         }
 
         if frame.is_finalizer {
@@ -667,7 +660,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     pub(crate) fn unwind_frame(&mut self) {
-        let frame = self
+        let mut frame = self
             .frame_stack
             .pop()
             .expect("unwind_frame called with empty stack");
@@ -723,6 +716,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                     .statics
                     .mark_failed(type_desc.clone(), &cctor_generics);
             }
+        }
+
+        if let Some(mut claim) = frame.initializer_claim.take() {
+            claim.fail();
         }
 
         if frame.is_finalizer {

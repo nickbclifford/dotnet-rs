@@ -36,6 +36,18 @@ thread_local! {
     pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
 }
 
+#[cfg(all(test, feature = "multithreading"))]
+type WorkerStartTestHook = Box<dyn FnOnce(&mut Executor) -> ExecutorResult>;
+#[cfg(all(test, feature = "multithreading"))]
+type RetiredQuiescenceTestHook = Box<dyn FnMut(bool)>;
+
+// Inject an early worker failure with live state before the common teardown.
+#[cfg(all(test, feature = "multithreading"))]
+thread_local! {
+    static WORKER_START_TEST_HOOK: std::cell::RefCell<Option<WorkerStartTestHook>> = std::cell::RefCell::new(None);
+    static RETIRED_QUIESCENCE_TEST_HOOK: std::cell::RefCell<Option<RetiredQuiescenceTestHook>> = std::cell::RefCell::new(None);
+}
+
 enum NativeWaitSleep {
     Monitor(Arc<crate::sync::SyncBlock>, u64, Option<std::time::Instant>),
     Finalizers,
@@ -411,7 +423,7 @@ impl Executor {
     ) {
         let mut executor = Self::new(shared);
         let result = match executor.install_thread_start(method, generic_inst) {
-            Ok(()) => executor.run(),
+            Ok(()) => executor.run_installed_thread_start(),
             Err(error) => ExecutorResult::Error(error),
         };
         // The finished segment cannot retain its stack or resume after publication.
@@ -427,6 +439,15 @@ impl Executor {
         });
         let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
         executor.serve_retired(worker.complete(result));
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn run_installed_thread_start(&mut self) -> ExecutorResult {
+        #[cfg(test)]
+        if let Some(hook) = WORKER_START_TEST_HOOK.with(|slot| slot.borrow_mut().take()) {
+            return hook(self);
+        }
+        self.run()
     }
 
     #[cfg(feature = "multithreading")]
@@ -463,6 +484,23 @@ impl Executor {
                     if pending && !shared.is_abort_requested() {
                         return false;
                     }
+                    // INVARIANT: F1.RetiredCollectionExclusion — freeing this arena is only
+                    // safe once no managed code anywhere can still collect, because a trace
+                    // reads owner identity through references into every arena. Another owner's
+                    // finalizer, a still-running worker or a pending queue keeps this one
+                    // serving. Abort abandons pending finalizers, as in the entry-arena wait.
+                    let quiescent = shared.workers.is_quiescent(|| {
+                        shared.is_abort_requested() || !shared.has_pending_finalizers()
+                    });
+                    #[cfg(test)]
+                    RETIRED_QUIESCENCE_TEST_HOOK.with(|hook| {
+                        if let Some(callback) = hook.borrow_mut().as_mut() {
+                            callback(quiescent);
+                        }
+                    });
+                    if !quiescent {
+                        return false;
+                    }
                     retired.begin_shutdown();
                     self.unregister();
                     true
@@ -470,7 +508,9 @@ impl Executor {
                 if done == Some(true) {
                     break;
                 }
-                std::thread::yield_now();
+                // The shutdown signal makes `wait_retired` return immediately, so back off
+                // rather than spin while another owner finishes its finalizers.
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
         // Lease holders can need coordinator locks before releasing their leases.
@@ -552,11 +592,12 @@ impl Executor {
     pub fn wait_for_foreground_workers(&mut self) {
         loop {
             // Observe cancellation before the registry lock: a worker either published
-            // Finalizing under that lock or sees the cancellation before entering it.
+            // Finalizing under that lock or observes the cancellation while holding it.
             let aborted = self.shared.is_abort_requested();
-            if !self.shared.workers.has_running()
-                && !self.shared.workers.has_finalizing()
-                && (aborted || !self.shared.has_pending_finalizers())
+            if self
+                .shared
+                .workers
+                .is_quiescent(|| aborted || !self.shared.has_pending_finalizers())
             {
                 break;
             }
@@ -752,8 +793,8 @@ impl Executor {
                 }
             }
 
-            // Finalizer work is scheduled first; the returned block contains no arena
-            // references, so the actual wait cannot keep a mutation or lease live.
+            // Finalizer work is scheduled first; the returned `NativeWaitSleep` holds no arena
+            // lease or branded value, so the actual wait cannot keep a mutation or lease live.
             if let Some(wait) = wait {
                 #[cfg(test)]
                 WAIT_TEST_HOOK.with(|hook| {

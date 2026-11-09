@@ -189,7 +189,8 @@ impl<'gc> VesContext<'_, 'gc> {
         let depth = self.frame_stack.len();
         let saved_ip = *self.original_ip;
         let saved_height = *self.original_stack_height;
-        *self.original_ip = self.frame_stack.state().ip;
+        let ip_before = self.frame_stack.state().ip;
+        *self.original_ip = ip_before;
         *self.original_stack_height = self.top_of_stack();
         let actions = std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
         let arm_base = self.call_state.reflection_arming.len();
@@ -213,7 +214,12 @@ impl<'gc> VesContext<'_, 'gc> {
             && self.frame_stack.len() == depth + 1
             && self.frame_stack.current_frame().state.info_handle.is_cctor
             && self.frame_stack.current_frame().state.info_handle.source != pending.method;
-        if (initializer || matches!(result, StepResult::Yield))
+        // A synchronous target that advanced this frame's IP and then yielded (`GC.Collect`)
+        // has completed; only a yield that left the IP alone asks for a retry.
+        let completed_yield = matches!(result, StepResult::Yield)
+            && self.frame_stack.len() == depth
+            && self.frame_stack.state().ip != ip_before;
+        if (initializer || (matches!(result, StepResult::Yield) && !completed_yield))
             && self.frame_stack.frames[depth - 1]
                 .reflection_pending
                 .is_none()
@@ -222,6 +228,14 @@ impl<'gc> VesContext<'_, 'gc> {
         }
         match result {
             StepResult::Continue | StepResult::Jump(_) => {
+                let actions =
+                    std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
+                match self.apply_frame_return_actions(actions) {
+                    Ok(()) => result,
+                    Err(error) => StepResult::Error(error),
+                }
+            }
+            StepResult::Yield if completed_yield => {
                 let actions =
                     std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
                 match self.apply_frame_return_actions(actions) {
@@ -366,7 +380,8 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
             .collect();
         let saved_ip = *self.original_ip;
         let saved_height = *self.original_stack_height;
-        *self.original_ip = self.frame_stack.state().ip;
+        let ip_before = self.frame_stack.state().ip;
+        *self.original_ip = ip_before;
         *self.original_stack_height = self.top_of_stack();
         self.call_state.reflection_arming.push(action);
         let result = self.dispatch_method(dispatch_method.clone(), lookup.clone());
@@ -381,8 +396,19 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
             && self.frame_stack.len() == depth + 1
             && self.frame_stack.current_frame().state.info_handle.is_cctor
             && self.frame_stack.current_frame().state.info_handle.source != dispatch_method;
+        // A synchronous target that advanced this frame's IP and then yielded (`GC.Collect`)
+        // has completed; only a yield that left the IP alone asks for a retry.
+        let completed_yield = matches!(result, StepResult::Yield)
+            && self.frame_stack.len() == depth
+            && self.frame_stack.state().ip != ip_before;
         let caller = &mut self.frame_stack.frames[depth - 1];
         match result {
+            StepResult::Yield if completed_yield => {
+                match self.apply_frame_return_actions(action.into_iter().collect()) {
+                    Ok(()) => result,
+                    Err(error) => StepResult::Error(error),
+                }
+            }
             StepResult::FramePushed | StepResult::NativeSuspended(_) | StepResult::Yield => {
                 if let Some(action) = action {
                     caller.frame_continuation.push(action);

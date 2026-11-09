@@ -815,8 +815,15 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
             .statics
             .init(description.clone(), &context, thread_id)
         {
-            Ok(crate::statics::StaticInitResult::Execute(cctor)) => {
-                self.dispatch_method(cctor, type_generics)
+            Ok(crate::statics::StaticInitResult::Execute(cctor, mut claim)) => {
+                let depth = self.frame_stack.len();
+                let result = self.dispatch_method(cctor, type_generics);
+                if self.frame_stack.len() > depth {
+                    self.frame_stack.current_frame_mut().initializer_claim = Some(Box::new(claim));
+                } else if matches!(result, StepResult::Continue) {
+                    dotnet_vm_data::stack::InitializerClaim::succeed(&mut claim);
+                }
+                result
             }
             Ok(crate::statics::StaticInitResult::Initialized)
             | Ok(crate::statics::StaticInitResult::Recursive) => StepResult::Continue,
@@ -839,10 +846,10 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                         .statics
                         .get_init_state(description.clone(), &type_generics);
                     match state {
-                        crate::statics::INIT_STATE_INITIALIZED => {
+                        crate::statics::InitState::Initialized => {
                             // Success - continue with the operation
                         }
-                        crate::statics::INIT_STATE_FAILED => {
+                        crate::statics::InitState::Failed => {
                             let type_name = description.type_name();
                             let message = format!(
                                 "The type initializer for '{}' threw an exception.",
@@ -855,10 +862,10 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                         }
                         _ => {
                             // VM invariant: once `wait_for_init` returns without yielding, the
-                            // state machine must have converged to INITIALIZED or FAILED.
+                            // state machine must have converged to Initialized or Failed.
                             // Any other state is an internal synchronization bug.
                             unreachable!(
-                                "Type initialization for '{}' ended in unexpected state {}",
+                                "Type initialization for '{}' ended in unexpected state {:?}",
                                 description.type_name(),
                                 state
                             );

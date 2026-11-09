@@ -23,6 +23,8 @@ mod single_threaded;
 #[cfg(feature = "multithreading")]
 mod threaded;
 
+#[cfg(all(test, not(feature = "multithreading")))]
+pub(crate) use single_threaded::MONITOR_TEST_CONTENDED;
 #[cfg(not(feature = "multithreading"))]
 pub use single_threaded::{SyncBlock, SyncBlockManager};
 

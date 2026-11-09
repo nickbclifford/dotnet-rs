@@ -98,6 +98,7 @@ impl WorkerRegistry {
                 state: Arc::clone(&published),
                 index,
             };
+            // A panic must update the registry to Leaked; otherwise shutdown sees Running forever.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(token)));
             if let Err(panic) = result {
                 let mut state = published.lock();
@@ -141,6 +142,7 @@ impl WorkerRegistry {
         self.spawn_with_completion_hook(run, || {})
     }
 
+    #[cfg(test)]
     pub(crate) fn has_running(&self) -> bool {
         self.state
             .lock()
@@ -149,36 +151,51 @@ impl WorkerRegistry {
             .any(|entry| matches!(entry.lifecycle, Lifecycle::Running))
     }
 
-    pub(crate) fn has_finalizing(&self) -> bool {
-        self.state
-            .lock()
-            .entries
-            .iter()
-            .any(|entry| matches!(entry.lifecycle, Lifecycle::Finalizing(_)))
+    /// Whether no worker can run managed code: none is `Running` or `Finalizing`, and
+    /// `finalizers_idle` holds. The predicate runs under the same registry lock that
+    /// `begin_finalizing` takes, so a retired owner cannot start finalizing between the
+    /// two observations, and a finalizer cannot start another worker after this returns.
+    pub(crate) fn is_quiescent(&self, finalizers_idle: impl FnOnce() -> bool) -> bool {
+        let state = self.state.lock();
+        Self::quiescent_locked(&state) && finalizers_idle()
     }
 
+    fn quiescent_locked(state: &RegistryState) -> bool {
+        !state.entries.iter().any(|entry| {
+            matches!(
+                entry.lifecycle,
+                Lifecycle::Running | Lifecycle::Finalizing(_)
+            )
+        })
+    }
+
+    /// Waits until no worker can run managed code, signals the retired owners, then joins every
+    /// native thread, including workers that a retired owner starts while finishing finalizers
+    /// after the signal.
     pub(crate) fn shutdown(&self, signal: impl FnOnce()) {
-        // The caller has stopped being a GC participant before waiting here. A worker may
-        // start another worker, so observe the complete set under the same lock.
-        let handles = loop {
-            let mut state = self.state.lock();
-            if state
-                .entries
-                .iter()
-                .all(|entry| !matches!(entry.lifecycle, Lifecycle::Running))
-            {
-                break state
-                    .entries
-                    .iter_mut()
-                    .filter_map(|entry| entry.handle.take())
-                    .collect::<Vec<_>>();
+        // The caller has stopped being a GC participant before waiting here. A `Finalizing`
+        // worker can start another worker, so it must finish before the handle set is final.
+        loop {
+            if Self::quiescent_locked(&self.state.lock()) {
+                break;
             }
-            drop(state);
             std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+        }
         signal();
-        for handle in handles {
-            let _ = handle.join();
+        loop {
+            let handles = self
+                .state
+                .lock()
+                .entries
+                .iter_mut()
+                .filter_map(|entry| entry.handle.take())
+                .collect::<Vec<_>>();
+            if handles.is_empty() {
+                break;
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -292,11 +309,8 @@ impl WorkerCompletion {
 
 #[cfg(not(feature = "multithreading"))]
 impl WorkerRegistry {
-    pub(crate) fn has_running(&self) -> bool {
-        false
-    }
-    pub(crate) fn has_finalizing(&self) -> bool {
-        false
+    pub(crate) fn is_quiescent(&self, finalizers_idle: impl FnOnce() -> bool) -> bool {
+        finalizers_idle()
     }
     pub(crate) fn shutdown(&self) {}
 }
@@ -356,6 +370,31 @@ mod tests {
                 )),
             }
         }
+    }
+
+    #[test]
+    fn abort_prevents_retired_worker_from_starting_finalizers() {
+        let state = Arc::new(Mutex::new(RegistryState {
+            entries: vec![Entry {
+                lifecycle: Lifecycle::Running,
+                handle: None,
+            }],
+        }));
+        let retired = RunningWorker {
+            state: state.clone(),
+            index: 0,
+        }
+        .complete(ExecutorResult::Exited(42))
+        .retire();
+        let loader =
+            dotnet_assemblies::AssemblyLoader::new_bare("worker-abort-test".into()).unwrap();
+        let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
+        shared.abort_signal().request_abort();
+        assert!(!retired.begin_finalizing(&shared));
+        assert!(matches!(
+            state.lock().entries[0].lifecycle,
+            Lifecycle::Retired(_)
+        ));
     }
 
     #[test]
@@ -422,6 +461,84 @@ mod tests {
             completion.take_outcome(),
             Some(Ok(ExecutorResult::Exited(42)))
         ));
+    }
+
+    #[test]
+    fn quiescence_requires_no_running_or_finalizing_worker_and_idle_finalizers() {
+        let registry = WorkerRegistry::default();
+        registry.state.lock().entries.push(Entry {
+            lifecycle: Lifecycle::Running,
+            handle: None,
+        });
+        assert!(!registry.is_quiescent(|| true));
+        let running = RunningWorker {
+            state: Arc::clone(&registry.state),
+            index: 0,
+        };
+        let completed = running.complete(ExecutorResult::Exited(0));
+        assert!(registry.is_quiescent(|| true));
+        assert!(!registry.is_quiescent(|| false));
+        let retired = completed.retire();
+        assert!(registry.is_quiescent(|| true));
+        let loader =
+            dotnet_assemblies::AssemblyLoader::new_bare("worker-quiescence-test".into()).unwrap();
+        let shared = crate::state::SharedGlobalState::new(Arc::new(loader));
+        assert!(retired.begin_finalizing(&shared));
+        // The finalizer predicate must not decide the answer while a worker can still run.
+        assert!(!registry.is_quiescent(|| true));
+        retired.finish_finalizing();
+        assert!(registry.is_quiescent(|| true));
+    }
+
+    #[test]
+    fn shutdown_joins_worker_started_after_signal() {
+        use std::sync::mpsc;
+
+        let registry = Arc::new(WorkerRegistry::default());
+        let (retired_tx, retired_rx) = mpsc::channel();
+        let (start_tx, start_rx) = mpsc::channel();
+        let (late_tx, late_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let parent_registry = registry.clone();
+        registry.spawn_owner(move |running| {
+            let _retired = running.complete(ExecutorResult::Exited(0)).retire();
+            let _ = retired_tx.send(());
+            if start_rx.recv_timeout(Duration::from_secs(10)).is_ok() {
+                parent_registry.spawn_owner(move |running| {
+                    let _ = late_tx.send(());
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                    let _ = running.complete(ExecutorResult::Exited(0)).retire();
+                });
+            }
+        });
+        let retired = retired_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        let (signal_tx, signal_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let shutdown_registry = registry.clone();
+        let shutdown = std::thread::spawn(move || {
+            shutdown_registry.shutdown(|| {
+                let _ = signal_tx.send(());
+            });
+            let _ = done_tx.send(());
+        });
+        let signaled = signal_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while registry.state.lock().entries[0].handle.is_some() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let first_taken = registry.state.lock().entries[0].handle.is_none();
+        let _ = start_tx.send(());
+        let late_started = late_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        let returned_early = done_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        let _ = release_tx.send(());
+        let completed = returned_early || done_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        shutdown.join().unwrap();
+        registry.shutdown(|| {});
+        assert!(retired && signaled && first_taken && late_started && completed);
+        assert!(
+            !returned_early,
+            "shutdown returned before joining the late worker"
+        );
     }
 
     #[test]

@@ -203,7 +203,7 @@ pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesI
     StepResult::Yield
 }
 
-/// Keep the self-wait on the existing retry path while a finalizer is executing.
+/// A finalizer cannot wait for the work that includes its own completion.
 pub fn gc_wait_finalizers_select<'gc, T: MemoryOps<'gc>>(
     ctx: &T,
     _operands: NativeOperandView<'_, 'gc>,
@@ -221,16 +221,17 @@ pub fn gc_wait_finalizers_select<'gc, T: MemoryOps<'gc>>(
     }
 }
 
-/// Preserve the legacy retry for self-waits and non-inline dispatch.
+/// Wait for pending finalizers on legacy dispatch, or return from the current finalizer.
 pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    if ctx.has_global_pending_finalizers()
-        || !ctx.heap().pending_finalization.borrow().is_empty()
-        || ctx.heap().processing_finalizer.get()
-    {
+    if ctx.heap().processing_finalizer.get() {
+        return StepResult::Continue;
+    }
+
+    if ctx.has_global_pending_finalizers() || !ctx.heap().pending_finalization.borrow().is_empty() {
         return StepResult::Yield;
     }
     StepResult::Continue

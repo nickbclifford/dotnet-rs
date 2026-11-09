@@ -28,6 +28,18 @@ pub struct Args {
     pub entrypoint: String,
 }
 
+/// Stops the entry executor's GC participation, shuts the workers down, and only then frees the
+/// entry arena. Statics and other arenas can still reference its objects until every retired
+/// owner has drained, so its storage must outlive them (as in the integration harness).
+fn finish_executor(executor: vm::Executor, shared: &Arc<state::SharedGlobalState>) {
+    #[cfg(feature = "multithreading")]
+    let arena = executor.extract_arena();
+    drop(executor);
+    shared.shutdown_workers();
+    #[cfg(feature = "multithreading")]
+    drop(arena);
+}
+
 /// Initialize the rayon global thread pool to a bounded size before any assembly parsing begins.
 ///
 /// dotnetdll fans each per-assembly metadata table across all CPU cores via rayon. On many-core
@@ -155,8 +167,7 @@ pub fn run_cli() -> ExitCode {
         .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
     else {
         eprintln!("Internal VM error: failed to locate entry method index");
-        drop(executor);
-        shared.shutdown_workers();
+        finish_executor(executor, &shared);
         return ExitCode::from(1);
     };
 
@@ -169,15 +180,13 @@ pub fn run_cli() -> ExitCode {
     if let Err(e) = executor.entrypoint(entrypoint) {
         eprintln!("Internal VM error: {}", e);
         executor.wait_for_foreground_workers();
-        drop(executor);
-        shared.shutdown_workers();
+        finish_executor(executor, &shared);
         return ExitCode::from(1);
     }
 
     let result = executor.run();
     executor.wait_for_foreground_workers();
-    drop(executor);
-    shared.shutdown_workers();
+    finish_executor(executor, &shared);
     match result {
         ExecutorResult::Exited(i) => exit_fast(i as i32),
         ExecutorResult::Threw(exc) => {

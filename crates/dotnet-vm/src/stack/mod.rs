@@ -264,8 +264,9 @@ impl<'gc> CallStack<'gc> {
     /// The caller must ensure that the arena handle lives as long as the GC arena.
     /// In our case, `CallStack` is stored in the arena root, so it's safe.
     pub unsafe fn arena_inner_gc(&self) -> &'gc dotnet_utils::gc::ArenaHandleInner {
-        // SAFETY: F3.StackSlotMatchesView — The stack owns this arena for `self`'s lifetime; this shared reborrow only
-        // narrows the interior mutable representation to its immutable arena view.
+        // SAFETY: F1.GcHandleRooted — The rooted CallStack retains its arena handle for
+        // the GC lifetime; this shared reborrow narrows the interior mutable representation
+        // to its immutable arena view.
         unsafe { &*(self.arena.as_inner() as *const _) }
     }
 

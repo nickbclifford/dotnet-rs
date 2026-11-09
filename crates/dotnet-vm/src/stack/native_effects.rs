@@ -17,8 +17,8 @@ use dotnet_vm_ops::MemoryOps;
 use dotnet_vm_ops::effects::{
     NativeBackend, NativeCall, NativeControl, NativeDispatchMode, NativeEffect, NativeFailure,
     NativeFuture, NativeInitClaim, NativeInitProbe, NativeIntrinsicHost, NativeInvocation,
-    NativeOperandView, NativeRegion, NativeSelection, NativeSelector, NativeSyncHandler,
-    NativeValue, VmEffects, poll_native, poll_native_continuation,
+    NativeOperandView, NativePrepareError, NativeRegion, NativeSelection, NativeSelector,
+    NativeSyncHandler, NativeValue, VmEffects, poll_native, poll_native_continuation,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use gc_arena::DynamicRootSet;
@@ -42,6 +42,8 @@ pub(crate) struct PendingCall {
 pub(crate) enum WaitTestPoint {
     Probed,
     Registered,
+    #[cfg(feature = "multithreading")]
+    FinalizersRegistered,
 }
 
 #[cfg(test)]
@@ -50,6 +52,10 @@ type WaitTestHook = Box<dyn FnMut(WaitTestPoint)>;
 #[cfg(test)]
 thread_local! {
     pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<WaitTestHook>> = std::cell::RefCell::new(None);
+    pub(crate) static MONITOR_FLAG_WRITES: std::cell::RefCell<Option<Vec<bool>>> =
+        const { std::cell::RefCell::new(None) };
+    pub(crate) static MULTICAST_FALLBACK_TEST: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -76,18 +82,16 @@ pub(crate) struct PendingMonitor {
     _object: dotnet_vm_ops::effects::RootedValue,
 }
 
-struct InitializerClaim {
+struct NativeInitializerClaim {
     manager: crate::sync::Arc<crate::statics::StaticStorageManager>,
     description: dotnet_types::TypeDescription,
     generics: GenericLookup,
-    armed: bool,
+    claim: crate::statics::InitializerClaim,
 }
 
-impl NativeInitClaim for InitializerClaim {
+impl NativeInitClaim for NativeInitializerClaim {
     fn succeed(&mut self) {
-        self.manager
-            .mark_initialized(self.description.clone(), &self.generics);
-        self.armed = false;
+        dotnet_vm_data::stack::InitializerClaim::succeed(&mut self.claim);
     }
 
     fn fail(&mut self, exception: ObjectRef<'_>) {
@@ -96,16 +100,7 @@ impl NativeInitClaim for InitializerClaim {
             &self.generics,
             exception,
         );
-        self.armed = false;
-    }
-}
-
-impl Drop for InitializerClaim {
-    fn drop(&mut self) {
-        if self.armed {
-            self.manager
-                .mark_failed(self.description.clone(), &self.generics);
-        }
+        dotnet_vm_data::stack::InitializerClaim::fail(&mut self.claim);
     }
 }
 
@@ -118,10 +113,7 @@ struct InitializerWait {
 #[cfg(feature = "multithreading")]
 impl dotnet_vm_ops::effects::NativeInitWait for InitializerWait {
     fn ready(&self) -> bool {
-        self.storage
-            .init_state
-            .load(dotnet_utils::sync::Ordering::Acquire)
-            != crate::statics::INIT_STATE_INITIALIZING
+        !self.storage.init_state().is_initializing()
     }
     fn sleeper(&self) -> Box<dyn dotnet_vm_ops::effects::NativeInitSleeper> {
         Box::new(InitializerSleeper(self.storage.clone()))
@@ -135,12 +127,7 @@ struct InitializerSleeper(crate::sync::Arc<crate::statics::StaticStorage>);
 impl dotnet_vm_ops::effects::NativeInitSleeper for InitializerSleeper {
     fn wait(&self, duration: std::time::Duration) {
         let mut lock = self.0.init_mutex.lock();
-        if self
-            .0
-            .init_state
-            .load(dotnet_utils::sync::Ordering::Acquire)
-            == crate::statics::INIT_STATE_INITIALIZING
-        {
+        if self.0.init_state().is_initializing() {
             let _ = self.0.init_cond.wait_for(lock.raw_mut(), duration);
         }
     }
@@ -182,12 +169,12 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             crate::statics::StaticInitResult::Failed => NativeInitProbe::Failed(
                 manager.failed_exception(description, &generics, self.context.gc),
             ),
-            crate::statics::StaticInitResult::Execute(method) => {
-                let claim = InitializerClaim {
+            crate::statics::StaticInitResult::Execute(method, claim) => {
+                let claim = NativeInitializerClaim {
                     manager,
                     description,
                     generics: generics.clone(),
-                    armed: true,
+                    claim,
                 };
                 NativeInitProbe::Execute(
                     NativeCall {
@@ -281,6 +268,12 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 &[u8::from(value)],
             )?
         };
+        #[cfg(test)]
+        MONITOR_FLAG_WRITES.with(|writes| {
+            if let Some(writes) = writes.borrow_mut().as_mut() {
+                writes.push(value);
+            }
+        });
         Ok(())
     }
     fn frame_home_block(
@@ -338,7 +331,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
     fn reflection_call(
         &mut self,
-    ) -> Result<dotnet_vm_ops::effects::NativePreparedCall<'gc>, VmError> {
+    ) -> Result<dotnet_vm_ops::effects::NativePreparedCall<'gc>, NativePrepareError<'gc>> {
         let (mut method, mut generics, receiver, parameters) = match self.operands.as_slice() {
             [
                 StackValue::ObjectRef(target),
@@ -472,11 +465,24 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             true,
         )
         .map_err(|step| match step {
-            StepResult::Error(error) => error,
-            _ => dotnet_types::error::ExecutionError::InternalError(
-                "unexpected reflection marshalling result".into(),
-            )
-            .into(),
+            StepResult::Error(error) => NativePrepareError::Host(error),
+            StepResult::Exception => match self.context.exception_mode() {
+                dotnet_vm_data::ExceptionState::Throwing(exception, _) => {
+                    NativePrepareError::Managed(*exception)
+                }
+                _ => NativePrepareError::Host(
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "reflection marshalling threw without an exception".into(),
+                    )
+                    .into(),
+                ),
+            },
+            _ => NativePrepareError::Host(
+                dotnet_types::error::ExecutionError::InternalError(
+                    "unexpected reflection marshalling result".into(),
+                )
+                .into(),
+            ),
         })?;
         if method.signature().instance {
             arguments.insert(
@@ -698,6 +704,17 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
 
 impl<'gc> VesContext<'_, 'gc> {
     pub(crate) fn start_static_field_effect(&mut self, action: StaticFieldAction) -> StepResult {
+        let state = self
+            .shared
+            .statics
+            .get_init_state(action.field.parent.clone(), &action.generics);
+        // The acquire read observes published bytes; only the initializing owner may
+        // access incomplete storage without going through the wait/cycle protocol.
+        if state == crate::statics::InitState::Initialized
+            || state == crate::statics::InitState::Initializing(self.thread_id.get().as_u64())
+        {
+            return crate::instructions::objects::fields::complete_static_field(self, action);
+        }
         let method = self.state().info_handle.source.clone();
         let generics = action.generics.clone();
         self.start_native_inner(
@@ -761,20 +778,27 @@ impl<'gc> VesContext<'_, 'gc> {
         };
         let output = if matches!(entry, NativeEntry::Instruction(_)) {
             NativeOutput::Void
-        } else if method.body().is_none() && method.method().name == "Invoke" {
-            multicast_output(self, &method, generics)
         } else {
-            match &signature.return_type.1 {
-                None => NativeOutput::Void,
-                Some(ParameterType::Value(MethodType::Base(base))) => match base.as_ref() {
-                    BaseType::Boolean => NativeOutput::Int32,
-                    BaseType::String => NativeOutput::String,
-                    BaseType::Object => NativeOutput::Object,
-                    _ => NativeOutput::Unsupported,
-                },
-                _ => NativeOutput::Unsupported,
+            let shape = multicast_output(self, &method, generics);
+            // Delegate transport accepts null; ordinary string intrinsics retain their stricter check.
+            if matches!(shape, NativeOutput::Object)
+                && matches!(
+                    &signature.return_type.1,
+                    Some(ParameterType::Value(MethodType::Base(base))) if matches!(base.as_ref(), BaseType::String)
+                )
+                && !dotnet_intrinsics_delegates::helpers::is_delegate_type(
+                    self,
+                    method.parent.clone(),
+                )
+            {
+                NativeOutput::String
+            } else {
+                shape
             }
         };
+        if matches!(output, NativeOutput::Unsupported) {
+            return StepResult::internal_error("unsupported native return shape");
+        }
         let control = NativeControl::new();
         let fx = match control.effects(invocation) {
             Ok(fx) => fx,
@@ -869,18 +893,6 @@ impl<'gc> VesContext<'_, 'gc> {
 }
 
 impl<'gc> VesContext<'_, 'gc> {
-    pub(crate) fn is_capturing_native_return(
-        &self,
-        destination: dotnet_vm_data::NativeReturnDestination,
-    ) -> bool {
-        self.call_state.native.last().is_some_and(|work| {
-            work.id == destination.id
-                && work.pending.as_ref().is_some_and(|pending| {
-                    pending.capture && pending.generation == destination.generation
-                })
-        })
-    }
-
     pub(crate) fn redirected_native_return(
         &self,
         destination: dotnet_vm_data::NativeReturnDestination,
@@ -963,6 +975,19 @@ impl<'gc> VesContext<'_, 'gc> {
                     && vector.object_ref_elements(self.gc.mutation()).next() != Some(receiver))
         });
         if !multicast {
+            return None;
+        }
+        // `GC.Collect`'s delegate signatures are normally admitted; exercise the
+        // fallback continuation with those same targets without changing dispatch.
+        #[cfg(test)]
+        if MULTICAST_FALLBACK_TEST.with(|slot| {
+            if let Some(count) = slot.get() {
+                slot.set(Some(count + 1));
+                true
+            } else {
+                false
+            }
+        }) {
             return None;
         }
         if matches!(
@@ -1155,6 +1180,8 @@ impl<'gc> VesContext<'_, 'gc> {
         };
         if !ready() {
             work.wait = Some(PendingWait::Finalizers(generation));
+            #[cfg(all(test, feature = "multithreading"))]
+            wait_test_hook(WaitTestPoint::FinalizersRegistered);
             // Recheck after registration without moving a branded queue outside the mutation.
             if !ready() {
                 self.call_state.native.push(work);
@@ -1205,7 +1232,9 @@ impl<'gc> VesContext<'_, 'gc> {
             || self.state().ip != work.caller_ip
             || (work.pending.is_none() && self.top_of_stack() != work.stack_height)
         {
-            work.cleanup();
+            // The caller mismatch can leave a child frame live. Keep its activation
+            // on the stack so terminal cleanup retires that frame before the future.
+            self.call_state.native.push(work);
             return StepResult::internal_error("native caller changed");
         }
         if let Some(wait) = work.wait.take() {
@@ -1569,11 +1598,24 @@ impl<'gc> VesContext<'_, 'gc> {
         self.call_state.native.push(work);
         let saved_ip = *self.original_ip;
         let saved_height = *self.original_stack_height;
-        *self.original_ip = self.state().ip;
+        let ip_before = self.state().ip;
+        *self.original_ip = ip_before;
         *self.original_stack_height = self.top_of_stack();
         let result = self.dispatch_method_inline(method.clone(), generics);
         *self.original_ip = saved_ip;
         *self.original_stack_height = saved_height;
+        // A synchronous target can finish, advance this frame's IP itself and then yield so the
+        // executor can collect (`GC.Collect`). That is completion, not a request to retry: replaying
+        // the call would repeat its effects and trip the caller-IP check on the next turn.
+        let completed_yield = matches!(result, StepResult::Yield)
+            && self.frame_stack.len() == depth
+            && self.state().ip != ip_before;
+        let result = if completed_yield {
+            self.frame_stack.state_mut().ip = ip_before;
+            StepResult::Continue
+        } else {
+            result
+        };
         match result {
             StepResult::FramePushed if self.frame_stack.len() == depth + 1 => {
                 let child = self.frame_stack.current_frame_mut();
@@ -1623,6 +1665,7 @@ impl<'gc> VesContext<'_, 'gc> {
                     dotnet_vm_data::NativeReturnDestination { id, generation },
                     value,
                 ) {
+                    Ok(()) if completed_yield => StepResult::Yield,
                     Ok(()) => StepResult::Continue,
                     Err(error) => StepResult::Error(error),
                 }

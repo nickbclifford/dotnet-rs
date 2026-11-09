@@ -100,8 +100,10 @@ impl RootedValue {
                 ),
             )),
             StackValue::ManagedPtr(pointer) => {
-                // INVARIANT: F6.NativePointerDescriptor — only traced heap owners or
-                // non-reused frame-home serials can survive across polls.
+                // INVARIANT: F6.NativePointerDescriptor — only traced heap owners,
+                // non-reused frame-home serials or (multithreading) cross-arena origins can
+                // survive across polls. A cross-arena origin is kept live by its recorded
+                // cross-arena reference and re-validated against the owner's lease on use.
                 let supported = match pointer.origin() {
                     PointerOrigin::Heap(ObjectRef(Some(_))) | PointerOrigin::FrameHome(_) => true,
                     #[cfg(feature = "multithreading")]
@@ -146,8 +148,10 @@ impl RootedValue {
                     offset,
                     pinned,
                 } => {
-                    // INVARIANT: F6.NativePointerDescriptor — the root keeps the heap
-                    // origin live; frame-home addresses are resolved anew and retired homes fail.
+                    // INVARIANT: F6.NativePointerDescriptor — the root keeps a heap origin
+                    // live (a cross-arena origin is live through its recorded cross-arena
+                    // reference and lease check); frame-home addresses are resolved anew and
+                    // retired homes fail.
                     let address = if let PointerOrigin::FrameHome(serial) = origin {
                         let (base, length) = backend
                             .frame_home_block(*serial)
@@ -259,8 +263,10 @@ pub trait NativeBackend<'gc> {
     ) -> Result<Option<NativeTarget<'gc>>, VmError> {
         Err(internal("native multicast unavailable"))
     }
-    fn reflection_call(&mut self) -> Result<NativePreparedCall<'gc>, VmError> {
-        Err(internal("native reflection unavailable"))
+    fn reflection_call(&mut self) -> Result<NativePreparedCall<'gc>, NativePrepareError<'gc>> {
+        Err(NativePrepareError::Host(internal(
+            "native reflection unavailable",
+        )))
     }
     fn reflection_result(
         &mut self,
@@ -310,6 +316,29 @@ pub struct NativePreparedCall<'gc> {
     pub constructor_result: Option<StackValue<'gc>>,
 }
 
+/// Failure while preparing a native call, before its operands are committed.
+pub enum NativePrepareError<'gc> {
+    /// A guest exception object in the current mutation; the native region roots it before return.
+    Managed(ObjectRef<'gc>),
+    Host(VmError),
+}
+
+impl<'gc> From<VmError> for NativePrepareError<'gc> {
+    fn from(error: VmError) -> Self {
+        Self::Host(error)
+    }
+}
+impl<'gc> From<ExecutionError> for NativePrepareError<'gc> {
+    fn from(error: ExecutionError) -> Self {
+        Self::Host(error.into())
+    }
+}
+impl<'gc> From<dotnet_types::error::TypeResolutionError> for NativePrepareError<'gc> {
+    fn from(error: dotnet_types::error::TypeResolutionError) -> Self {
+        Self::Host(error.into())
+    }
+}
+
 /// Branded synchronous access, never retained across a poll.
 pub struct NativeRegion<'gc, 'a> {
     mc: &'a Mutation<'gc>,
@@ -346,8 +375,16 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         self.backend.operands().clear();
         Ok((receiver, arguments))
     }
-    fn prepare_reflection(&mut self) -> Result<(NativeCall, Option<RootedValue>), VmError> {
-        let prepared = self.backend.reflection_call()?;
+    fn prepare_reflection(&mut self) -> Result<(NativeCall, Option<RootedValue>), NativeFailure> {
+        let prepared = match self.backend.reflection_call() {
+            Ok(prepared) => prepared,
+            Err(NativePrepareError::Host(error)) => return Err(error.into()),
+            Err(NativePrepareError::Managed(exception)) => {
+                return Err(NativeFailure::Managed(
+                    self.root(StackValue::ObjectRef(exception))?,
+                ));
+            }
+        };
         let constructor_result = prepared
             .constructor_result
             .map(|value| self.root(value))
@@ -559,16 +596,73 @@ pub struct NativeCall {
     pub arguments: Vec<RootedValue>,
 }
 
-enum Mailbox {
-    Empty,
-    Request(u64, NativeCall, bool),
-    Reply(u64, Result<NativeValue, RootedValue>),
-    MonitorRequest(u64, RootedValue, Option<std::time::Instant>),
-    MonitorReply(u64, bool),
-    FinalizerRequest(u64),
-    FinalizerReply(u64),
-    InitializerRequest(u64, Box<dyn NativeInitWait>),
-    InitializerReply(u64),
+enum Request {
+    Yield,
+    Call(NativeCall, bool),
+    Monitor(RootedValue, Option<std::time::Instant>),
+    Finalizers,
+    Initializer(Box<dyn NativeInitWait>),
+}
+impl Request {
+    fn effect(&self, generation: u64) -> NativeEffect {
+        match self {
+            Self::Yield => NativeEffect::Yield,
+            Self::Call(..) => NativeEffect::Call(generation),
+            Self::Monitor(..) => NativeEffect::Monitor(generation),
+            Self::Finalizers => NativeEffect::Finalizers(generation),
+            Self::Initializer(..) => NativeEffect::Initializer(generation),
+        }
+    }
+}
+enum Reply {
+    Call(Result<NativeValue, RootedValue>),
+    Monitor(bool),
+    Finalizers,
+    Initializer,
+}
+impl Reply {
+    fn effect(&self, generation: u64) -> NativeEffect {
+        match self {
+            Self::Call(..) => NativeEffect::Call(generation),
+            Self::Monitor(..) => NativeEffect::Monitor(generation),
+            Self::Finalizers => NativeEffect::Finalizers(generation),
+            Self::Initializer => NativeEffect::Initializer(generation),
+        }
+    }
+}
+enum ControlState {
+    Unissued,
+    Idle(u64),
+    Registered {
+        generation: u64,
+        request: Request,
+        announced: bool,
+    },
+    Awaiting(NativeEffect),
+    ReplyReady {
+        generation: u64,
+        reply: Reply,
+    },
+    Disabled,
+}
+enum ControlEvent {
+    Issue,
+    Access,
+    Register(Request),
+    TakeEffect,
+    Take(NativeEffect),
+    Reply(u64, Reply),
+    Consume(NativeEffect),
+    BeforePoll,
+    AfterPoll(bool),
+    Disable,
+}
+enum Transition {
+    Unit,
+    Generation(u64),
+    Effect(Option<NativeEffect>),
+    Request(Request),
+    Reply(Reply),
 }
 
 /// Effects registered by the body for the executor to service.
@@ -589,12 +683,7 @@ pub struct NativeControl {
     entered: Cell<bool>,
     accesses: Cell<usize>,
     grants: Cell<usize>,
-    effect: Cell<Option<NativeEffect>>,
-    generation: Cell<u64>,
-    awaiting: Cell<Option<NativeEffect>>,
-    mailbox: RefCell<Mailbox>,
-    issued: Cell<bool>,
-    disabled: Cell<bool>,
+    state: RefCell<ControlState>,
 }
 impl NativeControl {
     pub fn new() -> Rc<Self> {
@@ -603,156 +692,178 @@ impl NativeControl {
             entered: Cell::new(false),
             accesses: Cell::new(0),
             grants: Cell::new(0),
-            effect: Cell::new(None),
-            generation: Cell::new(0),
-            awaiting: Cell::new(None),
-            mailbox: RefCell::new(Mailbox::Empty),
-            issued: Cell::new(false),
-            disabled: Cell::new(false),
+            state: RefCell::new(ControlState::Unissued),
         })
     }
+    // INVARIANT: F6.NativeEffectProtocol — owning the payload in the protocol state prevents
+    // a request, an outstanding child and an unread reply from coexisting.
+    fn transition(&self, event: ControlEvent) -> Result<Transition, VmError> {
+        use ControlEvent as E;
+        use ControlState as S;
+        let mut slot = self.state.borrow_mut();
+        let state = std::mem::replace(&mut *slot, S::Disabled);
+        let (next, result) = match (state, event) {
+            (_, E::Disable) => (S::Disabled, Transition::Unit),
+            (S::Unissued, E::Issue) => (S::Idle(0), Transition::Unit),
+            (s @ S::Idle(_), E::Access | E::BeforePoll | E::AfterPoll(false)) => {
+                (s, Transition::Unit)
+            }
+            (s @ S::ReplyReady { .. }, E::BeforePoll) => (s, Transition::Unit),
+            (
+                s @ S::Registered {
+                    announced: false, ..
+                },
+                E::AfterPoll(true),
+            ) => (s, Transition::Unit),
+            (S::Idle(generation), E::Register(request)) if generation != u64::MAX => {
+                let generation = generation + 1;
+                (
+                    S::Registered {
+                        generation,
+                        request,
+                        announced: false,
+                    },
+                    Transition::Generation(generation),
+                )
+            }
+            (
+                S::Registered {
+                    generation,
+                    request: Request::Yield,
+                    announced: false,
+                },
+                E::TakeEffect,
+            ) => (
+                S::Idle(generation),
+                Transition::Effect(Some(NativeEffect::Yield)),
+            ),
+            (
+                S::Registered {
+                    generation,
+                    request,
+                    announced: false,
+                },
+                E::TakeEffect,
+            ) => {
+                let effect = request.effect(generation);
+                (
+                    S::Registered {
+                        generation,
+                        request,
+                        announced: true,
+                    },
+                    Transition::Effect(Some(effect)),
+                )
+            }
+            (s @ (S::Idle(_) | S::Awaiting(_) | S::ReplyReady { .. }), E::TakeEffect) => {
+                (s, Transition::Effect(None))
+            }
+            (
+                S::Registered {
+                    generation,
+                    request,
+                    announced: true,
+                },
+                E::Take(effect),
+            ) if effect != NativeEffect::Yield && request.effect(generation) == effect => {
+                (S::Awaiting(effect), Transition::Request(request))
+            }
+            (S::Awaiting(effect), E::Reply(generation, reply))
+                if reply.effect(generation) == effect =>
+            {
+                (S::ReplyReady { generation, reply }, Transition::Unit)
+            }
+            (S::ReplyReady { generation, reply }, E::Consume(effect))
+                if reply.effect(generation) == effect =>
+            {
+                (S::Idle(generation), Transition::Reply(reply))
+            }
+            (state, _) => {
+                *slot = state;
+                return Err(internal("invalid native control transition"));
+            }
+        };
+        *slot = next;
+        Ok(result)
+    }
     pub fn effects(self: &Rc<Self>, invocation: NativeInvocation) -> Result<VmEffects, VmError> {
-        if self.disabled.get() || self.issued.replace(true) {
-            return Err(internal("native capability unavailable or already issued"));
-        }
+        self.transition(ControlEvent::Issue)?;
         Ok(VmEffects {
             control: self.clone(),
             invocation,
         })
     }
     pub fn take_effect(&self) -> Option<NativeEffect> {
-        self.effect.take()
+        match self.transition(ControlEvent::TakeEffect) {
+            Ok(Transition::Effect(effect)) => effect,
+            _ => None,
+        }
     }
     pub fn take_call(&self, generation: u64) -> Result<(NativeCall, bool), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        match std::mem::replace(&mut *slot, Mailbox::Empty) {
-            Mailbox::Request(actual, call, capture)
-                if actual == generation && self.awaiting.get().is_none() =>
-            {
-                self.awaiting.set(Some(NativeEffect::Call(generation)));
-                Ok((call, capture))
-            }
-            other => {
-                *slot = other;
-                Err(internal("invalid native call request"))
-            }
+        match self.transition(ControlEvent::Take(NativeEffect::Call(generation)))? {
+            Transition::Request(Request::Call(call, capture)) => Ok((call, capture)),
+            _ => unreachable!(),
         }
     }
     pub fn reply_call(&self, generation: u64, value: NativeValue) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        if self.awaiting.get() != Some(NativeEffect::Call(generation))
-            || !matches!(*slot, Mailbox::Empty)
-        {
-            return Err(internal("invalid native call reply"));
-        }
-        self.awaiting.set(None);
-        *slot = Mailbox::Reply(generation, Ok(value));
+        self.transition(ControlEvent::Reply(generation, Reply::Call(Ok(value))))?;
         Ok(())
     }
     pub fn reply_exception(&self, generation: u64, exception: RootedValue) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        if self.awaiting.get() != Some(NativeEffect::Call(generation))
-            || !matches!(*slot, Mailbox::Empty)
-        {
-            return Err(internal("invalid native call reply"));
-        }
-        self.awaiting.set(None);
-        *slot = Mailbox::Reply(generation, Err(exception));
+        self.transition(ControlEvent::Reply(generation, Reply::Call(Err(exception))))?;
         Ok(())
     }
     pub fn take_monitor(
         &self,
         generation: u64,
     ) -> Result<(RootedValue, Option<std::time::Instant>), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        match std::mem::replace(&mut *slot, Mailbox::Empty) {
-            Mailbox::MonitorRequest(actual, object, deadline)
-                if actual == generation && self.awaiting.get().is_none() =>
-            {
-                self.awaiting.set(Some(NativeEffect::Monitor(generation)));
-                Ok((object, deadline))
-            }
-            other => {
-                *slot = other;
-                Err(internal("invalid monitor request"))
-            }
+        match self.transition(ControlEvent::Take(NativeEffect::Monitor(generation)))? {
+            Transition::Request(Request::Monitor(object, deadline)) => Ok((object, deadline)),
+            _ => unreachable!(),
         }
     }
     pub fn reply_monitor(&self, generation: u64, acquired: bool) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        if self.awaiting.get() != Some(NativeEffect::Monitor(generation))
-            || !matches!(*slot, Mailbox::Empty)
-        {
-            return Err(internal("invalid monitor reply"));
-        }
-        self.awaiting.set(None);
-        *slot = Mailbox::MonitorReply(generation, acquired);
+        self.transition(ControlEvent::Reply(generation, Reply::Monitor(acquired)))?;
         Ok(())
     }
     pub fn take_finalizers(&self, generation: u64) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        match std::mem::replace(&mut *slot, Mailbox::Empty) {
-            Mailbox::FinalizerRequest(actual)
-                if actual == generation && self.awaiting.get().is_none() =>
-            {
-                self.awaiting
-                    .set(Some(NativeEffect::Finalizers(generation)));
-                Ok(())
-            }
-            other => {
-                *slot = other;
-                Err(internal("invalid finalizer wait request"))
-            }
-        }
+        self.transition(ControlEvent::Take(NativeEffect::Finalizers(generation)))?;
+        Ok(())
     }
     pub fn reply_finalizers(&self, generation: u64) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        if self.awaiting.get() != Some(NativeEffect::Finalizers(generation))
-            || !matches!(*slot, Mailbox::Empty)
-        {
-            return Err(internal("invalid finalizer wait reply"));
-        }
-        self.awaiting.set(None);
-        *slot = Mailbox::FinalizerReply(generation);
+        self.transition(ControlEvent::Reply(generation, Reply::Finalizers))?;
         Ok(())
     }
     pub fn take_initializer(&self, generation: u64) -> Result<Box<dyn NativeInitWait>, VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        match std::mem::replace(&mut *slot, Mailbox::Empty) {
-            Mailbox::InitializerRequest(actual, wait)
-                if actual == generation && self.awaiting.get().is_none() =>
-            {
-                self.awaiting
-                    .set(Some(NativeEffect::Initializer(generation)));
-                Ok(wait)
-            }
-            other => {
-                *slot = other;
-                Err(internal("invalid initializer wait request"))
-            }
+        match self.transition(ControlEvent::Take(NativeEffect::Initializer(generation)))? {
+            Transition::Request(Request::Initializer(wait)) => Ok(wait),
+            _ => unreachable!(),
         }
     }
     pub fn reply_initializer(&self, generation: u64) -> Result<(), VmError> {
-        let mut slot = self.mailbox.borrow_mut();
-        if self.awaiting.get() != Some(NativeEffect::Initializer(generation))
-            || !matches!(*slot, Mailbox::Empty)
-        {
-            return Err(internal("invalid initializer wait reply"));
-        }
-        self.awaiting.set(None);
-        *slot = Mailbox::InitializerReply(generation);
+        self.transition(ControlEvent::Reply(generation, Reply::Initializer))?;
         Ok(())
     }
     /// Permanently revoke this activation's access before dropping its future.
     pub fn disable(&self) {
-        self.disabled.set(true);
+        self.transition(ControlEvent::Disable)
+            .expect("disable is unconditional");
+    }
+    fn register(&self, request: Request) -> Result<u64, VmError> {
+        match self.transition(ControlEvent::Register(request))? {
+            Transition::Generation(generation) => Ok(generation),
+            _ => unreachable!(),
+        }
     }
     fn enter<R>(
         &self,
         f: impl for<'gc> FnOnce(&mut NativeRegion<'gc, 'gc>) -> R,
     ) -> Result<R, VmError> {
         let p = self.adapter.get();
-        if p.is_null() || self.disabled.get() || self.entered.replace(true) {
+        if p.is_null()
+            || self.transition(ControlEvent::Access).is_err()
+            || self.entered.replace(true)
+        {
             return Err(internal("native adapter unavailable or already entered"));
         }
         struct Exit<'a>(&'a Cell<bool>);
@@ -770,6 +881,22 @@ impl NativeControl {
 }
 
 /// Thread-affine capability moved into the static native future.
+///
+/// It must remain local to the VM driver rather than crossing threads:
+///
+/// ```compile_fail,E0277
+/// use dotnet_vm_ops::effects::VmEffects;
+/// fn assert_send<T: Send>() {}
+/// fn require_send() { assert_send::<VmEffects>(); }
+/// ```
+///
+/// The future polled by the driver is likewise not `Send`:
+///
+/// ```compile_fail,E0277
+/// use dotnet_vm_ops::effects::NativeFuture;
+/// fn assert_send<T: Send>() {}
+/// fn require_send() { assert_send::<NativeFuture>(); }
+/// ```
 pub struct VmEffects {
     control: Rc<NativeControl>,
     invocation: NativeInvocation,
@@ -799,15 +926,14 @@ impl VmEffects {
         let mut generation = None;
         std::future::poll_fn(|_| {
             if let Some(expected) = generation {
-                let mut slot = self.control.mailbox.borrow_mut();
-                let value = match std::mem::replace(&mut *slot, Mailbox::Empty) {
-                    Mailbox::Reply(actual, value) if actual == expected => value,
-                    other => {
-                        *slot = other;
-                        return Poll::Ready(Err(internal("invalid native call reply").into()));
-                    }
+                let value = match self
+                    .control
+                    .transition(ControlEvent::Consume(NativeEffect::Call(expected)))
+                {
+                    Ok(Transition::Reply(Reply::Call(value))) => value,
+                    Ok(_) => unreachable!(),
+                    Err(error) => return Poll::Ready(Err(error.into())),
                 };
-                drop(slot);
                 let value = match value {
                     Ok(value) => value,
                     Err(exception) if capture => {
@@ -835,19 +961,13 @@ impl VmEffects {
                 }
                 return Poll::Ready(Ok(value));
             }
-            let Some(next) = self.control.generation.get().checked_add(1) else {
-                return Poll::Ready(Err(internal("native effect generation exhausted").into()));
+            let next = match self.control.register(Request::Call(
+                call.take().expect("call requested once"),
+                capture,
+            )) {
+                Ok(next) => next,
+                Err(error) => return Poll::Ready(Err(error.into())),
             };
-            let mut slot = self.control.mailbox.borrow_mut();
-            if !matches!(*slot, Mailbox::Empty)
-                || self.control.effect.get().is_some()
-                || self.control.awaiting.get().is_some()
-            {
-                return Poll::Ready(Err(internal("native effect already registered").into()));
-            }
-            self.control.generation.set(next);
-            *slot = Mailbox::Request(next, call.take().expect("call requested once"), capture);
-            self.control.effect.set(Some(NativeEffect::Call(next)));
             generation = Some(next);
             Poll::Pending
         })
@@ -904,75 +1024,44 @@ impl VmEffects {
         }
     }
 
-    async fn wait_initializer(&mut self, wait: Box<dyn NativeInitWait>) -> NativeResult {
-        let mut wait = Some(wait);
-        let mut generation = None;
+    async fn request(&mut self, request: Request) -> Result<Reply, NativeFailure> {
+        let mut request = Some(request);
+        let mut effect = None;
         std::future::poll_fn(|_| {
-            if let Some(expected) = generation {
-                let mut slot = self.control.mailbox.borrow_mut();
-                return match std::mem::replace(&mut *slot, Mailbox::Empty) {
-                    Mailbox::InitializerReply(actual) if actual == expected => Poll::Ready(Ok(())),
-                    other => {
-                        *slot = other;
-                        Poll::Ready(Err(internal("invalid initializer wait reply").into()))
-                    }
-                };
+            if let Some(effect) = effect {
+                return Poll::Ready(
+                    match self.control.transition(ControlEvent::Consume(effect)) {
+                        Ok(Transition::Reply(reply)) => Ok(reply),
+                        Ok(_) => unreachable!(),
+                        Err(error) => Err(error.into()),
+                    },
+                );
             }
-            let Some(next) = self.control.generation.get().checked_add(1) else {
-                return Poll::Ready(Err(internal("native effect generation exhausted").into()));
-            };
-            let mut slot = self.control.mailbox.borrow_mut();
-            if !matches!(*slot, Mailbox::Empty)
-                || self.control.effect.get().is_some()
-                || self.control.awaiting.get().is_some()
-            {
-                return Poll::Ready(Err(internal("native effect already registered").into()));
+            let request = request.take().expect("effect requested once");
+            let kind = request.effect(0);
+            match self.control.register(request) {
+                Ok(generation) => {
+                    effect = Some(match kind {
+                        NativeEffect::Monitor(_) => NativeEffect::Monitor(generation),
+                        NativeEffect::Finalizers(_) => NativeEffect::Finalizers(generation),
+                        NativeEffect::Initializer(_) => NativeEffect::Initializer(generation),
+                        _ => unreachable!(),
+                    });
+                    Poll::Pending
+                }
+                Err(error) => Poll::Ready(Err(error.into())),
             }
-            self.control.generation.set(next);
-            *slot =
-                Mailbox::InitializerRequest(next, wait.take().expect("initializer requested once"));
-            self.control
-                .effect
-                .set(Some(NativeEffect::Initializer(next)));
-            generation = Some(next);
-            Poll::Pending
         })
         .await
     }
-
-    /// Wait until this arena's pending and running finalizers have completed.
+    async fn wait_initializer(&mut self, wait: Box<dyn NativeInitWait>) -> NativeResult {
+        self.request(Request::Initializer(wait)).await?;
+        Ok(())
+    }
+    /// Wait until no arena, live or retired, has queued or running finalizers.
     pub async fn wait_finalizers(&mut self) -> NativeResult {
-        let mut generation = None;
-        std::future::poll_fn(|_| {
-            if let Some(expected) = generation {
-                let mut slot = self.control.mailbox.borrow_mut();
-                return match std::mem::replace(&mut *slot, Mailbox::Empty) {
-                    Mailbox::FinalizerReply(actual) if actual == expected => Poll::Ready(Ok(())),
-                    other => {
-                        *slot = other;
-                        Poll::Ready(Err(internal("invalid finalizer wait reply").into()))
-                    }
-                };
-            }
-            let Some(next) = self.control.generation.get().checked_add(1) else {
-                return Poll::Ready(Err(internal("native effect generation exhausted").into()));
-            };
-            let mut slot = self.control.mailbox.borrow_mut();
-            if !matches!(*slot, Mailbox::Empty)
-                || self.control.effect.get().is_some()
-                || self.control.awaiting.get().is_some()
-            {
-                return Poll::Ready(Err(internal("native effect already registered").into()));
-            }
-            self.control.generation.set(next);
-            *slot = Mailbox::FinalizerRequest(next);
-            self.control
-                .effect
-                .set(Some(NativeEffect::Finalizers(next)));
-            generation = Some(next);
-            Poll::Pending
-        })
-        .await
+        self.request(Request::Finalizers).await?;
+        Ok(())
     }
     /// Wait for monitor ownership. A deadline is absolute and remains in force across stops.
     pub async fn monitor_enter(
@@ -980,42 +1069,10 @@ impl VmEffects {
         object: RootedValue,
         deadline: Option<std::time::Instant>,
     ) -> Result<bool, NativeFailure> {
-        let mut object = Some(object);
-        let mut generation = None;
-        std::future::poll_fn(|_| {
-            if let Some(expected) = generation {
-                let mut slot = self.control.mailbox.borrow_mut();
-                return match std::mem::replace(&mut *slot, Mailbox::Empty) {
-                    Mailbox::MonitorReply(actual, acquired) if actual == expected => {
-                        Poll::Ready(Ok(acquired))
-                    }
-                    other => {
-                        *slot = other;
-                        Poll::Ready(Err(internal("invalid monitor reply").into()))
-                    }
-                };
-            }
-            let Some(next) = self.control.generation.get().checked_add(1) else {
-                return Poll::Ready(Err(internal("native effect generation exhausted").into()));
-            };
-            let mut slot = self.control.mailbox.borrow_mut();
-            if !matches!(*slot, Mailbox::Empty)
-                || self.control.effect.get().is_some()
-                || self.control.awaiting.get().is_some()
-            {
-                return Poll::Ready(Err(internal("native effect already registered").into()));
-            }
-            self.control.generation.set(next);
-            *slot = Mailbox::MonitorRequest(
-                next,
-                object.take().expect("monitor requested once"),
-                deadline,
-            );
-            self.control.effect.set(Some(NativeEffect::Monitor(next)));
-            generation = Some(next);
-            Poll::Pending
-        })
-        .await
+        match self.request(Request::Monitor(object, deadline)).await? {
+            Reply::Monitor(acquired) => Ok(acquired),
+            _ => unreachable!(),
+        }
     }
     /// Explicitly return to the executor once.
     pub async fn yield_now(&mut self) -> Result<(), NativeFailure> {
@@ -1023,17 +1080,17 @@ impl VmEffects {
         std::future::poll_fn(|_| {
             if first {
                 first = false;
-                if self
-                    .control
-                    .effect
-                    .replace(Some(NativeEffect::Yield))
-                    .is_some()
-                {
-                    return Poll::Ready(Err(internal("native effect already registered").into()));
+                if let Err(error) = self.control.register(Request::Yield) {
+                    return Poll::Ready(Err(error.into()));
                 }
                 Poll::Pending
             } else {
-                Poll::Ready(Ok(()))
+                Poll::Ready(
+                    self.control
+                        .transition(ControlEvent::Access)
+                        .map(|_| ())
+                        .map_err(Into::into),
+                )
             }
         })
         .await
@@ -1143,7 +1200,7 @@ impl<'fx> VmAccess<'fx> {
     pub fn prepare_reflection(
         &mut self,
     ) -> Result<(NativeCall, Option<RootedValue>), NativeFailure> {
-        Ok(self.with(|region| region.prepare_reflection())??)
+        self.with(|region| region.prepare_reflection())?
     }
     pub fn multicast_call(
         &mut self,
@@ -1263,14 +1320,13 @@ fn poll_native_impl(
     region: &mut NativeRegion<'_, '_>,
     new_turn: bool,
 ) -> Result<Poll<NativeResult>, VmError> {
-    if control.disabled.get()
+    if control.transition(ControlEvent::BeforePoll).is_err()
         || !control.adapter.get().is_null()
-        || control.effect.get().is_some()
         || control.accesses.get() != 0
         || control.entered.get()
         || region.backend.active_scope_depth() != 0
     {
-        control.disabled.set(true);
+        control.disable();
         return Err(internal("invalid native poll entry"));
     }
     if new_turn {
@@ -1285,7 +1341,7 @@ fn poll_native_impl(
         fn drop(&mut self) {
             self.control.adapter.set(ptr::null_mut());
             if !self.completed {
-                self.control.disabled.set(true);
+                self.control.disable();
             }
         }
     }
@@ -1296,16 +1352,14 @@ fn poll_native_impl(
     let poll = future.poll(&mut Context::from_waker(Waker::noop()));
     reset.completed = true;
     drop(reset);
-    if control.disabled.get()
-        || control.accesses.get() != 0
+    if control.accesses.get() != 0
         || control.entered.get()
         || region.backend.active_scope_depth() != 0
-        || poll.is_pending() != control.effect.get().is_some()
-        || (poll.is_ready()
-            && (control.awaiting.get().is_some()
-                || !matches!(*control.mailbox.borrow(), Mailbox::Empty)))
+        || control
+            .transition(ControlEvent::AfterPoll(poll.is_pending()))
+            .is_err()
     {
-        control.disabled.set(true);
+        control.disable();
         return Err(internal("invalid native poll result"));
     }
     Ok(poll)
@@ -1356,21 +1410,25 @@ pub enum NativeDispatchMode {
     Other,
 }
 
-/// Host entry hook. Implementations without a driver reject native calls before commitment.
+/// Host entry hook. Without a driver, non-inline calls use their synchronous fallback.
 pub trait NativeIntrinsicHost<'gc> {
     fn start_native(
         &mut self,
-        _method: dotnet_types::members::MethodDescription,
-        _mode: NativeDispatchMode,
-        _generics: &dotnet_types::generics::GenericLookup,
+        method: dotnet_types::members::MethodDescription,
+        mode: NativeDispatchMode,
+        generics: &dotnet_types::generics::GenericLookup,
         _selector: Option<NativeSelector<'gc, Self>>,
-        _fallback: NativeSyncHandler<Self>,
+        fallback: NativeSyncHandler<Self>,
         _entry: fn(VmEffects) -> NativeFuture,
     ) -> dotnet_vm_data::StepResult
     where
         Self: Sized,
     {
-        dotnet_vm_data::StepResult::internal_error("native effects driver unavailable")
+        if mode != NativeDispatchMode::InlineCall {
+            fallback(self, method, generics)
+        } else {
+            dotnet_vm_data::StepResult::internal_error("native effects driver unavailable")
+        }
     }
 }
 
@@ -1385,13 +1443,14 @@ mod tests {
         operands: Vec<StackValue<'gc>>,
         output: Vec<Vec<u16>>,
         stop: bool,
+        depth: Rc<Cell<usize>>,
     }
     impl<'gc> NativeBackend<'gc> for Mock<'gc> {
         fn stop_requested(&self) -> bool {
             self.stop
         }
         fn active_scope_depth(&self) -> usize {
-            0
+            self.depth.get()
         }
         fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
             &mut self.operands
@@ -1413,10 +1472,322 @@ mod tests {
             operands: vec![],
             output: vec![],
             stop: false,
+            depth: Rc::new(Cell::new(0)),
         }
     }
     fn arena() -> Arena<Rootable![DynamicRootSet<'_>]> {
         Arena::new(|mc| DynamicRootSet::new(mc))
+    }
+
+    fn test_call() -> NativeCall {
+        NativeCall {
+            method: dotnet_types::members::MethodDescription::new(
+                dotnet_types::TypeDescription::NULL,
+                dotnet_types::generics::GenericLookup::default(),
+                dotnet_types::resolution::ResolutionS::NULL,
+                dotnetdll::prelude::MethodMemberIndex::Method(0),
+            ),
+            generics: Default::default(),
+            arguments: vec![],
+        }
+    }
+
+    #[test]
+    fn abandoned_call_cannot_yield_or_access_vm() {
+        for taken in [false, true] {
+            for replied in [false, true] {
+                if replied && !taken {
+                    continue;
+                }
+                arena().mutate(|mc, roots| {
+                    let control = NativeControl::new();
+                    let mut fx = control.effects(invocation()).unwrap();
+                    let mut backend = mock();
+                    let mut region = NativeRegion::new(mc, *roots, &mut backend);
+                    let mut call = Box::pin(async { fx.call(test_call()).await.map(|_| ()) });
+                    assert!(matches!(
+                        poll_native(&control, call.as_mut(), &mut region),
+                        Ok(Poll::Pending)
+                    ));
+                    drop(call);
+                    assert_eq!(control.take_effect(), Some(NativeEffect::Call(1)));
+                    if taken {
+                        control.take_call(1).unwrap();
+                    }
+                    if replied {
+                        control.reply_call(1, NativeValue::Void).unwrap();
+                    }
+                    let mut yield_future = Box::pin(fx.yield_now());
+                    assert!(matches!(
+                        yield_future
+                            .as_mut()
+                            .poll(&mut Context::from_waker(Waker::noop())),
+                        Poll::Ready(Err(_))
+                    ));
+                    drop(yield_future);
+                    if replied {
+                        let mut future = Box::pin(async {
+                            assert!(matches!(fx.vm().await, Err(NativeFailure::Host(_))));
+                            Ok(())
+                        });
+                        assert!(poll_native(&control, future.as_mut(), &mut region).is_err());
+                    } else {
+                        let mut access = Box::pin(fx.vm());
+                        assert!(matches!(
+                            access
+                                .as_mut()
+                                .poll(&mut Context::from_waker(Waker::noop())),
+                            Poll::Ready(Err(_))
+                        ));
+                    }
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn control_transition_table() {
+        struct Wait;
+        impl NativeInitWait for Wait {
+            fn ready(&self) -> bool {
+                false
+            }
+            fn sleeper(&self) -> Box<dyn NativeInitSleeper> {
+                unreachable!()
+            }
+        }
+        fn request(kind: usize) -> Request {
+            match kind {
+                0 => Request::Yield,
+                1 => Request::Call(test_call(), false),
+                2 => Request::Monitor(RootedValue(RootedValueInner::Null), None),
+                3 => Request::Finalizers,
+                4 => Request::Initializer(Box::new(Wait)),
+                _ => unreachable!(),
+            }
+        }
+        fn reply(kind: usize) -> Reply {
+            match kind {
+                1 => Reply::Call(Ok(NativeValue::Void)),
+                2 => Reply::Monitor(true),
+                3 => Reply::Finalizers,
+                4 => Reply::Initializer,
+                _ => unreachable!(),
+            }
+        }
+        fn kind(effect: NativeEffect) -> usize {
+            match effect {
+                NativeEffect::Yield => 0,
+                NativeEffect::Call(_) => 1,
+                NativeEffect::Monitor(_) => 2,
+                NativeEffect::Finalizers(_) => 3,
+                NativeEffect::Initializer(_) => 4,
+            }
+        }
+        fn key(state: &ControlState) -> (usize, u64) {
+            match state {
+                ControlState::Unissued => (0, 0),
+                ControlState::Idle(generation) => (1, *generation),
+                ControlState::Registered {
+                    generation,
+                    request,
+                    announced,
+                } => (
+                    if *announced { 8 } else { 3 } + kind(request.effect(*generation)),
+                    *generation,
+                ),
+                ControlState::Awaiting(effect) => {
+                    let generation = match effect {
+                        NativeEffect::Call(g)
+                        | NativeEffect::Monitor(g)
+                        | NativeEffect::Finalizers(g)
+                        | NativeEffect::Initializer(g) => *g,
+                        NativeEffect::Yield => unreachable!(),
+                    };
+                    (12 + kind(*effect), generation)
+                }
+                ControlState::ReplyReady { generation, reply } => {
+                    (16 + kind(reply.effect(*generation)), *generation)
+                }
+                ControlState::Disabled => (21, 0),
+            }
+        }
+        // Include both generations, every payload kind and the exhausted idle state.
+        for state in 0..22 {
+            for event in 0..38 {
+                let control = NativeControl::new();
+                let initial = match state {
+                    0 => ControlState::Unissued,
+                    1 => ControlState::Idle(7),
+                    2 => ControlState::Idle(u64::MAX),
+                    3..=7 => ControlState::Registered {
+                        generation: 7,
+                        request: request(state - 3),
+                        announced: false,
+                    },
+                    8..=12 => ControlState::Registered {
+                        generation: 7,
+                        request: request(state - 8),
+                        announced: true,
+                    },
+                    13..=16 => ControlState::Awaiting(request(state - 12).effect(7)),
+                    17..=20 => ControlState::ReplyReady {
+                        generation: 7,
+                        reply: reply(state - 16),
+                    },
+                    _ => ControlState::Disabled,
+                };
+                *control.state.borrow_mut() = initial;
+                let input =
+                    match event {
+                        0 => ControlEvent::Issue,
+                        1 => ControlEvent::Access,
+                        2 => ControlEvent::BeforePoll,
+                        3 => ControlEvent::AfterPoll(false),
+                        4 => ControlEvent::AfterPoll(true),
+                        5 => ControlEvent::Disable,
+                        6 => ControlEvent::TakeEffect,
+                        7..=11 => ControlEvent::Register(request(event - 7)),
+                        12..=19 => ControlEvent::Take(
+                            request((event - 12) % 4 + 1).effect(if event < 16 { 7 } else { 6 }),
+                        ),
+                        20..=27 => ControlEvent::Reply(
+                            if event < 24 { 7 } else { 6 },
+                            reply((event - 20) % 4 + 1),
+                        ),
+                        28..=35 => ControlEvent::Consume(
+                            request((event - 28) % 4 + 1).effect(if event < 32 { 7 } else { 6 }),
+                        ),
+                        36 => ControlEvent::Take(NativeEffect::Yield),
+                        37 => ControlEvent::Consume(NativeEffect::Yield),
+                        _ => unreachable!(),
+                    };
+                let expected = match event {
+                    0 => state == 0,
+                    1 | 3 => state == 1 || state == 2,
+                    2 => state == 1 || state == 2 || (17..=20).contains(&state),
+                    4 => (3..=7).contains(&state),
+                    5 => true,
+                    6 => (1..=7).contains(&state) || (13..=20).contains(&state),
+                    7..=11 => state == 1,
+                    12..=15 => state == event - 3,
+                    20..=23 => state == event - 7,
+                    28..=31 => state == event - 11,
+                    _ => false,
+                };
+                let before = key(&control.state.borrow());
+                assert_eq!(
+                    control.transition(input).is_ok(),
+                    expected,
+                    "state {state}, event {event}"
+                );
+                let after = if !expected {
+                    before
+                } else {
+                    match event {
+                        0 => (1, 0),
+                        5 => (21, 0),
+                        6 if state == 3 => (1, 7),
+                        6 if (4..=7).contains(&state) => (state + 5, 7),
+                        7..=11 => (event - 4, 8),
+                        12..=15 => (event + 1, 7),
+                        20..=23 => (event - 3, 7),
+                        28..=31 => (1, 7),
+                        _ => before,
+                    }
+                };
+                assert_eq!(
+                    key(&control.state.borrow()),
+                    after,
+                    "state {state}, event {event}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn storage_scopes_are_rejected_at_poll_boundaries() {
+        for leak_during_poll in [false, true] {
+            arena().mutate(|mc, roots| {
+                let control = NativeControl::new();
+                let _fx = control.effects(invocation()).unwrap();
+                let mut backend = mock();
+                let depth = backend.depth.clone();
+                if !leak_during_poll {
+                    depth.set(1);
+                }
+                let polled = Rc::new(Cell::new(false));
+                let witness = polled.clone();
+                let mut future = Box::pin(async move {
+                    witness.set(true);
+                    depth.set(1);
+                    Ok(())
+                });
+                let mut region = NativeRegion::new(mc, *roots, &mut backend);
+                assert!(poll_native(&control, future.as_mut(), &mut region).is_err());
+                assert_eq!(polled.get(), leak_during_poll);
+                assert!(matches!(*control.state.borrow(), ControlState::Disabled));
+            });
+        }
+    }
+
+    #[derive(Default)]
+    struct MinimalHost {
+        fallback_calls: usize,
+    }
+
+    impl NativeIntrinsicHost<'static> for MinimalHost {}
+
+    fn minimal_host_fallback(
+        host: &mut MinimalHost,
+        _method: dotnet_types::members::MethodDescription,
+        _generics: &dotnet_types::generics::GenericLookup,
+    ) -> dotnet_vm_data::StepResult {
+        host.fallback_calls += 1;
+        dotnet_vm_data::StepResult::Continue
+    }
+
+    fn unused_native_entry(_: VmEffects) -> NativeFuture {
+        Box::pin(async { Ok(()) })
+    }
+
+    #[test]
+    fn default_native_host_runs_fallback_for_non_inline_mode() {
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let mut host = MinimalHost::default();
+        let method = dotnet_types::members::MethodDescription::new(
+            dotnet_types::TypeDescription::NULL,
+            dotnet_types::generics::GenericLookup::default(),
+            dotnet_types::resolution::ResolutionS::NULL,
+            MethodMemberIndex::Method(0),
+        );
+        let inline_method = method.clone();
+        let result = host.start_native(
+            method,
+            NativeDispatchMode::Other,
+            &dotnet_types::generics::GenericLookup::default(),
+            None,
+            minimal_host_fallback,
+            unused_native_entry,
+        );
+
+        assert_eq!(result, dotnet_vm_data::StepResult::Continue);
+        assert_eq!(host.fallback_calls, 1);
+
+        let inline_result = host.start_native(
+            inline_method,
+            NativeDispatchMode::InlineCall,
+            &dotnet_types::generics::GenericLookup::default(),
+            None,
+            minimal_host_fallback,
+            unused_native_entry,
+        );
+        assert!(matches!(
+            inline_result,
+            dotnet_vm_data::StepResult::Error(_)
+        ));
+        assert_eq!(host.fallback_calls, 1);
     }
 
     #[test]
@@ -1551,7 +1922,7 @@ mod tests {
                 .is_err()
             );
             assert!(control.adapter.get().is_null());
-            assert!(control.disabled.get());
+            assert!(matches!(*control.state.borrow(), ControlState::Disabled));
             assert!(!control.entered.get());
             assert_eq!(control.accesses.get(), 0);
             assert!(control.enter(|_| ()).is_err());
@@ -1586,6 +1957,54 @@ mod tests {
                 Ok(Poll::Ready(Ok(())))
             ));
             assert_eq!(count.get(), 33);
+        });
+    }
+
+    #[test]
+    fn continuation_polls_share_one_turn_grant_budget() {
+        arena().mutate(|mc, roots| {
+            let control = NativeControl::new();
+            let mut fx = control.effects(invocation()).unwrap();
+            let count = Rc::new(Cell::new(0));
+            let c = count.clone();
+            let mut future = Box::pin(async move {
+                for _ in 0..33 {
+                    drop(fx.vm().await?);
+                    c.set(c.get() + 1);
+                    fx.call(test_call()).await?;
+                }
+                Ok(())
+            });
+            let mut backend = mock();
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            for generation in 1..=32 {
+                assert_eq!(count.get(), generation as usize);
+                assert_eq!(control.take_effect(), Some(NativeEffect::Call(generation)));
+                control.take_call(generation).unwrap();
+                control.reply_call(generation, NativeValue::Void).unwrap();
+                assert!(matches!(
+                    poll_native_continuation(&control, future.as_mut(), &mut region),
+                    Ok(Poll::Pending)
+                ));
+            }
+            assert_eq!(count.get(), 32);
+            assert_eq!(control.take_effect(), Some(NativeEffect::Yield));
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert_eq!(count.get(), 33);
+            assert_eq!(control.take_effect(), Some(NativeEffect::Call(34)));
+            control.take_call(34).unwrap();
+            control.reply_call(34, NativeValue::Void).unwrap();
+            assert!(matches!(
+                poll_native_continuation(&control, future.as_mut(), &mut region),
+                Ok(Poll::Ready(Ok(())))
+            ));
         });
     }
 
@@ -1639,11 +2058,12 @@ mod tests {
         let arena = arena();
         arena.mutate(|mc, roots| {
             let control = NativeControl::new();
+            let _fx = control.effects(invocation()).unwrap();
             let mut future = Box::pin(std::future::pending::<NativeResult>());
             let mut backend = mock();
             let mut region = NativeRegion::new(mc, *roots, &mut backend);
             assert!(poll_native(&control, future.as_mut(), &mut region).is_err());
-            assert!(control.disabled.get());
+            assert!(matches!(*control.state.borrow(), ControlState::Disabled));
         });
     }
 
@@ -1664,7 +2084,7 @@ mod tests {
             let mut backend = mock();
             let mut region = NativeRegion::new(mc, *roots, &mut backend);
             assert!(poll_native(&control, future.as_mut(), &mut region).is_err());
-            assert!(control.disabled.get());
+            assert!(matches!(*control.state.borrow(), ControlState::Disabled));
         });
     }
 

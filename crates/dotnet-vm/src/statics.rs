@@ -8,7 +8,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{
     DebugStr,
-    sync::{Arc, AtomicU8, AtomicU64, Condvar, OrderedMutex, Ordering, RwLock, levels},
+    sync::{Arc, AtomicU64, Condvar, OrderedMutex, Ordering, RwLock, levels},
 };
 use dotnet_value::{
     layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout, LayoutManager, Scalar},
@@ -21,20 +21,143 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-/// Initialization states for type static constructors (.cctor).
-/// This is an atomic state machine for thread-safe type initialization.
-pub const INIT_STATE_UNINITIALIZED: u8 = 0;
-pub const INIT_STATE_INITIALIZING: u8 = 1;
-pub const INIT_STATE_INITIALIZED: u8 = 2;
-pub const INIT_STATE_FAILED: u8 = 3;
+/// One acquired snapshot contains both the state and its initializing owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitState {
+    Uninitialized,
+    Initializing(u64),
+    Initialized,
+    Failed,
+}
 
+#[derive(Clone, Copy, Debug)]
+enum InitEvent {
+    Claim(u64),
+    NoConstructor,
+    Publish(u64),
+    Fail(u64),
+}
+
+impl InitState {
+    fn encode(self) -> u64 {
+        match self {
+            Self::Uninitialized => 0,
+            Self::Initialized => 1,
+            Self::Failed => 2,
+            Self::Initializing(owner) => {
+                assert_ne!(owner, 0, "initializer owner must be nonzero");
+                owner
+                    .checked_add(2)
+                    .expect("initializer owner exceeds state encoding")
+            }
+        }
+    }
+
+    fn decode(word: u64) -> Self {
+        match word {
+            0 => Self::Uninitialized,
+            1 => Self::Initialized,
+            2 => Self::Failed,
+            owner => Self::Initializing(owner - 2),
+        }
+    }
+
+    fn transition(self, event: InitEvent) -> Option<Self> {
+        match (self, event) {
+            (Self::Uninitialized, InitEvent::Claim(owner))
+                if owner != 0 && owner <= u64::MAX - 2 =>
+            {
+                Some(Self::Initializing(owner))
+            }
+            (Self::Uninitialized, InitEvent::NoConstructor) => Some(Self::Initialized),
+            (Self::Initializing(owner), InitEvent::Publish(actor)) if owner == actor => {
+                Some(Self::Initialized)
+            }
+            (Self::Initializing(owner), InitEvent::Fail(actor)) if owner == actor => {
+                Some(Self::Failed)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_initializing(self) -> bool {
+        matches!(self, Self::Initializing(_))
+    }
+}
+
+/// Synchronization-only state can be retained by a frame without retaining GC references.
+#[derive(Debug)]
+struct Initialization {
+    word: AtomicU64,
+    cond: Arc<Condvar>,
+    mutex: Arc<OrderedMutex<levels::StaticInitMutex, ()>>,
+}
+
+impl Initialization {
+    fn state(&self) -> InitState {
+        InitState::decode(self.word.load(Ordering::Acquire))
+    }
+
+    fn transition(&self, state: InitState, event: InitEvent) -> bool {
+        let Some(next) = state.transition(event) else {
+            return false;
+        };
+        self.word
+            .compare_exchange(
+                state.encode(),
+                next.encode(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn finish(&self, owner: u64, success: bool) {
+        let _lock = self.mutex.lock();
+        let event = if success {
+            InitEvent::Publish(owner)
+        } else {
+            InitEvent::Fail(owner)
+        };
+        if self.transition(InitState::Initializing(owner), event) {
+            self.cond.notify_all();
+        }
+    }
+}
+
+/// Owns the obligation to publish completion; Drop only changes synchronization state.
+#[derive(Debug)]
+pub struct InitializerClaim {
+    initialization: Arc<Initialization>,
+    owner: u64,
+    armed: bool,
+}
+
+// SAFETY: F6.InitializerClaimLifetime — the claim retains only an atomic word, synchronization
+// primitives, an owner ID and an armed bit. Its destructor only publishes failure and notifies.
+unsafe impl dotnet_vm_data::stack::InitializerClaim for InitializerClaim {
+    fn succeed(&mut self) {
+        self.initialization.finish(self.owner, true);
+        self.armed = false;
+    }
+    fn fail(&mut self) {
+        self.initialization.finish(self.owner, false);
+        self.armed = false;
+    }
+}
+
+impl Drop for InitializerClaim {
+    fn drop(&mut self) {
+        // INVARIANT: F6.InitializerClaimLifetime — abandoned execution publishes failure without managed code or GC references.
+        if self.armed {
+            self.initialization.finish(self.owner, false);
+        }
+    }
+}
+
+/// Shared through `Arc`: field bytes and their initialization obligation must have one identity.
 pub struct StaticStorage {
-    /// Atomic initialization state for thread-safe .cctor execution.
-    /// States: 0=uninitialized, 1=initializing (in progress), 2=initialized (complete)
-    pub(crate) init_state: AtomicU8,
-    /// The ID of the thread currently initializing this type.
-    /// Only valid if init_state is INITIALIZING.
-    pub(crate) initializing_thread: AtomicU64,
+    initialization: Arc<Initialization>,
     /// Storage for static fields. Access must use atomic operations
     /// for thread-safety.
     pub storage: FieldStorage,
@@ -47,21 +170,12 @@ pub struct StaticStorage {
 }
 
 impl StaticStorage {
+    pub fn init_state(&self) -> InitState {
+        self.initialization.state()
+    }
+
     pub fn layout(&self) -> Arc<FieldLayoutManager> {
         self.storage.layout().clone()
-    }
-}
-
-impl Clone for StaticStorage {
-    fn clone(&self) -> Self {
-        Self {
-            init_state: AtomicU8::new(self.init_state.load(Ordering::Acquire)),
-            initializing_thread: AtomicU64::new(self.initializing_thread.load(Ordering::Acquire)),
-            storage: self.storage.clone(),
-            failure: RwLock::new(self.failure.read().clone()),
-            init_cond: self.init_cond.clone(),
-            init_mutex: self.init_mutex.clone(),
-        }
     }
 }
 
@@ -79,10 +193,11 @@ unsafe impl<'gc> Collect<'gc> for StaticStorage {
 
 impl Debug for StaticStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.init_state.load(Ordering::Acquire) {
-            INIT_STATE_INITIALIZED => Debug::fmt(&self.storage, f),
-            INIT_STATE_INITIALIZING => write!(f, "initializing"),
-            _ => write!(f, "uninitialized"),
+        match self.init_state() {
+            InitState::Initialized => Debug::fmt(&self.storage, f),
+            InitState::Initializing(_) => write!(f, "initializing"),
+            InitState::Uninitialized => write!(f, "uninitialized"),
+            InitState::Failed => write!(f, "failed"),
         }
     }
 }
@@ -296,7 +411,7 @@ impl Debug for StaticStorageManager {
 #[derive(Debug)]
 pub enum StaticInitResult {
     /// This thread must execute the static constructor.
-    Execute(MethodDescription),
+    Execute(MethodDescription, InitializerClaim),
     /// The type is already fully initialized.
     Initialized,
     /// This is a recursive call on the same thread; proceed as if initialized.
@@ -308,6 +423,11 @@ pub enum StaticInitResult {
 }
 
 impl StaticStorageManager {
+    #[cfg(all(test, feature = "multithreading"))]
+    pub(crate) fn has_initializer_waits(&self) -> bool {
+        !self.wait_graph.lock().edges.is_empty()
+    }
+
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
@@ -370,20 +490,27 @@ impl StaticStorageManager {
     }
 
     /// Get the current initialization state of a type.
-    pub fn get_init_state(&self, description: TypeDescription, generics: &GenericLookup) -> u8 {
+    pub fn get_init_state(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+    ) -> InitState {
         self.lookup_in_shard(description.clone(), generics)
-            .map(|s| s.init_state.load(Ordering::Acquire))
-            .unwrap_or(INIT_STATE_UNINITIALIZED)
+            .map(|s| s.init_state())
+            .unwrap_or(InitState::Uninitialized)
     }
 
     /// Mark a type as failed after its .cctor throws an exception.
     pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
         if let Some(storage) = self.lookup_in_shard(description.clone(), generics) {
             let _lock = storage.init_mutex.lock();
-            storage
-                .init_state
-                .store(INIT_STATE_FAILED, Ordering::Release);
-            storage.initializing_thread.store(0, Ordering::Release);
+            if let InitState::Initializing(owner) = storage.init_state() {
+                assert!(
+                    storage
+                        .initialization
+                        .transition(InitState::Initializing(owner), InitEvent::Fail(owner))
+                );
+            }
             // Notify any threads waiting for initialization
             storage.init_cond.notify_all();
         }
@@ -446,10 +573,13 @@ impl StaticStorageManager {
             .write(exception);
         let _lock = storage.init_mutex.lock();
         *storage.failure.write() = Some(carrier);
-        storage
-            .init_state
-            .store(INIT_STATE_FAILED, Ordering::Release);
-        storage.initializing_thread.store(0, Ordering::Release);
+        if let InitState::Initializing(owner) = storage.init_state() {
+            assert!(
+                storage
+                    .initialization
+                    .transition(InitState::Initializing(owner), InitEvent::Fail(owner))
+            );
+        }
         storage.init_cond.notify_all();
     }
 
@@ -515,12 +645,17 @@ impl StaticStorageManager {
                     clippy::arc_with_non_send_sync,
                     reason = "no-MT static storage is executor-confined; Arc preserves feature-neutral ownership"
                 )]
+                let init_cond = Arc::new(Condvar::new());
+                #[allow(clippy::arc_with_non_send_sync, reason = "single-threaded static storage is executor-confined")]
                 let storage = Arc::new(StaticStorage {
-                    init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
-                    initializing_thread: AtomicU64::new(0),
+                    initialization: Arc::new(Initialization {
+                        word: AtomicU64::new(InitState::Uninitialized.encode()),
+                        cond: init_cond.clone(),
+                        mutex: init_mutex.clone(),
+                    }),
                     storage: FieldStorage::new(layout, data),
                     failure: RwLock::new(None),
-                    init_cond: Arc::new(Condvar::new()),
+                    init_cond: init_cond.clone(),
                     init_mutex,
                 });
                 storage
@@ -529,19 +664,17 @@ impl StaticStorageManager {
 
         // Get the storage and check its state.
         let storage = self.get(description.clone(), context.generics);
-        let state = storage.init_state.load(Ordering::Acquire);
+        let state = storage.init_state();
 
-        if state == INIT_STATE_INITIALIZED {
+        if state == InitState::Initialized {
             return Ok(StaticInitResult::Initialized);
         }
 
-        if state == INIT_STATE_FAILED {
+        if state == InitState::Failed {
             return Ok(StaticInitResult::Failed);
         }
 
-        if state == INIT_STATE_INITIALIZING
-            && storage.initializing_thread.load(Ordering::Acquire) == thread_id.as_u64()
-        {
+        if state == InitState::Initializing(thread_id.as_u64()) {
             return Ok(StaticInitResult::Recursive);
         }
 
@@ -549,37 +682,31 @@ impl StaticStorageManager {
         let cctor = description.clone().static_initializer();
 
         if cctor.is_none() {
-            // No .cctor, so mark as initialized if it was uninitialized
             storage
-                .init_state
-                .compare_exchange(
-                    INIT_STATE_UNINITIALIZED,
-                    INIT_STATE_INITIALIZED,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .ok();
+                .initialization
+                .transition(InitState::Uninitialized, InitEvent::NoConstructor);
             return Ok(StaticInitResult::Initialized);
         }
 
         let cctor = cctor.expect("checked is_none() above and returned early");
 
         let _init_lock = storage.init_mutex.lock();
-        match storage.init_state.load(Ordering::Acquire) {
-            INIT_STATE_UNINITIALIZED => {
-                storage
-                    .init_state
-                    .store(INIT_STATE_INITIALIZING, Ordering::Release);
-                storage
-                    .initializing_thread
-                    .store(thread_id.as_u64(), Ordering::Release);
-                Ok(StaticInitResult::Execute(cctor))
+        match storage.init_state() {
+            InitState::Uninitialized => {
+                assert!(storage.initialization.transition(
+                    InitState::Uninitialized,
+                    InitEvent::Claim(thread_id.as_u64())
+                ));
+                let claim = InitializerClaim {
+                    initialization: storage.initialization.clone(),
+                    owner: thread_id.as_u64(),
+                    armed: true,
+                };
+                Ok(StaticInitResult::Execute(cctor, claim))
             }
-            INIT_STATE_INITIALIZED => Ok(StaticInitResult::Initialized),
-            INIT_STATE_FAILED => Ok(StaticInitResult::Failed),
-            INIT_STATE_INITIALIZING => {
-                let target = storage.initializing_thread.load(Ordering::Acquire);
-                assert_ne!(target, 0, "initializing type must have an owner");
+            InitState::Initialized => Ok(StaticInitResult::Initialized),
+            InitState::Failed => Ok(StaticInitResult::Failed),
+            InitState::Initializing(target) => {
                 if target == thread_id.as_u64() {
                     return Ok(StaticInitResult::Recursive);
                 }
@@ -603,19 +730,22 @@ impl StaticStorageManager {
                     )))
                 }
             }
-            state => unreachable!("Invalid initialization state: {}", state),
         }
     }
 
-    /// Mark a type as fully initialized after its .cctor completes.
-    /// This must be called after the .cctor returned by `init()` has finished executing.
+    /// Publish `Initialized` without a claim, for tests that stand in for a finished `.cctor`.
+    /// Production code publishes through the `InitializerClaim` that `init()` returned.
+    #[cfg(test)]
     pub fn mark_initialized(&self, description: TypeDescription, generics: &GenericLookup) {
         if let Some(storage) = self.lookup_in_shard(description, generics) {
             let _lock = storage.init_mutex.lock();
-            storage
-                .init_state
-                .store(INIT_STATE_INITIALIZED, Ordering::Release);
-            storage.initializing_thread.store(0, Ordering::Release);
+            if let InitState::Initializing(owner) = storage.init_state() {
+                assert!(
+                    storage
+                        .initialization
+                        .transition(InitState::Initializing(owner), InitEvent::Publish(owner))
+                );
+            }
             // Notify any threads waiting for initialization
             storage.init_cond.notify_all();
         }
@@ -648,8 +778,8 @@ impl StaticStorageManager {
         )]
         loop {
             // Check state before acquiring lock
-            let state = storage.init_state.load(Ordering::Acquire);
-            if state != INIT_STATE_INITIALIZING {
+            let state = storage.init_state();
+            if !state.is_initializing() {
                 break;
             }
 
@@ -663,7 +793,7 @@ impl StaticStorageManager {
             #[cfg(feature = "multithreading")]
             {
                 let mut lock = storage.init_mutex.lock();
-                if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
+                if !storage.init_state().is_initializing() {
                     break;
                 }
 
@@ -742,5 +872,143 @@ mod wait_graph_guard_tests {
         assert!(!manager.wait_graph.lock().causes_cycle(3, 1));
         drop(first);
         assert!(manager.wait_graph.lock().edges.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use super::*;
+    use dotnet_vm_data::stack::InitializerClaim as _;
+
+    #[test]
+    fn initialization_transition_table() {
+        use InitState::*;
+        let states = [
+            Uninitialized,
+            Initializing(1),
+            Initializing(2),
+            Initialized,
+            Failed,
+        ];
+        let events = [
+            InitEvent::Claim(0),
+            InitEvent::Claim(1),
+            InitEvent::Claim(2),
+            InitEvent::Claim(u64::MAX),
+            InitEvent::NoConstructor,
+            InitEvent::Publish(1),
+            InitEvent::Publish(2),
+            InitEvent::Fail(1),
+            InitEvent::Fail(2),
+        ];
+        let expected = [
+            [
+                None,
+                Some(Initializing(1)),
+                Some(Initializing(2)),
+                None,
+                Some(Initialized),
+                None,
+                None,
+                None,
+                None,
+            ],
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Initialized),
+                None,
+                Some(Failed),
+                None,
+            ],
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Initialized),
+                None,
+                Some(Failed),
+            ],
+            [None; 9],
+            [None; 9],
+        ];
+        for (row, state) in states.into_iter().enumerate() {
+            assert_eq!(InitState::decode(state.encode()), state);
+            for (column, event) in events.into_iter().enumerate() {
+                assert_eq!(
+                    state.transition(event),
+                    expected[row][column],
+                    "{state:?}, {event:?}"
+                );
+                #[allow(
+                    clippy::arc_with_non_send_sync,
+                    reason = "test state is executor-confined without multithreading"
+                )]
+                let initialization = Arc::new(Initialization {
+                    word: AtomicU64::new(state.encode()),
+                    cond: Arc::new(Condvar::new()),
+                    mutex: Arc::new(OrderedMutex::new(())),
+                });
+                assert_eq!(
+                    initialization.transition(state, event),
+                    expected[row][column].is_some()
+                );
+                assert_eq!(
+                    initialization.state(),
+                    expected[row][column].unwrap_or(state)
+                );
+                if expected[row][column].is_some() {
+                    assert!(
+                        !initialization.transition(state, event),
+                        "stale snapshot must not publish twice"
+                    );
+                }
+                assert!(!initialization.transition(Failed, InitEvent::Claim(1)));
+            }
+        }
+        assert_eq!(
+            InitState::decode(Initializing(u64::MAX - 2).encode()),
+            Initializing(u64::MAX - 2)
+        );
+    }
+
+    #[test]
+    fn initializer_claim_drop_and_explicit_completion() {
+        for completion in [None, Some(false), Some(true)] {
+            #[allow(
+                clippy::arc_with_non_send_sync,
+                reason = "test state is executor-confined without multithreading"
+            )]
+            let initialization = Arc::new(Initialization {
+                word: AtomicU64::new(InitState::Initializing(1).encode()),
+                cond: Arc::new(Condvar::new()),
+                mutex: Arc::new(OrderedMutex::new(())),
+            });
+            let mut claim = InitializerClaim {
+                initialization: initialization.clone(),
+                owner: 1,
+                armed: true,
+            };
+            match completion {
+                Some(true) => claim.succeed(),
+                Some(false) => claim.fail(),
+                None => {}
+            }
+            drop(claim);
+            assert_eq!(
+                initialization.state(),
+                if completion == Some(true) {
+                    InitState::Initialized
+                } else {
+                    InitState::Failed
+                }
+            );
+        }
     }
 }
