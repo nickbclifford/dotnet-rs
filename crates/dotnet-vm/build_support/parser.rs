@@ -112,85 +112,168 @@ pub fn process_intrinsic_file(
 ) {
     let content = fs::read_to_string(path).unwrap();
     let mod_path = get_mod_path(path, root);
-    let file = syn::parse_file(&content).expect("Failed to parse file for intrinsics");
+    let file = syn::parse_file(&content).unwrap_or_else(|error| {
+        panic!(
+            "{}: failed to parse intrinsic source: {error}",
+            path.display()
+        )
+    });
 
-    for item in file.items {
+    reject_inline_async_intrinsics(&file.items, &mod_path, path);
+    for item in &file.items {
         if let Item::Fn(item_fn) = item {
-            let func_name = item_fn.sig.ident.to_string();
-            let args: Vec<IntrinsicArgs> = item_fn
-                .attrs
-                .iter()
-                .filter(|attr| attr.path().is_ident("dotnet_intrinsic"))
-                .map(|attr| {
-                    attr.parse_args()
-                        .expect("Failed to parse dotnet_intrinsic args")
-                })
-                .collect();
-            validate_intrinsic_options(&args, item_fn.sig.asyncness.is_some())
-                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-            for attr in &item_fn.attrs {
-                if attr.path().is_ident("dotnet_intrinsic") {
-                    let args: IntrinsicArgs = attr
-                        .parse_args()
-                        .expect("Failed to parse dotnet_intrinsic args");
-                    let sig_str = args.signature;
-                    let parsed: ParsedSignature =
-                        syn::parse_str(&sig_str.value()).expect("Failed to parse signature");
-                    let mut arity = parsed.parameters.len() as u16;
-                    if !parsed.is_static {
-                        arity += 1;
-                    }
-                    let params_str = parsed.parameters.join(", ");
-                    let normalized_sig = format!(
-                        "{} {}::{}({})",
-                        parsed.return_type, parsed.class_name, parsed.method_name, params_str
+            process_intrinsic_fn(item_fn, &file.items, &mod_path, path, entries);
+        }
+    }
+}
+
+fn reject_inline_async_intrinsics(items: &[Item], mod_path: &str, path: &Path) {
+    for item in items {
+        if let Item::Mod(module) = item
+            && let Some((_, nested)) = &module.content
+        {
+            let nested_path = format!("{}::{}", mod_path, module.ident);
+            for item in nested {
+                if let Item::Fn(func) = item
+                    && func.sig.asyncness.is_some()
+                    && func.attrs.iter().any(|attr| {
+                        let path = attr.path();
+                        path.is_ident("dotnet_intrinsic")
+                            || (path.segments.len() == 2
+                                && path.segments[0].ident == "dotnet_macros"
+                                && path.segments[1].ident == "dotnet_intrinsic")
+                    })
+                {
+                    panic!(
+                        "{}: {}::{}: async intrinsic inside an inline module is not scanned; move it to a separate module file",
+                        path.display(),
+                        nested_path,
+                        func.sig.ident
                     );
-                    let sig_hash = hash_value_u64(&normalized_sig);
-                    let filter_name = format!("{}_filter_{:x}", func_name, sig_hash);
-
-                    let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
-                    let sanitized_method = parsed.method_name.replace(['.', '$'], "_");
-                    let variant_name =
-                        format!("{}_{}_{:x}", sanitized_class, sanitized_method, sig_hash);
-                    entries.push(IntrinsicEntry {
-                        type_name: parsed.class_name,
-                        member_name: parsed.method_name,
-                        arity,
-                        is_static: parsed.is_static,
-                        is_field: false,
-                        is_async: item_fn.sig.asyncness.is_some(),
-                        selector: args.selector.map(|path| quote::quote!(#path).to_string()),
-                        original_handler_path: format!("{}::{}", mod_path, func_name),
-                        filter_name: Some(format!("{}::{}", mod_path, filter_name)),
-                        variant_name,
-                    });
-                } else if attr.path().is_ident("dotnet_intrinsic_field") {
-                    let sig_str: LitStr = attr
-                        .parse_args()
-                        .expect("Failed to parse dotnet_intrinsic_field args");
-                    let parsed: ParsedFieldSignature =
-                        syn::parse_str(&sig_str.value()).expect("Failed to parse field signature");
-
-                    let sig_hash = hash_value_u64(&sig_str.value());
-
-                    let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
-                    let sanitized_field = parsed.field_name.replace(['.', '$'], "_");
-                    let variant_name =
-                        format!("{}_{}_{:x}", sanitized_class, sanitized_field, sig_hash);
-                    entries.push(IntrinsicEntry {
-                        type_name: parsed.class_name,
-                        member_name: parsed.field_name,
-                        arity: 0,
-                        is_static: parsed.is_static,
-                        is_field: true,
-                        is_async: false,
-                        selector: None,
-                        original_handler_path: format!("{}::{}", mod_path, func_name),
-                        filter_name: None,
-                        variant_name,
-                    });
                 }
             }
+            reject_inline_async_intrinsics(nested, &nested_path, path);
+        }
+    }
+}
+
+fn process_intrinsic_fn(
+    item_fn: &ItemFn,
+    items: &[Item],
+    mod_path: &str,
+    path: &Path,
+    entries: &mut Vec<IntrinsicEntry>,
+) {
+    let func_name = item_fn.sig.ident.to_string();
+    let context = format!("{}: {}::{}", path.display(), mod_path, func_name);
+    let args: Vec<IntrinsicArgs> = item_fn
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("dotnet_intrinsic"))
+        .map(|attr| {
+            attr.parse_args()
+                .unwrap_or_else(|error| panic!("{context}: {error}"))
+        })
+        .collect();
+    validate_intrinsic_options(&args, item_fn.sig.asyncness.is_some())
+        .unwrap_or_else(|error| panic!("{context}: {error}"));
+    if item_fn.sig.asyncness.is_some() {
+        for (kind, target) in [
+            (
+                "selector",
+                args.first().and_then(|arg| arg.selector.as_ref()),
+            ),
+            (
+                "fallback",
+                args.first().and_then(|arg| arg.fallback.as_ref()),
+            ),
+        ] {
+            if let Some(target) = target {
+                check_local_target_visibility(items, target, kind, &context);
+            }
+        }
+    }
+    let mut args = args.into_iter();
+    for attr in &item_fn.attrs {
+        if attr.path().is_ident("dotnet_intrinsic") {
+            let args = args.next().expect("parsed intrinsic annotation");
+            let parsed: ParsedSignature = syn::parse_str(&args.signature.value())
+                .unwrap_or_else(|error| panic!("{context}: invalid intrinsic signature: {error}"));
+            let mut arity = parsed.parameters.len() as u16;
+            if !parsed.is_static {
+                arity += 1;
+            }
+            let params_str = parsed.parameters.join(", ");
+            let normalized_sig = format!(
+                "{} {}::{}({})",
+                parsed.return_type, parsed.class_name, parsed.method_name, params_str
+            );
+            let sig_hash = hash_value_u64(&normalized_sig);
+            let filter_name = format!("{}_filter_{:x}", func_name, sig_hash);
+
+            let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
+            let sanitized_method = parsed.method_name.replace(['.', '$'], "_");
+            let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_method, sig_hash);
+            entries.push(IntrinsicEntry {
+                type_name: parsed.class_name,
+                member_name: parsed.method_name,
+                arity,
+                is_static: parsed.is_static,
+                is_field: false,
+                is_async: item_fn.sig.asyncness.is_some(),
+                selector: args.selector.map(|path| quote::quote!(#path).to_string()),
+                original_handler_path: format!("{}::{}", mod_path, func_name),
+                filter_name: Some(format!("{}::{}", mod_path, filter_name)),
+                variant_name,
+            });
+        } else if attr.path().is_ident("dotnet_intrinsic_field") {
+            let sig_str: LitStr = attr
+                .parse_args()
+                .unwrap_or_else(|error| panic!("{context}: invalid field annotation: {error}"));
+            let parsed: ParsedFieldSignature = syn::parse_str(&sig_str.value())
+                .unwrap_or_else(|error| panic!("{context}: invalid field signature: {error}"));
+            let sig_hash = hash_value_u64(&sig_str.value());
+            let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
+            let sanitized_field = parsed.field_name.replace(['.', '$'], "_");
+            let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_field, sig_hash);
+            entries.push(IntrinsicEntry {
+                type_name: parsed.class_name,
+                member_name: parsed.field_name,
+                arity: 0,
+                is_static: parsed.is_static,
+                is_field: true,
+                is_async: false,
+                selector: None,
+                original_handler_path: format!("{}::{}", mod_path, func_name),
+                filter_name: None,
+                variant_name,
+            });
+        }
+    }
+}
+
+fn check_local_target_visibility(items: &[Item], target: &syn::Path, kind: &str, context: &str) {
+    // Only direct local function definitions can be resolved without duplicating Rust's name resolution.
+    // Generated public re-exports let rustc check imported and cross-module paths.
+    if target.leading_colon.is_some() {
+        return;
+    }
+    let segments: Vec<_> = target.segments.iter().collect();
+    let name = match segments.as_slice() {
+        [name] => &name.ident,
+        [prefix, name] if prefix.ident == "self" => &name.ident,
+        _ => return,
+    };
+    for item in items {
+        if let Item::Fn(func) = item
+            && func.sig.ident == *name
+            && !func
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+            && !matches!(func.vis, syn::Visibility::Public(_))
+        {
+            panic!("{context}: {kind} `{name}` must be public for the generated re-export");
         }
     }
 }

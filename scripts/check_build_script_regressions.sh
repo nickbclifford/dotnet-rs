@@ -191,6 +191,10 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_vm_ops::effects::{NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects};
 use crate::IntrinsicStringHost;
 
+#[cfg(any())]
+fn choose() {}
+#[cfg_attr(all(), cfg(any()))]
+fn sync() {}
 pub fn sync<'gc, T: IntrinsicStringHost<'gc>>(
     _ctx: &mut T, _method: MethodDescription, _generics: &GenericLookup,
 ) -> dotnet_vm_data::StepResult { dotnet_vm_data::StepResult::Continue }
@@ -236,7 +240,7 @@ EOF
         if cargo build -p dotnet-vm --no-default-features >"$LOG_DIR/async-conflict-$case.log" 2>&1; then
             fail "$case selector mismatch accepted by scanner"
         fi
-        rg -q 'async_selector_conflict.rs: intrinsic annotations must name the same selector' "$LOG_DIR/async-conflict-$case.log" || { print_log_excerpt "$LOG_DIR/async-conflict-$case.log"; fail "missing scanner conflict diagnostic ($case)"; }
+        grep -Fq "$(basename "$conflict"): crate::intrinsics::$(basename "$conflict" .rs)::conflict: intrinsic annotations must name the same selector" "$LOG_DIR/async-conflict-$case.log" || { print_log_excerpt "$LOG_DIR/async-conflict-$case.log"; fail "missing scanner conflict diagnostic ($case)"; }
     done
     for case in different missing; do
         cat > "$conflict" <<'EOF'
@@ -254,6 +258,100 @@ EOF
         fi
         rg -q "$diagnostic" "$LOG_DIR/async-fallback-$case.log" || { print_log_excerpt "$LOG_DIR/async-fallback-$case.log"; fail "missing scanner fallback diagnostic ($case)"; }
     done
+
+    assert_scanner_failure() {
+        local config="$1" case="$2" context="$3" diagnostic="$4"
+        local -a features=(--no-default-features)
+        [[ "$config" == st ]] || features+=(--features multithreading)
+        local log="$LOG_DIR/scanner-$config-$case.log"
+        if cargo build -p dotnet-vm "${features[@]}" >"$log" 2>&1; then
+            fail "scanner accepted $case ($config)"
+        fi
+        grep -Fq "$(basename "$conflict"): crate::intrinsics::$(basename "$conflict" .rs)::$context: $diagnostic" "$log" || {
+            print_log_excerpt "$log"; fail "missing scanner context or diagnostic for $case ($config)";
+        }
+    }
+
+    for config in st mt; do
+        for case in unknown duplicate; do
+            local option='unknown = target'
+            local diagnostic='expected `select` or `fallback`'
+            if [[ "$case" == duplicate ]]; then
+                option='fallback = sync, fallback = other'
+                diagnostic='duplicate intrinsic option'
+            fi
+            cat > "$conflict" <<EOF
+#[dotnet_intrinsic("static void DotnetRs.Probe::Run()", $option)]
+async fn handler(_fx: VmEffects) -> NativeResult { unreachable!() }
+EOF
+            assert_scanner_failure "$config" "$case" handler "$diagnostic"
+        done
+
+        for case in first-select first-fallback second-select second-fallback; do
+            local first='' second=''
+            case "$case" in
+                first-select) first=', select = choose' ;;
+                first-fallback) first=', fallback = sync' ;;
+                second-select) second=', select = choose' ;;
+                second-fallback) second=', fallback = sync' ;;
+            esac
+            cat > "$conflict" <<EOF
+#[dotnet_intrinsic("static void DotnetRs.Probe::First()"$first)]
+#[dotnet_intrinsic("static void DotnetRs.Probe::Second()"$second)]
+fn handler() {}
+EOF
+            assert_scanner_failure "$config" "$case" handler 'select and fallback require an async intrinsic'
+        done
+
+        for case in selector fallback; do
+            local declarations='fn choose() {}
+pub fn sync() {}'
+            local target='selector `choose`'
+            if [[ "$case" == fallback ]]; then
+                declarations='pub fn choose() {}
+pub(crate) fn sync() {}'
+                target='fallback `sync`'
+            fi
+            printf '%b\n' "$declarations" > "$conflict"
+            cat >> "$conflict" <<'EOF'
+#[dotnet_intrinsic("static void DotnetRs.Probe::Run()", select = choose, fallback = self::sync)]
+async fn handler(_fx: VmEffects) -> NativeResult { unreachable!() }
+EOF
+            assert_scanner_failure "$config" "$case" handler "$target must be public for the generated re-export"
+        done
+
+        for attribute in dotnet_intrinsic dotnet_macros::dotnet_intrinsic; do
+            cat > "$conflict" <<EOF
+mod outer { mod inner {
+    #[$attribute("static void DotnetRs.Probe::Run()", fallback = sync)]
+    async fn handler(_fx: VmEffects) -> NativeResult { unreachable!() }
+} }
+EOF
+            assert_scanner_failure "$config" inline 'outer::inner::handler' 'async intrinsic inside an inline module is not scanned'
+        done
+    done
+    rm "$conflict"
+
+    # Paths outside this source file are resolved by rustc, not the scanner.
+    cp "$probe" "$LOG_DIR/async-public-probe.rs"
+    for case in selector fallback; do
+        cp "$LOG_DIR/async-public-probe.rs" "$probe"
+        if [[ "$case" == selector ]]; then
+            printf '\nmod hidden { pub(super) use super::choose as target; }\n' >> "$probe"
+            sed -i 's/select = self::choose/select = self::hidden::target/g' "$probe"
+        else
+            printf '\nmod hidden { pub(super) use super::sync as target; }\n' >> "$probe"
+            sed -i 's/fallback = self::sync/fallback = self::hidden::target/g' "$probe"
+        fi
+        local log="$LOG_DIR/async-private-$case.log"
+        if cargo build -p dotnet-vm --no-default-features >"$log" 2>&1; then
+            fail "non-public cross-module $case accepted"
+        fi
+        grep -Eq 'error\[E0364\].*(only public within the crate|private)' "$log" || {
+            print_log_excerpt "$log"; fail "missing compiler visibility diagnostic for $case";
+        }
+    done
+    cp "$LOG_DIR/async-public-probe.rs" "$probe"
 )
 
 main() {

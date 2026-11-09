@@ -113,6 +113,58 @@ fn generate_intrinsic_filter_fn(
     }
 }
 
+fn is_named_type(ty: &syn::Type, name: &str) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    path.qself.is_none()
+        && path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == name)
+        && path
+            .path
+            .segments
+            .iter()
+            .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+}
+
+fn validate_async_intrinsic_signature(sig: &syn::Signature) -> syn::Result<()> {
+    if sig.inputs.len() != 1 {
+        return Err(syn::Error::new(
+            sig.paren_token.span.join(),
+            "async intrinsic requires exactly one `VmEffects` parameter",
+        ));
+    }
+    match &sig.inputs[0] {
+        syn::FnArg::Typed(param) if is_named_type(&param.ty, "VmEffects") => {}
+        syn::FnArg::Typed(param) => {
+            return Err(syn::Error::new_spanned(
+                &param.ty,
+                "async intrinsic parameter must be `VmEffects`",
+            ));
+        }
+        receiver => {
+            return Err(syn::Error::new_spanned(
+                receiver,
+                "async intrinsic parameter must be `VmEffects`",
+            ));
+        }
+    }
+    match &sig.output {
+        syn::ReturnType::Type(_, ty) if is_named_type(ty, "NativeResult") => Ok(()),
+        syn::ReturnType::Type(_, ty) => Err(syn::Error::new_spanned(
+            ty,
+            "async intrinsic return type must be `NativeResult`",
+        )),
+        syn::ReturnType::Default => Err(syn::Error::new_spanned(
+            &sig.ident,
+            "async intrinsic return type must be `NativeResult`",
+        )),
+    }
+}
+
 fn expand_intrinsic(
     args: IntrinsicArgs,
     mut func: ItemFn,
@@ -131,6 +183,9 @@ fn expand_intrinsic(
         func.attrs = retained;
     }
     validate_intrinsic_options(&annotations, is_async)?;
+    if is_async {
+        validate_async_intrinsic_signature(&func.sig)?;
+    }
     let func_name = &func.sig.ident;
     let filters = annotations
         .iter()
@@ -174,6 +229,12 @@ fn expand_intrinsic(
     Ok(quote! { #func #(#filters)* #entry })
 }
 
+/// Registers a synchronous or async native implementation for a managed method.
+///
+/// Async handlers must take one `VmEffects` argument and return `NativeResult`; they require
+/// `fallback = path` and may provide `select = path`. The selector runs before operands are
+/// consumed and chooses async execution, a synchronous handler, or rejection. Calls that cannot
+/// suspend use the fallback, while synchronous registrations keep their existing convention.
 #[proc_macro_attribute]
 pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as IntrinsicArgs);
@@ -409,6 +470,104 @@ mod tests {
         );
         let output = expand_intrinsic(args, func).unwrap().to_string();
         assert!(!output.contains("native_entry"));
+    }
+
+    fn expand_async_signature(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+        expand_intrinsic(
+            syn::parse_quote!("static void Test.Type::Work()", fallback = sync),
+            func,
+        )
+    }
+
+    #[test]
+    fn async_intrinsic_rejects_wrong_parameter_count() {
+        for func in [
+            syn::parse_quote!(
+                async fn work() -> NativeResult {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects, other: VmEffects) -> NativeResult {}
+            ),
+        ] {
+            let error = expand_async_signature(func).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("exactly one `VmEffects` parameter")
+            );
+        }
+    }
+
+    #[test]
+    fn async_intrinsic_rejects_wrong_parameter_type() {
+        for func in [
+            syn::parse_quote!(
+                async fn work(fx: Other) -> NativeResult {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: &mut VmEffects) -> NativeResult {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects<u8>) -> NativeResult {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: (VmEffects,)) -> NativeResult {}
+            ),
+        ] {
+            let error = expand_async_signature(func).unwrap_err();
+            assert!(error.to_string().contains("parameter must be `VmEffects`"));
+        }
+    }
+
+    #[test]
+    fn async_intrinsic_rejects_wrong_return_type() {
+        for func in [
+            syn::parse_quote!(
+                async fn work(fx: VmEffects) {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects) -> () {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects) -> Other {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects) -> NativeResult<u8> {}
+            ),
+            syn::parse_quote!(
+                async fn work(fx: VmEffects) -> &NativeResult {}
+            ),
+        ] {
+            let error = expand_async_signature(func).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("return type must be `NativeResult`")
+            );
+        }
+    }
+
+    #[test]
+    fn async_intrinsic_accepts_qualified_types_and_any_parameter_name() {
+        for func in [
+            syn::parse_quote!(
+                async fn work(mut fx: VmEffects) -> NativeResult {}
+            ),
+            syn::parse_quote!(
+                async fn work(
+                    effects: dotnet_vm_ops::effects::VmEffects,
+                ) -> dotnet_vm_ops::effects::NativeResult {
+                }
+            ),
+            syn::parse_quote!(
+                async fn work(
+                    _: ::dotnet_vm_ops::effects::VmEffects,
+                ) -> ::dotnet_vm_ops::effects::NativeResult {
+                }
+            ),
+        ] {
+            assert!(expand_async_signature(func).is_ok());
+        }
     }
 
     #[test]
