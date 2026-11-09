@@ -1191,3 +1191,122 @@ mod ownership {
         }
     }
 }
+
+/// A retired owner may not free its arena while another owner can still run a finalizer: that
+/// finalizer can allocate and collect, and a trace reads owner identity through references into
+/// every arena (F1.RetiredCollectionExclusion).
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_owner_stays_registered_while_another_owner_finalizes() {
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{sync::mpsc, time::Duration};
+
+    let state = shared();
+    let guard = ShutdownOnDrop(state.clone());
+    let worker_state = state.clone();
+    let (ready, ready_rx) = mpsc::channel();
+    let owner = state.workers.spawn_owner(move |running| {
+        let executor = Executor::new(worker_state);
+        ready.send(executor.thread_id).unwrap();
+        executor.serve_retired(running.complete(ExecutorResult::Exited(0)));
+    });
+    let id = ready_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("owner did not become ready");
+
+    // A second owner that is mid-finalizer when the shutdown signal arrives.
+    let finalizer_state = state.clone();
+    let (finalizing, finalizing_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    state.workers.spawn_owner(move |running| {
+        let retired = running.complete(ExecutorResult::Exited(0)).retire();
+        assert!(retired.begin_finalizing(&finalizer_state));
+        finalizing.send(()).unwrap();
+        let _ = release_rx.recv();
+        retired.finish_finalizing();
+    });
+    finalizing_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("second owner did not start finalizing");
+
+    let lease = try_acquire_lease(id).expect("owner is registered while retired");
+    state.thread_manager.shutdown_retired();
+    std::thread::sleep(Duration::from_millis(300));
+    let still_registered = lease.is_valid();
+    let phase_while_finalizing = owner.phase();
+
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while lease.is_valid() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let removed_after_finalizer = !lease.is_valid();
+    // Release before joining or asserting, including on a failed observation.
+    drop(lease);
+    drop(guard);
+
+    assert!(
+        still_registered,
+        "owner unregistered while another owner was finalizing"
+    );
+    assert_eq!(phase_while_finalizing, "retired");
+    assert!(removed_after_finalizer);
+    assert_eq!(owner.phase(), "drained");
+}
+
+/// A finalizer can start a worker. `shutdown` must wait for it to finish and still join the worker
+/// it started, not just the handles that existed when the finalizer was running.
+#[cfg(feature = "multithreading")]
+#[test]
+fn shutdown_waits_for_finalizing_worker_and_joins_workers_it_starts() {
+    use std::{
+        sync::{atomic::AtomicBool, mpsc},
+        time::Duration,
+    };
+
+    let state = shared();
+    let (finalizing, finalizing_rx) = mpsc::channel();
+    let started_late = StdArc::new(AtomicBool::new(false));
+    let finished_late = StdArc::new(AtomicBool::new(false));
+    let worker_state = state.clone();
+    let (late_started, late_finished) = (started_late.clone(), finished_late.clone());
+    state.workers.spawn_owner(move |running| {
+        let retired = running.complete(ExecutorResult::Exited(0)).retire();
+        assert!(retired.begin_finalizing(&worker_state));
+        finalizing.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        // A finalizer starting a thread.
+        let (started, finished) = (late_started, late_finished);
+        worker_state.workers.spawn_owner(move |running| {
+            started.store(true, AtomicOrdering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            finished.store(true, AtomicOrdering::SeqCst);
+            let _ = running.complete(ExecutorResult::Exited(0)).retire();
+        });
+        retired.finish_finalizing();
+    });
+    finalizing_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("worker did not start finalizing");
+
+    let signaled_while_finalizing = StdArc::new(AtomicBool::new(false));
+    let observed = signaled_while_finalizing.clone();
+    let observer = state.clone();
+    state.workers.shutdown(move || {
+        // The signal only goes out once no worker is finalizing, so the late worker already exists.
+        observed.store(
+            !observer.workers.is_quiescent(|| true),
+            AtomicOrdering::SeqCst,
+        );
+    });
+
+    assert!(
+        !signaled_while_finalizing.load(AtomicOrdering::SeqCst),
+        "shutdown signalled while a worker was still finalizing"
+    );
+    assert!(started_late.load(AtomicOrdering::SeqCst));
+    assert!(
+        finished_late.load(AtomicOrdering::SeqCst),
+        "shutdown returned before the worker started by a finalizer finished"
+    );
+}

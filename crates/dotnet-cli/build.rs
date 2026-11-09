@@ -267,11 +267,13 @@ fn main() {
             _ => None,
         };
 
-        // These fixtures exercise two managed Threads within one CLI execution and use
-        // custom cfg-gated registrations. Keep them in the fixture list for prebuilt validation.
+        // These fixtures use custom registrations to control thread ownership or feature gating.
+        // Keep them in the fixture list for prebuilt validation.
         let is_manually_registered = matches!(
             file_name,
-            "pinvoke_last_error_isolation_42" | "invoke_byref_foreign_42"
+            "pinvoke_last_error_isolation_42"
+                | "invoke_byref_foreign_42"
+                | "invoke_argument_race_42"
         );
 
         let source_path = path.strip_prefix(manifest_dir).unwrap().to_str().unwrap();

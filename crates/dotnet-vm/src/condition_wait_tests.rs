@@ -202,7 +202,7 @@ fn condition_wait_executor_runs_pending_finalizer_before_resuming() {
 }
 
 #[test]
-fn finalizer_wait_self_wait_retains_legacy_retry_in_finalizer_segment() {
+fn finalizer_wait_from_finalizer_returns_immediately() {
     finalizer_wait_executor(true);
 }
 
@@ -306,7 +306,7 @@ fn finalizer_wait_executor(test_self_wait: bool) {
                                 method.clone(),
                                 mode
                             ),
-                            StepResult::Yield
+                            StepResult::Continue
                         );
                         assert!(engine.stack.local.heap.processing_finalizer.get());
                         assert!(engine.stack.execution.call_state.native.is_empty());
@@ -1152,7 +1152,6 @@ fn monitor_byref_contended_dispatch_survives_collection() {
     assert!(!block.exit(thread));
 }
 
-#[cfg(feature = "multithreading")]
 fn timed_monitor_method(executor: &Executor) -> MethodDescription {
     use dotnetdll::{binary::signature::kinds::CallingConvention, resolved::types::TypeDefinition};
     let mut res = Resolution::new(Module::new("TimedMonitor.dll"));
@@ -1429,6 +1428,166 @@ fn monitor_retry_record_is_removed_on_executor_abort_and_frame_reuse() {
         .unwrap();
 }
 
+#[cfg(not(feature = "multithreading"))]
+struct SimulatedMonitorContention;
+
+#[cfg(not(feature = "multithreading"))]
+impl Drop for SimulatedMonitorContention {
+    fn drop(&mut self) {
+        crate::sync::MONITOR_TEST_CONTENDED.with(|contended| contended.set(false));
+    }
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn hold_monitor_for_timeout(
+    _: &crate::sync::SyncBlock,
+    _: dotnet_utils::ArenaId,
+) -> SimulatedMonitorContention {
+    // A single-threaded sync block always acquires, so emulate a failed probe while the
+    // real driver handles the expired deadline and replies to the actual intrinsic.
+    crate::sync::MONITOR_TEST_CONTENDED.with(|contended| {
+        assert!(!contended.replace(true));
+    });
+    SimulatedMonitorContention
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn release_monitor_for_test(
+    _: &crate::sync::SyncBlock,
+    _: dotnet_utils::ArenaId,
+    contention: SimulatedMonitorContention,
+) {
+    drop(contention);
+}
+
+#[cfg(feature = "multithreading")]
+fn release_monitor_for_test(block: &crate::sync::SyncBlock, owner: dotnet_utils::ArenaId, _: bool) {
+    use crate::sync::SyncBlockOps;
+    assert!(block.exit(owner));
+}
+
+#[cfg(feature = "multithreading")]
+fn hold_monitor_for_timeout(block: &crate::sync::SyncBlock, owner: dotnet_utils::ArenaId) -> bool {
+    use crate::sync::SyncBlockOps;
+    assert!(block.try_enter(owner));
+    true
+}
+
+#[test]
+fn monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition() {
+    use crate::{stack::native_effects::MONITOR_FLAG_WRITES, sync::SyncBlockOps};
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::{
+        object::Object,
+        pointer::{ManagedPtr, PointerOrigin},
+        storage::FieldStorage,
+    };
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    let owner = dotnet_utils::ArenaId::new(9999);
+    let thread = executor.thread_id;
+    for (index, acquired) in [false, true].into_iter().enumerate() {
+        let (block, contention) = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let layout = dotnet_value::layout::FieldLayoutManager {
+                fields: Default::default(), total_size: 1, alignment: 1,
+                gc_desc: Default::default(), has_ref_fields: false,
+            };
+            let flag = ObjectRef::new(gc, HeapStorage::Obj(Box::new(Object::new(
+                method.parent.clone(), Default::default(), FieldStorage::new(Arc::new(layout), vec![0]),
+            ))));
+            let address = flag.as_heap_storage(|storage| match storage {
+                HeapStorage::Obj(obj) => obj.instance_storage.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut())),
+                _ => unreachable!(),
+            });
+            let pointer = ManagedPtr::new(address, TypeDescription::NULL, Some(flag), false, Some(dotnet_utils::ByteOffset::new(0)));
+            engine.stack.local.heap.gchandles.borrow_mut().push(Some((flag, GCHandleType::Weak)));
+            let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+            let mut ctx = engine.ves_context(gc);
+            let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+            let contention = hold_monitor_for_timeout(&block, owner);
+
+            // Keep one byref on the caller's stack while its alias is passed to TryEnter.
+            ctx.push(StackValue::ManagedPtr(pointer.clone().into()));
+            ctx.push(StackValue::ObjectRef(object));
+            ctx.push(StackValue::Int32(i32::MAX));
+            ctx.push(StackValue::ManagedPtr(pointer.into()));
+            MONITOR_FLAG_WRITES.with(|writes| assert!(writes.borrow_mut().replace(Vec::new()).is_none()));
+            assert_eq!(crate::intrinsics::dispatch_method_intrinsic(
+                crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_TryEnter_a8f16726fa8c35c7,
+                &mut ctx, method.clone(), &Default::default(), NativeDispatchMode::InlineCall,
+            ), StepResult::Yield);
+            (block, contention)
+        })).unwrap();
+        let mut contention = Some(contention);
+        MONITOR_FLAG_WRITES.with(|writes| assert!(writes.borrow().as_ref().unwrap().is_empty()));
+        collect(&mut executor);
+        if acquired {
+            release_monitor_for_test(&block, owner, contention.take().unwrap());
+        } else {
+            executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|_, engine| {
+                        let Some(crate::stack::native_effects::PendingWait::Monitor(wait)) =
+                            &mut engine
+                                .stack
+                                .execution
+                                .call_state
+                                .native
+                                .last_mut()
+                                .unwrap()
+                                .wait
+                        else {
+                            panic!("missing monitor wait");
+                        };
+                        // Expire the actual activation deadline without a wall-clock sleep.
+                        wait.deadline = Some(std::time::Instant::now());
+                    })
+                })
+                .unwrap();
+        }
+        assert_eq!(resume(&mut executor), StepResult::Continue);
+        let writes = MONITOR_FLAG_WRITES.with(|writes| writes.borrow_mut().take().unwrap());
+        assert_eq!(writes, vec![acquired]);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let flag = engine.stack.local.heap.gchandles.borrow()[index]
+                        .as_ref()
+                        .unwrap()
+                        .0;
+                    let mut ctx = engine.ves_context(gc);
+                    let alias = ctx.pop().as_managed_ptr();
+                    let PointerOrigin::Heap(alias_owner) = alias.origin() else {
+                        panic!("alias lost heap owner")
+                    };
+                    assert_eq!(*alias_owner, flag);
+                    assert_eq!(
+                        alias_owner.as_heap_storage(|storage| match storage {
+                            HeapStorage::Obj(obj) => obj.instance_storage.with_data(|data| data[0]),
+                            _ => unreachable!(),
+                        }),
+                        u8::from(acquired)
+                    );
+                    assert_eq!(ctx.frame_stack.current_frame().stack_height.as_usize(), 0);
+                })
+            })
+            .unwrap();
+        if acquired {
+            assert!(block.exit(thread));
+            assert!(!block.exit(thread));
+        } else {
+            assert!(!block.exit(thread));
+            release_monitor_for_test(&block, owner, contention.take().unwrap());
+        }
+    }
+}
+
 #[cfg(feature = "multithreading")]
 #[test]
 fn monitor_timed_byref_writes_result_and_preserves_ownership() {
@@ -1458,6 +1617,8 @@ fn monitor_timed_byref_writes_result_and_preserves_ownership() {
             if index == 1 {
                 assert!(block.exit(owner));
             }
+            // SAFETY: F10.FrameHomeChecked — this live one-byte block remains owned by the current frame.
+            unsafe { address.as_ptr().write(0) };
             ctx.push(StackValue::ObjectRef(object));
             ctx.push(StackValue::Int32(0));
             ctx.push(StackValue::ManagedPtr(pointer.clone().into()));
@@ -1579,7 +1740,7 @@ fn monitor_heap_byref_survives_collection_and_writes_owner() {
 }
 
 #[test]
-fn monitor_byref_rejects_out_of_range_after_acquisition() {
+fn monitor_byref_rejects_out_of_range_before_acquisition() {
     use crate::sync::SyncBlockOps;
     use dotnet_intrinsics_threading::MonitorHost;
     use dotnet_value::pointer::ManagedPtr;
@@ -1628,7 +1789,6 @@ fn monitor_byref_rejects_out_of_range_after_acquisition() {
             &mut ctx, method, &Default::default(), NativeDispatchMode::InlineCall,
         ), StepResult::Error(_)));
                 assert!(ctx.call_state.native.is_empty());
-                assert!(block.exit(thread));
                 assert!(!block.exit(thread));
             })
         })
@@ -1919,4 +2079,222 @@ fn sync_block_is_assigned_once_per_object() {
             })
         })
         .unwrap();
+}
+
+#[cfg(feature = "multithreading")]
+fn queue_collected_finalizer(executor: &mut Executor) {
+    let mut res = Resolution::new(Module::new("mscorlib.dll"));
+    res.assembly = Some(Assembly::new("mscorlib"));
+    let mut object = TypeDefinition::new(None, "Object");
+    object.namespace = Some("System".into());
+    let ty_index = res.push_type_definition(object);
+    let mut signature = parameterless_i32_signature();
+    signature.instance = true;
+    signature.return_type = ReturnType(vec![], None);
+    let mut finalizer = Method::new(
+        Accessibility::Public,
+        signature,
+        "Finalize",
+        Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::Return])),
+    );
+    finalizer.virtual_member = true;
+    res.push_method(ty_index, finalizer);
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res, ty_index);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let layout = dotnet_value::layout::FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 0,
+                    alignment: 1,
+                    gc_desc: Default::default(),
+                    has_ref_fields: false,
+                };
+                let object = ObjectRef::new(
+                    gc,
+                    HeapStorage::Obj(Box::new(
+                        dotnet_value::object::Object::new_with_finalizer_flag(
+                            ty,
+                            GenericLookup::default(),
+                            dotnet_value::storage::FieldStorage::new(Arc::new(layout), vec![]),
+                            true,
+                        ),
+                    )),
+                );
+                engine.ves_context(gc).register_new_object(&object);
+            })
+        })
+        .unwrap();
+    collect(executor);
+    assert!(executor.shared.has_pending_finalizers());
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                assert_eq!(
+                    engine.stack.local.heap.pending_finalization.borrow().len(),
+                    1
+                );
+            })
+        })
+        .unwrap();
+}
+
+#[cfg(feature = "multithreading")]
+fn run_queued_finalizer(executor: &mut Executor) {
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                assert_eq!(
+                    engine.process_pending_finalizers(gc),
+                    StepResult::FramePushed
+                );
+                assert_eq!(engine.step(gc), StepResult::Continue);
+                assert!(engine.stack.parked_finalizer_caller.is_none());
+            })
+        })
+        .unwrap();
+    assert!(!executor.shared.has_pending_finalizers());
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn retired_owner_remains_registered_while_other_arena_has_queued_finalizer() {
+    use dotnet_utils::gc::cross_arena::try_acquire_lease;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let mut executor = executor();
+    queue_collected_finalizer(&mut executor);
+    let shared = executor.shared.clone();
+    struct AbortAndJoin(Arc<SharedGlobalState>);
+    impl Drop for AbortAndJoin {
+        fn drop(&mut self) {
+            self.0.abort_signal().request_abort();
+            self.0.shutdown_workers();
+        }
+    }
+    let cleanup = AbortAndJoin(shared.clone());
+    let worker_shared = shared.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (probe_tx, probe_rx) = mpsc::channel();
+    let worker = shared.workers.spawn_owner(move |running| {
+        super::super::RETIRED_QUIESCENCE_TEST_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |quiescent| {
+                let _ = probe_tx.send(quiescent);
+            }));
+        });
+        let owner = Executor::new(worker_shared);
+        ready_tx.send(owner.thread_id).unwrap();
+        owner.serve_retired(running.complete(ExecutorResult::Exited(0)));
+    });
+    let id = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !worker.is_finished() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let retired = worker.is_finished();
+    let lease = try_acquire_lease(id).unwrap();
+    shared.thread_manager.shutdown_retired();
+    let quiescent = probe_rx.recv_timeout(Duration::from_secs(30));
+    let still_registered = lease.is_valid();
+    let phase = worker.phase();
+    run_queued_finalizer(&mut executor);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while lease.is_valid() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let removed = !lease.is_valid();
+    drop(lease);
+    shared.shutdown_workers();
+    assert_eq!(quiescent, Ok(false));
+    assert!(retired && still_registered && removed);
+    assert_eq!(phase, "retired");
+    assert_eq!(worker.phase(), "drained");
+    drop(cleanup);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn finalizer_wait_rechecks_after_another_owner_finishes() {
+    use crate::{
+        stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint},
+        test_utils::worker::Worker,
+    };
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    use std::{sync::mpsc, time::Duration};
+    let mut executor = executor();
+    queue_collected_finalizer(&mut executor);
+    let info = executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                engine
+                    .stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .clone()
+            })
+        })
+        .unwrap();
+    let method = condition_wait_method(&executor, false);
+    let shared = executor.shared.clone();
+    let (registered_tx, registered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut waiter = Executor::new(shared);
+        waiter
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    engine.stack.execution.frame_stack.push_frame(
+                        BasePointer::default(),
+                        info,
+                        Default::default(),
+                        Default::default(),
+                    );
+                    WAIT_TEST_HOOK.with(|hook| {
+                        *hook.borrow_mut() = Some(Box::new(move |point| {
+                            if matches!(point, WaitTestPoint::FinalizersRegistered) {
+                                registered_tx.send(()).unwrap();
+                                let _ = release_rx.recv_timeout(Duration::from_secs(30));
+                            }
+                        }))
+                    });
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let result = engine.ves_context(gc).start_native(
+                        method,
+                        NativeDispatchMode::InlineCall,
+                        &Default::default(),
+                        None,
+                        native_test_fallback,
+                        condition_finalizer_body,
+                    );
+                    WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+                    result_tx
+                        .send((result, engine.stack.execution.call_state.native.is_empty()))
+                        .unwrap();
+                })
+            })
+            .unwrap();
+    });
+    let worker = Worker::new(handle, release_tx);
+    registered_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("wait was not registered");
+    run_queued_finalizer(&mut executor);
+    worker.resources().send(()).unwrap();
+    let result = result_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("waiter did not resume");
+    worker.finish().unwrap();
+    assert_eq!(result, (StepResult::Jump(1), true));
 }

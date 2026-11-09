@@ -59,19 +59,24 @@ BRIDGE = {'effects::tests::' + name for name in (
     'nested_entry_rejected', 'panic_resets_entry_and_installation',
     'condition_replies_require_matching_effect_and_generation',
     'initializer_replies_require_matching_effect_and_generation',
+    'continuation_polls_share_one_turn_grant_budget',
     'rooted_frame_home_descriptor_preserves_aliases_and_rejects_retired_home',
     'rooted_heap_pointer_descriptor_keeps_owner_alive')}
 NATIVE = {'executor::native_substring_tests::' + name for name in (
     'native_activation_real_context_and_collection',
+    'reflection_retry_completed_collection_does_not_retry',
     'condition_wait_tests::monitor_heap_byref_survives_stop_before_dispatch',
     'condition_wait_tests::monitor_byref_dispatch_writes_frame_home',
+    'condition_wait_tests::monitor_timed_byref_alias_writes_once_for_timeout_and_acquisition',
     'condition_wait_tests::condition_wait_executor_runs_pending_finalizer_before_resuming',
-    'condition_wait_tests::finalizer_wait_self_wait_retains_legacy_retry_in_finalizer_segment',
+    'condition_wait_tests::finalizer_wait_from_finalizer_returns_immediately',
     'finalizer_segment_resolves_parked_homes_and_preserves_serials',
     'finalizer_preserves_filter_and_suspended_native_context',
     'native_activation_nested_return_is_copied',
     'native_capture_filters_and_child_cleanup_precede_outer_search',
+    'legacy_initializer_frame_retirement_fails_claim',
     'native_initializer_failure_is_published_with_original_inner',
+    'native_error_retires_initializer_frame_before_future_drop',
     'static_store_operand_released_after_abandonment',
     'native_activation_calls_suspending_intrinsic',
     'native_activation_rejects_reply_from_wrong_root_set',
@@ -80,9 +85,14 @@ NATIVE = {'executor::native_substring_tests::' + name for name in (
     'native_activation_rejects_each_changed_caller_component',
     'native_activation_poll_panic_unwinds_and_releases_roots')}
 FOREIGN = {'executor::native_substring_tests::' + name for name in (
+    'condition_wait_tests::finalizer_wait_rechecks_after_another_owner_finishes',
+    'condition_wait_tests::retired_owner_remains_registered_while_other_arena_has_queued_finalizer',
+    'legacy_initializer_host_error_releases_waiter',
+    'worker_teardown_cleans_native_before_retiring_caller',
     'foreign_source_survives_coordinated_collections_between_chunks',
     'native_initializer_failure_survives_owner_retirement_and_collection',
     'native_initializer_wait_rechecks_cycle_after_real_collection',
+    'native_initializer_wait_replies_before_collection_when_owner_is_busy',
     'condition_wait_tests::monitor_heap_byref_survives_collection_and_writes_owner',
     'condition_wait_tests::monitor_byref_contended_dispatch_survives_collection',
     'condition_wait_tests::condition_wait_deadline_survives_real_collection',
@@ -133,7 +143,7 @@ def execute(row, name='Execute guarded singletons'):
 class CrossArenaManifestTests(unittest.TestCase):
     def test_matrix_teardown_is_exact_and_mt_only(self):
         rows = matrix_rows()
-        self.assertEqual(len(rows), 82)
+        self.assertEqual(len(rows), 97)
         self.assertEqual(len({(r['configuration'], r['group'], r['shard']) for r in rows}), len(rows))
         teardown = [r for r in rows if r['group'] == 'vm-teardown']
         st = [r for r in teardown if r['configuration'] == 'no-features']
@@ -229,8 +239,8 @@ class CrossArenaManifestTests(unittest.TestCase):
                       if crate == 'dotnet-vm' and selector.startswith('executor::native_substring_tests::')}
             self.assertEqual(bridge, BRIDGE)
             self.assertEqual(native, NATIVE | (FOREIGN if config == 'multithreading' else set()))
-        self.assertEqual(len(seen['no-features']), 30)
-        self.assertEqual(len(seen['multithreading']), 68)
+        self.assertEqual(len(seen['no-features']), 35)
+        self.assertEqual(len(seen['multithreading']), 78)
 
     def test_strict_core_is_isolated_and_guarded(self):
         strict = JOB[JOB.index('      - name: Isolated strict-provenance transport core'):

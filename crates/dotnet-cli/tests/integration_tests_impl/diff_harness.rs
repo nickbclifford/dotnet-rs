@@ -95,6 +95,11 @@ diff_test!(
     statics_cctor_wait_failure_matches_dotnet,
     "tests/fixtures/statics/cctor_wait_failure_42.cs"
 );
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    reflection_invoke_argument_race_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_argument_race_42.cs"
+);
 diff_test!(
     reflection_invoke_reference_byref_42_matches_dotnet,
     "tests/fixtures/reflection/invoke_reference_byref_42.cs"
@@ -118,6 +123,15 @@ diff_test!(
 diff_test!(
     reflection_invoke_byref_gc_42_matches_dotnet,
     "tests/fixtures/reflection/invoke_byref_gc_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    reflection_invoke_byref_foreign_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_foreign_42.cs"
+);
+diff_test!(
+    reflection_invoke_collect_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_collect_42.cs"
 );
 diff_test!(
     fields_enum_frame_homes_42_matches_dotnet,
@@ -174,6 +188,10 @@ diff_test!(
 diff_test!(
     delegates_multicast_static_ref_cctor_42_matches_dotnet,
     "tests/fixtures/delegates/delegate_multicast_static_ref_cctor_42.cs"
+);
+diff_test!(
+    delegates_multicast_gc_collect_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_gc_collect_42.cs"
 );
 diff_test!(
     strings_substring_chunks_42_matches_dotnet,
@@ -265,6 +283,11 @@ diff_test!(
     "tests/fixtures/threading/monitor_byref_origins_42.cs"
 );
 
+diff_test!(
+    threading_monitor_argument_validation_matches_dotnet,
+    "tests/fixtures/threading/monitor_argument_validation_42.cs"
+);
+
 #[cfg(feature = "multithreading")]
 diff_test!(
     threading_foreground_worker_42_matches_dotnet,
@@ -281,6 +304,11 @@ diff_test!(
     retired_arena_cycles_matches_dotnet,
     "tests/fixtures/gc/retired_arena_cycles_42.cs"
 );
+#[cfg(feature = "multithreading")]
+diff_test!(
+    retired_arena_static_matches_dotnet,
+    "tests/debug_fixtures/retired_arena_static_42.cs"
+);
 
 #[cfg(feature = "multithreading")]
 diff_test!(
@@ -296,6 +324,14 @@ diff_test!(
 diff_test!(
     finalizer_collect_matches_dotnet,
     "tests/fixtures/gc/finalizer_collect_42.cs"
+);
+diff_test!(
+    finalizer_self_wait_matches_dotnet,
+    "tests/fixtures/gc/finalizer_self_wait_42.cs"
+);
+diff_test!(
+    finalizer_cctor_self_wait_matches_dotnet,
+    "tests/fixtures/gc/finalizer_cctor_self_wait_42.cs"
 );
 
 diff_test!(

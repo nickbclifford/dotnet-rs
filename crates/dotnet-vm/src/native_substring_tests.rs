@@ -1135,9 +1135,9 @@ fn foreign_byref_owner_survives_collection_and_child_call(cross_origin: bool) {
                 CALL_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
                 let pointer = if cross_origin {
                     let lease = dotnet_utils::gc::try_acquire_lease(owner_id).expect("live owner");
-                    // SAFETY: F1.ArenaGenerationMatch; F1.GcHandleRooted — the decoded reference
-                    // is live in this mutation, the exact owner lease is held, and the pointer
-                    // is placed in the traced activation before the mutation can end.
+                    // SAFETY: F1.ArenaGenerationMatch — the exact owner lease is held. The object is
+                    // only weakly held by its owner, but the test requests no collection of the
+                    // owner arena before the pointer is placed in the traced activation.
                     unsafe {
                         dotnet_value::ManagedPtr::new_cross_arena(
                             None,
@@ -2821,14 +2821,14 @@ fn native_initializer_claim_executes_and_publishes_success() {
                 let frame = engine.stack.execution.frame_stack.current_frame();
                 assert!(frame.state.info_handle.is_cctor);
                 assert!(frame.native_return.is_some());
-                assert_eq!(
+                assert!(matches!(
                     engine
                         .stack
                         .shared
                         .statics
                         .get_init_state(subject.clone(), &GenericLookup::default()),
-                    crate::statics::INIT_STATE_INITIALIZING
-                );
+                    crate::statics::InitState::Initializing(_)
+                ));
             })
         })
         .unwrap();
@@ -2858,7 +2858,7 @@ fn native_initializer_claim_executes_and_publishes_success() {
             .shared
             .statics
             .get_init_state(subject, &GenericLookup::default()),
-        crate::statics::INIT_STATE_INITIALIZED
+        crate::statics::InitState::Initialized
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
@@ -3232,6 +3232,7 @@ fn boundary_executor_with_initializer(
         "ArgumentOutOfRangeException",
         "Enum",
         "ValueType",
+        "Byte",
         "Array",
         "String",
     ] {
@@ -3762,13 +3763,13 @@ fn native_initializer_failure_is_published_with_original_inner() {
         start_initializer_test(&mut executor),
         StepResult::NativeSuspended(_)
     ));
-    assert_eq!(
+    assert!(matches!(
         executor
             .shared
             .statics
             .get_init_state(subject.clone(), &GenericLookup::default()),
-        crate::statics::INIT_STATE_INITIALIZING
-    );
+        crate::statics::InitState::Initializing(_)
+    ));
     assert_eq!(
         boundary_throw_inner(&mut executor, exception_type.clone(), vec![], vec![], true),
         StepResult::Yield
@@ -3807,7 +3808,7 @@ fn native_initializer_failure_is_published_with_original_inner() {
                         .shared
                         .statics
                         .get_init_state(subject, &GenericLookup::default()),
-                    crate::statics::INIT_STATE_FAILED
+                    crate::statics::InitState::Failed
                 );
             })
         })
@@ -3838,7 +3839,7 @@ fn native_initializer_abandoned_claim_fails_on_cleanup() {
             .shared
             .statics
             .get_init_state(subject, &GenericLookup::default()),
-        crate::statics::INIT_STATE_FAILED
+        crate::statics::InitState::Failed
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
@@ -3956,7 +3957,7 @@ fn native_initializer_abort_publishes_failure() {
             .shared
             .statics
             .get_init_state(subject, &GenericLookup::default()),
-        crate::statics::INIT_STATE_FAILED
+        crate::statics::InitState::Failed
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
@@ -3985,7 +3986,7 @@ fn native_initializer_host_error_publishes_failure() {
             .shared
             .statics
             .get_init_state(subject, &GenericLookup::default()),
-        crate::statics::INIT_STATE_FAILED
+        crate::statics::InitState::Failed
     );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
@@ -4019,14 +4020,14 @@ fn native_initializer_child_cleanup_precedes_outer_filter() {
                     engine.stack.execution.frame_stack.current_frame().state.ip,
                     1
                 );
-                assert_eq!(
+                assert!(matches!(
                     engine
                         .stack
                         .shared
                         .statics
                         .get_init_state(subject.clone(), &GenericLookup::default()),
-                    crate::statics::INIT_STATE_INITIALIZING
-                );
+                    crate::statics::InitState::Initializing(_)
+                ));
             })
         })
         .unwrap();
@@ -4091,13 +4092,15 @@ fn native_initializer_wait_rechecks_cycle_after_real_collection() {
     CALL_TARGET.with(|slot| *slot.borrow_mut() = first.static_initializer());
     let owner = dotnet_utils::ArenaId::new(9999);
     let thread = executor.thread_id;
+    let claim_1 = claim_initializer_for(&mut executor, first.clone(), owner);
     assert!(matches!(
-        claim_initializer_for(&mut executor, first.clone(), owner),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_1,
+        crate::statics::StaticInitResult::Execute(..)
     ));
+    let claim_2 = claim_initializer_for(&mut executor, second.clone(), thread);
     assert!(matches!(
-        claim_initializer_for(&mut executor, second.clone(), thread),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_2,
+        crate::statics::StaticInitResult::Execute(..)
     ));
     assert_eq!(start_initializer_test(&mut executor), StepResult::Yield);
     executor.perform_full_gc().unwrap();
@@ -4107,13 +4110,13 @@ fn native_initializer_wait_rechecks_cycle_after_real_collection() {
         "{reverse:?}"
     );
     assert_eq!(resume(&mut executor), StepResult::Continue);
-    assert_eq!(
+    assert!(matches!(
         executor
             .shared
             .statics
             .get_init_state(first.clone(), &GenericLookup::default()),
-        crate::statics::INIT_STATE_INITIALIZING
-    );
+        crate::statics::InitState::Initializing(_)
+    ));
     drop(reverse);
     executor
         .shared
@@ -4128,13 +4131,47 @@ fn native_initializer_wait_rechecks_cycle_after_real_collection() {
 
 #[cfg(feature = "multithreading")]
 #[test]
+fn native_initializer_wait_replies_before_collection_when_owner_is_busy() {
+    let (mut executor, _) = boundary_executor_with_initializer(false, true);
+    let subject = initializer_test_subject(&executor, "CollectionWaitSubject");
+    let owner = dotnet_utils::ArenaId::new(9999);
+    let claim = claim_initializer_for(&mut executor, subject.clone(), owner);
+    assert!(matches!(
+        claim,
+        crate::statics::StaticInitResult::Execute(..)
+    ));
+    assert_eq!(start_initializer_test(&mut executor), StepResult::Yield);
+    assert!(executor.shared.statics.has_initializer_waits());
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| engine.stack.local.heap.needs_full_collect.set(true))
+        })
+        .unwrap();
+    assert_eq!(resume(&mut executor), StepResult::Yield);
+    assert!(
+        !executor.shared.statics.has_initializer_waits(),
+        "collection must release the wait before resumption"
+    );
+    assert_eq!(executor.collection_check().unwrap(), (true, true));
+    executor.perform_full_gc().unwrap();
+    executor
+        .shared
+        .statics
+        .mark_initialized(subject, &GenericLookup::default());
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
 fn native_initializer_wait_observes_published_success() {
     let (mut executor, _) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "WaitSubject");
     let owner = dotnet_utils::ArenaId::new(9999);
+    let claim_3 = claim_initializer_for(&mut executor, subject.clone(), owner);
     assert!(matches!(
-        claim_initializer_for(&mut executor, subject.clone(), owner),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_3,
+        crate::statics::StaticInitResult::Execute(..)
     ));
     assert_eq!(start_initializer_test(&mut executor), StepResult::Yield);
     executor
@@ -4142,6 +4179,10 @@ fn native_initializer_wait_observes_published_success() {
         .statics
         .mark_initialized(subject, &GenericLookup::default());
     assert_eq!(resume(&mut executor), StepResult::Continue);
+    assert!(
+        !executor.shared.statics.has_initializer_waits(),
+        "completed initializer wait retained its graph edge"
+    );
     CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
 }
 
@@ -4154,13 +4195,15 @@ fn native_initializer_wait_abort_removes_graph_edge() {
     CALL_TARGET.with(|slot| *slot.borrow_mut() = first.static_initializer());
     let owner = dotnet_utils::ArenaId::new(9999);
     let thread = executor.thread_id;
+    let claim_4 = claim_initializer_for(&mut executor, first.clone(), owner);
     assert!(matches!(
-        claim_initializer_for(&mut executor, first.clone(), owner),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_4,
+        crate::statics::StaticInitResult::Execute(..)
     ));
+    let claim_5 = claim_initializer_for(&mut executor, second.clone(), thread);
     assert!(matches!(
-        claim_initializer_for(&mut executor, second.clone(), thread),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_5,
+        crate::statics::StaticInitResult::Execute(..)
     ));
     assert_eq!(start_initializer_test(&mut executor), StepResult::Yield);
     assert!(matches!(
@@ -4200,9 +4243,10 @@ fn native_initializer_executor_wait_wakes_after_registration() {
     let (mut executor, _) = boundary_executor_with_initializer(false, true);
     let subject = initializer_test_subject(&executor, "WakeSubject");
     let owner = dotnet_utils::ArenaId::new(9999);
+    let claim_6 = claim_initializer_for(&mut executor, subject.clone(), owner);
     assert!(matches!(
-        claim_initializer_for(&mut executor, subject.clone(), owner),
-        crate::statics::StaticInitResult::Execute(_)
+        claim_6,
+        crate::statics::StaticInitResult::Execute(..)
     ));
     assert_eq!(start_initializer_test(&mut executor), StepResult::Yield);
     executor
@@ -6000,4 +6044,739 @@ fn managed_join_returns_before_native_worker_exits() {
         elapsed < Duration::from_secs(4),
         "Join waited for the native worker"
     );
+}
+
+#[path = "native_return_tests.rs"]
+mod native_return_tests;
+
+#[test]
+fn native_error_retires_initializer_frame_before_future_drop() {
+    use dotnet_utils::ByteOffset;
+    use dotnet_value::{
+        ManagedPtr,
+        layout::{FieldLayoutManager, GcDesc},
+        object::Object as ObjectInstance,
+        storage::FieldStorage,
+    };
+    use std::{cell::Cell, rc::Rc};
+    struct Witness {
+        inner: dotnet_vm_ops::effects::NativeFuture,
+        layout: Arc<FieldLayoutManager>,
+        retired: Rc<Cell<Option<bool>>>,
+    }
+    impl std::future::Future for Witness {
+        type Output = dotnet_vm_ops::effects::NativeResult;
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            self.inner.as_mut().poll(cx)
+        }
+    }
+    impl Drop for Witness {
+        fn drop(&mut self) {
+            // The child's transient stack value holds the only other layout reference.
+            self.retired.set(Some(Arc::strong_count(&self.layout) == 1));
+        }
+    }
+    let (mut executor, _) = boundary_executor_with_initializer(false, true);
+    let subject = initializer_test_subject(&executor, "RetireErrorSubject");
+    assert!(matches!(
+        start_initializer_test(&mut executor),
+        StepResult::NativeSuspended(_)
+    ));
+    let retired = Rc::new(Cell::new(None));
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let execution = &mut engine.stack.execution;
+                assert!(
+                    execution
+                        .frame_stack
+                        .current_frame()
+                        .state
+                        .info_handle
+                        .is_cctor
+                );
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 1,
+                    alignment: 1,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                let obj = ObjectInstance::new(
+                    TypeDescription::NULL,
+                    GenericLookup::default(),
+                    FieldStorage::new(layout.clone(), vec![0]),
+                );
+                let base =
+                    obj.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap());
+                execution.evaluation_stack.push(StackValue::ManagedPtr(
+                    ManagedPtr::new_transient(
+                        Some(base),
+                        TypeDescription::NULL,
+                        obj,
+                        ByteOffset::new(0),
+                    )
+                    .into(),
+                ));
+                let work = execution.call_state.native.last_mut().unwrap();
+                let inner = work.owner.future.take().unwrap();
+                work.owner.future = Some(Box::pin(Witness {
+                    inner,
+                    layout,
+                    retired: retired.clone(),
+                }));
+                assert!(matches!(
+                    engine.ves_context(gc).advance_native_effect(),
+                    StepResult::Error(_)
+                ));
+                assert_eq!(
+                    retired.get(),
+                    Some(true),
+                    "child-owned stack value must be released before future drop"
+                );
+                assert_eq!(engine.stack.execution.frame_stack.len(), 1);
+                assert!(engine.stack.execution.call_state.native.is_empty());
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        executor
+            .shared
+            .statics
+            .get_init_state(subject, &GenericLookup::default()),
+        crate::statics::InitState::Failed
+    );
+    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[test]
+fn native_future_owner_revokes_control_before_drop() {
+    use dotnet_vm_ops::effects::{NativeControl, NativeInvocation, VmEffects};
+    use std::{
+        cell::Cell,
+        future::Future,
+        rc::Rc,
+        task::{Context, Poll, Waker},
+    };
+    struct Probe {
+        effects: VmEffects,
+        rejected: Rc<Cell<bool>>,
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            let request = self.effects.yield_now();
+            let mut request = std::pin::pin!(request);
+            let mut cx = Context::from_waker(Waker::noop());
+            self.rejected.set(matches!(
+                request.as_mut().poll(&mut cx),
+                Poll::Ready(Err(_))
+            ));
+        }
+    }
+    let control = NativeControl::new();
+    let rejected = Rc::new(Cell::new(false));
+    let probe = Probe {
+        effects: control
+            .effects(NativeInvocation {
+                start: 0,
+                length: 0,
+                parameter_count: 0,
+            })
+            .unwrap(),
+        rejected: rejected.clone(),
+    };
+    let future = Box::pin(async move {
+        let _probe = probe;
+        std::future::pending::<()>().await;
+        Ok(())
+    });
+    let owner = crate::stack::context::NativeFutureOwner {
+        control,
+        future: Some(future),
+    };
+    drop(owner);
+    assert!(rejected.get(), "future destructor must see revoked control");
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn worker_teardown_cleans_native_before_retiring_caller() {
+    use dotnet_utils::ByteOffset;
+    use dotnet_value::{
+        ManagedPtr,
+        layout::{FieldLayoutManager, GcDesc},
+        object::Object as ObjectInstance,
+        storage::FieldStorage,
+    };
+    use std::{
+        sync::{
+            Arc as StdArc,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
+        time::Duration,
+    };
+    struct Witness {
+        inner: dotnet_vm_ops::effects::NativeFuture,
+        layout: Arc<FieldLayoutManager>,
+        result: StdArc<AtomicUsize>,
+    }
+    impl std::future::Future for Witness {
+        type Output = dotnet_vm_ops::effects::NativeResult;
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            self.inner.as_mut().poll(cx)
+        }
+    }
+    impl Drop for Witness {
+        fn drop(&mut self) {
+            // The caller's transient stack value must outlive native cleanup.
+            self.result.store(
+                if Arc::strong_count(&self.layout) == 2 {
+                    2
+                } else {
+                    1
+                },
+                AtomicOrdering::SeqCst,
+            );
+        }
+    }
+    let (executor, _) = boundary_executor_with_initializer(false, true);
+    let method = executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, engine| {
+                engine
+                    .stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .clone()
+            })
+        })
+        .unwrap();
+    let state = executor.shared.clone();
+    drop(executor);
+    let result = StdArc::new(AtomicUsize::new(0));
+    let worker_result = result.clone();
+    let worker_state = state.clone();
+    let completion = state.workers.spawn_owner(move |running| {
+        WORKER_START_TEST_HOOK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |executor| {
+                initializer_test_subject(executor, "WorkerTeardownSubject");
+                let layout = Arc::new(FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 1,
+                    alignment: 1,
+                    gc_desc: GcDesc::default(),
+                    has_ref_fields: false,
+                });
+                executor
+                    .with_arena(|arena| {
+                        arena.mutate_root(|gc, engine| {
+                            // SAFETY: F1.GcHandleRooted — the engine is rooted throughout this mutation.
+                            let gc = unsafe { test_gc_handle(gc, engine) };
+                            let obj = ObjectInstance::new(
+                                TypeDescription::NULL,
+                                GenericLookup::default(),
+                                FieldStorage::new(layout.clone(), vec![0]),
+                            );
+                            let base = obj.with_data(|data| {
+                                std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap()
+                            });
+                            engine.ves_context(gc).push(StackValue::ManagedPtr(
+                                ManagedPtr::new_transient(
+                                    Some(base),
+                                    TypeDescription::NULL,
+                                    obj,
+                                    ByteOffset::new(0),
+                                )
+                                .into(),
+                            ));
+                        })
+                    })
+                    .unwrap();
+                assert!(matches!(
+                    start_initializer_test(executor),
+                    StepResult::NativeSuspended(_)
+                ));
+                executor
+                    .with_arena(|arena| {
+                        arena.mutate_root(|_, engine| {
+                            let execution = &mut engine.stack.execution;
+                            assert!(
+                                execution
+                                    .frame_stack
+                                    .current_frame()
+                                    .state
+                                    .info_handle
+                                    .is_cctor
+                            );
+                            let work = execution.call_state.native.last_mut().unwrap();
+                            let inner = work.owner.future.take().unwrap();
+                            work.owner.future = Some(Box::pin(Witness {
+                                inner,
+                                layout,
+                                result: worker_result,
+                            }));
+                        })
+                    })
+                    .unwrap();
+                ExecutorResult::Error(
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "injected worker failure".into(),
+                    )
+                    .into(),
+                )
+            }))
+        });
+        Executor::run_thread_start(worker_state, method, GenericLookup::default(), running);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !completion.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let finished = completion.is_finished();
+    let outcome = completion.take_outcome();
+    state.shutdown_workers();
+    assert!(finished, "worker did not finish");
+    assert!(matches!(outcome, Some(Ok(ExecutorResult::Error(_)))));
+    assert_eq!(
+        result.load(AtomicOrdering::SeqCst),
+        2,
+        "caller roots must survive until native future cleanup"
+    );
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn legacy_initializer_host_error_releases_waiter() {
+    use dotnet_vm_ops::StaticsOps;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    struct OwnerCleanup {
+        release: Option<mpsc::Sender<()>>,
+        state: Arc<SharedGlobalState>,
+    }
+    impl Drop for OwnerCleanup {
+        fn drop(&mut self) {
+            if let Some(release) = self.release.take() {
+                let _ = release.send(());
+            }
+            self.state.shutdown_workers();
+        }
+    }
+    let (mut executor, _) = boundary_executor_with_initializer(false, true);
+    let method = executor
+        .with_arena_ref(|arena| {
+            arena.mutate(|_, engine| {
+                engine
+                    .stack
+                    .execution
+                    .frame_stack
+                    .current_frame()
+                    .state
+                    .info_handle
+                    .source
+                    .clone()
+            })
+        })
+        .unwrap();
+    let state = executor.shared.clone();
+    let worker_state = state.clone();
+    let (send, receive) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let completion = state.workers.spawn_owner(move |running| {
+        WORKER_START_TEST_HOOK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |executor| {
+                let subject = initializer_test_subject(executor, "LegacyFailureSubject");
+                executor
+                    .with_arena(|arena| {
+                        arena.mutate_root(|gc, engine| {
+                            // SAFETY: F1.GcHandleRooted — the engine is rooted throughout this mutation.
+                            let gc = unsafe { test_gc_handle(gc, engine) };
+                            let result = engine.ves_context(gc).initialize_static_storage(
+                                subject.clone(),
+                                GenericLookup::default(),
+                            );
+                            assert!(!matches!(
+                                result,
+                                StepResult::Error(_) | StepResult::Exception
+                            ));
+                            assert!(
+                                engine
+                                    .stack
+                                    .execution
+                                    .frame_stack
+                                    .current_frame()
+                                    .state
+                                    .info_handle
+                                    .is_cctor
+                            );
+                            assert!(engine.stack.execution.call_state.native.is_empty());
+                        })
+                    })
+                    .unwrap();
+                send.send(subject).unwrap();
+                released.recv_timeout(Duration::from_secs(30)).unwrap();
+                ExecutorResult::Error(
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "injected worker failure".into(),
+                    )
+                    .into(),
+                )
+            }));
+        });
+        Executor::run_thread_start(worker_state, method, GenericLookup::default(), running);
+    });
+    let mut owner_cleanup = OwnerCleanup {
+        release: Some(release),
+        state: state.clone(),
+    };
+    let subject = receive.recv_timeout(Duration::from_secs(30));
+    let waiting = subject.as_ref().ok().map(|subject| {
+        CALL_TARGET.with(|slot| *slot.borrow_mut() = subject.static_initializer());
+        start_initializer_test(&mut executor)
+    });
+    // Always release and join the owner before asserting, including setup failure paths.
+    let _ = owner_cleanup.release.take().unwrap().send(());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !completion.is_finished() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let finished = completion.is_finished();
+    let outcome = completion.take_outcome();
+    drop(owner_cleanup);
+    assert!(finished, "initializer owner did not finish");
+    assert!(matches!(outcome, Some(Ok(ExecutorResult::Error(_)))));
+    assert_eq!(waiting, Some(StepResult::Yield));
+    assert_eq!(
+        state
+            .statics
+            .get_init_state(subject.unwrap(), &GenericLookup::default()),
+        crate::statics::InitState::Failed
+    );
+    assert!(
+        matches!(resume(&mut executor), StepResult::MethodThrew(ref exception) if exception.type_name == "System.TypeInitializationException")
+    );
+    CALL_TARGET.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[test]
+fn legacy_initializer_frame_retirement_fails_claim() {
+    use dotnet_vm_ops::StaticsOps;
+    for pool in [false, true] {
+        let (mut executor, _) = boundary_executor_with_initializer(false, true);
+        let subject = initializer_test_subject(&executor, "RetiredLegacySubject");
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is rooted throughout this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let result = engine
+                        .ves_context(gc)
+                        .initialize_static_storage(subject.clone(), GenericLookup::default());
+                    assert!(!matches!(
+                        result,
+                        StepResult::Error(_) | StepResult::Exception
+                    ));
+                    let mut frame = engine.stack.execution.frame_stack.pop().unwrap();
+                    assert!(frame.initializer_claim.is_some());
+                    if pool {
+                        frame.prepare_for_pool();
+                    }
+                    drop(frame);
+                })
+            })
+            .unwrap();
+        assert_eq!(
+            executor
+                .shared
+                .statics
+                .get_init_state(subject, &GenericLookup::default()),
+            crate::statics::InitState::Failed
+        );
+    }
+}
+
+#[test]
+fn initialized_static_fields_complete_without_activation() {
+    static_fields_complete_without_activation(false);
+}
+
+#[test]
+fn recursive_static_fields_complete_without_activation() {
+    static_fields_complete_without_activation(true);
+}
+
+fn static_fields_complete_without_activation(recursive: bool) {
+    use crate::stack::ops::{StaticFieldAction, StaticFieldKind, VmResolutionOps, VmStaticsOps};
+    use crate::statics::StaticInitResult;
+    use dotnet_types::members::FieldDescription;
+    use dotnet_vm_data::stack::InitializerClaim;
+    use dotnet_vm_ops::VesInternals;
+
+    let (mut executor, _) = boundary_executor_with_initializer(false, true);
+    let mut assembly = Resolution::new(Module::new("StaticFields.dll"));
+    assembly.assembly = Some(Assembly::new("StaticFields"));
+    let index = assembly.push_type_definition(TypeDefinition::new(None, "Subject"));
+    assembly.push_field(
+        index,
+        dotnetdll::resolved::members::Field::static_member(
+            Accessibility::Public,
+            "Value",
+            MemberType::Base(Box::new(BaseType::UInt8)),
+        ),
+    );
+    let mut signature = parameterless_i32_signature();
+    signature.return_type = ReturnType(vec![], None);
+    let mut cctor = Method::new(
+        Accessibility::Private,
+        signature,
+        ".cctor",
+        Some(make_test_method!(max_stack: 0, instructions: vec![Instruction::Return])),
+    );
+    cctor.runtime_special_name = true;
+    assembly.push_method(index, cctor);
+    let assembly = executor.shared.loader.register_owned_assembly(assembly);
+    let subject = TypeDescription::new(assembly.clone(), index);
+    let field = FieldDescription::new(subject.clone(), assembly, 0);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the arena root throughout this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                let generics = GenericLookup::default();
+                let StaticInitResult::Execute(_, mut claim) = ctx
+                    .shared
+                    .statics
+                    .init(
+                        subject.clone(),
+                        &ctx.with_generics(&generics),
+                        ctx.thread_id.get(),
+                    )
+                    .unwrap()
+                else {
+                    panic!("initializer must be newly claimed")
+                };
+                if !recursive {
+                    claim.succeed();
+                }
+                let native_id = ctx.call_state.last_native_id;
+                let ip = ctx.state().ip;
+                for volatile in [false, true] {
+                    ctx.push(StackValue::Int32(42));
+                    for kind in [
+                        StaticFieldKind::Store { volatile },
+                        StaticFieldKind::Load { volatile },
+                        StaticFieldKind::Address,
+                    ] {
+                        assert_eq!(
+                            ctx.start_static_field(StaticFieldAction {
+                                field: field.clone(),
+                                generics: generics.clone(),
+                                kind: kind.clone(),
+                            }),
+                            StepResult::Continue
+                        );
+                        match kind {
+                            StaticFieldKind::Store { .. } => {}
+                            StaticFieldKind::Load { .. } => {
+                                assert!(matches!(ctx.pop(), StackValue::Int32(42)))
+                            }
+                            StaticFieldKind::Address => {
+                                assert!(matches!(ctx.pop(), StackValue::ManagedPtr(_)))
+                            }
+                        }
+                        assert_eq!(ctx.call_state.last_native_id, native_id);
+                        assert!(ctx.call_state.native.is_empty());
+                        assert_eq!(
+                            ctx.state().ip,
+                            ip,
+                            "ordinary instruction dispatch owns IP advancement"
+                        );
+                    }
+                }
+                claim.succeed();
+            });
+        })
+        .unwrap();
+}
+
+#[test]
+fn reflection_retry_completed_collection_does_not_retry() {
+    let mut executor = executor();
+    let mut res = Resolution::new(Module::new("mscorlib.dll"));
+    res.assembly = Some(Assembly::new("mscorlib"));
+    let mut gc_type = TypeDefinition::new(None, "GC");
+    gc_type.namespace = Some("System".into());
+    gc_type.flags.before_field_init = true;
+    let gc_index = res.push_type_definition(gc_type);
+    let mut signature = parameterless_i32_signature();
+    signature.return_type = ReturnType(vec![], None);
+    let method_index = res.push_method(
+        gc_index,
+        Method::new(Accessibility::Public, signature, "Collect", None),
+    );
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res.clone(), gc_index);
+    let method = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[method_index]))
+        .unwrap();
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(method),
+    );
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                engine.ves_context(gc).push(StackValue::Int32(0));
+                let frame = engine.stack.execution.frame_stack.current_frame_mut();
+                frame.reflection_pending =
+                    Some(Box::new(dotnet_vm_data::stack::ReflectionPending {
+                        method,
+                        generics: GenericLookup::default(),
+                        arguments: vec![],
+                        base: frame.stack_height,
+                    }));
+            })
+        })
+        .unwrap();
+    assert_eq!(resume(&mut executor), StepResult::Yield);
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                let frame = engine.stack.execution.frame_stack.current_frame();
+                assert!(
+                    frame.reflection_pending.is_none(),
+                    "completed collection was queued for retry"
+                );
+                assert_eq!(frame.state.ip, 1);
+                assert!(engine.stack.local.heap.needs_full_collect.get());
+            })
+        })
+        .unwrap();
+    executor.perform_full_gc().unwrap();
+    assert!(matches!(resume(&mut executor), StepResult::Return));
+}
+
+#[test]
+fn multicast_fallback_completes_collection_targets() {
+    use crate::stack::native_effects::MULTICAST_FALLBACK_TEST;
+    use std::{path::Path, process::Command, sync::mpsc, time::Duration};
+    struct Watchdog(Option<std::thread::JoinHandle<()>>, mpsc::Sender<()>);
+    impl Drop for Watchdog {
+        fn drop(&mut self) {
+            let _ = self.1.send(());
+            if let Some(thread) = self.0.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            MULTICAST_FALLBACK_TEST.with(|slot| slot.set(None));
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../dotnet-cli");
+    let fixture = std::fs::canonicalize(
+        root.join("tests/fixtures/delegates/delegate_multicast_gc_collect_42.cs"),
+    )
+    .unwrap();
+    let output =
+        std::env::temp_dir().join(format!("dotnet-multicast-collect-{}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let build = Command::new("dotnet")
+        .arg("build")
+        .arg(root.join("tests/SingleFile.csproj"))
+        .arg(format!("-p:TestFile={}", fixture.display()))
+        .arg(format!(
+            "-p:BaseIntermediateOutputPath={}/",
+            output.join("obj").display()
+        ))
+        .args(["-v:q", "--nologo", "-o"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "fixture build failed: {}",
+        String::from_utf8_lossy(&build.stdout)
+    );
+    let loader = AssemblyLoader::new(
+        dotnet_assemblies::find_dotnet_app_path()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned(),
+    )
+    .unwrap();
+    let resolution = loader
+        .load_resolution_from_file(output.join("SingleFile.dll"))
+        .unwrap();
+    let EntryPoint::Method(entry) = resolution.entry_point.expect("entrypoint") else {
+        panic!("method entrypoint expected")
+    };
+    let ty = TypeDescription::new(resolution.clone(), entry.parent_type());
+    let index = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &resolution.definition()[entry]))
+        .unwrap();
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        resolution,
+        MethodMemberIndex::Method(index),
+    );
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the single-threaded test owns its loader"
+    )]
+    let shared = Arc::new(SharedGlobalState::new(Arc::new(loader)));
+    let mut executor = Executor::new(shared.clone());
+    executor.entrypoint(method).unwrap();
+    let signal = shared.abort_signal();
+    let (done_tx, done_rx) = mpsc::channel();
+    let watchdog = std::thread::spawn(move || {
+        if done_rx.recv_timeout(Duration::from_secs(15)).is_err() {
+            signal.request_abort();
+        }
+    });
+    let watchdog = Watchdog(Some(watchdog), done_tx);
+    MULTICAST_FALLBACK_TEST.with(|slot| slot.set(Some(0)));
+    let reset = Reset;
+    let result = executor.run();
+    let calls = MULTICAST_FALLBACK_TEST.with(|slot| slot.get().unwrap());
+    drop(reset);
+    drop(watchdog);
+    drop(executor);
+    shared.shutdown_workers();
+    std::fs::remove_dir_all(output).unwrap();
+    assert!(calls > 0, "fixture did not select fallback multicast");
+    assert!(
+        matches!(result, ExecutorResult::Exited(42)),
+        "fallback collection did not complete: {result:?}"
+    );
+    assert!(calls >= 3, "fixture did not complete all multicast calls");
 }

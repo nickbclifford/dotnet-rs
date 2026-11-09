@@ -1,3 +1,5 @@
+// This fixture encodes non-CLR byref write-back after a throw; keep it out of CLR-diff tests
+// until the logged reflection compatibility fix corrects that behavior.
 using System;
 
 public static class Target
