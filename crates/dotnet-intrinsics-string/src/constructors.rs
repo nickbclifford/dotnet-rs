@@ -169,6 +169,41 @@ pub fn intrinsic_string_ctor_char_array<'gc, T: IntrinsicStringHost<'gc>>(
     StepResult::Continue
 }
 
+/// `System.String::.ctor(char, int)` builds a string of `count` copies of `c`.
+///
+/// ECMA-335 does not define this BCL constructor; the CLR throws
+/// `ArgumentOutOfRangeException` for a negative count.
+#[dotnet_intrinsic("void System.String::.ctor(char, int)")]
+pub fn intrinsic_string_ctor_char_count<
+    'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let count = ctx.pop_i32();
+    let c = ctx.pop_i32() as u16;
+
+    if count < 0 {
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentOutOfRangeException",
+            "Count cannot be less than zero. (Parameter 'count')",
+        );
+    }
+    let len = count as usize;
+    // Same size cap as `FastAllocateString`.
+    if len > 0x2000_0000 {
+        return ctx.throw_by_name_with_message(
+            "System.OutOfMemoryException",
+            "Insufficient memory to continue the execution of the program.",
+        );
+    }
+
+    ctx.push_string(CLRString::new(vec![c; len]));
+    StepResult::Continue
+}
+
 /// `System.String::.ctor(System.ReadOnlySpan<char>)`
 #[dotnet_intrinsic("void System.String::.ctor(System.ReadOnlySpan<char>)")]
 pub fn intrinsic_string_ctor_readonly_span_char<'gc, T: IntrinsicStringHost<'gc>>(
