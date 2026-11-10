@@ -81,7 +81,7 @@ fn condition_wait_ready_monitor_and_finalizers_use_driver() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_monitor_body
                     ),
                     StepResult::Jump(1)
@@ -95,7 +95,7 @@ fn condition_wait_ready_monitor_and_finalizers_use_driver() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_finalizer_body
                     ),
                     StepResult::Jump(1)
@@ -132,7 +132,7 @@ fn condition_wait_release_before_recheck_keeps_ownership() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_monitor_body
                     ),
                     StepResult::Yield
@@ -179,7 +179,9 @@ fn finalizer_wait_ready_and_non_inline_dispatch() {
                         method.clone(),
                         NativeDispatchMode::Other
                     ),
-                    StepResult::Continue
+                    StepResult::not_implemented(format!(
+                        "async intrinsic {method:?} reached through non-inline dispatch"
+                    ))
                 );
                 assert_eq!(
                     finalizer_wait_dispatch(
@@ -198,15 +200,20 @@ fn finalizer_wait_ready_and_non_inline_dispatch() {
 
 #[test]
 fn condition_wait_executor_runs_pending_finalizer_before_resuming() {
-    finalizer_wait_executor(false);
+    finalizer_wait_executor(false, false);
 }
 
 #[test]
 fn finalizer_wait_from_finalizer_returns_immediately() {
-    finalizer_wait_executor(true);
+    finalizer_wait_executor(true, false);
 }
 
-fn finalizer_wait_executor(test_self_wait: bool) {
+#[test]
+fn finalizer_wait_from_finalizer_triggered_cctor_returns_immediately() {
+    finalizer_wait_executor(true, true);
+}
+
+fn finalizer_wait_executor(test_self_wait: bool, cctor: bool) {
     use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
     let method = condition_wait_method(&executor, false);
@@ -233,7 +240,38 @@ fn finalizer_wait_executor(test_self_wait: bool) {
     );
     finalizer.virtual_member = true;
     res.push_method(ty_index, finalizer);
+    let initializer_type =
+        res.push_type_definition(TypeDefinition::new(None, "FinalizerInitializer"));
+    let mut signature = parameterless_i32_signature();
+    signature.return_type = ReturnType(vec![], None);
+    let initializer_index = res.push_method(
+        initializer_type,
+        Method::new(
+            Accessibility::Private,
+            signature,
+            ".cctor",
+            Some(make_test_method!(max_stack: 0, instructions: vec![Instruction::Return])),
+        ),
+    );
     let res = executor.shared.loader.register_owned_assembly(res);
+    let initializer_type = TypeDescription::new(res.clone(), initializer_type);
+    let index = initializer_type
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[initializer_index]))
+        .unwrap();
+    let initializer = MethodDescription::new(
+        initializer_type,
+        GenericLookup::default(),
+        res.clone(),
+        MethodMemberIndex::Method(index),
+    );
+    let initializer_info = executor
+        .shared
+        .caches
+        .get_method_info(initializer, &Default::default(), executor.shared.clone())
+        .unwrap();
     let ty = TypeDescription::new(res, ty_index);
     executor
         .with_arena(|arena| {
@@ -269,7 +307,9 @@ fn finalizer_wait_executor(test_self_wait: bool) {
                         method.clone(),
                         NativeDispatchMode::Other
                     ),
-                    StepResult::Yield
+                    StepResult::not_implemented(format!(
+                        "async intrinsic {method:?} reached through non-inline dispatch"
+                    ))
                 );
                 assert!(engine.stack.execution.call_state.native.is_empty());
                 assert_eq!(
@@ -298,6 +338,20 @@ fn finalizer_wait_executor(test_self_wait: bool) {
                     );
                     assert!(engine.stack.local.heap.processing_finalizer.get());
                     assert!(engine.stack.parked_finalizer_caller.is_some());
+                    if cctor {
+                        let ctx = engine.ves_context(gc);
+                        let top = ctx.top_of_stack();
+                        ctx.frame_stack.push_frame(
+                            BasePointer {
+                                arguments: top,
+                                locals: top,
+                                stack: top,
+                            },
+                            initializer_info,
+                            Default::default(),
+                            Default::default(),
+                        );
+                    }
                     let ip = engine.stack.execution.frame_stack.current_frame().state.ip;
                     for mode in [NativeDispatchMode::InlineCall, NativeDispatchMode::Other] {
                         assert_eq!(
@@ -306,7 +360,13 @@ fn finalizer_wait_executor(test_self_wait: bool) {
                                 method.clone(),
                                 mode
                             ),
-                            StepResult::Continue
+                            if mode == NativeDispatchMode::InlineCall {
+                                StepResult::Jump(ip + 1)
+                            } else {
+                                StepResult::not_implemented(format!(
+                                    "async intrinsic {method:?} reached through non-inline dispatch"
+                                ))
+                            }
                         );
                         assert!(engine.stack.local.heap.processing_finalizer.get());
                         assert!(engine.stack.execution.call_state.native.is_empty());
@@ -321,6 +381,11 @@ fn finalizer_wait_executor(test_self_wait: bool) {
                                 .unwrap()
                                 .is_none()
                         );
+                    }
+                    if cctor {
+                        let frames = &mut engine.stack.execution.frame_stack;
+                        let initializer = frames.pop().unwrap();
+                        frames.recycle_frame(initializer);
                     }
                     // Additional work queued while the caller is parked must also finish.
                     engine
@@ -393,7 +458,7 @@ fn start_condition_monitor(
                     NativeDispatchMode::InlineCall,
                     &Default::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     body,
                 );
                 (result, block)
@@ -521,7 +586,7 @@ fn condition_wait_cancel_does_not_manufacture_finalizer_readiness() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_finalizer_body
                     ),
                     StepResult::Yield
@@ -899,7 +964,7 @@ fn condition_wait_foreign_monitor_owner_survives_collection() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_monitor_body
                     ),
                     StepResult::Yield
@@ -1225,36 +1290,315 @@ fn timed_monitor_method(executor: &Executor) -> MethodDescription {
     )
 }
 
-#[cfg(feature = "multithreading")]
+fn static_descriptor_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let flag = fx.vm().await?.prepare_monitor(true, true)?.1.unwrap();
+        fx.yield_now().await?;
+        let mut vm = fx.vm().await?;
+        vm.with(|region| {
+            let StackValue::ManagedPtr(pointer) = region.fetch(&flag)? else {
+                panic!("expected managed pointer")
+            };
+            assert!(matches!(
+                pointer.origin(),
+                dotnet_value::pointer::PointerOrigin::Static(_)
+            ));
+            assert!(pointer.observe_address().is_none());
+            Ok::<_, dotnet_types::error::VmError>(())
+        })??;
+        // SAFETY: F10.RawMemoryAccessValid — this is an initialized static bool, accessed
+        // exclusively by the test executor; the backend checks the complete range.
+        assert!(!unsafe { vm.read_monitor_flag(&flag)? });
+        // SAFETY: F10.RawMemoryAccessValid — the same exclusively accessed bool is writable.
+        unsafe { vm.write_monitor_flag(&flag, true)? };
+        // SAFETY: F10.RawMemoryAccessValid — the same bool is initialized and exclusively held.
+        assert!(unsafe { vm.read_monitor_flag(&flag)? });
+        Ok(())
+    })
+}
+
 #[test]
-fn monitor_legacy_static_timeout_retains_deadline_across_stop() {
+fn static_descriptor_survives_collection_and_resolves_raw_access() {
+    use crate::stack::ops::{RawMemoryOps, VmResolutionOps};
+    use dotnet_value::pointer::ManagedPtr;
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                let generics = GenericLookup::default();
+                ctx.shared
+                    .statics
+                    .init(
+                        method.parent.clone(),
+                        &ctx.with_generics(&generics),
+                        ctx.thread_id.get(),
+                    )
+                    .unwrap();
+                let pointer = ManagedPtr::new_static(
+                    None,
+                    TypeDescription::NULL,
+                    method.parent.clone(),
+                    generics,
+                    false,
+                    dotnet_utils::ByteOffset::ZERO,
+                );
+                ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+                ctx.push(StackValue::Int32(0));
+                ctx.push(StackValue::ManagedPtr(pointer.into()));
+                assert_eq!(
+                    ctx.start_native(
+                        method.clone(),
+                        NativeDispatchMode::InlineCall,
+                        &Default::default(),
+                        None,
+                        None,
+                        static_descriptor_body
+                    ),
+                    StepResult::Yield
+                );
+            })
+        })
+        .unwrap();
+    collect(&mut executor);
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                let pointer = ManagedPtr::new_static(
+                    None,
+                    TypeDescription::NULL,
+                    method.parent.clone(),
+                    Default::default(),
+                    false,
+                    dotnet_utils::ByteOffset::ZERO,
+                );
+                let mut byte = [0];
+                // SAFETY: F10.RawMemoryAccessValid — this is the initialized static bool field and the
+                // origin-aware access checks its range while the executor has exclusive access.
+                unsafe {
+                    ctx.read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut byte)
+                        .unwrap();
+                }
+                assert_eq!(byte, [1]);
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn monitor_static_byref_inline_and_out_of_bounds() {
+    use crate::{stack::ops::VmResolutionOps, sync::SyncBlockOps};
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::pointer::ManagedPtr;
     use dotnet_vm_ops::effects::NativeDispatchMode;
-    for mode in [NativeDispatchMode::InlineCall, NativeDispatchMode::Other] {
-        check_legacy_static_timeout(mode);
+    for out_of_bounds in [false, true] {
+        let mut executor = executor();
+        let method = timed_monitor_method(&executor);
+        let thread = executor.thread_id;
+        executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let mut ctx = engine.ves_context(gc);
+            let generics = GenericLookup::default();
+            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+            let length = ctx.shared.statics.get(method.parent.clone(), &generics).storage.with_data(|data| data.len());
+            let offset = if out_of_bounds { length } else { 0 };
+            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::new(offset));
+            let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+            let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+            ctx.push(StackValue::ObjectRef(object));
+            ctx.push(StackValue::Int32(0));
+            ctx.push(StackValue::ManagedPtr(pointer.into()));
+            let result = crate::intrinsics::dispatch_method_intrinsic(
+                crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_TryEnter_a8f16726fa8c35c7,
+                &mut ctx, method.clone(), &Default::default(), NativeDispatchMode::InlineCall,
+            );
+            if out_of_bounds {
+                assert!(matches!(result, StepResult::Error(_)));
+                assert!(!block.exit(thread));
+            } else {
+                assert_eq!(result, StepResult::Jump(1));
+                assert_eq!(ctx.shared.statics.get(method.parent.clone(), &Default::default()).storage.with_data(|data| data[0]), 1);
+                assert!(block.exit(thread));
+            }
+            assert!(ctx.call_state.native.is_empty());
+        })).unwrap();
     }
 }
 
 #[cfg(feature = "multithreading")]
-fn check_legacy_static_timeout(mode: dotnet_vm_ops::effects::NativeDispatchMode) {
+#[test]
+fn monitor_static_operand_is_addressless_during_initial_gc_stop() {
+    use crate::{stack::ops::VmResolutionOps, sync::SyncBlockOps, threading::ThreadManagerOps};
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::pointer::ManagedPtr;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    let thread = executor.thread_id;
+    let shared = executor.shared.clone();
+    let guard = shared.thread_manager.request_stop_the_world();
+    let block = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+        let gc = unsafe { test_gc_handle(gc, engine) };
+        let mut ctx = engine.ves_context(gc);
+        let generics = GenericLookup::default();
+        ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+        let storage = ctx.shared.statics.get(method.parent.clone(), &generics);
+        let address = storage.storage.with_data(|data| std::ptr::NonNull::new(data.as_ptr().cast_mut()).unwrap());
+        let pointer = ManagedPtr::new_static(Some(address), TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::ZERO);
+        assert!(pointer.observe_address().is_some());
+        let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+        let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+        ctx.push(StackValue::ObjectRef(object));
+        ctx.push(StackValue::Int32(10_000));
+        ctx.push(StackValue::ManagedPtr(pointer.into()));
+        assert_eq!(crate::intrinsics::dispatch_method_intrinsic(
+            crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_TryEnter_a8f16726fa8c35c7,
+            &mut ctx, method.clone(), &Default::default(), NativeDispatchMode::InlineCall,
+        ), StepResult::Yield);
+        let activation = ctx.call_state.native.last().unwrap();
+        let StackValue::ManagedPtr(pointer) = &activation.operands[2] else { panic!("expected static pointer") };
+        assert!(matches!(pointer.origin(), dotnet_value::pointer::PointerOrigin::Static(_)));
+        assert!(pointer.observe_address().is_none());
+        block
+    })).unwrap();
+    drop(guard);
+    collect(&mut executor);
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    assert_eq!(
+        shared
+            .statics
+            .get(method.parent.clone(), &Default::default())
+            .storage
+            .with_data(|data| data[0]),
+        1
+    );
+    assert!(block.exit(thread));
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn monitor_static_timed_wait_survives_collection_and_writes_result() {
     use crate::{
-        stack::ops::{VmCallOps, VmResolutionOps},
+        stack::{
+            native_effects::{MONITOR_FLAG_WRITES, PendingWait},
+            ops::VmResolutionOps,
+        },
         sync::SyncBlockOps,
-        threading::ThreadManagerOps,
     };
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::pointer::ManagedPtr;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    for expire in [false, true] {
+        let mut executor = executor();
+        let method = timed_monitor_method(&executor);
+        let owner = dotnet_utils::ArenaId::new(9999);
+        let thread = executor.thread_id;
+        MONITOR_FLAG_WRITES
+            .with(|writes| assert!(writes.borrow_mut().replace(Vec::new()).is_none()));
+        let (block, deadline) = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let mut ctx = engine.ves_context(gc);
+            let generics = GenericLookup::default();
+            ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
+            let pointer = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::ZERO);
+            let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+            let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+            assert!(block.try_enter(owner));
+            ctx.push(StackValue::ObjectRef(object));
+            ctx.push(StackValue::Int32(10_000));
+            ctx.push(StackValue::ManagedPtr(pointer.into()));
+            assert_eq!(crate::intrinsics::dispatch_method_intrinsic(
+                crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_TryEnter_a8f16726fa8c35c7,
+                &mut ctx, method.clone(), &Default::default(), NativeDispatchMode::InlineCall,
+            ), StepResult::Yield);
+            let Some(PendingWait::Monitor(wait)) = &ctx.call_state.native.last().unwrap().wait else { panic!("monitor wait missing") };
+            (block, wait.deadline.unwrap())
+        })).unwrap();
+        MONITOR_FLAG_WRITES.with(|writes| assert!(writes.borrow().as_ref().unwrap().is_empty()));
+        collect(&mut executor);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|_, engine| {
+                    let Some(PendingWait::Monitor(wait)) = &mut engine
+                        .stack
+                        .execution
+                        .call_state
+                        .native
+                        .last_mut()
+                        .unwrap()
+                        .wait
+                    else {
+                        panic!("monitor wait missing")
+                    };
+                    assert_eq!(wait.deadline, Some(deadline));
+                    if expire {
+                        wait.deadline =
+                            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+                    }
+                })
+            })
+            .unwrap();
+        if !expire {
+            assert!(block.exit(owner));
+        }
+        assert_eq!(resume(&mut executor), StepResult::Continue);
+        let writes = MONITOR_FLAG_WRITES.with(|writes| writes.borrow_mut().take().unwrap());
+        assert_eq!(writes, vec![!expire]);
+        let value = executor
+            .shared
+            .statics
+            .get(method.parent.clone(), &Default::default())
+            .storage
+            .with_data(|data| data[0]);
+        assert_eq!(value, u8::from(!expire));
+        if expire {
+            assert!(!block.exit(thread));
+            assert!(block.exit(owner));
+        } else {
+            assert!(block.exit(thread));
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn monitor_legacy_unmanaged_timeout_retains_deadline_across_stop() {
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    for mode in [NativeDispatchMode::InlineCall, NativeDispatchMode::Other] {
+        check_legacy_unmanaged_timeout(mode);
+    }
+}
+
+#[cfg(feature = "multithreading")]
+fn check_legacy_unmanaged_timeout(mode: dotnet_vm_ops::effects::NativeDispatchMode) {
+    use crate::{stack::ops::VmCallOps, sync::SyncBlockOps, threading::ThreadManagerOps};
     use dotnet_intrinsics_threading::MonitorHost;
     use dotnet_value::pointer::ManagedPtr;
     let (mut executor, _) = boundary_executor(false);
     let method = timed_monitor_method(&executor);
     let owner = dotnet_utils::ArenaId::new(9999);
+    let mut flag = Box::new(0u8);
+    let address = std::ptr::NonNull::from(flag.as_mut());
     let shared = executor.shared.clone();
     let guard = shared.thread_manager.request_stop_the_world();
     let (block, deadline) = executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
         // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
         let gc = unsafe { test_gc_handle(gc, engine) };
         let mut ctx = engine.ves_context(gc);
-        let generics = GenericLookup::default();
-        ctx.shared.statics.init(method.parent.clone(), &ctx.with_generics(&generics), ctx.thread_id.get()).unwrap();
-        let ptr = ManagedPtr::new_static(None, TypeDescription::NULL, method.parent.clone(), generics, false, dotnet_utils::ByteOffset::new(0));
+        let ptr = ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
         let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
         let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
         assert!(block.try_enter(owner));
@@ -1297,14 +1641,7 @@ fn check_legacy_static_timeout(mode: dotnet_vm_ops::effects::NativeDispatchMode)
                     deadline
                 );
                 let mut ctx = engine.ves_context(gc);
-                let ptr = ManagedPtr::new_static(
-                    None,
-                    TypeDescription::NULL,
-                    method.parent.clone(),
-                    Default::default(),
-                    false,
-                    dotnet_utils::ByteOffset::new(0),
-                );
+                let ptr = ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
                 let object =
                     ObjectRef::new(gc, HeapStorage::Str(CLRString::from("finalizer monitor")));
                 let nested = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
@@ -1322,14 +1659,6 @@ fn check_legacy_static_timeout(mode: dotnet_vm_ops::effects::NativeDispatchMode)
                     StepResult::Continue
                 );
                 assert!(ctx.frame_stack.current_frame().monitor_retry.is_none());
-                assert_eq!(
-                    ctx.shared
-                        .statics
-                        .get(method.parent.clone(), &Default::default())
-                        .storage
-                        .with_data(|data| data[0]),
-                    0
-                );
                 assert!(nested.exit(owner));
                 let caller = engine.stack.parked_finalizer_caller.as_ref().unwrap();
                 assert_eq!(
@@ -1366,8 +1695,8 @@ fn check_legacy_static_timeout(mode: dotnet_vm_ops::effects::NativeDispatchMode)
         assert_eq!(result, StepResult::Continue);
         assert!(ctx.frame_stack.current_frame().monitor_retry.is_none());
         assert_eq!(ctx.frame_stack.current_frame().stack_height.as_usize(), 0);
-        assert_eq!(ctx.shared.statics.get(method.parent.clone(), &Default::default()).storage.with_data(|data| data[0]), 0);
     })).unwrap();
+    assert_eq!(*flag, 0);
     assert!(block.exit(owner));
 }
 
@@ -2275,7 +2604,7 @@ fn finalizer_wait_rechecks_after_another_owner_finishes() {
                         NativeDispatchMode::InlineCall,
                         &Default::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         condition_finalizer_body,
                     );
                     WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
@@ -2328,7 +2657,7 @@ fn start_sleep(
                     NativeDispatchMode::InlineCall,
                     &Default::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     body,
                 )
             })
@@ -2475,7 +2804,7 @@ fn start_pulse_wait(
                     NativeDispatchMode::InlineCall,
                     &Default::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     pulse_wait_body,
                 );
                 (result, block)
@@ -2621,46 +2950,104 @@ fn monitor_wait_parks_outside_mutation_during_collection() {
     assert!(block.exit(thread));
 }
 
-#[cfg(feature = "multithreading")]
 #[test]
-fn legacy_monitor_wait_retries_and_restores_recursion() {
+fn native_monitor_wait_timeout_restores_recursion() {
     use crate::sync::SyncBlockOps;
-    use dotnet_intrinsics_threading::{MonitorHost, monitor::intrinsic_monitor_wait};
-    use dotnet_vm_ops::TypedStackOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
     let mut executor = executor();
-    let method = condition_wait_method(&executor, true);
+    let method = validation_method(&executor, true, false, true);
     let thread = executor.thread_id;
-    let other = dotnet_utils::ArenaId::new(9999);
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: F1.GcHandleRooted — the engine is the root of this arena mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
-                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("legacy wait")));
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait timeout")));
                 let mut ctx = engine.ves_context(gc);
                 let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
                 assert!(block.try_enter(thread));
                 assert!(block.try_enter(thread));
+                ctx.push(StackValue::Int32(73));
                 ctx.push(StackValue::ObjectRef(source));
-                ctx.push(StackValue::Int32(1000));
-                assert_eq!(
-                    intrinsic_monitor_wait(&mut ctx, method.clone(), &Default::default()),
-                    StepResult::Yield
+                ctx.push(StackValue::Int32(0));
+                let result = crate::intrinsics::dispatch_method_intrinsic(
+                    crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_Wait_4a9ebf54fa5e8a7,
+                    &mut ctx,
+                    method,
+                    &Default::default(),
+                    NativeDispatchMode::InlineCall,
                 );
-                assert!(block.try_enter(other));
-                assert!(block.pulse(other, false));
-                assert!(block.exit(other));
+                assert_eq!(result, StepResult::Jump(1));
                 assert_eq!(
-                    intrinsic_monitor_wait(&mut ctx, method, &Default::default()),
-                    StepResult::Continue
+                    ctx.evaluation_stack.stack,
+                    vec![StackValue::Int32(73), StackValue::Int32(0)]
                 );
-                assert_eq!(ctx.pop_i32(), 1);
+                assert!(ctx.call_state.native.is_empty());
                 assert!(block.exit(thread));
                 assert!(block.exit(thread));
                 assert!(!block.exit(thread));
             })
         })
         .unwrap();
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn native_monitor_wait_pulse_restores_recursion_after_suspension() {
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    let mut executor = executor();
+    let method = validation_method(&executor, true, false, true);
+    let thread = executor.thread_id;
+    let other = dotnet_utils::ArenaId::new(9999);
+    let block = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait pulse")));
+                let mut ctx = engine.ves_context(gc);
+                let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
+                assert!(block.try_enter(thread));
+                assert!(block.try_enter(thread));
+                ctx.push(StackValue::Int32(73));
+                ctx.push(StackValue::ObjectRef(source));
+                ctx.push(StackValue::Int32(-1));
+                let result = crate::intrinsics::dispatch_method_intrinsic(
+                    crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_Wait_4a9ebf54fa5e8a7,
+                    &mut ctx,
+                    method,
+                    &Default::default(),
+                    NativeDispatchMode::InlineCall,
+                );
+                assert_eq!(result, StepResult::Yield);
+                block
+            })
+        })
+        .unwrap();
+    collect(&mut executor);
+    assert!(block.try_enter(other));
+    assert!(block.pulse(other, false));
+    assert!(block.exit(other));
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                let execution = &engine.stack.execution;
+                assert_eq!(
+                    execution.evaluation_stack.stack,
+                    vec![StackValue::Int32(73), StackValue::Int32(1)]
+                );
+                assert!(execution.call_state.native.is_empty());
+                assert_eq!(execution.frame_stack.current_frame().state.ip, 1);
+            })
+        })
+        .unwrap();
+    assert!(block.exit(thread));
+    assert!(block.exit(thread));
+    assert!(!block.exit(thread));
 }
 
 #[cfg(not(feature = "multithreading"))]
@@ -2696,11 +3083,641 @@ fn monitor_wait_infinite_in_single_thread_reports_deadlock() {
                     NativeDispatchMode::InlineCall,
                     &Default::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     wait_forever,
                 );
                 assert!(matches!(result, StepResult::Error(_)));
             })
         })
         .unwrap();
+}
+
+fn validation_method(
+    executor: &Executor,
+    timed: bool,
+    byref: bool,
+    returns_bool: bool,
+) -> MethodDescription {
+    use dotnetdll::binary::signature::kinds::CallingConvention;
+    let mut res = Resolution::new(Module::new("Validation.dll"));
+    res.assembly = Some(Assembly::new("Validation"));
+    let ty = res.push_type_definition(TypeDefinition::new(None, "Validation"));
+    let mut parameters = vec![Parameter(
+        vec![],
+        ParameterType::Value(MethodType::Base(Box::new(BaseType::Object))),
+    )];
+    if timed {
+        parameters.push(Parameter(
+            vec![],
+            ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
+        ));
+    }
+    if byref {
+        parameters.push(Parameter(
+            vec![],
+            ParameterType::Ref(MethodType::Base(Box::new(BaseType::Boolean))),
+        ));
+    }
+    let signature = MethodSignature {
+        instance: false,
+        explicit_this: false,
+        calling_convention: CallingConvention::Default,
+        parameters,
+        return_type: ReturnType(
+            vec![],
+            returns_bool.then_some(ParameterType::Value(MethodType::Base(Box::new(
+                BaseType::Boolean,
+            )))),
+        ),
+        varargs: None,
+    };
+    let index = res.push_method(
+        ty,
+        Method::new(Accessibility::Public, signature, "Validate", None),
+    );
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res.clone(), ty);
+    let index = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[index]))
+        .unwrap();
+    MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(index),
+    )
+}
+
+#[test]
+fn monitor_enter_aliases_validate_before_acquiring() {
+    use crate::intrinsics::MethodIntrinsicId::*;
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::pointer::ManagedPtr;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    let aliases = [
+        (
+            System_Threading_Monitor_Enter_79ae3ba8ce743b48,
+            false,
+            false,
+            false,
+        ),
+        (
+            System_Threading_Monitor_Enter_cf1115d21714f8ee,
+            false,
+            true,
+            false,
+        ),
+        (
+            System_Threading_Monitor_ReliableEnter_21c46da698e3163c,
+            false,
+            true,
+            false,
+        ),
+        (
+            System_Threading_Monitor_TryEnter_a8f16726fa8c35c7,
+            true,
+            true,
+            false,
+        ),
+        (
+            System_Threading_Monitor_ReliableEnterTimeout_f0d8c1f7af155de7,
+            true,
+            true,
+            false,
+        ),
+        (
+            System_Threading_Monitor_TryEnter_FastPath_WithTimeout_41fdc46787c8a6d2,
+            true,
+            true,
+            false,
+        ),
+        (
+            System_Threading_Monitor_TryEnter_362323e1917a246a,
+            true,
+            false,
+            true,
+        ),
+        (
+            System_Threading_Monitor_TryEnter_FastPath_WithTimeout_cbf93f3b6e7975a8,
+            true,
+            false,
+            true,
+        ),
+    ];
+    for (id, timed, byref, returns_bool) in aliases {
+        for (taken, null, timeout, expected, message) in [
+            (
+                true,
+                true,
+                -2,
+                "System.ArgumentException",
+                "The lockTaken argument must be initialized to false.",
+            ),
+            (
+                false,
+                true,
+                -2,
+                "System.ArgumentNullException",
+                "Value cannot be null.",
+            ),
+            (
+                false,
+                false,
+                -2,
+                "System.ArgumentOutOfRangeException",
+                "The timeout must be greater than or equal to -1.",
+            ),
+        ] {
+            if (taken && !byref) || (!null && !timed) {
+                continue;
+            }
+            let mut executor = validation_executor();
+            let method = validation_method(&executor, timed, byref, returns_bool);
+            let thread = executor.thread_id;
+            executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|gc, engine| {
+                        // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                        let gc = unsafe { test_gc_handle(gc, engine) };
+                        let frames = &mut engine.stack.execution.frame_stack;
+                        let serial = frames.issue_home_serial();
+                        let layout = dotnet_value::layout::FieldLayoutManager {
+                            fields: Default::default(),
+                            total_size: 1,
+                            alignment: 1,
+                            gc_desc: Default::default(),
+                            has_ref_fields: false,
+                        };
+                        let layout = dotnet_vm_data::frame_homes::FrameHomeLayout::new(
+                            layout,
+                            Box::new([]),
+                            Box::new([]),
+                        );
+                        frames.current_frame_mut().homes =
+                            dotnet_vm_data::frame_homes::FrameHomes::allocate(
+                                Arc::new(layout),
+                                serial,
+                            )
+                            .unwrap();
+                        let (address, _) = frames.home_block(serial).unwrap();
+                        // SAFETY: F10.FrameHomeChecked — this is the allocated live one-byte home.
+                        unsafe {
+                            address.as_ptr().write(u8::from(taken));
+                        }
+                        let pointer = ManagedPtr::new_frame_home(
+                            address,
+                            TypeDescription::NULL,
+                            serial,
+                            dotnet_utils::ByteOffset::new(0),
+                            false,
+                        );
+                        let object =
+                            ObjectRef::new(gc, HeapStorage::Str(CLRString::from("monitor")));
+                        let mut ctx = engine.ves_context(gc);
+                        ctx.frame_stack
+                            .current_frame_mut()
+                            .state
+                            .info_handle
+                            .exceptions = vec![Arc::new(boundary_section(
+                            dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                            0..1,
+                            1..2,
+                        ))];
+                        let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+                        assert!(block.try_enter(thread));
+                        ctx.push(StackValue::ObjectRef(if null {
+                            ObjectRef(None)
+                        } else {
+                            object
+                        }));
+                        if timed {
+                            ctx.push(StackValue::Int32(timeout));
+                        }
+                        if byref {
+                            ctx.push(StackValue::ManagedPtr(pointer.into()));
+                        }
+                        let result = crate::intrinsics::dispatch_method_intrinsic(
+                            id,
+                            &mut ctx,
+                            method,
+                            &Default::default(),
+                            NativeDispatchMode::InlineCall,
+                        );
+                        assert_validation_exception(&mut ctx, result, expected, message, None);
+                        // SAFETY: F10.FrameHomeChecked — the frame still owns this one-byte home.
+                        assert_eq!(unsafe { address.as_ptr().read() }, u8::from(taken));
+                        assert!(block.exit(thread));
+                        assert!(!block.exit(thread));
+                    })
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn monitor_wait_validates_before_releasing_or_registering() {
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    for (null, timeout, owned, expected, message) in [
+        (
+            true,
+            -2,
+            false,
+            "System.ArgumentNullException",
+            "Value cannot be null.",
+        ),
+        (
+            false,
+            -2,
+            false,
+            "System.ArgumentOutOfRangeException",
+            "The timeout must be greater than or equal to -1.",
+        ),
+        (
+            false,
+            -2,
+            true,
+            "System.ArgumentOutOfRangeException",
+            "The timeout must be greater than or equal to -1.",
+        ),
+        (
+            false,
+            0,
+            false,
+            "System.Threading.SynchronizationLockException",
+            "Object not locked by current thread",
+        ),
+    ] {
+        let mut executor = validation_executor();
+        let method = validation_method(&executor, true, false, true);
+        let thread = executor.thread_id;
+        executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let object = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait")));
+            let mut ctx = engine.ves_context(gc);
+            ctx.frame_stack.current_frame_mut().state.info_handle.exceptions = vec![Arc::new(boundary_section(dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 }, 0..1, 1..2))];
+            let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+            if owned { assert!(block.try_enter(thread)); }
+            ctx.push(StackValue::ObjectRef(if null { ObjectRef(None) } else { object }));
+            ctx.push(StackValue::Int32(timeout));
+            let result = crate::intrinsics::dispatch_method_intrinsic(crate::intrinsics::MethodIntrinsicId::System_Threading_Monitor_Wait_4a9ebf54fa5e8a7, &mut ctx, method, &Default::default(), NativeDispatchMode::InlineCall);
+            assert_validation_exception(&mut ctx, result, expected, message, None);
+            assert_eq!(block.is_owned(thread), owned);
+            if owned { assert!(block.exit(thread)); }
+        })).unwrap();
+    }
+}
+
+#[test]
+fn sleep_invalid_timeout_throws_without_waiting() {
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    let mut executor = validation_executor();
+    let mut signature = parameterless_i32_signature();
+    signature.parameters.push(Parameter(
+        vec![],
+        ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
+    ));
+    signature.return_type = ReturnType(vec![], None);
+    let mut res = Resolution::new(Module::new("SleepValidation.dll"));
+    res.assembly = Some(Assembly::new("SleepValidation"));
+    let ty = res.push_type_definition(TypeDefinition::new(None, "SleepValidation"));
+    let index = res.push_method(
+        ty,
+        Method::new(Accessibility::Public, signature, "Sleep", None),
+    );
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res.clone(), ty);
+    let index = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[index]))
+        .unwrap();
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(index),
+    );
+    executor.with_arena(|arena| arena.mutate_root(|gc, engine| {
+        // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+        let gc = unsafe { test_gc_handle(gc, engine) };
+        let mut ctx = engine.ves_context(gc);
+        ctx.frame_stack.current_frame_mut().state.info_handle.exceptions = vec![Arc::new(boundary_section(dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 }, 0..1, 1..2))];
+        ctx.push(StackValue::Int32(-2));
+        let result = crate::intrinsics::dispatch_method_intrinsic(crate::intrinsics::MethodIntrinsicId::System_Threading_Thread_Sleep_34c7990db73fe738, &mut ctx, method, &Default::default(), NativeDispatchMode::InlineCall);
+        assert_validation_exception(&mut ctx, result, "System.ArgumentOutOfRangeException", "The timeout must be greater than or equal to -1.", None);
+    })).unwrap();
+}
+
+#[test]
+fn engine_host_entries_preserve_optional_fallback_contract() {
+    use crate::context::ResolutionContext;
+    use dotnetdll::resolved::members::{MethodSource, UserMethod};
+    for name in ["Yield", "SpinWait", "Sleep"] {
+        for unified in [false, true] {
+            let mut executor = executor();
+            let mut res = Resolution::new(Module::new("HostThread.dll"));
+            res.assembly = Some(Assembly::new("HostThread"));
+            let mut ty = TypeDefinition::new(None, "Thread");
+            ty.namespace = Some("System.Threading".into());
+            ty.flags.before_field_init = true;
+            let ty_index = res.push_type_definition(ty);
+            let mut signature = parameterless_i32_signature();
+            signature.return_type = ReturnType(
+                vec![],
+                (name == "Yield").then_some(ParameterType::Value(MethodType::Base(Box::new(
+                    BaseType::Boolean,
+                )))),
+            );
+            if name != "Yield" {
+                signature.parameters.push(Parameter(
+                    vec![],
+                    ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
+                ));
+            }
+            let index = res.push_method(
+                ty_index,
+                Method::new(Accessibility::Public, signature, name, None),
+            );
+            let source = MethodSource::User(UserMethod::Definition(index));
+            let res = executor.shared.loader.register_owned_assembly(res);
+            let method = MethodDescription::new(
+                TypeDescription::new(res.clone(), ty_index),
+                GenericLookup::default(),
+                res.clone(),
+                MethodMemberIndex::Method(0),
+            );
+            let expected = StepResult::not_implemented(format!(
+                "async intrinsic {method:?} reached through non-inline dispatch"
+            ));
+            executor
+                .with_arena(|arena| {
+                    arena.mutate_root(|gc, engine| {
+                        // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                        let gc = unsafe { test_gc_handle(gc, engine) };
+                        // A sentinel below the argument window must survive either host API.
+                        engine.ves_context(gc).push(StackValue::Int32(73));
+                        if name != "Yield" {
+                            engine.ves_context(gc).push(StackValue::Int32(0));
+                        }
+                        let before = engine.stack.execution.evaluation_stack.stack.clone();
+                        let lookup = GenericLookup::default();
+                        let context = ResolutionContext::new(
+                            &lookup,
+                            engine.stack.shared.loader.clone(),
+                            res,
+                            engine.stack.shared.caches.clone(),
+                            Some(Arc::downgrade(&engine.stack.shared)),
+                        );
+                        let result = if unified {
+                            engine.unified_dispatch(gc, &source, None, Some(&context))
+                        } else {
+                            engine.dispatch_method(gc, method, lookup.clone())
+                        };
+                        assert_eq!(result, expected, "{name} unified={unified}");
+                        assert_eq!(engine.stack.execution.evaluation_stack.stack, before);
+                        assert!(engine.stack.execution.call_state.native.is_empty());
+                    })
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn absent_fallback_other_preserves_operands_and_inline_selection_is_invariant_error() {
+    use dotnet_vm_ops::effects::{
+        NativeDispatchMode, NativeIntrinsicHost, NativeOperandView, NativeSelection,
+    };
+    fn fallback_selector<'gc>(
+        _: &crate::stack::VesContext<'_, 'gc>,
+        _: NativeOperandView<'_, 'gc>,
+        _: &MethodDescription,
+        _: &GenericLookup,
+    ) -> NativeSelection {
+        NativeSelection::Fallback
+    }
+    for mode in [NativeDispatchMode::Other, NativeDispatchMode::InlineCall] {
+        let mut executor = executor();
+        let method = condition_wait_method(&executor, false);
+        let expected = if mode == NativeDispatchMode::Other {
+            StepResult::not_implemented(format!(
+                "async intrinsic {method:?} reached through non-inline dispatch"
+            ))
+        } else {
+            StepResult::internal_error(
+                "native selector requested a fallback but none is registered",
+            )
+        };
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    ctx.push(StackValue::Int32(17));
+                    let before = ctx.evaluation_stack.stack.clone();
+                    assert_eq!(
+                        ctx.start_native(
+                            method,
+                            mode,
+                            &GenericLookup::default(),
+                            Some(fallback_selector),
+                            None,
+                            condition_finalizer_body
+                        ),
+                        expected
+                    );
+                    assert_eq!(ctx.evaluation_stack.stack, before);
+                    assert!(ctx.call_state.native.is_empty());
+                })
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn threading_selectors_reject_malformed_operand_shapes() {
+    use crate::stack::VesContext;
+    use dotnet_intrinsics_threading::{
+        monitor::{reliable_enter_select, wait_select},
+        thread::spin_select,
+    };
+    use dotnet_vm_ops::effects::{NativeOperandView, NativeSelection};
+    let mut executor = executor();
+    let method = validation_method(&executor, true, false, true);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+                let before = ctx.evaluation_stack.stack.clone();
+                for selector in [
+                    wait_select::<VesContext<'_, '_>>,
+                    spin_select::<VesContext<'_, '_>>,
+                    reliable_enter_select::<VesContext<'_, '_>>,
+                ] {
+                    assert!(matches!(
+                        selector(
+                            &ctx,
+                            NativeOperandView::new(&ctx),
+                            &method,
+                            &Default::default()
+                        ),
+                        NativeSelection::Reject(_)
+                    ));
+                    assert_eq!(ctx.evaluation_stack.stack, before);
+                }
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn fallback_free_monitor_other_preserves_operands() {
+    use crate::intrinsics::MethodIntrinsicId::*;
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    for (id, timed) in [
+        (System_Threading_Monitor_Enter_79ae3ba8ce743b48, false),
+        (System_Threading_Monitor_TryEnter_362323e1917a246a, true),
+        (System_Threading_Monitor_Wait_4a9ebf54fa5e8a7, true),
+        (
+            System_Threading_Monitor_TryEnter_FastPath_WithTimeout_cbf93f3b6e7975a8,
+            true,
+        ),
+    ] {
+        let mut executor = executor();
+        let method = validation_method(&executor, timed, false, timed);
+        let expected = StepResult::not_implemented(format!(
+            "async intrinsic {method:?} reached through non-inline dispatch"
+        ));
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    ctx.push(StackValue::Int32(73));
+                    ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+                    if timed {
+                        ctx.push(StackValue::Int32(-2));
+                    }
+                    let before = ctx.evaluation_stack.stack.clone();
+                    assert_eq!(
+                        crate::intrinsics::dispatch_method_intrinsic(
+                            id,
+                            &mut ctx,
+                            method,
+                            &Default::default(),
+                            NativeDispatchMode::Other
+                        ),
+                        expected
+                    );
+                    assert_eq!(ctx.evaluation_stack.stack, before);
+                    assert!(ctx.call_state.native.is_empty());
+                })
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn engine_host_entries_use_retained_monitor_byref_fallback() {
+    use crate::context::ResolutionContext;
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_value::pointer::ManagedPtr;
+    use dotnetdll::{
+        binary::signature::kinds::CallingConvention,
+        resolved::members::{MethodSource, UserMethod},
+    };
+    for unified in [false, true] {
+        let mut executor = executor();
+        let thread = executor.thread_id;
+        let mut res = Resolution::new(Module::new("HostMonitor.dll"));
+        res.assembly = Some(Assembly::new("HostMonitor"));
+        let mut ty = TypeDefinition::new(None, "Monitor");
+        ty.namespace = Some("System.Threading".into());
+        ty.flags.before_field_init = true;
+        let ty_index = res.push_type_definition(ty);
+        let signature = MethodSignature {
+            instance: false,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![
+                Parameter(
+                    vec![],
+                    ParameterType::Value(MethodType::Base(Box::new(BaseType::Object))),
+                ),
+                Parameter(
+                    vec![],
+                    ParameterType::Ref(MethodType::Base(Box::new(BaseType::Boolean))),
+                ),
+            ],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        };
+        let index = res.push_method(
+            ty_index,
+            Method::new(Accessibility::Public, signature, "Enter", None),
+        );
+        let source = MethodSource::User(UserMethod::Definition(index));
+        let res = executor.shared.loader.register_owned_assembly(res);
+        let method = MethodDescription::new(
+            TypeDescription::new(res.clone(), ty_index),
+            GenericLookup::default(),
+            res.clone(),
+            MethodMemberIndex::Method(0),
+        );
+        let mut flag = Box::new(0u8);
+        let address = std::ptr::NonNull::from(flag.as_mut());
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let object =
+                        ObjectRef::new(gc, HeapStorage::Str(CLRString::from("host monitor")));
+                    let mut ctx = engine.ves_context(gc);
+                    let block = ctx.monitor_get_or_create_sync_block_for_object(object, gc);
+                    ctx.push(StackValue::Int32(73));
+                    ctx.push(StackValue::ObjectRef(object));
+                    let ptr =
+                        ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
+                    ctx.push(StackValue::ManagedPtr(ptr.into()));
+                    let lookup = GenericLookup::default();
+                    let context = ResolutionContext::new(
+                        &lookup,
+                        engine.stack.shared.loader.clone(),
+                        res,
+                        engine.stack.shared.caches.clone(),
+                        Some(Arc::downgrade(&engine.stack.shared)),
+                    );
+                    let result = if unified {
+                        engine.unified_dispatch(gc, &source, None, Some(&context))
+                    } else {
+                        engine.dispatch_method(gc, method, lookup.clone())
+                    };
+                    assert_eq!(result, StepResult::Continue);
+                    assert_eq!(
+                        engine.stack.execution.evaluation_stack.stack,
+                        vec![StackValue::Int32(73)]
+                    );
+                    assert!(engine.stack.execution.call_state.native.is_empty());
+                    assert!(block.exit(thread));
+                })
+            })
+            .unwrap();
+        assert_eq!(*flag, 1);
+    }
 }

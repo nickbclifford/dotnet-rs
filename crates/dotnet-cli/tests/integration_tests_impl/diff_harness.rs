@@ -671,6 +671,16 @@ diff_test!(
 );
 
 diff_test!(
+    monitor_static_flags_single_matches_dotnet,
+    "tests/fixtures/threading/monitor_static_flags_single_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    monitor_static_flags_contended_matches_dotnet,
+    "tests/fixtures/threading/monitor_static_flags_42.cs"
+);
+
+diff_test!(
     threading_monitor_wait_single_matches_dotnet,
     "tests/fixtures/threading/monitor_wait_single_42.cs"
 );
@@ -678,4 +688,18 @@ diff_test!(
 diff_test!(
     threading_monitor_wait_threads_matches_dotnet,
     "tests/fixtures/threading/monitor_wait_threads_42.cs"
+);
+
+diff_test!(
+    delegate_sleep_42_matches_dotnet,
+    "tests/fixtures/threading/delegate_sleep_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    delegate_monitor_enter_42_matches_dotnet,
+    "tests/fixtures/threading/delegate_monitor_enter_42.cs"
+);
+diff_test!(
+    delegate_substring_chunks_42_matches_dotnet,
+    "tests/fixtures/strings/delegate_substring_chunks_42.cs"
 );

@@ -134,12 +134,12 @@ fn reflection_tail_dispatch_matches_dotnet() {
         42
     );
     assert!(
-        fallback_count.load(Ordering::Relaxed) >= 8,
-        "tail-prefixed calls must use reflection fallback"
+        fallback_count.load(Ordering::Relaxed) > 0,
+        "excluded reflection shapes must retain fallback"
     );
     assert!(
-        async_count.load(Ordering::Relaxed) > 0,
-        "the existing-receiver constructor must use the async path"
+        async_count.load(Ordering::Relaxed) >= 8,
+        "tail-prefixed reflection calls must admit supported async targets"
     );
     fs::remove_dir_all(dir).expect("remove temporary project");
 }

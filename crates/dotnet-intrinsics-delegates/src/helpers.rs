@@ -84,13 +84,34 @@ pub fn try_delegate_dispatch<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvoke
     method: MethodDescription,
     lookup: &GenericLookup,
 ) -> Option<StepResult> {
+    try_delegate_dispatch_with_mode(ctx, method, lookup, false)
+}
+
+/// Dispatch a delegate at an IL call site, preserving inline target completion.
+pub fn try_delegate_dispatch_inline<
+    'gc,
+    T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    lookup: &GenericLookup,
+) -> Option<StepResult> {
+    try_delegate_dispatch_with_mode(ctx, method, lookup, true)
+}
+
+fn try_delegate_dispatch_with_mode<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    lookup: &GenericLookup,
+    inline: bool,
+) -> Option<StepResult> {
     // Quick check: only handle methods without bodies
     if method.body().is_some() {
         return None;
     }
 
     match cached_delegate_dispatch_kind(ctx, &method) {
-        DelegateDispatchKind::Invoke => Some(invoke_delegate(ctx, method, lookup)),
+        DelegateDispatchKind::Invoke => Some(invoke_delegate(ctx, method, lookup, inline)),
         DelegateDispatchKind::Constructor => None, // Constructor is handled by support library stub
         DelegateDispatchKind::BeginOrEndInvoke => Some(ctx.throw_by_name_with_message(
             "System.NotSupportedException",

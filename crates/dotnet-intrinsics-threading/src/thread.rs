@@ -123,36 +123,6 @@ pub fn intrinsic_thread_internal_finalize<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-/// Legacy dispatch keeps its operand and deadline across retries. Inline calls park outside
-/// the mutation through the native effect driver.
-pub fn intrinsic_thread_sleep<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let ms = ctx.peek_stack_at(0).as_i32();
-    if ms < -1 {
-        ctx.monitor_clear_retry();
-        let _ = ctx.pop_i32();
-        return ctx.throw_by_name_with_message(
-            "System.ArgumentOutOfRangeException",
-            "The timeout must be greater than or equal to -1.",
-        );
-    }
-    if ms == 0 {
-        let _ = ctx.pop_i32();
-        std::thread::yield_now();
-        return StepResult::Continue;
-    }
-    let deadline = ctx.monitor_retry_deadline(&method, ms);
-    if ms == -1 || Instant::now() < deadline {
-        return StepResult::Yield;
-    }
-    ctx.monitor_clear_retry();
-    let _ = ctx.pop_i32();
-    StepResult::Continue
-}
-
 pub fn sleep_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     _ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
@@ -160,20 +130,33 @@ pub fn sleep_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> NativeSelection {
     match operands.peek_at(0) {
-        StackValue::Int32(ms) if ms >= -1 => NativeSelection::Async(NativeInvocation {
+        StackValue::Int32(ms) => NativeSelection::Async(NativeInvocation {
             start: ms as u32 as usize,
             length: 0,
             parameter_count: method.signature().parameters.len(),
         }),
-        _ => NativeSelection::Fallback,
+        _ => NativeSelection::Reject(
+            dotnet_types::error::ExecutionError::InternalError(
+                "Sleep timeout is not an int32".into(),
+            )
+            .into(),
+        ),
     }
 }
 
-#[dotnet_intrinsic("static void System.Threading.Thread::Sleep(int)", select = sleep_select, fallback = intrinsic_thread_sleep)]
+#[dotnet_intrinsic("static void System.Threading.Thread::Sleep(int)", select = sleep_select)]
 pub async fn thread_sleep(mut fx: VmEffects) -> NativeResult {
     let ms = fx.invocation().start as u32 as i32;
     let deadline = (ms > 0).then(|| Instant::now() + Duration::from_millis(ms as u64));
-    fx.vm().await?.discard_scalars(1)?;
+    let mut vm = fx.vm().await?;
+    vm.discard_scalars(1)?;
+    if ms < -1 {
+        return Err(vm.exception(
+            "System.ArgumentOutOfRangeException",
+            "The timeout must be greater than or equal to -1.",
+        )?);
+    }
+    drop(vm);
     if ms == 0 {
         std::thread::yield_now();
         fx.yield_now().await
@@ -182,28 +165,7 @@ pub async fn thread_sleep(mut fx: VmEffects) -> NativeResult {
     }
 }
 
-pub fn intrinsic_thread_yield<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    std::thread::yield_now();
-    ctx.push_i32(1);
-    StepResult::Continue
-}
-
-pub fn intrinsic_thread_spin_wait<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    if ctx.pop_i32() > 0 {
-        std::thread::yield_now();
-    }
-    StepResult::Continue
-}
-
-#[dotnet_intrinsic("static bool System.Threading.Thread::Yield()", fallback = intrinsic_thread_yield)]
+#[dotnet_intrinsic("static bool System.Threading.Thread::Yield()")]
 pub async fn thread_yield(mut fx: VmEffects) -> NativeResult {
     std::thread::yield_now();
     fx.yield_now().await?;
@@ -222,11 +184,16 @@ pub fn spin_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
             length: 0,
             parameter_count: method.signature().parameters.len(),
         }),
-        _ => NativeSelection::Fallback,
+        _ => NativeSelection::Reject(
+            dotnet_types::error::ExecutionError::InternalError(
+                "SpinWait count is not an int32".into(),
+            )
+            .into(),
+        ),
     }
 }
 
-#[dotnet_intrinsic("static void System.Threading.Thread::SpinWait(int)", select = spin_select, fallback = intrinsic_thread_spin_wait)]
+#[dotnet_intrinsic("static void System.Threading.Thread::SpinWait(int)", select = spin_select)]
 pub async fn thread_spin_wait(mut fx: VmEffects) -> NativeResult {
     let positive = fx.invocation().start != 0;
     fx.vm().await?.discard_scalars(1)?;

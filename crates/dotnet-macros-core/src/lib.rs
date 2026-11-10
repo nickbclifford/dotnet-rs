@@ -84,12 +84,7 @@ pub fn validate_intrinsic_options(args: &[IntrinsicArgs], is_async: bool) -> Res
                     "select and fallback require an async intrinsic",
                 ));
             }
-            if is_async && arg.fallback.is_none() {
-                return Err(syn::Error::new_spanned(
-                    &arg.signature,
-                    "async intrinsic requires a fallback",
-                ));
-            }
+
             if first.selector != arg.selector {
                 return Err(syn::Error::new_spanned(
                     &arg.signature,
@@ -731,6 +726,30 @@ mod tests {
     use super::*;
     use quote::quote;
     use syn::parse_str;
+
+    #[test]
+    fn optional_async_options_preserve_stacked_equality() {
+        for text in ["\"s\"", "\"s\", select = choose"] {
+            let args: IntrinsicArgs = syn::parse_str(text).unwrap();
+            assert!(args.fallback.is_none());
+            validate_intrinsic_options(&[syn::parse_str(text).unwrap(), args], true).unwrap();
+        }
+        for reverse in [false, true] {
+            let absent: IntrinsicArgs = syn::parse_str("\"s\"").unwrap();
+            let present: IntrinsicArgs = syn::parse_str("\"s\", fallback = sync").unwrap();
+            let args = if reverse {
+                [present, absent]
+            } else {
+                [absent, present]
+            };
+            assert!(
+                validate_intrinsic_options(&args, true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("same fallback")
+            );
+        }
+    }
 
     #[test]
     fn intrinsic_argument_syntax() {

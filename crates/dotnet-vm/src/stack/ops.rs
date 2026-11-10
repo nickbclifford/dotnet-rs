@@ -240,6 +240,15 @@ pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
 
     fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult;
 
+    /// Dispatch a resolved target from an IL call instruction.
+    fn dispatch_method_inline(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_method(method, lookup)
+    }
+
     fn unified_dispatch(
         &mut self,
         target: UnifiedDispatchTarget<'_>,

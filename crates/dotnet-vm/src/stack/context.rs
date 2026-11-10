@@ -142,7 +142,6 @@ impl<'gc> CallState<'gc> {
                 stack.truncate(work.stack_height);
                 let frame = frames.current_frame_mut();
                 frame.monitor_retry = None;
-                frame.monitor_wait_retry = None;
                 frame.stack_height = work
                     .stack_height
                     .checked_sub(frame.base.stack.as_usize())
@@ -661,6 +660,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     }
 
     pub(crate) fn unwind_frame(&mut self) {
+        // An inline native body can throw without pushing a child frame. If the search
+        // crosses its owner, retire that activation before recycling the owner frame;
+        // otherwise a later frame at the same depth can be mistaken for its caller.
+        self.unwind_native_at(self.frame_stack.len());
         let mut frame = self
             .frame_stack
             .pop()

@@ -146,7 +146,7 @@ fn substring_range(
     Ok((start, length))
 }
 
-/// Choose the bounded native copy only after validating the unconsumed operands.
+/// Keep valid small copies synchronous; invalid operands are validated by the body.
 pub fn substring_select<'gc, T: IntrinsicStringHost<'gc>>(
     _ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
@@ -155,50 +155,96 @@ pub fn substring_select<'gc, T: IntrinsicStringHost<'gc>>(
 ) -> NativeSelection {
     let parameter_count = method.signature().parameters.len();
     if !(1..=2).contains(&parameter_count) {
-        return NativeSelection::Fallback;
+        return NativeSelection::Reject(
+            dotnet_types::error::ExecutionError::InternalError(
+                "Substring has an invalid parameter count".into(),
+            )
+            .into(),
+        );
     }
     let length = if parameter_count == 2 {
         match operands.peek_at(0) {
             StackValue::Int32(length) => Some(length),
-            _ => return NativeSelection::Fallback,
+            _ => {
+                return NativeSelection::Reject(
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "Substring length is not an int32".into(),
+                    )
+                    .into(),
+                );
+            }
         }
     } else {
         None
     };
     let StackValue::Int32(start) = operands.peek_at(parameter_count - 1) else {
-        return NativeSelection::Fallback;
+        return NativeSelection::Reject(
+            dotnet_types::error::ExecutionError::InternalError(
+                "Substring start is not an int32".into(),
+            )
+            .into(),
+        );
     };
-    let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(parameter_count) else {
-        return NativeSelection::Fallback;
-    };
-    let inner = handle.borrow();
-    let HeapStorage::Str(source) = &inner.storage else {
-        return NativeSelection::Fallback;
-    };
-    match substring_range(start, length, source.len()) {
-        Ok((start, length)) if length > SUBSTRING_CHUNK_SIZE => {
-            NativeSelection::Async(NativeInvocation {
-                start,
-                length,
-                parameter_count,
-            })
+    if let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(parameter_count) {
+        let inner = handle.borrow();
+        if let HeapStorage::Str(source) = &inner.storage
+            && let Ok((_, valid_length)) = substring_range(start, length, source.len())
+            && valid_length <= SUBSTRING_CHUNK_SIZE
+        {
+            return NativeSelection::Fallback;
         }
-        _ => NativeSelection::Fallback,
     }
+    NativeSelection::Async(NativeInvocation {
+        start: start as u32 as usize,
+        length: length.unwrap_or(0) as u32 as usize,
+        parameter_count,
+    })
 }
 
-/// Copy a selector-validated substring without retaining a heap borrow across a yield.
+/// Validate and copy a substring without retaining a heap borrow across a yield.
 #[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = intrinsic_string_substring)]
 #[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = intrinsic_string_substring)]
 pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
     let invocation = fx.invocation();
-    let source = {
+    let (source, start, length) = {
         let mut vm = fx.vm().await?;
         vm.discard_scalars(invocation.parameter_count)?;
-        vm.pop_string()?
+        let Some(source) = vm.pop_string_candidate()? else {
+            return Err(vm.exception("System.ArgumentException", "The argument must be a string.")?);
+        };
+        let source_len = vm.with(|region| match region.fetch(&source)? {
+            StackValue::ObjectRef(ObjectRef(None)) => {
+                Ok::<Option<Option<usize>>, dotnet_types::error::VmError>(None)
+            }
+            StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(chars) => Ok(Some(Some(chars.len()))),
+                    _ => Ok(Some(None)),
+                }
+            }
+            _ => Err(dotnet_types::error::ExecutionError::InternalError(
+                "native substring source invalid".into(),
+            )
+            .into()),
+        })??;
+        let Some(source_len) = source_len else {
+            return Err(vm.exception("System.NullReferenceException", NULL_REF_MSG)?);
+        };
+        let Some(source_len) = source_len else {
+            return Err(vm.exception("System.ArgumentException", "The argument must be a string.")?);
+        };
+        let signed_start = invocation.start as u32 as i32;
+        let signed_length =
+            (invocation.parameter_count == 2).then_some(invocation.length as u32 as i32);
+        let (start, length) = match substring_range(signed_start, signed_length, source_len) {
+            Ok(range) => range,
+            Err(parameter) => return Err(vm.argument_out_of_range(parameter)?),
+        };
+        (source, start, length)
     };
-    let mut buffer = substring_buffer(invocation.length);
-    while buffer.len() < invocation.length {
+    let mut buffer = substring_buffer(length);
+    while buffer.len() < length {
         {
             let mut vm = fx.vm().await?;
             vm.with(|region| {
@@ -215,9 +261,8 @@ pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
                     )
                     .into());
                 };
-                if invocation
-                    .start
-                    .checked_add(invocation.length)
+                if start
+                    .checked_add(length)
                     .is_none_or(|end| end > chars.len())
                 {
                     return Err(dotnet_types::error::ExecutionError::InternalError(
@@ -225,17 +270,11 @@ pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
                     )
                     .into());
                 }
-                copy_substring_chunk(
-                    chars,
-                    invocation.start,
-                    invocation.length,
-                    buffer.len(),
-                    &mut buffer,
-                );
+                copy_substring_chunk(chars, start, length, buffer.len(), &mut buffer);
                 Ok::<(), dotnet_types::error::VmError>(())
             })??;
         }
-        if buffer.len() < invocation.length {
+        if buffer.len() < length {
             fx.yield_now().await?;
         }
     }

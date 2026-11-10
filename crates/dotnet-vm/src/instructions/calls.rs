@@ -129,7 +129,7 @@ pub fn call_constrained<'gc, T: VmCallOps<'gc> + VmResolutionOps<'gc> + VmLoader
 
     // The resolver cache contains only target metadata. The source lookup remains live here so
     // no cached route can capture caller state, a managed pointer, or tail-call eligibility.
-    ctx.dispatch_method(target, lookup)
+    ctx.dispatch_method_inline(target, lookup)
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
@@ -339,9 +339,9 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
     }
     *ctx.call_args_buffer_mut() = args;
 
-    // Note: CallVirtualConstrained uses dispatch_method directly
+    // CallVirtualConstrained uses resolved inline dispatch directly
     // instead of unified_dispatch because it performs custom method resolution
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
-    ctx.dispatch_method(method, dispatch_lookup)
+    ctx.dispatch_method_inline(method, dispatch_lookup)
 }

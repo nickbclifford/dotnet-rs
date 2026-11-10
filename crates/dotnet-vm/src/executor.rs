@@ -1031,7 +1031,6 @@ impl Executor {
                     .chain(execution.frame_stack.pooled_frames.iter_mut())
                 {
                     frame.monitor_retry = None;
-                    frame.monitor_wait_retry = None;
                 }
                 execution
                     .call_state

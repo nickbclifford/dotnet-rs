@@ -229,7 +229,7 @@ fn unsupported_dispatch_preserves_operands_before_fallback() {
                     NativeDispatchMode::Other,
                     &GenericLookup::default(),
                     Some(native_test_reject_selector),
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_body,
                 );
                 assert_eq!(ctx.evaluation_stack.stack, before);
@@ -570,7 +570,7 @@ fn substring_method(executor: &Executor, explicit_length: bool) -> MethodDescrip
 }
 
 #[test]
-fn substring_selector_preserves_operands_and_selects_only_large_valid_ranges() {
+fn substring_selector_preserves_operands_and_admits_invalid_ranges() {
     use crate::stack::VesContext;
     use dotnet_intrinsics_string::search::substring_select;
     use dotnet_vm_ops::effects::{NativeOperandView, NativeSelection};
@@ -583,18 +583,22 @@ fn substring_selector_preserves_operands_and_selects_only_large_valid_ranges() {
                 (0, Some(0), None),
                 (0, Some(CHUNK as i32), None),
                 (1, Some((CHUNK + 1) as i32), Some((1, CHUNK + 1))),
-                (-1, Some(-1), None),
-                (0, Some(-1), None),
-                (2, Some(i32::MAX), None),
-                (i32::MAX, Some(i32::MAX), None),
+                (-1, Some(-1), Some((u32::MAX as usize, u32::MAX as usize))),
+                (0, Some(-1), Some((0, u32::MAX as usize))),
+                (2, Some(i32::MAX), Some((2, i32::MAX as usize))),
+                (
+                    i32::MAX,
+                    Some(i32::MAX),
+                    Some((i32::MAX as usize, i32::MAX as usize)),
+                ),
             ]
         } else {
             vec![
                 ((CHUNK + 2) as i32, None, None),
                 (2, None, None),
-                (1, None, Some((1, CHUNK + 1))),
-                (-1, None, None),
-                (i32::MAX, None, None),
+                (1, None, Some((1, 0))),
+                (-1, None, Some((u32::MAX as usize, 0))),
+                (i32::MAX, None, Some((i32::MAX as usize, 0))),
             ]
         };
         executor
@@ -646,11 +650,53 @@ fn substring_selector_preserves_operands_and_selects_only_large_valid_ranges() {
                                 &method,
                                 &GenericLookup::default(),
                             ),
-                            NativeSelection::Fallback
+                            NativeSelection::Async(_)
                         ));
                         assert_eq!(ctx.evaluation_stack.stack, before);
                         ctx.drop_top(if explicit_length { 3 } else { 2 });
                     }
+                })
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn substring_selector_rejects_malformed_scalar_operands() {
+    use crate::stack::VesContext;
+    use dotnet_intrinsics_string::search::substring_select;
+    use dotnet_vm_ops::effects::{NativeOperandView, NativeSelection};
+    for malformed_length in [false, true] {
+        let mut executor = executor();
+        let method = substring_method(&executor, true);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    ctx.push(StackValue::ObjectRef(ObjectRef(None)));
+                    ctx.push(if malformed_length {
+                        StackValue::Int32(0)
+                    } else {
+                        StackValue::ObjectRef(ObjectRef(None))
+                    });
+                    ctx.push(if malformed_length {
+                        StackValue::ObjectRef(ObjectRef(None))
+                    } else {
+                        StackValue::Int32(0)
+                    });
+                    let before = ctx.evaluation_stack.stack.clone();
+                    assert!(matches!(
+                        substring_select::<VesContext<'_, '_>>(
+                            &ctx,
+                            NativeOperandView::new(&ctx),
+                            &method,
+                            &Default::default()
+                        ),
+                        NativeSelection::Reject(_)
+                    ));
+                    assert_eq!(ctx.evaluation_stack.stack, before);
                 })
             })
             .unwrap();
@@ -698,7 +744,7 @@ fn substring_dispatch_admits_only_inline_calls() {
                     })
                 })
                 .unwrap();
-            if entry == "inline" {
+            if entry != "engine_api" {
                 assert_eq!(result, StepResult::Yield);
                 assert_eq!(resume(&mut executor), StepResult::Yield);
                 assert_eq!(resume(&mut executor), StepResult::Continue);
@@ -1165,7 +1211,7 @@ fn foreign_byref_owner_survives_collection_and_child_call(cross_origin: bool) {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_foreign_byref_body,
                 )
             })
@@ -1265,7 +1311,7 @@ fn native_activation_real_context_and_collection() {
                         NativeDispatchMode::Other,
                         &GenericLookup::default(),
                         Some(native_test_reject_selector),
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         native_test_body
                     ),
                     StepResult::Continue
@@ -1275,7 +1321,7 @@ fn native_activation_real_context_and_collection() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_body,
                 )
             })
@@ -1425,7 +1471,7 @@ fn native_activation_selection_and_failure() {
                         NativeDispatchMode::InlineCall,
                         &GenericLookup::default(),
                         Some(selector),
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         entry,
                     )
                 })
@@ -1476,7 +1522,7 @@ fn native_activation_identity_exhaustion_preserves_operands() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_body,
                 );
                 assert!(matches!(result, StepResult::Error(_)));
@@ -1510,7 +1556,7 @@ fn native_activation_abort_and_changed_caller_cleanup() {
                         NativeDispatchMode::InlineCall,
                         &GenericLookup::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         native_test_body,
                     )
                 })
@@ -1614,7 +1660,7 @@ fn native_activation_managed_throw_reaches_exception_search() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_throw,
                 )
             })
@@ -1694,7 +1740,7 @@ fn native_activation_immediate_completion_and_bad_poll() {
                         NativeDispatchMode::InlineCall,
                         &GenericLookup::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         entry,
                     )
                 })
@@ -1808,7 +1854,7 @@ fn start_native_with_weak_source(
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     entry,
                 )
             })
@@ -2014,7 +2060,7 @@ fn native_activation_managed_calls_through_frames() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 )
             })
@@ -2144,7 +2190,7 @@ fn native_activation_inline_call_budget() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_inline_calls_body,
                 )
             })
@@ -2196,7 +2242,7 @@ fn native_activation_nested_abort_retires_managed_children() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 )
             })
@@ -2218,7 +2264,7 @@ fn native_activation_nested_abort_retires_managed_children() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_body,
                 )
             })
@@ -2320,7 +2366,7 @@ fn native_activation_nested_return_is_copied() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_echo_body,
                 )
             })
@@ -2357,7 +2403,7 @@ fn native_activation_nested_return_is_copied() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_test_body,
                 )
             })
@@ -2451,7 +2497,7 @@ fn native_activation_rejects_call_with_unconsumed_operands() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_call_with_operands_body,
                 )
             })
@@ -2522,7 +2568,7 @@ fn native_activation_calls_suspending_intrinsic() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_nested_intrinsic_body,
                 )
             })
@@ -2723,7 +2769,7 @@ fn native_activation_retries_target_after_initializer() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_initialized_target_body,
                 )
             })
@@ -2886,7 +2932,7 @@ fn native_activation_defers_nested_entry_at_limit() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_nested_intrinsic_body,
                 )
             })
@@ -2960,7 +3006,7 @@ fn native_activation_rejects_reply_from_wrong_root_set() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 );
                 assert!(matches!(first, StepResult::NativeSuspended(_)));
@@ -3101,7 +3147,7 @@ fn native_activation_foreign_child_return_survives_collection() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_echo_body,
                 )
             })
@@ -3377,7 +3423,7 @@ fn boundary_start_with(
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     body,
                 )
             })
@@ -3633,7 +3679,7 @@ fn start_initializer_test(executor: &mut Executor) -> StepResult {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_ensure_initialized_body,
                 )
             })
@@ -4671,7 +4717,7 @@ fn capturing_synchronous_body(
 }
 
 #[test]
-fn native_capture_synchronous_throw_precedes_outer_filter() {
+fn native_capture_intrinsic_throw_precedes_outer_filter() {
     use dotnet_vm_data::exceptions::HandlerKind;
     use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     let (mut executor, _) = boundary_executor(false);
@@ -4701,14 +4747,13 @@ fn native_capture_synchronous_throw_precedes_outer_filter() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     capturing_synchronous_body,
                 )
             })
         })
         .unwrap();
-    assert_eq!(result, StepResult::Exception);
-    assert_eq!(boundary_handle(&mut executor, false), StepResult::Yield);
+    assert_eq!(result, StepResult::Yield);
     assert_eq!(BOUNDARY_RESUMES.with(|count| count.get()), 0);
     executor.perform_full_gc().unwrap();
     assert_eq!(resume(&mut executor), StepResult::Exception);
@@ -4789,7 +4834,7 @@ fn native_capture_inside_filter_restores_outer_exception() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     capturing_handled_body,
                 )
             })
@@ -5025,7 +5070,7 @@ fn native_boundary_stack_trace_and_cleanup_for_nested_calls() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     boundary_body,
                 )
             })
@@ -5191,7 +5236,7 @@ fn native_boundary_synchronous_throw_reaches_caller_handler() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     boundary_synchronous_throw_body,
                 )
             })
@@ -5252,7 +5297,7 @@ fn native_call_in_filter_does_not_reply_to_suspended_call() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 )
             })
@@ -5375,7 +5420,7 @@ fn native_replacement_check(tail: bool) {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 )
             })
@@ -5799,7 +5844,7 @@ fn native_call_in_handler_preserves_ambient_unwind() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     native_managed_call_body,
                 )
             })
@@ -5879,7 +5924,7 @@ fn native_activations_follow_nested_filter_segments() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     boundary_body,
                 )
             })
@@ -5921,7 +5966,7 @@ fn native_activations_follow_nested_filter_segments() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     boundary_body,
                 )
             })
@@ -6032,7 +6077,7 @@ fn finalizer_native_ids_remain_monotonic_across_segments() {
                         NativeDispatchMode::InlineCall,
                         &GenericLookup::default(),
                         None,
-                        native_test_fallback,
+                        Some(native_test_fallback),
                         native_test_body
                     ),
                     StepResult::Yield
@@ -6177,7 +6222,7 @@ fn abort_drops_suspended_children_before_active_parent() {
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     boundary_body,
                 )
             })
@@ -7030,4 +7075,484 @@ fn multicast_fallback_completes_collection_targets() {
         "fallback collection did not complete: {result:?}"
     );
     assert!(calls >= 3, "fixture did not complete all multicast calls");
+}
+
+/// CoreLib layout sufficient to inspect exceptions created without constructors.
+fn validation_executor() -> Executor {
+    let executor = executor();
+    let mut core = Resolution::new(Module::new("System.Private.CoreLib.dll"));
+    core.assembly = Some(Assembly::new("System.Private.CoreLib"));
+    let mut ty = TypeDefinition::new(None, "Object");
+    ty.namespace = Some("System".into());
+    let object = core.push_type_definition(ty);
+    let mut ty = TypeDefinition::new(None, "Exception");
+    ty.namespace = Some("System".into());
+    ty.extends = Some(object.into());
+    let exception = core.push_type_definition(ty);
+    core.push_field(
+        exception,
+        Field::instance(
+            Accessibility::Private,
+            "_message",
+            MemberType::Base(Box::new(BaseType::String)),
+        ),
+    );
+    let mut ty = TypeDefinition::new(None, "ArgumentException");
+    ty.namespace = Some("System".into());
+    ty.extends = Some(exception.into());
+    let argument = core.push_type_definition(ty);
+    core.push_field(
+        argument,
+        Field::instance(
+            Accessibility::Private,
+            "_paramName",
+            MemberType::Base(Box::new(BaseType::String)),
+        ),
+    );
+    for (namespace, name, parent) in [
+        ("System", "ArgumentNullException", argument),
+        ("System", "ArgumentOutOfRangeException", argument),
+        ("System", "NullReferenceException", exception),
+        (
+            "System.Threading",
+            "SynchronizationLockException",
+            exception,
+        ),
+        ("System", "Enum", object),
+        ("System", "ValueType", object),
+        ("System", "Array", object),
+        ("System", "String", object),
+        ("System", "Byte", object),
+    ] {
+        let mut ty = TypeDefinition::new(None, name);
+        ty.namespace = Some(namespace.into());
+        ty.extends = Some(parent.into());
+        core.push_type_definition(ty);
+    }
+    executor.shared.loader.register_owned_assembly(core.clone());
+    core.assembly = Some(Assembly::new("mscorlib"));
+    executor.shared.loader.register_owned_assembly(core);
+    executor
+}
+
+fn assert_validation_exception<'gc>(
+    ctx: &mut crate::stack::VesContext<'_, 'gc>,
+    result: StepResult,
+    expected: &str,
+    message: &str,
+    parameter: Option<&str>,
+) {
+    assert_eq!(result, StepResult::Exception);
+    let ExceptionState::Filtering(state) = *ctx.exception_mode else {
+        panic!("expected filtering exception")
+    };
+    let exception = state.exception;
+    assert_eq!(
+        exception.as_object(|obj| obj.description.type_name()),
+        expected
+    );
+    let exception_type = ctx.shared.loader.corlib_type("System.Exception").unwrap();
+    let text = exception.as_object(|obj| {
+        obj.instance_storage
+            .field::<ObjectRef>(exception_type, "_message")
+            .unwrap()
+            .read()
+    });
+    assert_eq!(
+        {
+            let handle = text.0.unwrap();
+            let inner = handle.borrow();
+            match &inner.storage {
+                HeapStorage::Str(chars) => String::from_utf16_lossy(chars),
+                _ => panic!("message is not a string"),
+            }
+        },
+        message
+    );
+    if let Some(parameter) = parameter {
+        let argument_type = ctx
+            .shared
+            .loader
+            .corlib_type("System.ArgumentException")
+            .unwrap();
+        let text = exception.as_object(|obj| {
+            obj.instance_storage
+                .field::<ObjectRef>(argument_type, "_paramName")
+                .unwrap()
+                .read()
+        });
+        assert_eq!(
+            {
+                let handle = text.0.unwrap();
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(chars) => String::from_utf16_lossy(chars),
+                    _ => panic!("parameter is not a string"),
+                }
+            },
+            parameter
+        );
+    }
+    assert!(ctx.call_state.native.is_empty());
+}
+
+#[test]
+fn substring_body_validates_invalid_ranges_and_null_receiver() {
+    use crate::stack::ops::{UnifiedDispatchTarget, VmCallOps};
+    for (source, start, length, expected, parameter) in [
+        (false, -1, Some(-1), "System.NullReferenceException", None),
+        (false, -1, None, "System.NullReferenceException", None),
+        (
+            true,
+            -1,
+            Some(-1),
+            "System.ArgumentOutOfRangeException",
+            Some("startIndex"),
+        ),
+        (
+            true,
+            4,
+            Some(0),
+            "System.ArgumentOutOfRangeException",
+            Some("startIndex"),
+        ),
+        (
+            true,
+            -1,
+            None,
+            "System.ArgumentOutOfRangeException",
+            Some("startIndex"),
+        ),
+        (
+            true,
+            4,
+            None,
+            "System.ArgumentOutOfRangeException",
+            Some("startIndex"),
+        ),
+        (
+            true,
+            0,
+            Some(-1),
+            "System.ArgumentOutOfRangeException",
+            Some("length"),
+        ),
+        (
+            true,
+            2,
+            Some(2),
+            "System.ArgumentOutOfRangeException",
+            Some("length"),
+        ),
+    ] {
+        let mut executor = validation_executor();
+        let method = substring_method(&executor, length.is_some());
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    ctx.frame_stack
+                        .current_frame_mut()
+                        .state
+                        .info_handle
+                        .exceptions = vec![Arc::new(boundary_section(
+                        dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                        0..1,
+                        1..2,
+                    ))];
+                    let object = if source {
+                        ObjectRef::new(gc, HeapStorage::Str(CLRString::from("abc")))
+                    } else {
+                        ObjectRef(None)
+                    };
+                    ctx.push(StackValue::ObjectRef(object));
+                    ctx.push(StackValue::Int32(start));
+                    if let Some(length) = length {
+                        ctx.push(StackValue::Int32(length));
+                    }
+                    let result = ctx.unified_dispatch(
+                        UnifiedDispatchTarget::Resolved(method, GenericLookup::default()),
+                        None,
+                        None,
+                    );
+                    let message = parameter
+                        .unwrap_or("Object reference not set to an instance of an object.");
+                    assert_validation_exception(&mut ctx, result, expected, message, parameter);
+                })
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn substring_body_rejects_non_string_receivers() {
+    use crate::stack::ops::{UnifiedDispatchTarget, VmCallOps};
+    use dotnet_vm_ops::MemoryOps;
+    for is_object in [false, true] {
+        let mut executor = validation_executor();
+        let method = substring_method(&executor, true);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    ctx.frame_stack
+                        .current_frame_mut()
+                        .state
+                        .info_handle
+                        .exceptions = vec![Arc::new(boundary_section(
+                        dotnet_vm_data::exceptions::HandlerKind::Filter { clause_offset: 1 },
+                        0..1,
+                        1..2,
+                    ))];
+                    let receiver = if is_object {
+                        let ty = ctx.shared.loader.corlib_type("System.Object").unwrap();
+                        let object = ctx.new_object(ty).unwrap();
+                        StackValue::ObjectRef(ctx.alloc_obj_ref(gc, object))
+                    } else {
+                        StackValue::Int32(9)
+                    };
+                    ctx.push(receiver);
+                    ctx.push(StackValue::Int32(0));
+                    ctx.push(StackValue::Int32(1));
+                    let result = ctx.unified_dispatch(
+                        UnifiedDispatchTarget::Resolved(method, GenericLookup::default()),
+                        None,
+                        None,
+                    );
+                    assert_validation_exception(
+                        &mut ctx,
+                        result,
+                        "System.ArgumentException",
+                        "The argument must be a string.",
+                        None,
+                    );
+                })
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn single_cast_substring_activation_completes_at_invoke_instruction() {
+    use std::{path::Path, process::Command};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../dotnet-cli");
+    let output =
+        std::env::temp_dir().join(format!("dotnet-delegate-substring-{}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let source = output.join("Delegate.cs");
+    std::fs::write(
+        &source,
+        r#"using System;
+public static class Program {
+    public static int Main() {
+        string source = new string(new char[131080]);
+        Func<int, int, string> slice = source.Substring;
+        string result = slice(3, 131073);
+        return result.Length == 131073 ? 42 : 1;
+    }
+}"#,
+    )
+    .unwrap();
+    let build = Command::new("dotnet")
+        .arg("build")
+        .arg(root.join("tests/SingleFile.csproj"))
+        .arg(format!("-p:TestFile={}", source.display()))
+        .arg(format!(
+            "-p:BaseIntermediateOutputPath={}/",
+            output.join("obj").display()
+        ))
+        .args(["-v:q", "--nologo", "-o"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "fixture build failed: {}",
+        String::from_utf8_lossy(&build.stdout)
+    );
+    let loader = AssemblyLoader::new(
+        dotnet_assemblies::find_dotnet_app_path()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned(),
+    )
+    .unwrap();
+    let res = loader
+        .load_resolution_from_file(output.join("SingleFile.dll"))
+        .unwrap();
+    let EntryPoint::Method(entry) = res.entry_point.expect("entrypoint") else {
+        panic!("method entrypoint expected")
+    };
+    let ty = TypeDescription::new(res.clone(), entry.parent_type());
+    let idx = ty
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &res.definition()[entry]))
+        .unwrap();
+    let method = MethodDescription::new(
+        ty,
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(idx),
+    );
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "the executor owns its loader"
+    )]
+    let shared = Arc::new(SharedGlobalState::new(Arc::new(loader)));
+    let mut executor = Executor::new(shared.clone());
+    executor.entrypoint(method).unwrap();
+    let mut suspended = None;
+    for _ in 0..1_000_000 {
+        let before = executor
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| {
+                    let execution = &engine.stack.execution;
+                    let frame = execution.frame_stack.current_frame();
+                    let ip = frame.state.ip;
+                    let invoke = matches!(
+                        frame.state.info_handle.instructions.get(ip),
+                        Some(Instruction::CallVirtual { .. })
+                    );
+                    let stack = &execution.evaluation_stack.stack;
+                    let arguments = stack.len() >= 3
+                        && matches!(
+                            stack[stack.len() - 3..],
+                            [
+                                StackValue::ObjectRef(ObjectRef(Some(_))),
+                                StackValue::Int32(3),
+                                StackValue::Int32(131073)
+                            ]
+                        );
+                    (
+                        execution.frame_stack.len(),
+                        ip,
+                        execution.evaluation_stack.top_of_stack(),
+                        invoke && arguments,
+                    )
+                })
+            })
+            .unwrap();
+        let result = resume(&mut executor);
+        if matches!(
+            result,
+            StepResult::Error(_) | StepResult::MethodThrew(_) | StepResult::Return
+        ) {
+            executor
+                .with_arena(|arena| {
+                    arena.mutate(|_, engine| {
+                        for frame in &engine.stack.execution.frame_stack.frames {
+                            eprintln!(
+                                "frame {:?} ip {}",
+                                frame.state.info_handle.source, frame.state.ip
+                            );
+                        }
+                    })
+                })
+                .unwrap();
+            panic!("before delegate activation: {result:?}");
+        }
+        let snapshot = executor
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| {
+                    let execution = &engine.stack.execution;
+                    execution.call_state.native.last().and_then(|native| {
+                        if native.method.0.method().name != "Substring" {
+                            return None;
+                        }
+                        assert!(before.3, "target must be reached by callvirt with the delegate receiver and both arguments");
+                        assert_eq!((before.0, before.1), (native.caller_depth, native.caller_ip));
+                        assert_eq!(before.2, native.stack_height + 3);
+                        assert!(native.method.0.signature().instance);
+                        assert_eq!(native.method.0.signature().parameters.len(), 2);
+                        assert_eq!(execution.frame_stack.len(), native.caller_depth);
+                        assert_eq!(
+                            execution.frame_stack.current_frame().state.ip,
+                            native.caller_ip
+                        );
+                        assert_eq!(
+                            execution.evaluation_stack.top_of_stack(),
+                            native.stack_height
+                        );
+                        Some((
+                            native.id,
+                            native.caller_depth,
+                            native.caller_ip,
+                            native.stack_height,
+                        ))
+                    })
+                })
+            })
+            .unwrap();
+        if let Some(snapshot) = snapshot {
+            assert_eq!(result, StepResult::Yield);
+            suspended = Some(snapshot);
+            break;
+        }
+    }
+    let (id, depth, ip, base) = suspended.expect("delegate target must enter its async body");
+    let mut completed = false;
+    for _ in 0..10 {
+        let result = resume(&mut executor);
+        assert!(
+            !matches!(result, StepResult::Error(_) | StepResult::MethodThrew(_)),
+            "{result:?}"
+        );
+        completed = executor
+            .with_arena(|arena| {
+                arena.mutate(|_, engine| {
+                    let execution = &engine.stack.execution;
+                    if execution
+                        .call_state
+                        .native
+                        .iter()
+                        .any(|native| native.id == id)
+                    {
+                        assert_eq!(execution.frame_stack.len(), depth);
+                        assert_eq!(execution.frame_stack.current_frame().state.ip, ip);
+                        assert_eq!(execution.evaluation_stack.top_of_stack(), base);
+                        return false;
+                    }
+                    assert_eq!(execution.frame_stack.len(), depth);
+                    assert_eq!(execution.frame_stack.current_frame().state.ip, ip + 1);
+                    assert_eq!(execution.evaluation_stack.top_of_stack(), base + 1);
+                    assert!(matches!(
+                        execution.evaluation_stack.stack.last(),
+                        Some(StackValue::ObjectRef(ObjectRef(Some(_))))
+                    ));
+                    true
+                })
+            })
+            .unwrap();
+        if completed {
+            break;
+        }
+    }
+    assert!(completed, "delegate target must complete once");
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                let execution = &engine.stack.execution;
+                assert!(
+                    execution
+                        .call_state
+                        .native
+                        .iter()
+                        .all(|native| native.id != id)
+                );
+                assert_eq!(execution.frame_stack.current_frame().state.ip, ip + 2);
+            })
+        })
+        .unwrap();
+    drop(executor);
+    shared.shutdown_workers();
+    std::fs::remove_dir_all(output).unwrap();
 }

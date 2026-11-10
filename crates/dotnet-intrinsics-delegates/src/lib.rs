@@ -82,4 +82,13 @@ pub trait DelegateInvokeHost<'gc> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult;
+
+    /// Dispatch a single target at an IL call site, where suspension can complete inline.
+    fn delegate_dispatch_method_inline(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.delegate_dispatch_method(method, lookup)
+    }
 }

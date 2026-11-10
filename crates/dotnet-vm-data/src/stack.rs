@@ -76,26 +76,12 @@ pub struct NativeReturnDestination {
     pub generation: u64,
 }
 
-/// A timed intrinsic retry belongs to one invocation in this frame.
+/// A timed byref monitor fallback or Thread.Join retry belongs to one invocation in this frame.
 pub struct MonitorRetry {
     pub method: dotnet_types::members::MethodDescription,
     pub ip: usize,
     pub stack_top: StackSlotIndex,
     pub deadline: std::time::Instant,
-}
-
-/// A legacy monitor wait is owned by a frame until completion or cancellation.
-///
-/// # Safety
-/// Implementations must contain no GC references and must not execute managed code when dropped.
-pub unsafe trait MonitorWaitRetry {
-    fn poll(&mut self) -> Option<bool>;
-}
-pub struct LegacyMonitorWait {
-    pub method: dotnet_types::members::MethodDescription,
-    pub ip: usize,
-    pub stack_top: StackSlotIndex,
-    pub wait: Box<dyn MonitorWaitRetry>,
 }
 
 /// A synchronization-only obligation owned by a legacy initializer frame.
@@ -122,7 +108,6 @@ pub struct StackFrame<'gc> {
     pub frame_continuation: Vec<FrameReturnAction>,
     pub reflection_pending: Option<Box<ReflectionPending<'gc>>>,
     pub monitor_retry: Option<Box<MonitorRetry>>,
-    pub monitor_wait_retry: Option<Box<LegacyMonitorWait>>,
     pub native_return: Option<NativeReturnDestination>,
     // INVARIANT: F6.InitializerClaimLifetime — frame disposal and pooling drop the synchronization-only obligation.
     pub initializer_claim: Option<Box<dyn InitializerClaim>>,
@@ -152,7 +137,6 @@ impl<'gc> StackFrame<'gc> {
             frame_continuation: Vec::new(),
             reflection_pending: None,
             monitor_retry: None,
-            monitor_wait_retry: None,
             native_return: None,
             initializer_claim: None,
             homes: FrameHomes::default(),
@@ -179,7 +163,6 @@ impl<'gc> StackFrame<'gc> {
         self.frame_continuation.clear();
         self.reflection_pending = None;
         self.monitor_retry = None;
-        self.monitor_wait_retry = None;
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;
@@ -198,7 +181,6 @@ impl<'gc> StackFrame<'gc> {
         self.frame_continuation.clear();
         self.reflection_pending = None;
         self.monitor_retry = None;
-        self.monitor_wait_retry = None;
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;
@@ -210,7 +192,7 @@ impl<'gc> StackFrame<'gc> {
 // local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
 // no GC references. `reflection_pending` traces its arguments. The native return destination
 // contains only an ID and generation. Initializer claims contain synchronization state only;
-// monitor retry state contains only static metadata, time and synchronization-only wait registrations.
+// Retry state for byref monitor fallbacks and Thread.Join contains only static metadata and time.
 // Constructor completion also carries only static metadata; its
 // receiver bytes are traced through the caller's homes.
 unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {

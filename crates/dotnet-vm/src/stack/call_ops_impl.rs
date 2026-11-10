@@ -556,6 +556,14 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         self.dispatch_method_with_mode(method, lookup, ResolvedMethodDispatchMode::VmContext)
     }
 
+    fn dispatch_method_inline(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        VesContext::dispatch_method_inline(self, method, lookup)
+    }
+
     #[inline]
     fn unified_dispatch(
         &mut self,
@@ -803,9 +811,16 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             ) {
                 return result;
             }
-            if let Some(result) =
+            let delegate_result = if mode == ResolvedMethodDispatchMode::InlineCall {
+                dotnet_intrinsics_delegates::helpers::try_delegate_dispatch_inline(
+                    self,
+                    method.clone(),
+                    &lookup,
+                )
+            } else {
                 dotnet_intrinsics_delegates::try_delegate_dispatch(self, method.clone(), &lookup)
-            {
+            };
+            if let Some(result) = delegate_result {
                 return result;
             }
 
@@ -813,7 +828,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             // virtual/interface slot. Resolve those like a last-chance callvirt
             // instead of executing the declaration itself.
             if let Some(result) =
-                self.try_dispatch_no_body_abstract_virtual(method.clone(), lookup.clone())
+                self.try_dispatch_no_body_abstract_virtual(method.clone(), lookup.clone(), mode)
             {
                 return result;
             }
@@ -833,6 +848,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         &mut self,
         method: MethodDescription,
         lookup: GenericLookup,
+        mode: ResolvedMethodDispatchMode,
     ) -> Option<StepResult> {
         if !method.signature().instance
             || !method.method().virtual_member
@@ -894,7 +910,15 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         self.rebind_lookup_to_resolved_method(&mut dispatch_lookup, &resolved);
-        Some(self.dispatch_method(resolved, dispatch_lookup))
+        Some(self.dispatch_method_with_mode(
+            resolved,
+            dispatch_lookup,
+            if mode == ResolvedMethodDispatchMode::InlineCall {
+                ResolvedMethodDispatchMode::InlineCall
+            } else {
+                ResolvedMethodDispatchMode::VmContext
+            },
+        ))
     }
 
     fn try_interface_method_not_found_invalid_cast(
@@ -1104,18 +1128,14 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         lookup: GenericLookup,
     ) -> StepResult {
         // If we can't safely tail-call, fall back to the regular call path.
-        if let Some(metadata) = crate::intrinsics::classify_intrinsic(
+        if crate::intrinsics::classify_intrinsic(
             method.clone(),
             self.loader(),
             Some(&self.shared.caches.intrinsic_registry),
-        ) {
-            return crate::intrinsics::dispatch_method_intrinsic(
-                metadata.handler,
-                self,
-                method,
-                &lookup,
-                dotnet_vm_ops::effects::NativeDispatchMode::Other,
-            );
+        )
+        .is_some()
+        {
+            return self.dispatch_method_inline(method, lookup);
         }
         if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
@@ -1125,7 +1145,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if method.body().is_none() {
             // Delegate dispatch may emulate a call without a managed body; do not attempt to
             // tail-call optimize it.
-            return self.dispatch_method(method, lookup);
+            return self.dispatch_method_inline(method, lookup);
         }
 
         let info = dotnet_vm_ops::vm_try!(self.method_info_for_dispatch(method, &lookup));

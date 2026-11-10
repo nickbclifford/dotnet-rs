@@ -152,7 +152,7 @@ fn run(case: ReturnCase) -> (StepResult, bool, Vec<StackValue<'static>>, usize) 
                     NativeDispatchMode::InlineCall,
                     &GenericLookup::default(),
                     None,
-                    native_test_fallback,
+                    Some(native_test_fallback),
                     return_body,
                 );
                 let values = ctx

@@ -15,9 +15,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     with_string,
 };
-use dotnet_vm_ops::effects::{
-    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
-};
+use dotnet_vm_ops::effects::{NativeResult, VmEffects};
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
@@ -201,42 +199,11 @@ pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesI
     StepResult::Yield
 }
 
-/// A finalizer cannot wait for the work that includes its own completion.
-pub fn gc_wait_finalizers_select<'gc, T: MemoryOps<'gc>>(
-    ctx: &T,
-    _operands: NativeOperandView<'_, 'gc>,
-    _method: &MethodDescription,
-    _generics: &GenericLookup,
-) -> NativeSelection {
-    if ctx.heap().processing_finalizer.get() {
-        NativeSelection::Fallback
-    } else {
-        NativeSelection::Async(NativeInvocation {
-            start: 0,
-            length: 0,
-            parameter_count: 0,
-        })
-    }
-}
-
-/// Wait for pending finalizers on legacy dispatch, or return from the current finalizer.
-pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    if ctx.heap().processing_finalizer.get() {
-        return StepResult::Continue;
-    }
-
-    if ctx.has_global_pending_finalizers() || !ctx.heap().pending_finalization.borrow().is_empty() {
-        return StepResult::Yield;
-    }
-    StepResult::Continue
-}
-
-#[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()", select = gc_wait_finalizers_select, fallback = intrinsic_gc_wait_for_pending_finalizers)]
+#[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
 pub async fn gc_wait_finalizers(mut fx: VmEffects) -> NativeResult {
+    if fx.vm().await?.processing_finalizer()? {
+        return Ok(());
+    }
     fx.wait_finalizers().await
 }
 

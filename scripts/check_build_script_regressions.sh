@@ -200,7 +200,7 @@ pub fn sync<'gc, T: IntrinsicStringHost<'gc>>(
 ) -> dotnet_vm_data::StepResult { dotnet_vm_data::StepResult::Continue }
 pub fn choose<'gc, T: IntrinsicStringHost<'gc>>(
     _ctx: &T, _operands: NativeOperandView<'_, 'gc>, _method: &MethodDescription, _generics: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     NativeSelection::Async(NativeInvocation { start: 0, length: 0, parameter_count: 0 })
 }
 #[dotnet_intrinsic("static void DotnetRs.AsyncProbe::First()", select = self::choose, fallback = self::sync)]
@@ -208,6 +208,18 @@ pub fn choose<'gc, T: IntrinsicStringHost<'gc>>(
 pub async fn selected(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
 #[dotnet_intrinsic("static void DotnetRs.AsyncProbe::Unselected()", fallback = self::sync)]
 pub async fn unselected(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::BodyOnly()")]
+pub async fn body_only(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::SelectorOnly()", select = self::choose)]
+pub async fn selector_only(mut fx: VmEffects) -> NativeResult { fx.yield_now().await?; Ok(()) }
+#[dotnet_intrinsic("static void DotnetRs.AsyncProbe::WithArg(int)", fallback = self::sync)]
+pub async fn routed_static(mut fx: VmEffects) -> NativeResult {
+    fx.yield_now().await?; fx.vm().await?.discard_scalars(1)?; Ok(())
+}
+#[dotnet_intrinsic("void DotnetRs.AsyncProbe::Virtual(int)", fallback = self::sync)]
+pub async fn routed_instance(mut fx: VmEffects) -> NativeResult {
+    fx.yield_now().await?; let mut vm = fx.vm().await?; vm.discard_scalars(1)?; vm.pop_object()?; Ok(())
+}
 EOF
     cat scripts/tests/async_dispatch_probe.rs >> "$test_file"
     for config in st mt; do
@@ -217,14 +229,15 @@ EOF
         generated="$(find target/debug/build -path '*/out/intrinsics_dispatch.rs' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
         rg -q 'Some\(dotnet_intrinsics_string::async_build_probe::selected_native_selector\)' "$generated" || fail "missing selected wiring ($config)"
         [[ "$(grep -c 'fn selector().*Some(dotnet_intrinsics_string::async_build_probe::selected_native_selector)' "$generated")" == 2 ]] || fail "expected two selector providers ($config)"
-        [[ "$(grep -c 'fn selector().*{ None }' "$generated")" == 1 ]] || fail "expected one unselected provider ($config)"
-        [[ "$(grep -c 'fn fallback().*async_build_probe::.*_native_fallback' "$generated")" == 3 ]] || fail "expected three fallback providers ($config)"
+        [[ "$(grep -A1 'for NativeSelector_DotnetRs_AsyncProbe_' "$generated" | grep -c 'fn selector().*{ None }')" == 4 ]] || fail "expected four unselected providers ($config)"
+        [[ "$(grep -A2 'for NativeSelector_DotnetRs_AsyncProbe_' "$generated" | grep -c 'fn fallback().*{ None }')" == 2 ]] || fail "expected two absent fallback providers ($config)"
+        [[ "$(grep -c 'fn fallback().*async_build_probe::.*_native_fallback' "$generated")" == 5 ]] || fail "expected five fallback providers ($config)"
         [[ "$(grep -c '=> dotnet_intrinsics_string::async_build_probe::selected_native_entry' "$generated")" == 2 ]] || fail "expected two selected arms ($config)"
         rg -q 'unselected_native_entry::<T, NativeSelector_.*>\(ctx, method, generics, _mode\)' "$generated" || fail "missing unselected wiring ($config)"
         sed -n '/pub fn dispatch_method_intrinsic/,/^}/p' "$generated" | grep -v 'DotnetRs_AsyncProbe_' > "$LOG_DIR/async-$config-arms"
         cmp "$LOG_DIR/async-baseline-arms" "$LOG_DIR/async-$config-arms" || fail "existing dispatch arms changed ($config)"
-        run_logged "$LOG_DIR/async-dispatch-$config.log" cargo nextest run -p dotnet-vm "${features[@]}" async_probe_dispatch_modes
-        rg -q '1 test run: 1 passed' "$LOG_DIR/async-dispatch-$config.log" || fail "async dispatch probe did not pass exactly once ($config)"
+        run_logged "$LOG_DIR/async-dispatch-$config.log" cargo nextest run -p dotnet-vm "${features[@]}" async_probe_
+        rg -q '2 tests run: 2 passed' "$LOG_DIR/async-dispatch-$config.log" || fail "async dispatch probe did not pass both tests ($config)"
     done
 
     # The unreferenced source is scanned by build.rs but never compiled as a module.
@@ -251,7 +264,6 @@ EOF
         local diagnostic='intrinsic annotations must name the same fallback'
         if [[ "$case" == missing ]]; then
             sed -i 's/, fallback = two//' "$conflict"
-            diagnostic='async intrinsic requires a fallback'
         fi
         if cargo build -p dotnet-vm --no-default-features >"$LOG_DIR/async-fallback-$case.log" 2>&1; then
             fail "$case fallback accepted by scanner"

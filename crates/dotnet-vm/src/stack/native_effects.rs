@@ -7,13 +7,15 @@ use crate::StepResult;
 use crate::sync::SyncBlockOps;
 use crate::threading::ThreadManagerOps;
 use dotnet_intrinsics_threading::MonitorHost;
+use dotnet_runtime_memory::ops::BaseMemoryOps;
 use dotnet_runtime_resolver::resolution::TypeResolutionExt;
-use dotnet_types::{error::VmError, generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    WellKnown, error::VmError, generics::GenericLookup, members::MethodDescription,
+};
 use dotnet_value::{
     CLRString, StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_ops::MemoryOps;
 use dotnet_vm_ops::effects::{
     NativeBackend, NativeCall, NativeControl, NativeDispatchMode, NativeEffect, NativeFailure,
     NativeFuture, NativeInitClaim, NativeInitProbe, NativeIntrinsicHost, NativeInvocation,
@@ -247,6 +249,81 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             .into()),
         }
     }
+    fn exception(
+        &mut self,
+        name: &str,
+        message: &str,
+        parameter: Option<&str>,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        let gc = self.context.gc;
+        let exception_type = self.context.shared.loader.corlib_type(name)?;
+        let instance = self.context.new_object(exception_type)?;
+        let object = self.context.alloc_obj_ref(gc, instance);
+        let base = self
+            .context
+            .shared
+            .loader
+            .corlib_wkt(WellKnown::Exception)?;
+        if !message.is_empty() {
+            let text = StackValue::string(gc, CLRString::from(message)).as_object_ref();
+            self.context.register_new_object(&text);
+            object.as_object_mut(gc, |obj| {
+                if let Some(field) = obj.instance_storage.field::<ObjectRef>(base, "_message") {
+                    field.write(text);
+                }
+            });
+        }
+        if let Some(parameter) = parameter {
+            let argument_type = self
+                .context
+                .shared
+                .loader
+                .corlib_type("System.ArgumentException")?;
+            let text = StackValue::string(gc, CLRString::from(parameter)).as_object_ref();
+            self.context.register_new_object(&text);
+            object.as_object_mut(gc, |obj| {
+                if obj
+                    .instance_storage
+                    .has_field(argument_type.clone(), "_paramName")
+                {
+                    let mut field = obj
+                        .instance_storage
+                        .get_field_mut_local(argument_type, "_paramName");
+                    text.write(&mut field);
+                }
+            });
+        }
+        Ok(object)
+    }
+    fn monitor_owned(&self, object: ObjectRef<'gc>) -> Result<bool, VmError> {
+        Ok(self
+            .context
+            .monitor_get_sync_block_for_object(object)
+            .is_some_and(|block| {
+                self.context
+                    .monitor_is_owned(&block, self.context.thread_id())
+            }))
+    }
+    fn processing_finalizer(&self) -> Result<bool, VmError> {
+        Ok(self.context.local.heap.processing_finalizer.get())
+    }
+    unsafe fn read_monitor_flag(&mut self, pointer: StackValue<'gc>) -> Result<bool, VmError> {
+        use dotnet_vm_ops::ops::RawMemoryOps;
+        let StackValue::ManagedPtr(pointer) = pointer else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "invalid monitor flag pointer".into(),
+            )
+            .into());
+        };
+        let mut value = [0u8; 1];
+        // SAFETY: F10.RawMemoryAccessValid — the caller supplies synchronized bool storage;
+        // read_bytes resolves static storage afresh and checks the complete range for each admitted origin.
+        unsafe {
+            self.context
+                .read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut value)?
+        };
+        Ok(value[0] != 0)
+    }
     fn operands(&mut self) -> &mut Vec<StackValue<'gc>> {
         self.operands
     }
@@ -269,7 +346,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             .into());
         };
         // SAFETY: F10.RawMemoryAccessValid — the caller supplies synchronized bool storage;
-        // write_bytes checks the entire one-byte range against its live frame or heap owner.
+        // write_bytes resolves static storage afresh and checks the complete range for each admitted origin.
         unsafe {
             self.context.write_bytes(
                 pointer.origin().clone(),
@@ -695,17 +772,22 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
         mode: NativeDispatchMode,
         generics: &GenericLookup,
         selector: Option<NativeSelector<'gc, Self>>,
-        fallback: NativeSyncHandler<Self>,
+        fallback: Option<NativeSyncHandler<Self>>,
         entry: fn(VmEffects) -> NativeFuture,
     ) -> StepResult {
         if mode != NativeDispatchMode::InlineCall {
-            return fallback(self, method, generics);
+            return match fallback {
+                Some(handler) => handler(self, method, generics),
+                None => dotnet_vm_data::StepResult::not_implemented(format!(
+                    "async intrinsic {method:?} reached through non-inline dispatch"
+                )),
+            };
         }
         self.start_native_inner(
             method,
             generics,
             selector,
-            Some(fallback),
+            fallback,
             NativeEntry::Intrinsic(entry),
             false,
         )
@@ -843,6 +925,30 @@ impl<'gc> VesContext<'_, 'gc> {
             caller.frame_continuation.append(&mut reflection_actions);
         }
         let mut operands = self.pop_multiple(count);
+        if matches!(&entry, NativeEntry::Intrinsic(_)) {
+            for value in &mut operands {
+                if let StackValue::ManagedPtr(pointer) = value
+                    && matches!(
+                        pointer.origin(),
+                        dotnet_value::pointer::PointerOrigin::Static(_)
+                    )
+                {
+                    // INVARIANT: F6.NativePointerDescriptor — an access grant can wait for a
+                    // GC stop before the body roots its operands. Keep static metadata and
+                    // offset, not the observed address, in the activation during that wait.
+                    *pointer = dotnet_value::pointer::ManagedPtr::from_info_full(
+                        dotnet_value::pointer::ManagedPtrInfo {
+                            address: None,
+                            origin: pointer.origin().clone(),
+                            offset: pointer.byte_offset(),
+                        },
+                        pointer.inner_type(),
+                        pointer.is_pinned(),
+                    )
+                    .into();
+                }
+            }
+        }
         let (future, instruction) = match entry {
             NativeEntry::Instruction(action) => {
                 let description = action.field.parent.clone();
@@ -1072,7 +1178,7 @@ impl<'gc> VesContext<'_, 'gc> {
                 NativeDispatchMode::InlineCall,
                 generics,
                 None,
-                multicast_fallback,
+                Some(multicast_fallback),
                 multicast_entry,
             ));
         }

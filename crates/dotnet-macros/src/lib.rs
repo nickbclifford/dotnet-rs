@@ -200,15 +200,13 @@ fn expand_intrinsic(
             let name = syn::Ident::new(&format!("{}_native_selector", func_name), func_name.span());
             quote! { #[doc(hidden)] pub use #selector as #name; }
         });
-        let fallback = annotations[0]
-            .fallback
-            .as_ref()
-            .expect("validated fallback");
-        let fallback_name =
-            syn::Ident::new(&format!("{}_native_fallback", func_name), func_name.span());
+        let fallback_alias = annotations[0].fallback.as_ref().map(|fallback| {
+            let name = syn::Ident::new(&format!("{}_native_fallback", func_name), func_name.span());
+            quote! { #[doc(hidden)] pub use #fallback as #name; }
+        });
         quote! {
             #selector_alias
-            #[doc(hidden)] pub use #fallback as #fallback_name;
+            #fallback_alias
             #[doc(hidden)]
             pub fn #entry_name<'gc, T, S>(
                 ctx: &mut T,
@@ -231,12 +229,21 @@ fn expand_intrinsic(
 
 /// Registers a synchronous or async native implementation for a managed method.
 ///
-/// Async handlers must take one `VmEffects` argument and return `NativeResult`; they require
-/// `fallback = path` and may provide `select = path`. The selector runs before operands are
+/// Async handlers must take one `VmEffects` argument and return `NativeResult`; they may provide
+/// `fallback = path`, `select = path`, both, or neither. The selector runs before operands are
 /// consumed and chooses async execution, the registered `fallback` (`NativeSelection::Fallback`,
 /// so the selector never names it), or rejection. Without a selector the whole parameter list is
-/// the invocation. Calls that cannot suspend use the fallback, while synchronous registrations
-/// keep their existing convention.
+/// the invocation. Admitted threading and Substring bodies validate committed arguments and
+/// construct rooted managed exceptions; reflection still excludes its unsupported shapes.
+/// Sleep, finalizer wait, Monitor.Wait and object-only Enter and timed TryEnter have no fallback;
+/// Monitor byref variants retain theirs for Transient and Unmanaged origins. A measured bulk
+/// intrinsic may select a synchronous fast path for valid small inputs and use its async body for
+/// larger inputs: Substring does this for at most one chunk; invalid ranges reach the body.
+/// Inline IL calls include
+/// constrained and tail calls, single-cast delegate targets and abstract redirects; non-inline
+/// continuations and public engine dispatch use the optional fallback, or return `NotImplemented`
+/// without selecting or consuming operands when it is absent. Synchronous registrations keep
+/// their existing convention.
 #[proc_macro_attribute]
 pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as IntrinsicArgs);
@@ -415,6 +422,23 @@ mod tests {
     }
 
     #[test]
+    fn async_intrinsic_body_only_and_selector_only() {
+        for args in [
+            syn::parse_quote!("static void X::A()"),
+            syn::parse_quote!("static void X::A()", select = choose),
+        ] {
+            let func: ItemFn = syn::parse_quote!(
+                pub async fn work(fx: VmEffects) -> NativeResult {
+                    Ok(())
+                }
+            );
+            let output = expand_intrinsic(args, func).unwrap().to_string();
+            assert!(output.contains("work_native_entry"));
+            assert!(!output.contains("work_native_fallback"));
+        }
+    }
+
+    #[test]
     fn async_intrinsic_requires_consistent_fallbacks() {
         for (other, expected) in [
             (
@@ -423,7 +447,7 @@ mod tests {
             ),
             (
                 syn::parse_quote!(#[dotnet_intrinsic("static void X::B()")]),
-                "requires a fallback",
+                "same fallback",
             ),
         ] {
             let mut func: ItemFn = syn::parse_quote!(
@@ -446,12 +470,8 @@ mod tests {
                 Ok(())
             }
         );
-        assert!(
-            expand_intrinsic(args, func)
-                .unwrap_err()
-                .to_string()
-                .contains("requires a fallback")
-        );
+        let output = expand_intrinsic(args, func).unwrap().to_string();
+        assert!(!output.contains("work_native_fallback"));
     }
 
     #[test]

@@ -217,7 +217,6 @@ impl<'gc> ExecutionEngine<'gc> {
         ) && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
         {
             frame.monitor_retry = None;
-            frame.monitor_wait_retry = None;
         }
         self.finish_finalizer_segment(result)
     }
@@ -342,7 +341,6 @@ impl<'gc> ExecutionEngine<'gc> {
             && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
         {
             frame.monitor_retry = None;
-            frame.monitor_wait_retry = None;
         }
         self.finish_finalizer_segment(result)
     }
@@ -439,7 +437,6 @@ impl<'gc> ExecutionEngine<'gc> {
             if res == StepResult::Exception {
                 if let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut() {
                     frame.monitor_retry = None;
-                    frame.monitor_wait_retry = None;
                 }
                 continue;
             }

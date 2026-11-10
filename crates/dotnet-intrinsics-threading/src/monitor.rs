@@ -54,38 +54,6 @@ pub fn intrinsic_monitor_exit<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-/// System.Threading.Monitor::Enter(object)
-pub fn intrinsic_monitor_enter_obj<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let obj_ref = ctx.peek_stack_at(0).as_object_ref();
-    if let Some(error) = monitor_argument_error(false, obj_ref.0.is_some(), None) {
-        ctx.drop_top(1);
-        return throw_monitor_argument_error(ctx, error);
-    }
-
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let thread_id = ctx.thread_id();
-    assert_ne!(
-        thread_id,
-        ArenaId::INVALID,
-        "Monitor.Enter called from unregistered thread"
-    );
-
-    let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
-
-    match ctx.monitor_enter_safe(&sync_block, thread_id) {
-        MonitorLockResult::Success => {
-            let _ = ctx.pop();
-            StepResult::Continue
-        }
-        MonitorLockResult::Yield => StepResult::Yield,
-        MonitorLockResult::Timeout => unreachable!("Infinite timeout cannot time out"),
-    }
-}
-
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -228,49 +196,6 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'g
     StepResult::Continue
 }
 
-/// System.Threading.Monitor::TryEnter(object, int)
-pub fn intrinsic_monitor_try_enter_timeout<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let timeout_ms = ctx.peek_stack_at(0).as_i32();
-    let obj_ref = ctx.peek_stack_at(1).as_object_ref();
-    if let Some(error) = monitor_argument_error(false, obj_ref.0.is_some(), Some(timeout_ms)) {
-        ctx.monitor_clear_retry();
-        ctx.drop_top(2);
-        return throw_monitor_argument_error(ctx, error);
-    }
-
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let thread_id = ctx.thread_id();
-    assert_ne!(
-        thread_id,
-        ArenaId::INVALID,
-        "Monitor.TryEnter called from unregistered thread"
-    );
-
-    let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
-
-    let deadline = ctx.monitor_retry_deadline(&method, timeout_ms);
-    let lock_res = ctx.monitor_enter_with_timeout_safe(&sync_block, thread_id, deadline);
-
-    if lock_res != MonitorLockResult::Yield {
-        ctx.monitor_clear_retry();
-    }
-
-    let success = match lock_res {
-        MonitorLockResult::Success => true,
-        MonitorLockResult::Timeout => false,
-        MonitorLockResult::Yield => return StepResult::Yield,
-    };
-
-    // Pop timeout_ms, then obj_ref after all work that may yield or trigger GC.
-    ctx.drop_top(2);
-    ctx.push_i32(if success { 1 } else { 0 });
-    StepResult::Continue
-}
-
 #[cfg(feature = "multithreading")]
 fn cross_arena_origin(origin: &PointerOrigin<'_>) -> bool {
     matches!(origin, PointerOrigin::CrossArenaObjectRef(_))
@@ -343,41 +268,51 @@ fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     timed: bool,
     byref: bool,
 ) -> NativeSelection {
-    let count = 1 + usize::from(timed) + usize::from(byref);
-    let lock_taken = if byref {
+    if byref {
         let StackValue::ManagedPtr(ptr) = operands.peek_at(0) else {
-            return NativeSelection::Fallback;
+            return NativeSelection::Reject(
+                dotnet_types::error::ExecutionError::InternalError(
+                    "Monitor lockTaken is not a managed pointer".into(),
+                )
+                .into(),
+            );
         };
         let supported = matches!(
             ptr.origin(),
-            PointerOrigin::Heap(ObjectRef(Some(_))) | PointerOrigin::FrameHome(_)
+            PointerOrigin::Heap(ObjectRef(Some(_)))
+                | PointerOrigin::FrameHome(_)
+                | PointerOrigin::Static(_)
         ) || cross_arena_origin(ptr.origin());
         if !supported {
-            return NativeSelection::Fallback;
+            return if matches!(
+                ptr.origin(),
+                PointerOrigin::Transient(_) | PointerOrigin::Unmanaged
+            ) {
+                NativeSelection::Fallback
+            } else {
+                NativeSelection::Reject(
+                    dotnet_types::error::ExecutionError::InternalError(
+                        "Monitor lockTaken has an invalid origin".into(),
+                    )
+                    .into(),
+                )
+            };
         }
-        match read_monitor_lock_taken(ctx, &ptr) {
-            Ok(value) => value,
-            Err(_) => return NativeSelection::Fallback,
-        }
-    } else {
-        false
-    };
-
-    let object_is_non_null = matches!(
-        operands.peek_at(count - 1),
-        StackValue::ObjectRef(ObjectRef(Some(_)))
-    );
+    }
     let timeout = if timed {
         let StackValue::Int32(timeout) = operands.peek_at(usize::from(byref)) else {
-            return NativeSelection::Fallback;
+            return NativeSelection::Reject(
+                dotnet_types::error::ExecutionError::InternalError(
+                    "Monitor timeout is not an int32".into(),
+                )
+                .into(),
+            );
         };
         Some(timeout)
     } else {
         None
     };
-    if monitor_argument_error(lock_taken, object_is_non_null, timeout).is_some() {
-        return NativeSelection::Fallback;
-    }
+    let _ = ctx;
 
     // Capture the signed timeout before operand commitment so its deadline starts before
     // the first access grant can wait for a stop.
@@ -388,14 +323,6 @@ fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     })
 }
 
-pub fn enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &T,
-    operands: NativeOperandView<'_, 'gc>,
-    method: &MethodDescription,
-    _: &GenericLookup,
-) -> NativeSelection {
-    select_monitor(ctx, operands, method, false, false)
-}
 pub fn reliable_enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
@@ -433,7 +360,35 @@ async fn enter_effect(
     } else {
         None
     };
-    let (object, flag, _) = fx.vm().await?.prepare_monitor(timed, byref)?;
+    let (object, flag) = {
+        let mut vm = fx.vm().await?;
+        let (object, flag, _) = vm.prepare_monitor(timed, byref)?;
+        let taken = if let Some(flag) = &flag {
+            // SAFETY: F10.RawMemoryAccessValid — the signature supplies synchronized bool storage;
+            // the backend resolves the owner and checks the entire byte range.
+            unsafe { vm.read_monitor_flag(flag)? }
+        } else {
+            false
+        };
+        if let Some(error) =
+            monitor_argument_error(taken, !vm.is_null(&object)?, timed.then_some(timeout))
+        {
+            return Err(match error {
+                MonitorArgumentError::LockTaken => vm.exception(
+                    "System.ArgumentException",
+                    "The lockTaken argument must be initialized to false.",
+                )?,
+                MonitorArgumentError::NullObject => {
+                    vm.exception("System.ArgumentNullException", "Value cannot be null.")?
+                }
+                MonitorArgumentError::Timeout => vm.exception(
+                    "System.ArgumentOutOfRangeException",
+                    "The timeout must be greater than or equal to -1.",
+                )?,
+            });
+        }
+        (object, flag)
+    };
     let acquired = fx.monitor_enter(object, deadline).await?;
     if let Some(flag) = flag {
         let mut vm = fx.vm().await?;
@@ -448,7 +403,7 @@ async fn enter_effect(
     Ok(())
 }
 
-#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)", select = enter_select, fallback = intrinsic_monitor_enter_obj)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub async fn monitor_enter(fx: VmEffects) -> NativeResult {
     enter_effect(fx, false, false, false).await
 }
@@ -465,31 +420,10 @@ pub async fn monitor_reliable_enter(fx: VmEffects) -> NativeResult {
 pub async fn monitor_try_enter_ref(fx: VmEffects) -> NativeResult {
     enter_effect(fx, true, true, false).await
 }
-#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)", select = try_enter_select, fallback = intrinsic_monitor_try_enter_timeout)]
-#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath_WithTimeout(object, int)", select = try_enter_select, fallback = intrinsic_monitor_try_enter_timeout)]
+#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)", select = try_enter_select)]
+#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath_WithTimeout(object, int)", select = try_enter_select)]
 pub async fn monitor_try_enter(fx: VmEffects) -> NativeResult {
     enter_effect(fx, true, false, true).await
-}
-
-pub fn intrinsic_monitor_wait<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _: &GenericLookup,
-) -> StepResult {
-    let timeout = ctx.peek_stack_at(0).as_i32();
-    let object = ctx.peek_stack_at(1).as_object_ref();
-    if let Some(error) = monitor_argument_error(false, object.0.is_some(), Some(timeout)) {
-        ctx.drop_top(2);
-        return throw_monitor_argument_error(ctx, error);
-    }
-    let Some(block) = ctx.monitor_get_sync_block_for_object(object) else {
-        ctx.drop_top(2);
-        return ctx.throw_by_name_with_message(
-            "System.Threading.SynchronizationLockException",
-            "Object not locked by current thread",
-        );
-    };
-    ctx.monitor_wait_legacy(block, &method, timeout)
 }
 
 pub fn wait_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
@@ -498,27 +432,46 @@ pub fn wait_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     method: &MethodDescription,
     _: &GenericLookup,
 ) -> NativeSelection {
-    if let (StackValue::ObjectRef(object @ ObjectRef(Some(_))), StackValue::Int32(timeout)) =
-        (operands.peek_at(1), operands.peek_at(0))
-        && timeout >= -1
-        && ctx
-            .monitor_get_sync_block_for_object(object)
-            .is_some_and(|block| ctx.monitor_is_owned(&block, ctx.thread_id()))
-    {
-        return NativeSelection::Async(NativeInvocation {
+    let _ = ctx;
+    match operands.peek_at(0) {
+        StackValue::Int32(timeout) => NativeSelection::Async(NativeInvocation {
             start: timeout as u32 as usize,
             length: 0,
             parameter_count: method.signature().parameters.len(),
-        });
+        }),
+        _ => NativeSelection::Reject(
+            dotnet_types::error::ExecutionError::InternalError(
+                "Monitor.Wait timeout is not an int32".into(),
+            )
+            .into(),
+        ),
     }
-    NativeSelection::Fallback
 }
 
-#[dotnet_intrinsic("static bool System.Threading.Monitor::Wait(object, int)", select = wait_select, fallback = intrinsic_monitor_wait)]
+#[dotnet_intrinsic("static bool System.Threading.Monitor::Wait(object, int)", select = wait_select)]
 pub async fn monitor_wait(mut fx: VmEffects) -> NativeResult {
     let timeout = fx.invocation().start as u32 as i32;
     let deadline = (timeout >= 0).then(|| Instant::now() + Duration::from_millis(timeout as u64));
-    let (object, _, _) = fx.vm().await?.prepare_monitor(true, false)?;
+    let object = {
+        let mut vm = fx.vm().await?;
+        let (object, _, _) = vm.prepare_monitor(true, false)?;
+        if vm.is_null(&object)? {
+            return Err(vm.exception("System.ArgumentNullException", "Value cannot be null.")?);
+        }
+        if timeout < -1 {
+            return Err(vm.exception(
+                "System.ArgumentOutOfRangeException",
+                "The timeout must be greater than or equal to -1.",
+            )?);
+        }
+        if !vm.monitor_owned(&object)? {
+            return Err(vm.exception(
+                "System.Threading.SynchronizationLockException",
+                "Object not locked by current thread",
+            )?);
+        }
+        object
+    };
     let pulsed = fx.monitor_wait(object, deadline).await?;
     fx.vm().await?.push_bool(pulsed)?;
     Ok(())
@@ -558,4 +511,27 @@ pub fn intrinsic_monitor_pulse_all<'gc, T: ThreadingIntrinsicHost<'gc>>(
     _: &GenericLookup,
 ) -> StepResult {
     pulse(ctx, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MonitorArgumentError, monitor_argument_error};
+
+    #[test]
+    fn monitor_argument_validation_orders_flag_null_and_timeout() {
+        assert_eq!(
+            monitor_argument_error(true, false, Some(-2)),
+            Some(MonitorArgumentError::LockTaken)
+        );
+        assert_eq!(
+            monitor_argument_error(false, false, Some(-2)),
+            Some(MonitorArgumentError::NullObject)
+        );
+        assert_eq!(
+            monitor_argument_error(false, true, Some(-2)),
+            Some(MonitorArgumentError::Timeout)
+        );
+        assert_eq!(monitor_argument_error(false, true, Some(-1)), None);
+        assert_eq!(monitor_argument_error(false, true, Some(0)), None);
+    }
 }

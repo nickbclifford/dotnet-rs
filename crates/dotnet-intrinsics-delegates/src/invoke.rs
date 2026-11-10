@@ -18,6 +18,7 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     ctx: &mut T,
     invoke_method: MethodDescription,
     _lookup: &GenericLookup,
+    inline: bool,
 ) -> StepResult {
     let num_invoke_args = invoke_method.signature().parameters.len();
 
@@ -112,7 +113,11 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     *ctx.call_args_buffer_mut() = args;
 
     // Dispatch to the target method
-    ctx.delegate_dispatch_method(target_method, target_lookup)
+    if inline {
+        ctx.delegate_dispatch_method_inline(target_method, target_lookup)
+    } else {
+        ctx.delegate_dispatch_method(target_method, target_lookup)
+    }
 }
 
 #[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]

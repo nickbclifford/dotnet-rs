@@ -101,11 +101,15 @@ impl RootedValue {
             )),
             StackValue::ManagedPtr(pointer) => {
                 // INVARIANT: F6.NativePointerDescriptor — only traced heap owners,
-                // non-reused frame-home serials or (multithreading) cross-arena origins can
-                // survive across polls. A cross-arena origin is kept live by its recorded
-                // cross-arena reference and re-validated against the owner's lease on use.
+                // non-reused frame-home serials, static metadata, or (multithreading)
+                // cross-arena origins can survive across polls. Static storage is resolved
+                // by type and generics on every raw access, never by a cached address. A
+                // cross-arena origin is kept live by its recorded cross-arena reference and
+                // re-validated against the owner's lease on use.
                 let supported = match pointer.origin() {
-                    PointerOrigin::Heap(ObjectRef(Some(_))) | PointerOrigin::FrameHome(_) => true,
+                    PointerOrigin::Heap(ObjectRef(Some(_)))
+                    | PointerOrigin::FrameHome(_)
+                    | PointerOrigin::Static(_) => true,
                     #[cfg(feature = "multithreading")]
                     PointerOrigin::CrossArenaObjectRef(_) => true,
                     _ => false,
@@ -151,7 +155,8 @@ impl RootedValue {
                     // INVARIANT: F6.NativePointerDescriptor — the root keeps a heap origin
                     // live (a cross-arena origin is live through its recorded cross-arena
                     // reference and lease check); frame-home addresses are resolved anew and
-                    // retired homes fail.
+                    // retired homes fail. Static descriptors are deliberately addressless;
+                    // their storage is resolved afresh by origin-aware raw access.
                     let address = if let PointerOrigin::FrameHome(serial) = origin {
                         let (base, length) = backend
                             .frame_home_block(*serial)
@@ -172,7 +177,7 @@ impl RootedValue {
                         );
                         pointer.observe_address()
                     };
-                    if address.is_none() {
+                    if address.is_none() && !matches!(origin, PointerOrigin::Static(_)) {
                         return Err(internal("native pointer owner unavailable"));
                     }
                     StackValue::ManagedPtr(
@@ -250,6 +255,27 @@ pub trait NativeBackend<'gc> {
         _inner: Option<ObjectRef<'gc>>,
     ) -> Result<ObjectRef<'gc>, VmError> {
         Err(internal("native initialization unavailable"))
+    }
+    /// Allocate an exception without invoking a managed constructor.
+    fn exception(
+        &mut self,
+        _name: &str,
+        _message: &str,
+        _parameter: Option<&str>,
+    ) -> Result<ObjectRef<'gc>, VmError> {
+        Err(internal("native exception construction unavailable"))
+    }
+    fn monitor_owned(&self, _object: ObjectRef<'gc>) -> Result<bool, VmError> {
+        Err(internal("native monitor ownership unavailable"))
+    }
+    fn processing_finalizer(&self) -> Result<bool, VmError> {
+        Err(internal("native finalizer state unavailable"))
+    }
+    /// # Safety
+    /// The pointer must designate synchronized, initialized boolean storage without overlapping
+    /// reference slots. The backend checks the complete range and live owner.
+    unsafe fn read_monitor_flag(&mut self, _pointer: StackValue<'gc>) -> Result<bool, VmError> {
+        Err(internal("native monitor flag unavailable"))
     }
     fn operands(&mut self) -> &mut Vec<StackValue<'gc>>;
     fn push_new_string(&mut self, chars: Vec<u16>) -> Result<(), VmError>;
@@ -508,6 +534,21 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
     fn pop_string(&mut self) -> Result<RootedValue, VmError> {
         self.pop_reference("native string operand invalid")
     }
+    fn pop_string_candidate(&mut self) -> Result<Option<RootedValue>, VmError> {
+        let value = self
+            .backend
+            .operands()
+            .last()
+            .ok_or_else(|| internal("native operand underflow"))?
+            .clone();
+        let root = if matches!(value, StackValue::ObjectRef(_)) {
+            Some(self.root(value)?)
+        } else {
+            None
+        };
+        self.backend.operands().pop();
+        Ok(root)
+    }
     fn pop_reference(&mut self, invalid: &'static str) -> Result<RootedValue, VmError> {
         let value = self
             .backend
@@ -529,9 +570,7 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
     ) -> Result<(RootedValue, Option<RootedValue>, Option<i32>), VmError> {
         let operands = self.backend.operands().clone();
         let expected = 1 + usize::from(timed) + usize::from(byref);
-        if operands.len() != expected
-            || !matches!(operands[0], StackValue::ObjectRef(ObjectRef(Some(_))))
-        {
+        if operands.len() != expected || !matches!(operands[0], StackValue::ObjectRef(_)) {
             return Err(internal("invalid native monitor operands"));
         }
         let object = self.root(operands[0].clone())?;
@@ -550,6 +589,28 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         };
         self.backend.operands().clear();
         Ok((object, flag, timeout))
+    }
+    fn exception(
+        &mut self,
+        name: &str,
+        message: &str,
+        parameter: Option<&str>,
+    ) -> Result<NativeFailure, VmError> {
+        let exception = self.backend.exception(name, message, parameter)?;
+        Ok(NativeFailure::Managed(
+            self.root(StackValue::ObjectRef(exception))?,
+        ))
+    }
+    fn monitor_owned(&self, object: &RootedValue) -> Result<bool, VmError> {
+        let StackValue::ObjectRef(object) = self.fetch(object)? else {
+            return Err(internal("invalid monitor object"));
+        };
+        self.backend.monitor_owned(object)
+    }
+    unsafe fn read_monitor_flag(&mut self, pointer: &RootedValue) -> Result<bool, VmError> {
+        let pointer = self.fetch(pointer)?;
+        // SAFETY: F10.RawMemoryAccessValid — the caller supplies the boolean storage contract.
+        unsafe { self.backend.read_monitor_flag(pointer) }
     }
     /// # Safety
     /// Any in-range byte must be writable boolean storage, with synchronized access and no
@@ -1260,6 +1321,41 @@ impl<'fx> VmAccess<'fx> {
     ) -> Result<(RootedValue, Option<RootedValue>, Option<i32>), NativeFailure> {
         Ok(self.with(|region| region.prepare_monitor(timed, byref))??)
     }
+    pub fn exception(&mut self, name: &str, message: &str) -> Result<NativeFailure, VmError> {
+        self.with(|region| region.exception(name, message, None))?
+    }
+    pub fn argument_out_of_range(&mut self, parameter: &str) -> Result<NativeFailure, VmError> {
+        self.with(|region| {
+            region.exception(
+                "System.ArgumentOutOfRangeException",
+                parameter,
+                Some(parameter),
+            )
+        })?
+    }
+    pub fn is_null(&mut self, object: &RootedValue) -> Result<bool, VmError> {
+        self.with(|region| {
+            Ok(matches!(
+                region.fetch(object)?,
+                StackValue::ObjectRef(ObjectRef(None))
+            ))
+        })?
+    }
+    pub fn monitor_owned(&mut self, object: &RootedValue) -> Result<bool, VmError> {
+        self.with(|region| region.monitor_owned(object))?
+    }
+    pub fn processing_finalizer(&mut self) -> Result<bool, VmError> {
+        self.with(|region| region.backend.processing_finalizer())?
+    }
+    /// # Safety
+    /// The pointer must designate synchronized, initialized boolean storage without overlapping
+    /// reference slots. The backend checks the complete range and live owner.
+    pub unsafe fn read_monitor_flag(&mut self, pointer: &RootedValue) -> Result<bool, VmError> {
+        self.with(|region| {
+            // SAFETY: F10.RawMemoryAccessValid — the caller supplies the boolean storage contract.
+            unsafe { region.read_monitor_flag(pointer) }
+        })?
+    }
     /// # Safety
     /// Any in-range byte must be writable boolean storage, with synchronized access and no
     /// overlapping reference slot. The backend checks the complete range and live owner.
@@ -1281,6 +1377,11 @@ impl<'fx> VmAccess<'fx> {
     }
     pub fn pop_string(&mut self) -> Result<RootedValue, NativeFailure> {
         Ok(self.with(|region| region.pop_string())??)
+    }
+    /// Pop a string receiver, returning `None` for a non-reference operand. A null reference
+    /// is returned as a rooted value so the body can distinguish it from a wrong type.
+    pub fn pop_string_candidate(&mut self) -> Result<Option<RootedValue>, NativeFailure> {
+        Ok(self.with(|region| region.pop_string_candidate())??)
     }
     pub fn discard_scalars(&mut self, count: usize) -> NativeResult {
         Ok(self.with(|region| region.discard_scalars(count))??)
@@ -1422,7 +1523,13 @@ impl<'a, 'gc> NativeOperandView<'a, 'gc> {
 /// Selector outcome before any operands are consumed.
 ///
 /// `Fallback` runs the `fallback` handler registered on the same `#[dotnet_intrinsic]`, so a
-/// selector never names it and the two cannot drift apart.
+/// selector never names it and the two cannot drift apart. Requesting an absent handler is a
+/// driver invariant error. Threading selectors capture timeout
+/// values and exclude Transient and Unmanaged byref origins; their bodies validate committed
+/// operands; Monitor.Wait has no fallback. Threading and Substring selectors reject malformed
+/// captured operand shapes. Substring selects a measured synchronous fast path only for valid
+/// copies of at most one chunk; invalid ranges and larger copies reach the body. Reflection
+/// retains its separate validation and transport exclusions.
 pub enum NativeSelection {
     Async(NativeInvocation),
     Fallback,
@@ -1443,17 +1550,24 @@ pub type NativeSelector<'gc, T> = fn(
 /// Connects a generated dispatch arm to its selector without constraining the body.
 pub trait NativeSelectorProvider<'gc, T> {
     fn selector() -> Option<NativeSelector<'gc, T>>;
-    fn fallback() -> NativeSyncHandler<T>;
+    fn fallback() -> Option<NativeSyncHandler<T>>;
 }
 
-/// How the resolved intrinsic is being invoked. Only inline calls can suspend.
+/// How the resolved intrinsic is being invoked. Inline IL calls, including constrained,
+/// tail, single-cast delegate and abstract redirects, can suspend. `Other` covers guest
+/// `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
+/// managed-body-only cctor, span equality and Expression.Compile routes. Public
+/// `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` also use
+/// non-inline dispatch. These paths use the optional synchronous fallback or return
+/// `NotImplemented` before selection and operand commitment, including for Monitor.Wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeDispatchMode {
     InlineCall,
     Other,
 }
 
-/// Host entry hook. Without a driver, non-inline calls use their synchronous fallback.
+/// Host entry hook. Non-inline calls use the optional synchronous fallback, or return
+/// `NotImplemented` without selecting or consuming operands. Inline calls require a driver.
 pub trait NativeIntrinsicHost<'gc> {
     fn start_native(
         &mut self,
@@ -1461,14 +1575,19 @@ pub trait NativeIntrinsicHost<'gc> {
         mode: NativeDispatchMode,
         generics: &dotnet_types::generics::GenericLookup,
         _selector: Option<NativeSelector<'gc, Self>>,
-        fallback: NativeSyncHandler<Self>,
+        fallback: Option<NativeSyncHandler<Self>>,
         _entry: fn(VmEffects) -> NativeFuture,
     ) -> dotnet_vm_data::StepResult
     where
         Self: Sized,
     {
         if mode != NativeDispatchMode::InlineCall {
-            fallback(self, method, generics)
+            match fallback {
+                Some(handler) => handler(self, method, generics),
+                None => dotnet_vm_data::StepResult::not_implemented(format!(
+                    "async intrinsic {method:?} reached through non-inline dispatch"
+                )),
+            }
         } else {
             dotnet_vm_data::StepResult::internal_error("native effects driver unavailable")
         }
@@ -1813,7 +1932,7 @@ mod tests {
             NativeDispatchMode::Other,
             &dotnet_types::generics::GenericLookup::default(),
             None,
-            minimal_host_fallback,
+            Some(minimal_host_fallback),
             unused_native_entry,
         );
 
@@ -1825,7 +1944,7 @@ mod tests {
             NativeDispatchMode::InlineCall,
             &dotnet_types::generics::GenericLookup::default(),
             None,
-            minimal_host_fallback,
+            Some(minimal_host_fallback),
             unused_native_entry,
         );
         assert!(matches!(
@@ -2357,7 +2476,7 @@ mod tests {
             assert!(value.fetch(roots, &backend).is_err());
             backend.block = None;
             assert!(value.fetch(roots, &backend).is_err());
-            let excluded = ManagedPtr::new_static(
+            let static_pointer = ManagedPtr::new_static(
                 Some(address),
                 dotnet_types::TypeDescription::NULL,
                 dotnet_types::TypeDescription::NULL,
@@ -2365,9 +2484,16 @@ mod tests {
                 false,
                 ByteOffset::new(2),
             );
-            assert!(
-                RootedValue::stash(mc, roots, StackValue::ManagedPtr(excluded.into())).is_err()
-            );
+            let static_root =
+                RootedValue::stash(mc, roots, StackValue::ManagedPtr(static_pointer.into()))
+                    .unwrap();
+            let StackValue::ManagedPtr(fetched) = static_root.fetch(roots, &backend).unwrap()
+            else {
+                panic!("expected static pointer")
+            };
+            assert!(matches!(fetched.origin(), PointerOrigin::Static(_)));
+            assert_eq!(fetched.byte_offset(), ByteOffset::new(2));
+            assert!(fetched.observe_address().is_none());
             let unmanaged = ManagedPtr::new(
                 Some(address),
                 dotnet_types::TypeDescription::NULL,

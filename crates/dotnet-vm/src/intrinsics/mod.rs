@@ -118,7 +118,7 @@
 //!   ↓
 //! Stage 3: dispatch_method()
 //!   ├─→ is_intrinsic_cached() [checks DirectIntercept, Static, VirtualOverride]
-//!   ├─→ intrinsic_call() → dispatch_method_intrinsic(id, ...) [if intrinsic]
+//!   ├─→ dispatch_method_intrinsic(id, ..., mode) [if intrinsic]
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```

@@ -372,6 +372,14 @@ impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContex
     ) -> StepResult {
         self.dispatch_method(method, lookup)
     }
+
+    fn delegate_dispatch_method_inline(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_method_inline(method, lookup)
+    }
 }
 
 impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<'a, 'gc> {
@@ -617,72 +625,6 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         all: bool,
     ) -> bool {
         block.pulse(thread, all)
-    }
-    fn monitor_wait_legacy(
-        &mut self,
-        block: Self::SyncBlock,
-        method: &dotnet_types::members::MethodDescription,
-        timeout: i32,
-    ) -> StepResult {
-        let thread = self.thread_id();
-        let ip = self.state().ip;
-        let top = self.top_of_stack();
-        let frame = self.frame_stack.current_frame_mut();
-        let same = frame
-            .monitor_wait_retry
-            .as_ref()
-            .is_some_and(|r| r.ip == ip && r.stack_top == top && r.method == *method);
-        if !same {
-            if !block.is_owned(thread) {
-                self.drop_top(2);
-                return self.throw_by_name_with_message(
-                    "System.Threading.SynchronizationLockException",
-                    "Object not locked by current thread",
-                );
-            }
-            #[cfg(not(feature = "multithreading"))]
-            if timeout == -1 {
-                return StepResult::internal_error(
-                    "Monitor.Wait would deadlock in single-threaded mode",
-                );
-            }
-            let deadline = (timeout >= 0).then(|| {
-                std::time::Instant::now() + std::time::Duration::from_millis(timeout as u64)
-            });
-            let Some(wait) = crate::sync::MonitorWait::begin(block, thread, deadline) else {
-                return self.throw_by_name_with_message(
-                    "System.Threading.SynchronizationLockException",
-                    "Object not locked by current thread",
-                );
-            };
-            frame.monitor_wait_retry = Some(Box::new(dotnet_vm_data::stack::LegacyMonitorWait {
-                method: method.clone(),
-                ip,
-                stack_top: top,
-                wait: Box::new(LegacyWait { wait, thread }),
-            }));
-        }
-        let frame = self.frame_stack.current_frame_mut();
-        if let Some(result) = frame.monitor_wait_retry.as_mut().unwrap().wait.poll() {
-            frame.monitor_wait_retry = None;
-            self.drop_top(2);
-            self.push_i32(i32::from(result));
-            StepResult::Continue
-        } else {
-            StepResult::Yield
-        }
-    }
-}
-
-struct LegacyWait {
-    wait: crate::sync::MonitorWait,
-    thread: dotnet_utils::ArenaId,
-}
-// SAFETY: F5.TracesEveryGcRef — the wait contains only an Arc to non-GC synchronization state
-// and scalar metadata, so the frame that owns it has no GC reference to trace.
-unsafe impl dotnet_vm_data::stack::MonitorWaitRetry for LegacyWait {
-    fn poll(&mut self) -> Option<bool> {
-        self.wait.poll(self.thread)
     }
 }
 

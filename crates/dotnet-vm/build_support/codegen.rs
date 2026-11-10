@@ -125,12 +125,16 @@ pub fn generate_intrinsic_phf(out_dir: &OsStr, entries: &[IntrinsicEntry]) {
             || "None".to_string(),
             |_| format!("Some({}_native_selector)", entry.original_handler_path),
         );
+        let fallback = entry.fallback.as_ref().map_or_else(
+            || "None".to_string(),
+            |_| format!("Some({}_native_fallback)", entry.original_handler_path),
+        );
         dispatch_code.push_str(&format!(
             "#[allow(non_camel_case_types)] struct NativeSelector_{};\n\
              impl<'gc, T: crate::stack::ops::VesOps<'gc>> dotnet_vm_ops::effects::NativeSelectorProvider<'gc, T> for NativeSelector_{} {{\n\
              fn selector() -> Option<dotnet_vm_ops::effects::NativeSelector<'gc, T>> {{ {} }}\n\
-             fn fallback() -> dotnet_vm_ops::effects::NativeSyncHandler<T> {{ {}_native_fallback }}\n}}\n",
-            entry.variant_name, entry.variant_name, selector, entry.original_handler_path
+             fn fallback() -> Option<dotnet_vm_ops::effects::NativeSyncHandler<T>> {{ {} }}\n}}\n",
+            entry.variant_name, entry.variant_name, selector, fallback
         ));
     }
 
