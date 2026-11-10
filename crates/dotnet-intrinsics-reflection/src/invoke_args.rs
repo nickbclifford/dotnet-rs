@@ -406,3 +406,44 @@ pub(crate) fn nullable_with_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
     Ok(StackValue::ValueType(instance))
 }
+
+/// How well a requested parameter type matches a declared one in `Type.GetConstructor`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TypeFit {
+    Exact,
+    Convertible,
+    No,
+}
+
+/// Compare `wanted` against a declared parameter type the way the default binder does: identical
+/// types first, then reference conversions and primitive or enum widening.
+pub(crate) fn type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    wanted: &dotnet_types::runtime::RuntimeType,
+    declared: &dotnet_types::runtime::RuntimeType,
+) -> TypeFit {
+    if wanted == declared {
+        return TypeFit::Exact;
+    }
+    let loader = ctx.loader();
+    let (wanted, declared) = (
+        wanted.to_concrete(loader.as_ref()),
+        declared.to_concrete(loader.as_ref()),
+    );
+    if let (Ok(from), Ok(to)) = (
+        loader.find_concrete_type(wanted.clone()),
+        loader.find_concrete_type(declared.clone()),
+    ) && let (Some(from), Some(to)) = (Prim::of_type(&from), Prim::of_type(&to))
+    {
+        return if from.can_widen_to(to) {
+            TypeFit::Convertible
+        } else {
+            TypeFit::No
+        };
+    }
+    if ctx.is_a(wanted, declared).unwrap_or(false) {
+        TypeFit::Convertible
+    } else {
+        TypeFit::No
+    }
+}

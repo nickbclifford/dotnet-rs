@@ -1,5 +1,6 @@
 use crate::{
     ReflectionIntrinsicHost,
+    invoke_args::TypeFit,
     types::{
         build_generic_lookup_from_runtime_type, populate_reflection_array, string_from_heap_obj,
     },
@@ -885,8 +886,9 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let _modifiers = ctx.pop();
-    let _types = ctx.pop();
+    let types = ctx.pop_obj();
     let _call_convention = ctx.pop();
     let _binder = ctx.pop();
     let flags = ctx.pop_i32();
@@ -894,14 +896,39 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
 
     let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, obj));
 
+    // A null array means "any signature"; otherwise the constructor must accept these types.
+    let wanted = if types.0.is_none() {
+        None
+    } else {
+        let elements = dotnet_vm_ops::vm_try!(types.try_as_vector(
+            |v: &dotnet_value::object::Vector<'gc>| v.object_ref_elements(&gc).collect::<Vec<_>>()
+        ));
+        let mut wanted = Vec::with_capacity(elements.len());
+        for element in elements {
+            if element.0.is_none() {
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentNullException",
+                    "Value cannot be null. (Parameter 'types')",
+                );
+            }
+            wanted.push(dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(
+                ctx, element
+            )));
+        }
+        Some(wanted)
+    };
+
     const BINDING_FLAGS_INSTANCE: i32 = 4;
     const BINDING_FLAGS_STATIC: i32 = 8;
     const BINDING_FLAGS_PUBLIC: i32 = 16;
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
-    let mut found_constructor = None;
-    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
-        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+    // The best candidate so far: exact matches beat convertible ones, earlier beats later.
+    let mut found_constructor: Option<(TypeFit, usize)> = None;
+    // Built-in aliases such as `object` and `string` are not `Type` variants but still have
+    // constructors.
+    if let Some((td, lookup)) = member_lookup_target(ctx, &target_type) {
+        let td = &td;
         for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != ".ctor" {
                 continue;
@@ -920,19 +947,67 @@ pub fn handle_get_constructor_impl<'gc, T: ReflectionIntrinsicHost<'gc>>(
                 (flags & BINDING_FLAGS_INSTANCE) != 0
             };
 
-            if match_public && match_static {
-                found_constructor = Some(get_runtime_method_metadata(ctx, td, &lookup, idx));
-                break;
+            if !(match_public && match_static) {
+                continue;
             }
+            let fit = match &wanted {
+                None => TypeFit::Exact,
+                Some(wanted) => {
+                    let candidate = MethodDescription::new(
+                        td.clone(),
+                        lookup.clone(),
+                        td.resolution.clone(),
+                        MethodMemberIndex::Method(idx),
+                    );
+                    constructor_type_fit(ctx, &candidate, &lookup, wanted)
+                }
+            };
+            if fit != TypeFit::No && found_constructor.is_none_or(|(best, _)| fit < best) {
+                found_constructor = Some((fit, idx));
+                if fit == TypeFit::Exact {
+                    break;
+                }
+            }
+        }
+        if let Some((_, idx)) = found_constructor {
+            let m = get_runtime_method_metadata(ctx, td, &lookup, idx);
+            ctx.push_obj(m);
+            return StepResult::Continue;
         }
     }
 
-    if let Some(m) = found_constructor {
-        ctx.push_obj(m);
-    } else {
-        ctx.push(StackValue::null());
-    }
+    ctx.push(StackValue::null());
     StepResult::Continue
+}
+
+/// How `wanted` matches the declared parameter types of `constructor`.
+fn constructor_type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    constructor: &MethodDescription,
+    lookup: &GenericLookup,
+    wanted: &[RuntimeType],
+) -> TypeFit {
+    let parameters = &constructor.signature().parameters;
+    if parameters.len() != wanted.len() {
+        return TypeFit::No;
+    }
+    let mut overall = TypeFit::Exact;
+    for (parameter, wanted) in parameters.iter().zip(wanted) {
+        let declared = match &parameter.1 {
+            ParameterType::Value(t) => {
+                ctx.reflection_make_runtime_type_for_method(constructor.clone(), lookup, t)
+            }
+            ParameterType::Ref(t) => RuntimeType::ByRef(Box::new(
+                ctx.reflection_make_runtime_type_for_method(constructor.clone(), lookup, t),
+            )),
+            _ => return TypeFit::No,
+        };
+        match crate::invoke_args::type_fit(ctx, wanted, &declared) {
+            TypeFit::No => return TypeFit::No,
+            fit => overall = overall.max(fit),
+        }
+    }
+    overall
 }
 
 fn member_name_matches(name_filter: Option<&str>, candidate: &str, ignore_case: bool) -> bool {
