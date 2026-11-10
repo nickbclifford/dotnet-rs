@@ -160,32 +160,16 @@ pub fn resolve_activator_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
         }
         _ => return None,
     };
-    let count = if parameters.0.is_none() {
-        0
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+    let args = if parameters.0.is_none() {
+        Vec::new()
     } else {
         parameters.as_heap_storage(|storage| match storage {
-            HeapStorage::Vec(vector) => Some(vector.layout.length),
+            HeapStorage::Vec(vector) => Some(vector.object_ref_elements(&gc).collect::<Vec<_>>()),
             _ => None,
         })?
     };
-    let method = td
-        .definition()
-        .methods
-        .iter()
-        .enumerate()
-        .find_map(|(index, method)| {
-            if method.name != ".ctor" {
-                return None;
-            }
-            let candidate = MethodDescription::new(
-                td.clone(),
-                lookup.clone(),
-                td.resolution.clone(),
-                MethodMemberIndex::Method(index),
-            );
-            let signature = candidate.signature();
-            (signature.instance && signature.parameters.len() == count).then_some(candidate)
-        })?;
+    let method = crate::invoke_args::select_constructor(ctx, &td, &lookup, &args)?;
     Some((method, lookup))
 }
 
@@ -262,45 +246,43 @@ pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsic
         }
     };
 
-    let ctor_args = if ctor_args_obj.0.is_none() {
+    let ctor_arg_objs = if ctor_args_obj.0.is_none() {
         Vec::new()
     } else {
         dotnet_vm_ops::vm_try!(ctor_args_obj.try_as_vector(
-            |v: &dotnet_value::object::Vector<'gc>| {
-                v.object_ref_elements(&gc)
-                    .map(StackValue::ObjectRef)
-                    .collect::<Vec<_>>()
-            }
+            |v: &dotnet_value::object::Vector<'gc>| v.object_ref_elements(&gc).collect::<Vec<_>>()
         ))
     };
 
     let Some(ctor_desc) =
-        target_td
-            .definition()
-            .methods
-            .iter()
-            .enumerate()
-            .find_map(|(index, method)| {
-                if method.name != ".ctor" {
-                    return None;
-                }
-
-                let candidate = MethodDescription::new(
-                    target_td.clone(),
-                    lookup.clone(),
-                    target_td.resolution.clone(),
-                    MethodMemberIndex::Method(index),
-                );
-                let signature = candidate.signature();
-                (signature.instance && signature.parameters.len() == ctor_args.len())
-                    .then_some(candidate)
-            })
+        crate::invoke_args::select_constructor(ctx, &target_td, &lookup, &ctor_arg_objs)
     else {
+        // A struct always has a default value, even without a declared constructor.
+        if ctor_arg_objs.is_empty()
+            && dotnet_vm_ops::vm_try!(
+                ctx.reflection_is_value_type_with_lookup(target_td.clone(), &lookup)
+            )
+        {
+            let instance = dotnet_vm_ops::vm_try!(
+                ctx.reflection_new_object_with_lookup(target_td.clone(), &lookup)
+            );
+            let boxed = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(instance)));
+            ctx.register_new_object(&boxed);
+            ctx.push_obj(boxed);
+            return StepResult::Continue;
+        }
         return ctx.throw_by_name_with_message(
             "System.MissingMethodException",
             "No matching constructor found.",
         );
     };
+
+    let ctor_args =
+        match crate::methods::unmarshal_invoke_params(ctx, &gc, &ctor_desc, &lookup, ctor_args_obj)
+        {
+            Ok(args) => args,
+            Err(thrown) => return thrown,
+        };
 
     let instance =
         dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(target_td.clone(), &lookup));

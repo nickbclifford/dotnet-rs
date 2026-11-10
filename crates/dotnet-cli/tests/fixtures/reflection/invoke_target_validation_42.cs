@@ -14,6 +14,7 @@ public class Student : Person
     public override string Greet() => "student";
 }
 public class Unrelated { }
+public class Made { public Made(int v) { } }
 public struct Point
 {
     public int X;
@@ -56,6 +57,8 @@ public static class Program
         Check(15, Throws<TargetException>(() => get.Invoke(new Person(), null)));
         Check(16, Throws<TargetException>(() => typeof(object).GetMethod("ToString")!.Invoke(null, null)));
         Check(17, (string)typeof(object).GetMethod("ToString")!.Invoke(new Person(), null)! == "Person");
+        var made = typeof(Made).GetConstructor(new[] { typeof(int) })!;
+        Check(18, Throws<TargetException>(() => made.Invoke(null, BindingFlags.Default, null, new object[] { 1 }, null)));
         return failures == 0 ? 42 : 1;
     }
 }

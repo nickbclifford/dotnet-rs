@@ -18,7 +18,10 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
-use dotnetdll::prelude::{BaseType, MemberType, MethodType, TypeSource, UserType};
+use dotnetdll::prelude::{
+    Accessibility, BaseType, MemberAccessibility, MemberType, MethodMemberIndex, MethodType,
+    ParameterType, TypeSource, UserType,
+};
 
 /// Primitive kinds that take part in CLR argument widening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,4 +449,64 @@ pub(crate) fn type_fit<'gc, T: ReflectionIntrinsicHost<'gc>>(
     } else {
         TypeFit::No
     }
+}
+
+/// Choose the public instance constructor of `td` that `args` bind to, as the default binder does
+/// for `Activator.CreateInstance(Type, object[])`. A constructor must accept every argument; among
+/// those, one needing no widening wins, and otherwise the earliest declared one.
+pub(crate) fn select_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    td: &TypeDescription,
+    lookup: &GenericLookup,
+    args: &[ObjectRef<'gc>],
+) -> Option<MethodDescription> {
+    let mut best: Option<(usize, MethodDescription)> = None;
+    for (index, method) in td.definition().methods.iter().enumerate() {
+        if method.name != ".ctor"
+            || !method.signature.instance
+            || method.accessibility != MemberAccessibility::Access(Accessibility::Public)
+            || method.signature.parameters.len() != args.len()
+        {
+            continue;
+        }
+        let candidate = MethodDescription::new(
+            td.clone(),
+            lookup.clone(),
+            td.resolution.clone(),
+            MethodMemberIndex::Method(index),
+        );
+        let mut conversions = 0;
+        let fits = candidate
+            .signature()
+            .parameters
+            .iter()
+            .zip(args)
+            .all(|(parameter, arg)| {
+                let (ty, byref) = match &parameter.1 {
+                    ParameterType::Value(ty) => (ty, false),
+                    ParameterType::Ref(ty) => (ty, true),
+                    ParameterType::TypedReference => return false,
+                };
+                let Ok(shape) = param_shape(ctx, &candidate, lookup, ty) else {
+                    return false;
+                };
+                match plan_argument(ctx, *arg, &shape, byref) {
+                    ArgPlan::Reject => false,
+                    // The binder only lets `null` stand for a reference or `Nullable<T>`.
+                    ArgPlan::Default => {
+                        conversions += 1;
+                        !shape.value_type || is_nullable(&shape.td)
+                    }
+                    ArgPlan::Widen { .. } | ArgPlan::NullableSome => {
+                        conversions += 1;
+                        true
+                    }
+                    ArgPlan::Reference | ArgPlan::Exact => true,
+                }
+            });
+        if fits && best.as_ref().is_none_or(|(score, _)| conversions < *score) {
+            best = Some((conversions, candidate));
+        }
+    }
+    best.map(|(_, method)| method)
 }

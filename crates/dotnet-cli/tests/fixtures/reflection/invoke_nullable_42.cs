@@ -10,6 +10,7 @@ public static class Target
 {
     public static int Unwrap(int? value) => value.HasValue ? value.Value : -1;
     public static int? Wrap(int value) => value == 0 ? null : value;
+    public static long TakeLong(long? value) => value ?? -1;
     public static int Two(int? a, long? b) => (a ?? 1) + (int)(b ?? 10);
 }
 public static class Program
@@ -43,6 +44,9 @@ public static class Program
         var created = (Holder)Activator.CreateInstance(typeof(Holder), new object?[] { null })!;
         Check(10, created.Value == null);
         Check(11, ((Holder)Activator.CreateInstance(typeof(Holder), new object?[] { 6 })!).Value == 6);
+        var takeLong = typeof(Target).GetMethod(nameof(Target.TakeLong))!;
+        Check(12, (long)takeLong.Invoke(null, new object[] { 5L })! == 5);
+        Check(13, Throws<ArgumentException>(() => takeLong.Invoke(null, new object[] { 5 })));
         return failures == 0 ? 42 : 1;
     }
 }

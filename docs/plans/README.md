@@ -36,11 +36,13 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Reflection compatibility and validation:** reflection calls remain transparent (guest
   exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
   rejected, both deliberate CLR deviations in the
-  [plan 08 reflection contract](08-async-effects.md#decisions-already-made). Argument validation
-  is incomplete: wrong argument counts, nullable parameters and
-  `Activator.CreateInstance(Type, object[])` can panic; wrong argument types can produce an
-  internal error; `GetConstructor(Type[])` ignores the supplied types; and null or wrong-type
-  targets may still run the method body.
+  [plan 08 reflection contract](08-async-effects.md#decisions-already-made). Argument binding
+  follows the CLR for counts, targets, widening, `null` and `Nullable<T>`, with these gaps:
+  array-typed arguments and receivers are accepted without a type check, a byref argument must
+  match its parameter exactly (the CLR widens and writes back), `Nullable<T>` accepts only a
+  boxed `T` (no widening), and `Activator.CreateInstance(Type, object[])` and
+  `GetConstructor(Type[])` return the first best match rather than throwing
+  `AmbiguousMatchException`.
 - **Reflection byref write-back after throws:** byref arguments are written back when the invoked guest method throws, unlike the CLR.
 - **Legacy static-initialization triggers:** `newobj`, eligible calls through
   `prepare_method_initialization` and `RuntimeHelpers.RunClassConstructor` retain the legacy

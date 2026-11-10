@@ -1257,7 +1257,8 @@ fn parameter_count_mismatch<'gc, T: ReflectionIntrinsicHost<'gc>>(ctx: &mut T) -
 
 /// Throw `TargetException` unless `receiver` is a valid `this` for `method`.
 ///
-/// Static methods ignore the receiver, and a constructor without a receiver allocates its own.
+/// Static methods ignore the receiver. A constructor invoked with an explicit receiver re-runs on
+/// that object, so it needs one just like any instance method.
 pub fn validate_invoke_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: &MethodDescription,
@@ -1272,9 +1273,6 @@ pub fn validate_invoke_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
         _ => ObjectRef(None),
     };
     if receiver.0.is_none() {
-        if method.method().name == ".ctor" {
-            return Ok(());
-        }
         return Err(ctx.throw_by_name_with_message(
             "System.Reflection.TargetException",
             "Non-static method requires a target.",
