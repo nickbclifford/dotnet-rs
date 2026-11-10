@@ -221,21 +221,10 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         description: &dotnet_types::TypeDescription,
         inner: Option<ObjectRef<'gc>>,
     ) -> Result<ObjectRef<'gc>, VmError> {
-        let message = format!(
-            "The type initializer for '{}' threw an exception.",
-            description.type_name()
-        );
         let previous = *self.context.exception_mode;
-        let result = match inner {
-            Some(inner) => self.context.throw_by_name_with_inner(
-                "System.TypeInitializationException",
-                &message,
-                inner,
-            ),
-            None => self
-                .context
-                .throw_by_name_with_message("System.TypeInitializationException", &message),
-        };
+        let result = self
+            .context
+            .throw_type_initialization_exception(description, inner);
         let current = *self.context.exception_mode;
         *self.context.exception_mode = previous;
         match (result, current) {

@@ -689,19 +689,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             };
 
             if let Some(inner) = current_exception {
-                let type_name = type_desc.type_name();
-                let message = format!(
-                    "The type initializer for '{}' threw an exception.",
-                    type_name
-                );
-                // We use throw_by_name_with_inner which updates self.exception_mode to Throwing.
-                // This is safe because unwind_frame is called during the exception handling loop
-                // in dotnet-exceptions, and the next iteration will see the new Throwing state.
-                let result = self.throw_by_name_with_inner(
-                    "System.TypeInitializationException",
-                    &message,
-                    inner,
-                );
+                // This updates self.exception_mode to Throwing. That is safe because unwind_frame
+                // is called during the exception handling loop in dotnet-exceptions, and the next
+                // iteration will see the new Throwing state.
+                let result = self.throw_type_initialization_exception(&type_desc, Some(inner));
                 if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
                     (result, *self.exception_mode)
                 {

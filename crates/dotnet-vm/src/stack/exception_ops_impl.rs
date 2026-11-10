@@ -14,6 +14,44 @@ use dotnet_vm_data::{
 };
 use dotnet_vm_ops::VesInternals;
 
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// Throws the `System.TypeInitializationException` that reports a failed `.cctor` of
+    /// `description` (ECMA-335 §II.10.5.3.3), optionally wrapping the exception the `.cctor`
+    /// threw. The exception's `TypeName` is the failing type's name, as in the CLR.
+    pub(crate) fn throw_type_initialization_exception(
+        &mut self,
+        description: &dotnet_types::TypeDescription,
+        inner: Option<ObjectRef<'gc>>,
+    ) -> StepResult {
+        const NAME: &str = "System.TypeInitializationException";
+        let type_name = description.type_name();
+        let message = format!("The type initializer for '{type_name}' threw an exception.");
+        let result = match inner {
+            Some(inner) => self.throw_by_name_with_inner(NAME, &message, inner),
+            None => self.throw_by_name_with_message(NAME, &message),
+        };
+        if let (StepResult::Exception, ExceptionState::Throwing(exception, _)) =
+            (&result, *self.exception_mode)
+        {
+            let gc = self.gc;
+            let exception_type = dotnet_vm_ops::vm_try!(self.shared.loader.corlib_type(NAME));
+            let name_ref =
+                StackValue::string(gc, CLRString::from(type_name.as_str())).as_object_ref();
+            self.register_new_object(&name_ref);
+            // `_typeName` is private BCL layout, so it is looked up by name and skipped if absent.
+            exception.as_object_mut(gc, |obj| {
+                if let Some(field) = obj
+                    .instance_storage
+                    .field::<ObjectRef>(exception_type, "_typeName")
+                {
+                    field.write(name_ref);
+                }
+            });
+        }
+        result
+    }
+}
+
 impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     fn throw_argument_out_of_range(&mut self, param_name: &str) -> StepResult {
         let argument_type =

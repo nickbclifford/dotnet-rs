@@ -1081,15 +1081,7 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                             // Success - continue with the operation
                         }
                         crate::statics::InitState::Failed => {
-                            let type_name = description.type_name();
-                            let message = format!(
-                                "The type initializer for '{}' threw an exception.",
-                                type_name
-                            );
-                            return self.throw_by_name_with_message(
-                                "System.TypeInitializationException",
-                                &message,
-                            );
+                            return self.throw_type_initialization_exception(&description, None);
                         }
                         _ => {
                             // VM invariant: once `wait_for_init` returns without yielding, the
@@ -1114,12 +1106,7 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
                 StepResult::Continue
             }
             Ok(crate::statics::StaticInitResult::Failed) => {
-                let type_name = description.type_name();
-                let message = format!(
-                    "The type initializer for '{}' threw an exception.",
-                    type_name
-                );
-                self.throw_by_name_with_message("System.TypeInitializationException", &message)
+                self.throw_type_initialization_exception(&description, None)
             }
             Err(e) => StepResult::Error(e.into()),
         }
