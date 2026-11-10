@@ -62,7 +62,9 @@ Evidence and IDs (p01…, R01…) are defined in the
   through recursion. A finalizer run by a retired worker can receive a new `Thread` object with
   the worker's ID after the original thread object has been released. The resurrection and
   weak-handle fixtures also disagree with the CLR and may be timing-dependent; resolving these
-  behaviors requires separate GC/finalizer work.
+  behaviors requires separate GC/finalizer work. One such dependence is fixed: a cross-arena
+  short `WeakReference` no longer survives the first `GC.Collect` depending on which arena
+  finalized first (the `ClearWeak` phase).
 - **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running
   or finalizing, so a finalizer that never returns blocks every caller. The CLR does not wait for
   finalizers at exit. `Executor::run_entrypoint` returns without the wait (plan 11).

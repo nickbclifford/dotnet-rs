@@ -315,6 +315,10 @@ pub enum MarkPhaseCommand {
 /// Reclaim-phase commands sent from the coordinator to worker threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepPhaseCommand {
+    /// Clear short weak handles whose targets are unreachable. This runs on every arena, and the
+    /// coordinator waits for all of them, before any arena resurrects a finalizable object:
+    /// a handle can target an object another arena owns, and resurrection recolors it.
+    ClearWeak,
     /// Run finalizers for dead objects.
     Finalize,
     /// Finish collection (sweep).

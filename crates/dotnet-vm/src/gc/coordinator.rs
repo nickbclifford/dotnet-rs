@@ -642,6 +642,14 @@ impl CollectionSession<'_> {
         #[cfg(feature = "bench-instrumentation")]
         dotnet_metrics::record_active_gc_fixed_point_cycle(fixed_point_iterations);
 
+        // Short weak handles must observe reachability before any arena resurrects a finalizable
+        // object. A handle may target an object another arena owns, and that owner's `Finalize`
+        // recolors it, so clearing and finalizing cannot share one concurrent phase.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::ClearWeak),
+        );
+
         // Run finalizers.
         self.send_command_to_all_and_wait(
             initiating_thread_id,
@@ -925,7 +933,9 @@ mod tests {
                             rounds += 1;
                         }
                         GCCommand::Sweep(SweepPhaseCommand::Sweep) => finished = true,
-                        GCCommand::Sweep(SweepPhaseCommand::Finalize) => {}
+                        GCCommand::Sweep(
+                            SweepPhaseCommand::ClearWeak | SweepPhaseCommand::Finalize,
+                        ) => {}
                     }
                     worker_coordinator.command_finished(worker);
                 } else {

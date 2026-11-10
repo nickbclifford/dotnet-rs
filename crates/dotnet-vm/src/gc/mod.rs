@@ -31,6 +31,13 @@ pub enum CollectionWork {
     Full,
 }
 
+/// Clear this arena's short weak handles whose targets are unreachable. It only reads colors, so
+/// every arena can run it concurrently; it must complete everywhere before any arena finalizes.
+#[cfg(feature = "multithreading")]
+pub fn clear_weak_arena(marked: MarkedArena<'_, GCArenaRoot>) {
+    marked.finalize(|fc, c| c.stack.local.heap.clear_dead_weak_handles(fc));
+}
+
 /// Perform post-marking finalization check for a GC arena.
 /// This handles object finalization by checking which objects are no longer reachable.
 pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {

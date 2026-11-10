@@ -147,6 +147,25 @@ impl<'gc> HeapManager<'gc> {
         !self.pending_finalization.borrow().is_empty()
     }
 
+    /// Zero short weak handles whose targets are unreachable.
+    ///
+    /// Read-only with respect to object colors, so every arena can run it concurrently. In a
+    /// multi-arena collection it must finish on all arenas before any `finalize_check`, because
+    /// a handle can target an object owned by another arena and that arena's finalization
+    /// resurrects (recolors) it.
+    #[cfg(feature = "multithreading")]
+    pub fn clear_dead_weak_handles(&self, fc: &'gc gc_arena::Finalization<'gc>) {
+        let mut handles = self.gchandles.borrow_mut();
+        for (obj_ref, handle_type) in handles.iter_mut().flatten() {
+            if *handle_type == GCHandleType::Weak
+                && let ObjectRef(Some(ptr)) = obj_ref
+                && Gc::is_dead(fc, *ptr)
+            {
+                *obj_ref = ObjectRef(None);
+            }
+        }
+    }
+
     pub fn finalize_check(
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,

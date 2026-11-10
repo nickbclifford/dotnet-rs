@@ -835,6 +835,15 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
             }
         },
         GCCommand::Sweep(sweep_command) => match sweep_command {
+            SweepPhaseCommand::ClearWeak => {
+                with_current(|arena| {
+                    if let Some(arena) = arena
+                        && let Some(marked) = arena.finish_marking()
+                    {
+                        crate::gc::clear_weak_arena(marked);
+                    }
+                });
+            }
             SweepPhaseCommand::Finalize => {
                 with_current(|arena| {
                     if let Some(arena) = arena {

@@ -278,12 +278,13 @@ Two implementations are selected via the `multithreading` feature flag:
 - Orchestrates STW collection via `collect_all_arenas` using a phase-based approach. In `Executor::perform_full_gc` the `CollectionSession` and the `StopTheWorldGuard` are bound together into a `GcCycleGuard` (which enforces drop order: session cleanup before thread resume), and `collect_all_arenas` is invoked through that guard:
   1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `GCCommand::Mark(MarkPhaseCommand::All)` to all arenas.
   2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `GCCommand::Mark(MarkPhaseCommand::Objects(…))` for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
-  3. **Phase 3 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to queue unreachable finalizable objects.
-  4. **Phase 4 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
+  3. **Phase 3 (ClearWeak)**: Sends `GCCommand::Sweep(SweepPhaseCommand::ClearWeak)` and waits for every arena. Each arena zeroes its short weak handles whose targets are unreachable. This reads object colors without changing them, and it must finish everywhere first: a handle can target an object another arena owns, and that arena's `Finalize` resurrects (recolors) finalizable objects. Running both in one concurrent phase made a cross-arena `WeakReference` survive the first `GC.Collect` depending on which arena ran first.
+  4. **Phase 4 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to queue unreachable finalizable objects.
+  5. **Phase 5 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
 
 **Single-threaded (`cfg(not(feature = "multithreading"))`)**:
 - Stub implementation — `should_collect` always returns false. The executor collects locally through `GCArena::collect_single_threaded`: allocation debt incrementally, and a full cycle when `GC.Collect` requests one.
-- Every cycle stops when fully marked so `finalize_check` runs before sweeping, mirroring phases 3 and 4 above. The finalization queue holds finalizable objects weakly, so a cycle that swept first would free objects the queue still points to. gc-arena's `collect_debt` passes through the fully marked phase without stopping, so the executor never calls it.
+- Every cycle stops when fully marked so `finalize_check` runs before sweeping, mirroring phases 3 through 5 above (one arena, so the weak-handle clearing inside `finalize_check` already precedes resurrection). The finalization queue holds finalizable objects weakly, so a cycle that swept first would free objects the queue still points to. gc-arena's `collect_debt` passes through the fully marked phase without stopping, so the executor never calls it.
 - No cross-arena tracking needed.
 
 ### `GCCommand` enum
@@ -292,6 +293,7 @@ Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums
   - `MarkPhaseCommand::All` — start marking phase, trace all local roots in the arena.
   - `MarkPhaseCommand::Objects(MarkObjectPointers)` — trace specific typed cross-arena object pointers.
 - `Sweep(SweepPhaseCommand)`:
+  - `SweepPhaseCommand::ClearWeak` — zero short weak handles whose targets are unreachable, before any arena resurrects a finalizable object.
   - `SweepPhaseCommand::Finalize` — queue unreachable finalizable objects.
   - `SweepPhaseCommand::Sweep` — reclaim unreachable objects.
 
@@ -322,6 +324,9 @@ sequenceDiagram
         W-->>C: Found new cross_refs?
     end
     
+    C->>W: Send GCCommand::Sweep(SweepPhaseCommand::ClearWeak)
+    W-->>C: Finished ClearWeak
+
     C->>W: Send GCCommand::Sweep(SweepPhaseCommand::Finalize)
     W-->>C: Finished Finalize
     
@@ -370,9 +375,9 @@ Registration rejects duplicate live IDs; checked generation and token allocation
 
 ### Weak References
 The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
-- **Implementation**: `HeapManager::finalize_check` zero-fills weak handles for objects that are unreachable and don't require (or have finished) finalization. The `GCHandle` intrinsics use opaque slot IDs with two clear low bits for CoreLib's handle tags; `System.WeakReference` liveness is tested in its handle's owning arena. [Cross-thread handle access](plans/README.md#not-yet-planned) remains limited.
+- **Implementation**: `HeapManager::clear_dead_weak_handles` (the multi-arena `ClearWeak` phase) and `HeapManager::finalize_check` zero-fill short weak handles for unreachable objects before any finalizable object is resurrected. The `GCHandle` intrinsics use opaque slot IDs with two clear low bits for CoreLib's handle tags; `System.WeakReference` liveness is tested in its handle's owning arena. [Cross-thread handle access](plans/README.md#not-yet-planned) remains limited.
 - **BCL Support**: `System.WeakReference<T>` is not in the BCL support library and must be defined by the user or added to `support.dll`.
-- **Cross-Arena Limitation**: The `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not tracked or zeroed by the global coordinator.
+- **Cross-Arena Limitation**: The `GCCoordinator` fixed-point iteration only resurrects strong references. Short weak handles are cleared per owning arena in the `ClearWeak` phase, using the target's color even when another arena owns it. `WeakTrackResurrection` handles whose target another arena resurrects are not coordinated.
 
 ## GcScopeGuard and Deadlock Prevention
 
