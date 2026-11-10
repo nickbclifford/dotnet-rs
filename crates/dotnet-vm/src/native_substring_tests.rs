@@ -5741,21 +5741,65 @@ fn native_activations_follow_nested_filter_segments() {
         })
         .unwrap();
     assert!(matches!(result, StepResult::NativeSuspended(_)));
+    // A filter cannot contain protected regions (ECMA-335 I.12.4.2.7), so the nested filter
+    // belongs to the method the first filter called, and a second native call below it throws.
     let nested = vec![boundary_section(
-        HandlerKind::Filter { clause_offset: 2 },
+        HandlerKind::Filter { clause_offset: 1 },
+        0..1,
         1..2,
-        2..3,
+    )];
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                let frames = &mut ctx.frame_stack.frames;
+                assert_eq!(frames.len(), 2);
+                frames[1].state.info_handle.exceptions = nested.into_iter().map(Arc::new).collect();
+            })
+        })
+        .unwrap();
+    let inner_method = substring_method(&executor, true);
+    let result = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("abc")));
+                ctx.push(StackValue::ObjectRef(source));
+                ctx.push(StackValue::Int32(0));
+                ctx.push(StackValue::Int32(3));
+                ctx.start_native(
+                    inner_method,
+                    NativeDispatchMode::InlineCall,
+                    &GenericLookup::default(),
+                    None,
+                    native_test_fallback,
+                    boundary_body,
+                )
+            })
+        })
+        .unwrap();
+    assert!(matches!(result, StepResult::NativeSuspended(_)));
+    let outer = vec![boundary_section(
+        HandlerKind::Filter { clause_offset: 1 },
+        0..1,
+        1..2,
     )];
     assert_eq!(
-        boundary_throw(&mut executor, ty, vec![], nested),
+        boundary_throw(&mut executor, ty, vec![], outer),
         StepResult::Exception
     );
     executor
         .with_arena(|arena| {
             arena.mutate(|_, engine| {
                 let calls = &engine.stack.execution.call_state;
+                // The first filter parked A; the nested filter parks the call below its owner (C).
+                // B, the call the first filter made, stays active.
                 assert_eq!(calls.suspended_native.len(), 2);
-                assert!(calls.native.is_empty());
+                assert_eq!(calls.native.len(), 1);
                 assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
             })
         })
@@ -5768,7 +5812,7 @@ fn native_activations_follow_nested_filter_segments() {
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert_eq!(engine.ves_context(gc).endfilter(0), StepResult::Exception);
                 assert_eq!(engine.stack.execution.call_state.suspended_native.len(), 1);
-                assert_eq!(engine.stack.execution.call_state.native.len(), 1);
+                assert_eq!(engine.stack.execution.call_state.native.len(), 2);
                 assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 0);
             })
         })
@@ -5777,7 +5821,7 @@ fn native_activations_follow_nested_filter_segments() {
         boundary_handle(&mut executor, false),
         StepResult::MethodThrew(_)
     ));
-    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 2);
+    assert_eq!(BOUNDARY_DROPS.with(|x| x.get()), 3);
     assert_eq!(BOUNDARY_RESUMES.with(|x| x.get()), 0);
 }
 

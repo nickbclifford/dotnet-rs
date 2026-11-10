@@ -137,7 +137,7 @@ safepoint; `Join` cannot catch the exception. The entry executor returns the rec
 the CLI, which reports it as an unhandled exception. A native operation already in progress must
 return before its executor can observe the abort.
 
-After Main returns, `Executor::run` calls `wait_for_foreground_workers`, keeping the entry arena registered,
+After Main returns, `Executor::run` calls `wait_for_foreground_workers`. (`Executor::run_entrypoint` runs only the entry method and returns without that wait; use it when a test must observe the state while a finalizer is still running, and call `wait_for_foreground_workers` before dropping the executor.) The wait keeps the entry arena registered,
 services GC stops and its own finalizers, and waits until no worker is running or finalizing and no
 finalizer is pending, observed under one registry lock (`WorkerRegistry::is_quiescent`), before
 reporting exit. All supported workers are foreground because `IsBackground` is

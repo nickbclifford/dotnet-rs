@@ -119,17 +119,34 @@ original throw. Preserve native capture boundaries before stopping the search.
 
 ## Done when
 
-- The slice 1 fixtures pass in both configurations and match CLR; the INVENTORY note for
-  handler state, if one exists, is updated.
+- The slice 1 fixtures pass in both configurations and match CLR.
 - Slice 2 fixtures pass under `multithreading`; an unhandled worker exception can no longer be
   caught through `Thread.Join`.
-- Exception fixture selector `exceptions` and `threading` pass in both configurations; clippy
-  for `dotnet-exceptions`, `dotnet-vm`, `dotnet-vm-data` and `dotnet-cli` with `-D warnings`.
+- In both configurations: the `exceptions` and `threading` fixture selectors, `cargo test -p
+  dotnet-vm --lib`, and the whole `integration_tests` binary with no selector. The selector
+  does not filter the non-fixture tests (shutdown, retired-finalizer, managed-thread
+  lifecycle), and the `dotnet-vm` unit tests build exception shapes directly. Clippy for
+  `dotnet-exceptions`, `dotnet-vm`, `dotnet-vm-data` and `dotnet-cli` with `-D warnings`.
 - The README's "Unhandled worker exceptions" and "Control flow and filters" entries are
   removed.
 
-The exception and threading fixture selectors, including CLR comparisons, pass in no-features
-and `multithreading`; clippy for the four named crates passes with `-D warnings` in both.
+## Follow-up found after implementation
+
+Verifying with the selectors alone missed two regressions, fixed afterwards:
+
+- `Executor::run` began waiting for workers, which blocked
+  `shutdown_waits_for_active_retired_finalizer` (a finalizer that never returns). Added
+  `Executor::run_entrypoint`, which returns when the entry method does; that test uses it.
+  `managed_thread_lifecycle_42.cs` also stopped expecting `Thread.Join` to catch a worker
+  exception.
+- `native_activations_follow_nested_filter_segments` built a protected region inside a filter in
+  the filter's own frame, which §I.12.4.2.7 forbids and the filter-frame search stop now
+  rejects. The nested filter now lives in the method the first filter calls, below a second
+  native call.
+
+`Executor::run` waits for `Finalizing` workers, so a finalizer that never returns blocks every
+caller of `run`, not only the CLI. The CLR does not wait for finalizers at exit. Not changed
+here.
 
 ## Ask the maintainer only if
 

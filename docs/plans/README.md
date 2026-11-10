@@ -63,6 +63,9 @@ Evidence and IDs (p01…, R01…) are defined in the
   thread identity, so they can re-enter monitors it holds or observe an in-progress `.cctor`
   through recursion. The resurrection and weak-handle fixtures also disagree with the CLR and
   may be timing-dependent; resolving these behaviors requires separate GC/finalizer work.
+- **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running
+  or finalizing, so a finalizer that never returns blocks every caller. The CLR does not wait for
+  finalizers at exit. `Executor::run_entrypoint` returns without the wait (plan 11).
 - **`Thread.IsBackground`:** unimplemented, so every managed thread is treated as foreground at
   exit (plan 09).
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
