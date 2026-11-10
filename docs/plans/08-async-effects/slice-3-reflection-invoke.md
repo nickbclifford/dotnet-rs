@@ -31,8 +31,8 @@ on an exceptional return. These are byrefs to a value or an object reference, no
 stored in the array: ECMA-335 §§II.14.4.2 and III.1.1.5.2 permit those targets but forbid a
 managed pointer to another managed pointer or a managed pointer stored in an array, field or
 static. The observed reflection marshalling does not require static or transient pointer
-transport. The slice 2 `RootedValue` descriptor supports heap, MT cross-arena and frame-home
-origins; use the actual origin rather than guessing from the address.
+transport. The `RootedValue` descriptor supports heap, MT cross-arena, frame-home and, since
+plan 13, static origins; use the actual origin rather than guessing from the address.
 
 ## Design
 
@@ -65,9 +65,10 @@ the slice 2 pending-target/initializer protocol for managed and synchronous targ
 
 ### Scoped reflection fallback
 
-The existing dispatch contract sends all non-inline modes, including a tail-prefixed intrinsic
-call, to the synchronous fallback before selection. Unsupported transport shapes also need a
-fallback. Deleting the sole caller-side return action while retaining those rules would lose the
+The dispatch contract sends non-inline modes to the synchronous fallback before selection.
+Plan 13 routes tail-prefixed intrinsic calls inline: supported reflection shapes use effects,
+while excluded shapes still select the fallback. Unsupported transport shapes need that
+fallback. Deleting the sole caller-side return action while retaining these rules would lose the
 required reflection result transformation. Keep `InvokeReturn` and the frame continuation, or
 their corrected equivalents, only for those fallback calls. Do not route an excluded call to
 effects, retry it after commitment, or reject a previously supported call to avoid the fallback.
@@ -133,9 +134,9 @@ configurations and CLR; it did not exercise collection, generic layout or nullab
   from an admitted call. Cover fallback success and throw/catch for managed and synchronous
   targets, void/value/reference results, constructor results, initializer success and failure,
   nested invocation, and later unrelated returns. Exercise a real tail-prefixed reflection
-  call, verify the emitted IL contains the prefix, and test it in ST and MT; a simulated
-  `Other` mode alone is insufficient. Include an unsupported transport shape that remains
-  supported on the fallback. Compare applicable results and initializer ordering with CLR,
+  call, verify the emitted IL contains the prefix, and test it in ST and MT; supported shapes
+  take the inline body, while an unsupported transport shape remains on the fallback. A simulated
+  `Other` mode alone is insufficient. Compare applicable results and initializer ordering with CLR,
   accounting for the deliberate difference in exception wrapping.
 - Keep only the continuation, trace/reset, tail-call guard and slice 2 forwarding needed by
   that fallback; audit all producers and consumers for the boundary above and update directly

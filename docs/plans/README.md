@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Not started; settles the API before further intrinsic migrations |
+| 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
 | 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Complete; managed threads and monitor condition waits are supported |
 | 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Complete; nested handlers, fatal worker exceptions and filter exception boundary verified |
 | 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Establishes the retained-arena lifecycle contract |
@@ -48,9 +48,17 @@ Evidence and IDs (p01…, R01…) are defined in the
   timing and wrapping differ from the field-instruction effect path described in the
   [static-initialization slice](08-async-effects/slice-4-static-initialization.md).
 - **Fallback continuations for excluded shapes:** `MulticastState`, `InvokeReturn` and the
-  monitor frame retry deadline remain necessary until a plan covers all invocation and wait
-  shapes excluded from native effects; their ownership and admitted shapes are defined by
-  [plan 08](08-async-effects.md).
+  frame retry deadline remain necessary until a plan covers invocation and wait
+  shapes excluded from native effects; the retry record serves timed Transient/Unmanaged byref
+  monitor fallbacks and independently Thread.Join. Monitor.Wait uses a native wait. Their ownership
+  and admitted shapes are defined by [plan 08](08-async-effects.md). Threading and string bodies now validate admitted operands;
+  single-cast delegates and other IL calls now forward inline. Guest non-inline routes remain
+  `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
+  managed-body-only cctor, span equality slow path and Expression.Compile redirect. Public
+  `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` are also non-inline.
+  Non-inline calls use a registered fallback or return `NotImplemented` when absent, as for
+  `Thread.Yield`, `Thread.SpinWait` and `Monitor.Wait`. Monitor byref and reflection exclusions
+  remain; Substring retains its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
 - **Pending-reflection instruction cost:** the per-instruction check for a pending reflection
   continuation adds interpreter work. Disabling it in an experimental build changed ST dispatch
   timings by +0.54%, -2.72%, -3.08% and -2.17%, but also changed code layout and broke retry;

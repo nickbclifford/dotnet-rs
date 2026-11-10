@@ -1,18 +1,22 @@
 # Async intrinsic API: the body is the implementation
 
-**Status:** Not started
+**Status:** Complete
 **Outcome:** An async intrinsic can be registered with only its `async fn` body. Each remaining
-`select` only captures values before commitment or excludes a named operand shape. Each
-remaining `fallback` serves only such an excluded shape, a measured fast path, or one of the
-residual non-inline callers listed below.
+`select` only captures values before commitment, excludes a named operand shape, or selects
+a measured fast path. Each remaining `fallback` serves only such an excluded shape, a measured
+fast path, or one of the residual non-inline callers listed below.
 
 ## Problem
 
-Plan 08 requires every async intrinsic to have a synchronous `fallback` and lets it have a
-`select`. There are 12 bodies with 19 registrations today. For most of them, the fallback is a
-second full implementation:
+This inventory and diagnosis describe the pre-plan baseline. Admitted threading and Substring
+validation and the finalizer self-wait return now belong to their bodies; inline IL dispatch and
+optional fallbacks are complete. The measured Substring fast-path decision is recorded below.
 
-| Intrinsic | Why the fallback exists today |
+At plan start, plan 08 required every async intrinsic to have a synchronous `fallback` and
+allowed a `select`. There were 12 bodies with 19 registrations. For most of them, the
+fallback was a second full implementation:
+
+| Intrinsic | Why the fallback existed at plan start |
 |---|---|
 | `Thread.Yield`, `Thread.SpinWait` | Non-inline dispatch only. It is the same operation with the yield removed. |
 | `Thread.Sleep` | Throws for `ms < -1`. Non-inline dispatch, using a legacy `Yield` retry against `monitor_retry_deadline`. |
@@ -67,6 +71,8 @@ need three functions. This plan settles the API first.
     whose completion must finish the constructor receiver
   - `.cctor` dispatch, the span equality slow path and the `Expression.Compile` redirect, all
     of which dispatch managed bodies, never intrinsics
+  - Public `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` host
+    entry APIs, whose non-inline dispatch contract is preserved
 
   Retiring those continuations is the separate "Fallback continuations for excluded shapes"
   item.
@@ -98,8 +104,10 @@ pub async fn thread_yield(mut fx: VmEffects) -> NativeResult { … }
 
 Rules:
 - `select` is optional. It returns `Async` (with captured values), `Fallback` (only for a named
-  excluded shape, or a fast path that slice 4 keeps) or `Reject`. It doesn't throw guest
-  exceptions or validate arguments.
+  excluded shape, or a fast path that slice 4 keeps) or `Reject`. The migrated threading
+  selectors don't throw guest exceptions or validate arguments. Reflection's pre-existing
+  validation exclusions remain out of scope; Substring checks validity only to choose its
+  measured fast path and sends invalid operands to the body.
 - `fallback` is optional. A selector that returns `Fallback` for an intrinsic with no fallback
   is already an internal error (`start_native_inner`).
 - If an `Other` dispatch reaches an intrinsic with no fallback, the result is
@@ -120,8 +128,8 @@ activation and returns it as `NativeFailure::Managed`. A body can then write
 The operands have already been committed by then. The driver discards them on a throw, which
 matches the CLR: intermediate results on the evaluation stack are lost when an exception is
 thrown (§I.12.4.2.5). Bodies
-validate before their first suspension, so a throw comes before any wait or acquire. This
-preserves the plan 10 rule that `Monitor` validates before acquiring.
+validate before registering an operation wait or acquiring a monitor, although the initial VM
+access itself may wait for a GC stop. This preserves plan 10's validation-before-acquire rule.
 
 `Monitor` and `GC` also need some read-only queries:
 - reading the `bool&` flag (unsafe, cited `F10.RawMemoryAccessValid`, like
@@ -133,17 +141,15 @@ preserves the plan 10 rule that `Monitor` validates before acquiring.
 
 ### Static `bool&` origins
 
-`RootedValue::stash` (`effects.rs`) admits only `Heap`, `FrameHome` and (MT)
-`CrossArenaObjectRef` pointers under `F6.NativePointerDescriptor`, so `Monitor.Enter(o, ref
-s_taken)` on a static field takes the fallback. A `PointerOrigin::Static` holds no branded
+`RootedValue::stash` (`effects.rs`) admits `Heap`, `FrameHome`, `Static` and (MT)
+`CrossArenaObjectRef` pointers under `F6.NativePointerDescriptor`; static monitor flags
+therefore reach the async body. A `PointerOrigin::Static` holds no branded
 pointer: it is an `Arc<StaticMetadata>` (type and generics) plus an offset. Every raw access
 re-resolves the storage through `statics().get(type, generics)` and bounds-checks the offset
 (`raw_memory_ops_impl/mod.rs`). Static storage lives as long as the VM, so the descriptor
-stays valid across polls and needs no tracing. Admit `Static` in `stash` and in
-`select_monitor`, and extend `F6.NativePointerDescriptor` in
-`docs/INVARIANT_REGISTRY.md` and plan 08's managed-pointers section to "or a static
-origin, re-resolved by type and generics on every access". This adds no new shared-memory
-hazard, because the legacy fallback already writes the same static byte through the same
+stays valid across polls and needs no tracing. `stash`, `fetch` and `select_monitor` admit `Static`,
+and `F6.NativePointerDescriptor` names the static origin. Committed operands and reconstructed
+descriptors are addressless. This adds no new shared-memory hazard, because the legacy fallback already writes the same static byte through the same
 `write_bytes`. That hazard stays with the README's shared raw-memory access entry.
 
 ### Inline dispatch at IL call sites
@@ -152,9 +158,10 @@ Pass `ResolvedMethodDispatchMode::InlineCall` from the five call sites above. Th
 pending-target and initializer handling in `dispatch_method_with_mode` doesn't depend on the
 mode, so only the intrinsic arm changes. Check each site against the activation's admission
 and completion checks: the caller depth, the IP at the call instruction, and the operand base
-after the call site has re-pushed the arguments. The `constrained.` sites and delegate
-dispatch re-push their arguments before dispatching. Delegate dispatch replaces the delegate
-receiver with the target (or nothing), and the target's signature determines the window.
+after the call site has prepared the arguments. The static `constrained. call` leaves its
+operands in place; `constrained. callvirt` and delegate dispatch reconstruct their argument
+windows. Delegate dispatch replaces the delegate receiver with the target (or nothing), and the
+target's signature determines the window.
 
 ## Slices
 
@@ -212,16 +219,66 @@ Each slice updates the docs it invalidates:
 - plan 08's entry section and the slice-5 legacy-timeout decision
 - the README's "Fallback continuations for excluded shapes" entry
 
+## Substring fast-path measurement
+
+The completed slice-3 tree at `385edee6e1fcbfdb46d5a35c0538d2c7dc231891` was the
+baseline. The candidate differed only by removing the selector branch that returns `Fallback`
+for a valid range of at most one chunk; validation, selector capture, fallback and body were
+otherwise unchanged. SHA-256 of `search.rs` was
+`28e61ed73fc18d6470eac3d9339e604a9ec644b9b24c7e761f9d265d0ee76f9b` baseline and
+`705b4cb3f47196c8587030f518c760a21d0ad2354f48fe6ff5ad45ebe3b3e614` candidate.
+The current valid-small branch is retained: each of four pairs in each
+configuration slowed down by well over 1% when removed. A measured synchronous path for valid
+small inputs and an async body for larger inputs is sanctioned for bulk intrinsics; invalid
+Substring arguments still reach the body, and the retained fallback also serves non-inline calls.
+
+Measurements were on an AMD Ryzen 9 9900X (24 logical CPUs, CPU 0 pinned with `taskset`),
+Linux 7.2.14-arch1-1 x86-64, `powersave` governor, Rust 1.95.0 (LLVM 22.1.2), .NET SDK
+10.0.114 and Microsoft.NETCore.App 10.0.14. Separate baseline/candidate target directories and
+ST/MT Criterion homes were used; no instrumentation features. Fixtures built once with the
+benchmark single-file project were copied to both targets, verified identical before and after:
+
+| Fixture | SHA-256 |
+|---|---|
+| `substring/Small_0/SingleFile.dll` | `ebd7b304bc6932a840feae071d42c2361602e08e1f1e702fc047664721ca9ba5` |
+| `substring/Large_0/SingleFile.dll` | `1a7ac3f6e3d9523f924e60b360cc9aa34681f2f2d8fc3017c99e8705904160ee` |
+
+Both sides used the following, with their own `CARGO_TARGET_DIR` and `CRITERION_HOME`;
+Each configuration ran in order
+baseline/candidate, candidate/baseline, baseline/candidate, candidate/baseline:
+
+```sh
+taskset -c 0 cargo bench -p dotnet-benchmarks --bench substring --profile bench-fat --no-default-features -- --sample-size 10 --warm-up-time 1 --measurement-time 4 --noplot
+taskset -c 0 cargo bench -p dotnet-benchmarks --bench substring --profile bench-fat --no-default-features --features multithreading -- --sample-size 10 --warm-up-time 1 --measurement-time 4 --noplot
+```
+
+Each cell is baseline mean / candidate mean in milliseconds followed by the pair change
+`100 * (candidate / baseline - 1)`, based on Criterion mean point estimates, not paired
+confidence intervals. The last column is the arithmetic mean of the four percentage changes.
+Criterion extended small-workload collection beyond the four-second target to collect 10 samples.
+
+| Configuration / workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean change |
+|---|---:|---:|---:|---:|---:|
+| ST empty/small | 107.4809 / 141.8008 (+31.93%) | 107.2046 / 143.0862 (+33.47%) | 108.2014 / 140.3793 (+29.74%) | 107.3406 / 140.8659 (+31.23%) | +31.59% |
+| ST large control | 13.5304 / 13.4724 (-0.43%) | 13.3730 / 13.8346 (+3.45%) | 13.4149 / 13.3616 (-0.40%) | 13.4852 / 13.5507 (+0.49%) | +0.78% |
+| MT empty/small | 113.5007 / 150.0324 (+32.19%) | 116.7881 / 142.1655 (+21.73%) | 115.0851 / 146.5101 (+27.31%) | 111.5406 / 147.6977 (+32.42%) | +28.41% |
+| MT large control | 12.9507 / 13.9108 (+7.41%) | 13.3209 / 12.6638 (-4.93%) | 13.2620 / 13.3351 (+0.55%) | 12.9905 / 12.6156 (-2.89%) | +0.04% |
+
+MT's control varied substantially between pairs, but the small-workload slowdown was above
+21% in every pair and both launch orders, far beyond the 1% threshold. Cargo rebuilt workspace
+crates under CPU 0 affinity before each measured invocation; both sides followed the same procedure.
+
 ## Done when
 
 - An async intrinsic with no `fallback` compiles and dispatches, and the scanner accepts it.
-- No selector returns `Fallback` for an argument error. Every argument check on the
-  threading and GC intrinsics is in a body and has a test that fails without it.
+- No migrated threading or Substring selector returns `Fallback` for an argument error;
+  reflection's excluded validation shapes remain out of scope. Every moved argument check on
+  the threading and GC intrinsics is in a body and has a test that fails without it.
 - The five IL call-site paths dispatch intrinsics inline. `NativeDispatchMode::Other` comes
   only from the residual callers listed in Scope, and its doc comment names them.
 - Fallbacks remain only on the monitor byref variants (and their selectors return `Fallback`
-  only for `Transient` and `Unmanaged` flags), on reflection `Invoke`/`Activator` and,
-  depending on slice 4, on `Substring`. `monitor_wait_legacy`, `LegacyWait` and
+  only for `Transient` and `Unmanaged` flags), on reflection `Invoke`/`Activator` and on
+  `Substring` as measured above. `monitor_wait_legacy`, `LegacyWait` and
   `monitor_wait_retry` are gone.
 - A static `bool&` flag reaches the async body, and `F6.NativePointerDescriptor` names the
   static origin.

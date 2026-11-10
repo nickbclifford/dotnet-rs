@@ -32,16 +32,16 @@ In:
 Out:
 - **Localloc addresses.** ECMA-335 §III.3.47: `localloc` returns an unmanaged pointer (native
   int). They are scalars here and carry no pointer permission.
-- **Static field addresses as transport** until `p12_ldsflda_convu_stind_static` (README,
-  "Not yet planned") is fixed. Multicast invocations that require them stay on the existing
-  continuation, selected before operands are committed.
+- **Static field addresses in multicast transport.** Multicast invocations requiring them stay
+  on the existing continuation, selected before operands are committed. Monitor flags admit
+  addressless static descriptors through origin-aware bounded raw access.
 - Transient and unmanaged pointers, and byref-containing aggregates. These stay on the legacy
   path; multicast retains its continuation for such shapes.
 - External async runtimes, guest `Task` scheduling, thread-pool work, `Thread.Sleep`/`Join`.
 - `select`/`join` over concurrent effects on one capability.
 - Typed argument binding for intrinsic bodies.
-- Tail-prefixed calls into async intrinsics (legacy path). Tail calls and `jmp` inside a
-  managed child of a native body are handled in slice 2.
+- Tail-prefixed calls into async intrinsics were outside this plan; [plan 13](13-async-intrinsic-api.md)
+  routes them inline. Tail calls and `jmp` inside a managed child are handled in slice 2.
 - New reflection exception semantics. Calls stay transparent and no
   `TargetInvocationException` wrapping is added (maintainer decision; revisit only for an
   observed compatibility failure).
@@ -62,8 +62,9 @@ Out:
   invocations. The fallback is `invoke_delegate` → `MulticastState` → `handle_multicast_step`;
   single-target dispatch does not use it. The slice note defines admission and verification.
 - **Reflection fallback (2026-11-06).** Keep and correct the existing return continuation only
-  for reflection calls excluded from effects, including non-inline and tail-prefixed dispatch.
-  Admitted calls use transparent effects. The slice 3 note defines the fallback's lifetime,
+  for reflection calls excluded from effects, including non-inline dispatch. Plan 13 routes
+  tail-prefixed intrinsic calls inline; supported reflection shapes use transparent effects there.
+  The slice 3 note defines the fallback's lifetime,
   initializer retry and verification requirements. This is an exception to deleting
   `InvokeReturn`, not permission to transport excluded pointers or reject previously supported
   invocations. Its only producers are the fallback for `MethodInfo.Invoke` and both
@@ -99,78 +100,28 @@ Out:
 ## Authoring contract
 
 `#[dotnet_intrinsic]` accepts `async fn(mut fx: VmEffects) -> NativeResult`, an optional
-`select = path`, and a required synchronous `fallback = path`. If a body has several annotations,
-all selectors, when present, and all fallbacks must agree. The fallback is independent of the
-optional selector and uses the existing intrinsic handler convention for non-inline dispatch and
+`select = path`, and an optional synchronous `fallback = path`. If a body has several annotations,
+all selector and fallback paths must agree, including absent versus present options. The fallback
+is independent of the optional selector and uses the existing intrinsic handler convention for non-inline dispatch and
 call shapes not admitted by the selector. `NativeResult = Result<(), NativeFailure>`.
 
 The selector runs synchronously before anything is consumed. It receives a shared host reference,
 the method, generic metadata and a read-only operand view, and returns one of:
 
-- `Async(entry)`: owned, already-validated scalars for the body (via `fx.invocation()`);
-- `Synchronous(handler)`: run an existing handler by the existing convention (direct fast
-  paths and legacy fallback);
+- `Async(invocation)`: owned captured scalars for the body (via `fx.invocation()`);
+- `Fallback`: run the registered synchronous handler by the existing convention;
 - `Reject(VmError)`.
 
-**Validation that can throw belongs in the selector or the synchronous handler**, so an async
-body starts with valid arguments. It throws only for failures that arise during its own work.
+Admitted threading, finalizer and Substring bodies validate committed operands before a wait
+or acquire, creating rooted managed exceptions without constructors. Monitor.Wait has no fallback;
+non-inline dispatch returns `NotImplemented`. The monitor byref fallbacks retain validation for
+Transient and Unmanaged origins and non-inline calls. Reflection continues to select its excluded
+validation and transport shapes before commitment. Substring retains its measured valid-small
+fallback; larger copies use the async body. See [plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement).
 
-```rust,ignore
-/// Copy a selector-validated substring without retaining a heap borrow across a yield.
-#[dotnet_intrinsic("string System.String::Substring(int)", select = substring_select, fallback = intrinsic_string_substring)]
-#[dotnet_intrinsic("string System.String::Substring(int, int)", select = substring_select, fallback = intrinsic_string_substring)]
-pub async fn substring_async(mut fx: VmEffects) -> NativeResult {
-    let invocation = fx.invocation();
-    let source = {
-        let mut vm = fx.vm().await?;
-        vm.discard_scalars(invocation.parameter_count)?;
-        vm.pop_string()?
-    };
-    let mut buffer = substring_buffer(invocation.length);
-    while buffer.len() < invocation.length {
-        {
-            let mut vm = fx.vm().await?;
-            vm.with(|region| {
-                let StackValue::ObjectRef(ObjectRef(Some(handle))) = region.fetch(&source)? else {
-                    return Err(dotnet_types::error::ExecutionError::InternalError(
-                        "native substring source invalid".into(),
-                    )
-                    .into());
-                };
-                let inner = handle.borrow();
-                let HeapStorage::Str(chars) = &inner.storage else {
-                    return Err(dotnet_types::error::ExecutionError::InternalError(
-                        "native substring source invalid".into(),
-                    )
-                    .into());
-                };
-                if invocation
-                    .start
-                    .checked_add(invocation.length)
-                    .is_none_or(|end| end > chars.len())
-                {
-                    return Err(dotnet_types::error::ExecutionError::InternalError(
-                        "native substring range invalid".into(),
-                    )
-                    .into());
-                }
-                copy_substring_chunk(
-                    chars,
-                    invocation.start,
-                    invocation.length,
-                    buffer.len(),
-                    &mut buffer,
-                );
-                Ok::<(), dotnet_types::error::VmError>(())
-            })??;
-        }
-        if buffer.len() < invocation.length {
-            fx.yield_now().await?;
-        }
-    }
-    fx.vm().await?.push_new_string(buffer)
-}
-```
+For the current bounded-copy example, see `substring_async` in
+`crates/dotnet-intrinsics-string/src/search.rs`: it validates signed ranges, roots the source,
+and copies in bounded chunks without holding a heap borrow across a yield.
 
 The body pushes its result (nothing for void). The driver checks stack shape and advances the
 caller's IP exactly once. Invocation metadata is owned and readable without heap access.
@@ -228,17 +179,24 @@ reachable.
 
 ### Entry and operand ownership
 
+The registration API follows [plan 13’s target API](13-async-intrinsic-api.md#target-api).
 The generated synchronous entry calls one shared runtime helper (a vm-ops host trait method,
 e.g. `start_native`, that the `VesContext` implements). The helper:
 
-1. Receives the dispatch mode as a parameter. For any mode other than an ordinary non-tail inline
-   `call` or `callvirt`, it invokes the registered fallback before selecting or consuming operands.
-   For an admitted mode it runs the optional selector with a read-only operand view; `Synchronous`
+1. Receives the dispatch mode as a parameter. Inline `call` and `callvirt`, including constrained
+   and tail calls, single-cast delegate forwarding and abstract redirects, admit suspension.
+   Other dispatch uses the optional registered fallback, or returns `NotImplemented`, before
+   selecting or consuming operands: guest
+   `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
+   managed-body-only cctor, span equality slow path and Expression.Compile redirect. Public
+   `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` also deliberately
+   use non-inline dispatch. For an
+   admitted mode it runs the optional selector with a read-only operand view; `Fallback`
    and `Reject` return here. With no selector the driver selects the async body with `start` and
    `length` set to zero and `parameter_count` taken from the method signature (excluding the
-   receiver). The generated registration must provide the fallback even when there is no
-   selector; `Async` does not have to carry it. The macro and scanner reject a missing fallback
-   or inconsistent fallback annotations; code generation forwards it with the selector and mode.
+   receiver). The generated registration may omit both selector and fallback; `Async` does not
+   carry a handler. The macro and scanner reject inconsistent annotations, including absent
+   versus present paths; code generation forwards the optional handler with selector and mode.
 2. For `Async`, classifies the declared return before commitment. Unsupported return shapes are
    rejected without entering the body or consuming operands. The multicast selector routes its
    unsupported shapes to the existing fallback before reaching this check.
@@ -334,9 +292,10 @@ MT tests must root a foreign reference obtained through the plan-06 helper, then
 ### Managed pointers
 
 A retained managed pointer is a descriptor, resolved again inside each access: a heap owner
-plus offset, or a frame-home serial plus offset (frame-home serials are never reused). Static
-descriptors are added only after p12. Each category is enabled together with its consumer and
-its tests: conversion from the actual `PointerOrigin` variant, tracing, reconstruction, and
+plus offset, a frame-home serial plus offset (frame-home serials are never reused), or a static
+origin resolved by type and generics on every raw access. Committed static operands and rooted
+descriptors carry no cached address and need no tracing. Each category is enabled together with its consumer and tests:
+conversion from the actual `PointerOrigin` variant, tracing where needed, reconstruction, and
 invalidation when the owning frame retires. The selector rejects unsupported categories before
 commitment, and checks declared byref returns before any side effect.
 
@@ -344,13 +303,13 @@ commitment, and checks declared byref returns before any side effect.
 
 1. **Substring.**
    - Async registration with a selector: empty and single-chunk results are synchronous,
-     invalid arguments go to the synchronous handler, unsupported call shapes go legacy.
+     invalid ranges reach the body and malformed scalar shapes are rejected.
    - Driver, bridge, `RootedValue`, a single optional activation, `vm()`, `yield_now()`,
      inline-call completion and cleanup, in ST and MT.
    - Slice 2 adds finalizer segment isolation while native work is parked.
    - Delete the `NativeSubstringActivation` machinery.
    - No reply state, frame IDs or segment isolation.
-   - `substring_selector_preserves_operands_and_selects_only_large_valid_ranges` and
+   - `substring_selector_preserves_operands_and_admits_invalid_ranges` and
      `substring_dispatch_admits_only_inline_calls` cover selection, operand preservation and
      unsupported dispatch modes. Stop tests cover repeated polls with a stop still pending and a
      real executor collection before access resumes.
@@ -377,7 +336,7 @@ needs them.
 
 **Slice 1**
 - Every test in `native_substring_tests.rs` passes against the async path, in both
-  configurations. `substring_selector_preserves_operands_and_selects_only_large_valid_ranges`
+  configurations. `substring_selector_preserves_operands_and_admits_invalid_ranges`
   and `substring_dispatch_admits_only_inline_calls` cover selection and dispatch.
   `pending_finalizer_runs_in_separate_segment_during_copy` confirms finalizer work runs in an
   isolated segment while the native copy remains parked.

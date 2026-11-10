@@ -11,28 +11,30 @@ Ordinary inline `GC.WaitForPendingFinalizers` calls use `wait_finalizers`, which
 global pending and in-progress finalizer count, including the current arena's queue and processing flag. In `Executor::run`,
 pending finalizers are scheduled before an outside-mutation wait; `process_pending_finalizers`
 parks the caller in a separate segment while a finalizer runs, and `retire_finalizer_segment`
-clears the flag. A call made while `processing_finalizer` is set returns immediately: the selector
-uses the synchronous handler for inline dispatch, and the legacy fallback makes the same check for
-non-inline calls. Neither path clears the flag. `intrinsic_gc_collect_2` yields after advancing
+clears the flag. A call made while `processing_finalizer` is set returns immediately: the inline
+body checks before registering a wait. Non-inline dispatch returns `NotImplemented`; neither
+path clears the flag. `intrinsic_gc_collect_2` yields after advancing
 the IP, independently of the finalizer wait.
 
 Admitted inline monitor calls use `monitor_enter` with an activation-owned deadline.
-The synchronous monitor handlers remain fallbacks for excluded byrefs and non-inline dispatch.
-Timed fallback calls keep a frame-associated retry deadline. `TryEnter_FastPath` and `Exit`
+Synchronous monitor handlers remain as fallbacks for byref variants with Transient or Unmanaged
+origins and for their non-inline dispatch; Monitor.Wait, object-only Enter and timed TryEnter
+have no fallback. Timed byref fallback calls keep a
+frame-associated retry deadline. `TryEnter_FastPath` and `Exit`
 remain synchronous. In MT, monitor release notifies waiters; ST counts recursion and enters
-immediately. Timeout results, recursion and ownership are preserved. `select_monitor` admits only
-non-null objects, false `lockTaken` values and integer timeouts of at least -1; invalid arguments
-select the synchronous handler before operand commitment. The handlers repeat those checks before
-acquisition, then throw `ArgumentException`, `ArgumentOutOfRangeException` or
+immediately. Timeout results, recursion and ownership are preserved. The admitted bodies validate
+`lockTaken`, null objects and timeouts in that order before acquisition; `Wait` validates null,
+timeout and ownership before release. The remaining legacy handlers repeat their checks before acquisition,
+then throw `ArgumentException`, `ArgumentOutOfRangeException` or
 `ArgumentNullException` as appropriate; a null-object failure leaves `lockTaken` unchanged. The
-core-library `ReliableEnterTimeout` and `TryEnter_FastPath_WithTimeout` paths share the timed
-handler. The contended-lock fixture initializes its shared gate on the main arena.
+core-library byref `ReliableEnterTimeout` and `TryEnter_FastPath_WithTimeout` paths share
+the timed byref handler; the non-byref timed aliases share their own async body. The contended-lock fixture initializes its shared gate on the main arena.
 
-The [main plan](../08-async-effects.md) excludes static, transient and unmanaged pointer
-transport and tail-prefixed async dispatch. Select unsupported byref shapes before committing
-operands and keep their existing legacy behavior; do not turn a managed pointer into an
-unmanaged origin. A self-finalizer wait completes synchronously and does not widen the async
-admission set. Delete the retry paths for admitted calls, not the behavior required by these
+The [main plan](../08-async-effects.md), as updated by plan 13, admits static monitor flags
+and inline tail dispatch; transient and unmanaged pointer transport remain excluded. Select
+unsupported byref shapes before committing operands and keep their existing legacy behavior; do not turn a managed pointer into an
+unmanaged origin. A self-finalizer wait completes inside its admitted body without registering a
+wait. Delete the retry paths for admitted calls, not the behavior required by these
 exclusions.
 
 ## Frame-home decision
@@ -80,10 +82,14 @@ also uses driver-owned waiting and the [retained-arena prerequisite](../09-retir
 
 ## Decision: legacy timeout retries (approved 2026-11-07)
 
-The excluded static, transient and unmanaged byrefs and non-inline dispatch cannot use an
-activation under the current admission rules. A timed legacy call can yield for an MT GC stop
-before consuming its operands, so recreating its deadline on retry extends the timeout. The
-current host-thread-local deadline also lets a nested call reuse or clear another call's deadline.
+The excluded transient and unmanaged byrefs and non-inline dispatch cannot use an
+activation under the current admission rules. Sleep and object-only timed TryEnter now have
+no fallback: non-inline calls return `NotImplemented`, and inline calls own their deadlines.
+Monitor.Wait uses a driver-owned native wait, not a frame retry. The retained timed byref
+fallback (Transient and Unmanaged origins) and Thread.Join independently use the frame retry record.
+A timed legacy monitor call can yield for an MT GC stop before consuming its operands, so
+recreating its deadline on retry extends the timeout. The former host-thread-local deadline
+also let a nested call reuse or clear another call's deadline.
 
 Use a scoped retry record for each outstanding legacy timed monitor invocation, associated
 with its owning managed frame and call site. Create its absolute `Instant` deadline once, retain
@@ -98,7 +104,7 @@ existing frame/call identity cannot express this, revisit the design before impl
 Admitted calls continue to use activation-owned deadlines and driver waits. This exception
 allows legacy `Yield` retries only for excluded calls and replaces `CURRENT_DEADLINE`; it does
 not expand pointer transport or alter monitor ownership. Add real-dispatch deterministic tests
-for a static-byref timeout spanning a GC stop, non-inline timeout retry, independent nested
+for an unmanaged-byref timeout spanning a GC stop, non-inline timeout retry, independent nested
 finalizer timeout, and cleanup on terminal paths and frame reuse. Verify the excluded pointer's
 write-through and the existing exception and operand behavior. These tests supplement the
 full fixture and runtime verification requirements; this decision is not an implementation or
@@ -111,7 +117,7 @@ verification claim.
   use `monitor_enter`. Calls selected for the explicitly excluded legacy cases keep their
   operands and behavior. The migrated calls do not replay after a wait. Remove
   `CURRENT_DEADLINE` and the migrated monitor `Yield` retries. `yield_spin` has been removed;
-  the collection and excluded finalizer paths return an equivalent bare yield.
+  collection continues to use a bare yield.
 - Probe/register/recheck cannot lose a notification at any interleaving; a notification never
   asserts readiness or grants ownership. Generation-addressed replies and terminal cleanup
   prevent stale wakeups and leaked registrations. Deterministic schedule tests cover notify
@@ -123,8 +129,8 @@ verification claim.
   activations do not share them. ST runs available managed/finalizer work before sleeping,
   does not spin or invent readiness, and preserves existing blocking/deadlock semantics.
 - Pending and running finalizers finish before an ordinary wait returns, including work scheduled
-  while a caller is parked. A wait from within a finalizer returns immediately through both the
-  selector and legacy fallback and never clears `processing_finalizer`. Verify cleanup and
+  while a caller is parked. A wait from within a finalizer returns immediately through the
+  body and never clears `processing_finalizer`; non-inline calls return `NotImplemented`. Verify cleanup and
   caller-segment restoration on normal and exceptional terminal paths.
 - Monitor tests cover uncontended, contended, recursive, successful and expired timeout cases,
   stop while waiting, release/notification races and ownership after success or cancellation.

@@ -178,9 +178,8 @@ pending request:
   `ensure_initialized`. The executor sleeps outside a
   mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
   and pending finalizers are scheduled before an ordinary finalizer wait sleeps. Excluded monitor
-  calls retain the safe-point-aware synchronous handlers (`enter_safe` and
-  `enter_with_timeout_safe`); legacy `Monitor.Wait` retries at safe points with a frame-owned
-  registration. Legacy static-initializer waiters use
+  byref calls with Transient or Unmanaged origins retain the safe-point-aware synchronous
+  handlers (`enter_safe` and `enter_with_timeout_safe`). Legacy static-initializer waiters use
   `StaticStorageManager::wait_for_init` and periodically check for a pending stop. See the
   [condition-wait design](plans/08-async-effects/slice-5-condition-waits.md) and
   [static-initialization design](plans/08-async-effects/slice-4-static-initialization.md).

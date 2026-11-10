@@ -481,8 +481,8 @@ and frame retirement clear it.
 
 ### Finite native copies
 
-Ordinary, non-tail `call` and `callvirt` instructions retain large `Substring` copies
-in a native effects activation in both configurations. The source is held in the
+Inline `call` and `callvirt` instructions, including tail, constrained and single-cast delegate
+targets, retain large `Substring` copies in a native effects activation in both configurations. The source is held in the
 activation's `DynamicRootSet`; the destination buffer contains UTF-16 code units and no
 GC references. Arguments are consumed once before copying. Each executor turn copies at
 most 64K code units, then yields if incomplete. Heap borrows end before yielding. The
@@ -491,9 +491,9 @@ executor services collection requests and abort/budget checks between turns.
 The caller remains at the call instruction until completion publishes one result and
 advances its IP once. Resumption checks caller depth, IP and operand-stack height.
 Queued finalizers run in a separate managed segment while the copy remains rooted and parked.
-Terminal executor results clear retained native work. Non-inline reflection, indirect and tail
-calls use the synchronous intrinsic path; eligible calls issued by native effects can also enter
-the async copy.
+Terminal executor results clear retained native work. Non-inline reflection uses the synchronous
+intrinsic path; indirect `calli` is unsupported. Eligible calls issued by native effects can also
+enter the async copy.
 
 ### GC handles and Rust futures
 

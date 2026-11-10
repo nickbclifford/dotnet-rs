@@ -37,6 +37,9 @@ rather than substitute a boolean for collection.
 
 ## Scope and entry
 
+This section records the original proof scope; [plan 08](08-async-effects.md) and
+[plan 13](13-async-intrinsic-api.md) supersede its dispatch and feature limitations.
+
 Enable the continuation without `multithreading`, for ordinary non-tail `call` and
 `callvirt`, when the requested result exceeds 64K UTF-16 code units. Empty and
 single-chunk results stay synchronous. Indirect calls, reflection, delegates, tail

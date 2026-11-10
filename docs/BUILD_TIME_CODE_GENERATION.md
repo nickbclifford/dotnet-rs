@@ -116,6 +116,14 @@ dotnet-vm-data = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
 ```
 
+Body-only registrations such as `Thread.Yield`, `Monitor.Enter(object)` and
+`GC.WaitForPendingFinalizers` generate no fallback export; their provider returns `None`.
+`Thread.SpinWait`, `Thread.Sleep`, `Monitor.Wait` and the non-byref timed `Monitor.TryEnter` aliases keep
+capture selectors without fallbacks. Non-inline dispatch returns `NotImplemented` for these
+targets without consuming operands. Monitor byref variants retain fallbacks for Transient and
+Unmanaged origins; reflection retains its exclusions and Substring its measured valid-small path
+([plan 13](plans/13-async-intrinsic-api.md#substring-fast-path-measurement)).
+
 ### Build Process
 
 1. `process_intrinsic_file` walks all configured intrinsic roots:
@@ -128,9 +136,9 @@ dotnet-vm-ops = { workspace = true, default-features = false }
    - `../dotnet-intrinsics-reflection/src`
    - `../dotnet-intrinsics-unsafe/src`
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
-3. Extracts type, member, arity, staticness, handler path, async status and selector.
-   An async body has signature `async fn(VmEffects) -> NativeResult`, requires a
-   `fallback = path` handler and may specify `select = path`. Stacked annotations must
+3. Extracts type, member, arity, staticness, handler path, async status, selector and fallback path.
+   An async body has signature `async fn(VmEffects) -> NativeResult` and may specify
+   `fallback = path`, `select = path`, both, or neither. Stacked annotations must
    agree on both paths, which must be public for the generated re-exports. The scanner
    diagnoses non-public local function definitions; Rust checks visibility for imported,
    conditional and cross-module paths. Async handlers inside inline modules are rejected:
@@ -138,15 +146,22 @@ dotnet-vm-ops = { workspace = true, default-features = false }
    receives a shared host reference, a `NativeOperandView`, method and generic metadata and
    returns `NativeSelection`. The host reference is for read-only resolution before commitment.
    The proc macro emits a `*_native_entry` wrapper and hidden public aliases for the selector
-   (when present) and fallback. The build script emits a `NativeSelector_<variant>` provider
+   and fallback (each only when present). The build script emits a `NativeSelector_<variant>` provider
    for each async registration; it implements `NativeSelectorProvider` and supplies those
    paths to the wrapper. The generated method dispatcher accepts `NativeDispatchMode` and
    sends async arms through the wrapper, while synchronous arms retain their existing
    `(ctx, method, generics)` handler call. The wrapper passes the mode, provider selector and
    fallback, and a boxed body to `NativeIntrinsicHost::start_native`. For inline calls, the
    selector can choose an async invocation, a synchronous handler or rejection, all before
-   operands are consumed. Only ordinary non-tail calls admit suspension; other modes go
-   directly to the fallback without selecting or consuming operands.
+   operands are consumed. Threading bodies validate committed arguments and create rooted
+   managed exceptions before acquiring or registering a wait; the finalizer body returns
+   before registration when running a finalizer. Substring admits invalid arguments to its body
+   and retains the measured valid-small synchronous path; larger copies use the async body.
+   This is a sanctioned pattern for a measured bulk intrinsic. Reflection retains its
+   own selector validation. IL calls, including constrained and tail calls, single-cast delegate
+   targets and abstract redirects, admit suspension. Non-inline guest continuations and public
+   ExecutionEngine dispatch APIs go directly to the optional fallback, or return
+   `NotImplemented` when absent, without selecting or consuming operands.
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
 5. `generate_intrinsic_phf` creates:
     - `intrinsics_dispatch.rs`: Contains `MethodIntrinsicId` and `FieldIntrinsicId` enums and their respective `dispatch_*` functions.
@@ -256,8 +271,8 @@ impl<'gc, T: crate::stack::ops::VesOps<'gc>>
     fn selector() -> Option<dotnet_vm_ops::effects::NativeSelector<'gc, T>> {
         Some(dotnet_intrinsics_string::search::substring_async_native_selector)
     }
-    fn fallback() -> dotnet_vm_ops::effects::NativeSyncHandler<T> {
-        dotnet_intrinsics_string::search::substring_async_native_fallback
+    fn fallback() -> Option<dotnet_vm_ops::effects::NativeSyncHandler<T>> {
+        Some(dotnet_intrinsics_string::search::substring_async_native_fallback)
     }
 }
 

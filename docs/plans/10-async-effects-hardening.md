@@ -122,8 +122,8 @@ Prefer the smallest change that makes each contract enforced at the earliest poi
 - **CLR compatibility.** Verify the reflection-race behavior against the CLR before changing it.
 - **Approved guest-visible changes (maintainer, 2026-11-08):**
   - In-finalizer `WaitForPendingFinalizers` returns immediately, matching the CLR.
-  - `Monitor` validates its arguments in the selectors and the retained fallbacks before acquiring,
-    matching the CLR.
+  - `Monitor` validates its arguments before acquiring, matching the CLR. The admitted bodies
+    now own those checks; retained fallbacks still validate their excluded and non-inline calls.
   - A legacy-triggered `.cctor` dropped without a managed exception marks its type failed, so later
     accesses throw `TypeInitializationException` instead of hanging. The `ldsfld` effect path already
     does this for the same case.

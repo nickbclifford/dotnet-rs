@@ -23,7 +23,7 @@ tree. Each returns 42 on the CLR.
 | `t.IsBackground = true` | `ThreadStateException: Argument_InvalidHandle` from `GetNativeHandle` |
 | `new Thread(new ParameterizedThreadStart(f)).Start(42)` | same `ThreadStateException` |
 | `new Thread(() => { x = 42; })` | `PlatformNotSupportedException: ThreadStart delegates with a target instance are not supported` |
-| `Thread.Sleep(3000)` on a worker, `GC.Collect()` on main | collection takes longer than 1 s: `intrinsic_thread_sleep` calls `std::thread::sleep` inside the mutation, so the sleeper cannot join a stop-the-world |
+| `Thread.Sleep(3000)` on a worker, `GC.Collect()` on main | collection takes longer than 1 s: the former synchronous Sleep handler called `std::thread::sleep` inside the mutation, so the sleeper cannot join a stop-the-world |
 
 A `ManualResetEventSlim` set by a worker and waited on by main already works.
 
@@ -110,7 +110,7 @@ workers stop at their next safepoint and the first exception wins.
    park, and the sleeping-worker-versus-`GC.Collect` fixture with a tight but not flaky bound;
    `Sleep(Timeout.Infinite)` ended by abort. Deterministic tests for deadline expiry, abort and a
    GC stop while parked, using the real executor path, as in slice 5. Inline calls park outside
-   the mutation; non-inline legacy calls retain a frame-local deadline and retry at safepoints.
+   the mutation; non-inline dispatch returns `NotImplemented` without consuming operands.
    `Yield` reports `true` after yielding because the host API does not report whether another
    thread ran.
 3. **Thread identity and start shapes (implemented).** Fixtures for `CurrentThread` identity on the entry thread
@@ -130,7 +130,7 @@ workers stop at their next safepoint and the first exception wins.
 - Every fixture above passes in the configurations it applies to and matches the CLR where the
   differential harness can compare it.
 - `Thread.Yield`, `SpinWait`, `Monitor.Wait` and `Pulse` no longer reach the `QCall` library, and
-  `intrinsic_thread_sleep` no longer calls `std::thread::sleep` in the mutation.
+  Sleep no longer calls `std::thread::sleep` in the mutation.
 - In both configurations: the `threading` and `exceptions` selectors, `cargo test -p dotnet-vm
   --lib`, the whole `integration_tests` binary, and clippy with `-D warnings` for the touched crates.
   Plan 11's follow-up explains why the selectors alone are not enough.

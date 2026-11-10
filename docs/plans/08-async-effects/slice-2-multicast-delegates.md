@@ -135,7 +135,7 @@ Transparent `call` suffices; `try_call` is not needed here.
   fixtures exercise a `.cctor` in a target and exception/filter ordering. Verify that targets run
   once, in order, and that finalizer and suspended-filter handling remain correct on both paths.
 - The retained multicast state and its dispatch, return, tracing, reset and tail-call handling are
-  used only for fallback invocations. The single-target path remains synchronous.
+  used only for fallback invocations. The single-target path forwards inline at IL call sites; non-inline callers retain fallback dispatch.
 
 ## Multicast regressions
 
