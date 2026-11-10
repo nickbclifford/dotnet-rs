@@ -361,7 +361,7 @@ pub struct SharedGlobalState {
     pub thread_manager: Arc<ThreadManager>,
     pub(crate) workers: crate::threading::workers::WorkerRegistry,
     #[cfg(feature = "multithreading")]
-    fatal_worker_exception: Mutex<Option<dotnet_vm_data::ManagedException>>,
+    fatal_exception: Mutex<Option<dotnet_vm_data::ManagedException>>,
     pending_finalizer_arenas: AtomicUsize,
     pub metrics: Arc<RuntimeMetrics>,
     pub tracer: Tracer,
@@ -452,7 +452,7 @@ impl SharedGlobalState {
             thread_manager: ThreadManager::new(stw_in_progress.clone()),
             workers: crate::threading::workers::WorkerRegistry::default(),
             #[cfg(feature = "multithreading")]
-            fatal_worker_exception: Mutex::new(None),
+            fatal_exception: Mutex::new(None),
             pending_finalizer_arenas: AtomicUsize::new(0),
             metrics,
             tracer,
@@ -520,8 +520,8 @@ impl SharedGlobalState {
     }
 
     #[cfg(feature = "multithreading")]
-    pub(crate) fn report_worker_exception(&self, exception: dotnet_vm_data::ManagedException) {
-        let mut fatal = self.fatal_worker_exception.lock();
+    pub(crate) fn report_fatal_exception(&self, exception: dotnet_vm_data::ManagedException) {
+        let mut fatal = self.fatal_exception.lock();
         if fatal.is_none() {
             *fatal = Some(exception);
         }
@@ -530,8 +530,8 @@ impl SharedGlobalState {
     }
 
     #[cfg(feature = "multithreading")]
-    pub(crate) fn fatal_worker_exception(&self) -> Option<dotnet_vm_data::ManagedException> {
-        self.fatal_worker_exception.lock().clone()
+    pub(crate) fn fatal_exception(&self) -> Option<dotnet_vm_data::ManagedException> {
+        self.fatal_exception.lock().clone()
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {
@@ -843,7 +843,7 @@ mod abort_signal_tests {
 
     #[cfg(feature = "multithreading")]
     #[test]
-    fn first_worker_exception_requests_abort_and_is_preserved() {
+    fn first_fatal_exception_requests_abort_and_is_preserved() {
         let loader = AssemblyLoader::new_bare("fatal-worker-test".to_owned()).unwrap();
         let shared = SharedGlobalState::new(Arc::new(loader));
         let exception = |message: &str| dotnet_vm_data::ManagedException {
@@ -851,10 +851,10 @@ mod abort_signal_tests {
             message: Some(message.into()),
             stack_trace: None,
         };
-        shared.report_worker_exception(exception("first"));
-        shared.report_worker_exception(exception("second"));
+        shared.report_fatal_exception(exception("first"));
+        shared.report_fatal_exception(exception("second"));
         assert!(shared.is_abort_requested());
-        assert_eq!(shared.fatal_worker_exception(), Some(exception("first")));
+        assert_eq!(shared.fatal_exception(), Some(exception("first")));
     }
 
     #[test]

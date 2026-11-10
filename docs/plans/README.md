@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Not started; `Yield`/`SpinWait`/`Monitor.Wait` hit missing QCalls, `Sleep` stalls GC, no thread identity or `IsBackground` |
+| 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | In progress; `Yield`/`SpinWait`/`Monitor.Wait` hit missing QCalls, `Sleep` stalls GC, no thread identity or `IsBackground` |
 | 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Complete; nested handlers, fatal worker exceptions and filter exception boundary verified |
 | 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Establishes the retained-arena lifecycle contract |
 | 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Validates typed field and memory-operation premises |

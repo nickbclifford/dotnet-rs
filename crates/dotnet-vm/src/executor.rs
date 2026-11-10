@@ -428,7 +428,7 @@ impl Executor {
         };
         let result = match result {
             ExecutorResult::Threw(exception) => {
-                executor.shared.report_worker_exception(exception);
+                executor.shared.report_fatal_exception(exception);
                 // Join must never turn the unhandled exception into a catchable guest error.
                 ExecutorResult::Exited(0)
             }
@@ -476,7 +476,7 @@ impl Executor {
             if pending && retired.begin_finalizing(&shared) {
                 let result = self.run_inner(true);
                 match result {
-                    ExecutorResult::Threw(exception) => shared.report_worker_exception(exception),
+                    ExecutorResult::Threw(exception) => shared.report_fatal_exception(exception),
                     ExecutorResult::Error(_) => shared.abort_signal().request_abort(),
                     ExecutorResult::Exited(_) => {}
                 }
@@ -639,18 +639,25 @@ impl Executor {
     /// (a finalizer that never returns would otherwise block it). The caller must call
     /// [`Self::wait_for_foreground_workers`] before dropping the executor.
     pub fn run_entrypoint(&mut self) -> ExecutorResult {
-        self.run_inner(false)
+        let result = self.run_inner(false);
+        #[cfg(feature = "multithreading")]
+        if let ExecutorResult::Threw(exception) = &result {
+            // Publish before waiting for workers: a worker may be blocked on a monitor
+            // held by this unhandled entry frame, whose finally will not run.
+            self.shared.report_fatal_exception(exception.clone());
+        }
+        result
     }
 
     /// Runs the entry point with its arguments already on the stack, and waits for foreground
-    /// workers before returning. An unhandled worker exception takes precedence over its result.
+    /// workers before returning. The first unhandled exception takes precedence over its result.
     pub fn run(&mut self) -> ExecutorResult {
         let result = self.run_entrypoint();
         // Foreground workers can throw after the entry method has returned. Keep the entry
-        // arena participating in GC until they stop, then return their fatal exception.
+        // arena participating in GC until they stop, then return the first fatal exception.
         self.wait_for_foreground_workers();
         #[cfg(feature = "multithreading")]
-        if let Some(exception) = self.shared.fatal_worker_exception() {
+        if let Some(exception) = self.shared.fatal_exception() {
             return ExecutorResult::Threw(exception);
         }
         result

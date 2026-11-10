@@ -1,6 +1,6 @@
 # Managed threading intrinsics
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** A guest program can use the common `System.Threading.Thread` and `Monitor` surface
 (`Yield`, `SpinWait`, `Sleep`, `CurrentThread`, `ManagedThreadId`, `IsBackground`,
 `Start(object)`, closure targets, `Join(int)`, `Monitor.Wait`/`Pulse`/`PulseAll`) with CLR-matching
@@ -33,6 +33,8 @@ that does `lock (O)`, the VM reports the exception and then hangs. Search finds 
 `handle_exception` clears the frames without running `finally` blocks and the lock stays held;
 `Executor::run` then waits forever for the foreground worker. Without the lock the same program
 exits, because the worker finishes. The CLR terminates the process at the unhandled exception.
+Slice 1 routes entry exceptions through the fatal path before waiting. A sleeping worker can still
+delay shutdown until its current sleep finishes; slice 2 makes sleep interruptible.
 
 The ST configuration has no workers (`Managed Thread(ThreadStart) requires the multithreading
 feature`), so every shape above that needs a second thread is `multithreading`-only. `Yield`,
@@ -56,7 +58,7 @@ Out:
   work depends on this plan.
 - `Thread.Abort`/`Interrupt`, thread priorities, apartment states, `ThreadStatic` identity.
 - Making `Monitor.Wait` available in ST beyond what is stated under Design.
-- Running `finally` blocks on an unhandled exception: the CLR does not run them either.
+- Changing `finally` execution on an unhandled exception.
 
 ## Design
 
@@ -99,9 +101,9 @@ workers stop at their next safepoint and the first exception wins.
 
 ## Slices
 
-1. **Fatal entry-thread exception.** Fixture: the `lock`-holding `Main` above, with a worker that
-   would block; the process must exit with the unhandled-exception code. Also an idle sleeping
-   worker. Compare stdout and termination with the CLR where the harness can.
+1. **Fatal entry-thread exception (implemented).** The lock-holding entry and sleeping-worker
+   fixtures compare stdout and termination with the CLR. The lock fixture does not depend on
+   whether the CLR schedules the worker during termination.
 2. **`Yield`, `SpinWait`, `Sleep`.** Fixtures: `Yield`/`SpinWait` (ST and MT); `Sleep` as a timed
    park, and the sleeping-worker-versus-`GC.Collect` fixture with a tight but not flaky bound;
    `Sleep(Timeout.Infinite)` ended by abort. Deterministic tests for deadline expiry, abort and a

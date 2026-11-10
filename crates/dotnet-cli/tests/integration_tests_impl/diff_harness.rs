@@ -79,7 +79,7 @@ macro_rules! diff_test_exit_code {
 // The original expression-compilation case is retained while the canonical set expands coverage.
 #[cfg(all(feature = "multithreading", not(feature = "fuzzing"), unix))]
 #[test]
-fn threading_fatal_worker_exceptions_match_dotnet() {
+fn threading_fatal_exceptions_match_dotnet() {
     use crate::integration_tests_impl::harness::TestHarness;
     use std::{
         os::unix::process::ExitStatusExt,
@@ -112,8 +112,15 @@ fn threading_fatal_worker_exceptions_match_dotnet() {
     }
 
     let harness = TestHarness::get();
-    for fixture in ["joined", "unjoined", "after_return", "computation"] {
-        let source = format!("tests/debug_fixtures/fatal_worker_{fixture}.cs");
+    for (fixture, expected_stdout, expected_message) in [
+        ("worker_joined", "before worker\n", "worker failure"),
+        ("worker_unjoined", "before worker\n", "worker failure"),
+        ("worker_after_return", "before worker\n", "worker failure"),
+        ("worker_computation", "before worker\n", "worker failure"),
+        ("entry_locked", "before entry failure\n", "entry failure"),
+        ("entry_sleeping", "before entry failure\n", "entry failure"),
+    ] {
+        let source = format!("tests/debug_fixtures/fatal_{fixture}.cs");
         let dll = harness.ensure_dll(Path::new(&source));
         let clr = output_with_timeout(Command::new("dotnet").arg(&dll));
         let vm = output_with_timeout(&mut harness.cli_command(&dll));
@@ -131,13 +138,14 @@ fn threading_fatal_worker_exceptions_match_dotnet() {
         );
         assert_eq!(vm.stdout, clr.stdout, "{fixture} stdout");
         assert_eq!(
-            vm.stdout, b"before worker\n",
+            vm.stdout,
+            expected_stdout.as_bytes(),
             "{fixture} continued after throw"
         );
         let stderr = String::from_utf8_lossy(&vm.stderr);
         assert!(
             stderr.contains("System.InvalidOperationException")
-                && stderr.contains("worker failure"),
+                && stderr.contains(expected_message),
             "VM {fixture}: {stderr}"
         );
     }
