@@ -598,9 +598,9 @@ impl Executor {
                     .caches
                     .get_method_info(method, &generic_inst, shared.clone())?;
                 let args = if let Some(start) = start {
-                    // SAFETY: The creating and starting arenas retain these objects in traced
-                    // thread records until this worker's cleanup has completed. Those arenas
-                    // cannot be destroyed while this worker is running.
+                    // SAFETY: F1.GcHandleRooted — the creating and starting arenas retain these
+                    // objects in traced thread records until this worker's cleanup has
+                    // completed. Those arenas cannot be destroyed while this worker is running.
                     let decode = |ptr: dotnet_value::object::ObjectPtr| unsafe {
                         dotnet_value::object::ObjectRef::from_storage_ptr(
                             ptr.as_ptr().cast_mut().cast(),

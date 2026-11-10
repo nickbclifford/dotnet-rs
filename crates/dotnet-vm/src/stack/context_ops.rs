@@ -678,7 +678,8 @@ struct LegacyWait {
     wait: crate::sync::MonitorWait,
     thread: dotnet_utils::ArenaId,
 }
-// SAFETY: The wait contains only an Arc to non-GC synchronization state and scalar metadata.
+// SAFETY: F5.TracesEveryGcRef — the wait contains only an Arc to non-GC synchronization state
+// and scalar metadata, so the frame that owns it has no GC reference to trace.
 unsafe impl dotnet_vm_data::stack::MonitorWaitRetry for LegacyWait {
     fn poll(&mut self) -> Option<bool> {
         self.wait.poll(self.thread)
@@ -836,7 +837,8 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                 );
             }
             let delegate_ptr = metadata.delegate.expect("start delegate");
-            // SAFETY: The creating arena roots the delegate until this worker completes.
+            // SAFETY: F1.GcHandleRooted — the creating arena roots the delegate until this worker
+            // completes.
             let delegate =
                 unsafe { ObjectRef::from_storage_ptr(delegate_ptr.as_ptr().cast_mut().cast()) };
             {

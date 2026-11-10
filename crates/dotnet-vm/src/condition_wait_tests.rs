@@ -2460,7 +2460,7 @@ fn start_pulse_wait(
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: the engine is the root of this arena mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the root of this arena mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait")));
                 let mut ctx = engine.ves_context(gc);
@@ -2634,7 +2634,7 @@ fn legacy_monitor_wait_retries_and_restores_recursion() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: the engine is the root of this arena mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the root of this arena mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("legacy wait")));
                 let mut ctx = engine.ves_context(gc);
@@ -2684,7 +2684,7 @@ fn monitor_wait_infinite_in_single_thread_reports_deadlock() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: the engine is the root of this arena mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the root of this arena mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait")));
                 let mut ctx = engine.ves_context(gc);
