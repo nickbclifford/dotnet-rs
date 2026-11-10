@@ -136,11 +136,18 @@ Evidence and IDs (p01…, R01…) are defined in the
   be deterministic but need a scheduler mechanism plan 08 does not have. Prerequisites: plan 12
   (`IsBackground`, `Monitor.Wait`/`Pulse`, `Sleep`, thread identity) and plan 11 (a thrown pool
   work item must be fatal, not swallowed).
-- **Other missing or incorrect runtime behavior:** `[MethodImpl(Synchronized)]` is ignored
-  (including its effect on concurrent `Console.WriteLine`); `Monitor.IsEntered` and
-  `Delegate.DynamicInvoke` are missing; `new string(char, int)` fails; interpolating an object prints its type name;
-  `TypeInitializationException.TypeName` is empty; and buffered stdout can be lost when the VM
-  exits on an internal error.
+- **Other missing or incorrect runtime behavior:**
+  - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
+    of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
+    stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
+    error`) is needed first.
+  - `MethodInfo.Invoke`, and so `Delegate.DynamicInvoke`, lets the target's exception escape
+    instead of wrapping it in `TargetInvocationException`.
+  - `Delegate.GetInvocationList` is missing on `System.Delegate` (only `MulticastDelegate`
+    has it), and `delegate is MulticastDelegate` is false for a runtime delegate type.
+  - `System.Type` objects are per-arena, so `typeof(T) == typeof(T)` is false across managed
+    threads. `Monitor` on a `Type` object is canonical per type; reference equality is not.
+  - A `Synchronized` instance method on a value type runs without taking a monitor.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
   producing finalizable garbage. The behavior has not been reproduced.
