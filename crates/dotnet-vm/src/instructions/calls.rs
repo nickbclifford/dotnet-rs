@@ -305,31 +305,19 @@ pub fn callvirt_constrained<'gc, T: VesOps<'gc>>(
 
         args[0] = StackValue::ObjectRef(obj_ref);
 
-        // For reference types with constrained callvirt, try to find the method
-        // implementation directly in the constraint type first
-        if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
-            constraint_type.clone(),
-            &base_method.method().name,
-            base_method.signature(),
-            base_method.resolution(),
-            &lookup,
-            false,
-        ) {
-            // Implementation found on the constraint type: run it under that type's
-            // instantiation rather than the caller frame's lookup.
-            (Ok(impl_method), constraint_lookup.clone())
-        } else {
-            // Fall back to normal virtual dispatch
-            let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj_ref));
-            let dispatch_lookup = merge_receiver_type_generics_into_lookup(&lookup, obj_ref);
-            let resolved = ctx.resolver().resolve_virtual_method(
-                base_method,
-                this_type,
-                &dispatch_lookup,
-                &ctx.current_context(),
-            );
-            (resolved, dispatch_lookup)
-        }
+        // ECMA-335 III.2.1: for a reference-type constraint the pointer is dereferenced and the
+        // call is an ordinary `callvirt` on the object, so the target is chosen by the object's
+        // runtime type. The constraint type only names the static type: `T = object` still
+        // dispatches `ToString` to the receiver's override.
+        let this_type = dotnet_vm_ops::vm_try!(ctx.get_heap_description(obj_ref));
+        let dispatch_lookup = merge_receiver_type_generics_into_lookup(&lookup, obj_ref);
+        let resolved = ctx.resolver().resolve_virtual_method(
+            base_method,
+            this_type,
+            &dispatch_lookup,
+            &ctx.current_context(),
+        );
+        (resolved, dispatch_lookup)
     };
 
     let method = dotnet_vm_ops::vm_try!(method);
