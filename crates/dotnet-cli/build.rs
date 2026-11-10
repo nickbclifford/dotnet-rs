@@ -240,6 +240,8 @@ fn main() {
             // are expected to fail.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
+            || file_name == "monitor_is_entered_42"
+            || file_name == "synchronized_method_42"
             || file_name == "monitor_contended_lock_42"
             || file_name == "delegate_monitor_enter_42"
             || file_name == "monitor_static_flags_42"

@@ -513,6 +513,26 @@ pub fn intrinsic_monitor_pulse_all<'gc, T: ThreadingIntrinsicHost<'gc>>(
     pulse(ctx, true)
 }
 
+/// `Monitor.IsEntered` reports whether the current thread holds the object's monitor. The managed
+/// `IsEntered(object)` validates its argument and calls this native helper.
+#[dotnet_intrinsic("static bool System.Threading.Monitor::IsEnteredNative(object)")]
+pub fn intrinsic_monitor_is_entered_native<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    let object = ctx.pop_obj();
+    if object.0.is_none() {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
+    }
+    let entered = ctx
+        .monitor_get_sync_block_for_object(object)
+        .is_some_and(|block| ctx.monitor_is_owned(&block, ctx.thread_id()));
+    ctx.push_i32(i32::from(entered));
+    StepResult::Continue
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MonitorArgumentError, monitor_argument_error};
