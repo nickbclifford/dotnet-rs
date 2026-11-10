@@ -152,28 +152,28 @@ pub fn substring_select<'gc, T: IntrinsicStringHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     let parameter_count = method.signature().parameters.len();
     if !(1..=2).contains(&parameter_count) {
-        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+        return NativeSelection::Fallback;
     }
     let length = if parameter_count == 2 {
         match operands.peek_at(0) {
             StackValue::Int32(length) => Some(length),
-            _ => return NativeSelection::Synchronous(intrinsic_string_substring::<T>),
+            _ => return NativeSelection::Fallback,
         }
     } else {
         None
     };
     let StackValue::Int32(start) = operands.peek_at(parameter_count - 1) else {
-        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+        return NativeSelection::Fallback;
     };
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = operands.peek_at(parameter_count) else {
-        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+        return NativeSelection::Fallback;
     };
     let inner = handle.borrow();
     let HeapStorage::Str(source) = &inner.storage else {
-        return NativeSelection::Synchronous(intrinsic_string_substring::<T>);
+        return NativeSelection::Fallback;
     };
     match substring_range(start, length, source.len()) {
         Ok((start, length)) if length > SUBSTRING_CHUNK_SIZE => {
@@ -183,7 +183,7 @@ pub fn substring_select<'gc, T: IntrinsicStringHost<'gc>>(
                 parameter_count,
             })
         }
-        _ => NativeSelection::Synchronous(intrinsic_string_substring::<T>),
+        _ => NativeSelection::Fallback,
     }
 }
 

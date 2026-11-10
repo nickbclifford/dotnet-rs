@@ -626,7 +626,7 @@ fn substring_selector_preserves_operands_and_selects_only_large_valid_ranges() {
                                     if explicit_length { 2 } else { 1 }
                                 );
                             }
-                            (NativeSelection::Synchronous(_), None) => {}
+                            (NativeSelection::Fallback, None) => {}
                             _ => panic!("unexpected substring selection"),
                         }
                         assert_eq!(ctx.evaluation_stack.stack, before);
@@ -646,7 +646,7 @@ fn substring_selector_preserves_operands_and_selects_only_large_valid_ranges() {
                                 &method,
                                 &GenericLookup::default(),
                             ),
-                            NativeSelection::Synchronous(_)
+                            NativeSelection::Fallback
                         ));
                         assert_eq!(ctx.evaluation_stack.stack, before);
                         ctx.drop_top(if explicit_length { 3 } else { 2 });
@@ -1240,7 +1240,7 @@ fn native_test_reject_selector<'a, 'gc>(
     _: dotnet_vm_ops::effects::NativeOperandView<'_, 'gc>,
     _: &MethodDescription,
     _: &GenericLookup,
-) -> dotnet_vm_ops::effects::NativeSelection<crate::stack::VesContext<'a, 'gc>> {
+) -> dotnet_vm_ops::effects::NativeSelection {
     panic!("unsupported modes must not run the selector")
 }
 
@@ -1353,7 +1353,7 @@ fn native_test_select_async<'a, 'gc>(
     operands: dotnet_vm_ops::effects::NativeOperandView<'_, 'gc>,
     _: &MethodDescription,
     _: &GenericLookup,
-) -> dotnet_vm_ops::effects::NativeSelection<crate::stack::VesContext<'a, 'gc>> {
+) -> dotnet_vm_ops::effects::NativeSelection {
     assert!(matches!(operands.peek_at(0), StackValue::Int32(3)));
     dotnet_vm_ops::effects::NativeSelection::Async(dotnet_vm_ops::effects::NativeInvocation {
         start: 0,
@@ -1367,9 +1367,9 @@ fn native_test_select_sync<'a, 'gc>(
     operands: dotnet_vm_ops::effects::NativeOperandView<'_, 'gc>,
     _: &MethodDescription,
     _: &GenericLookup,
-) -> dotnet_vm_ops::effects::NativeSelection<crate::stack::VesContext<'a, 'gc>> {
+) -> dotnet_vm_ops::effects::NativeSelection {
     assert!(matches!(operands.peek_at(0), StackValue::Int32(3)));
-    dotnet_vm_ops::effects::NativeSelection::Synchronous(native_test_fallback)
+    dotnet_vm_ops::effects::NativeSelection::Fallback
 }
 
 fn native_test_select_reject<'a, 'gc>(
@@ -1377,7 +1377,7 @@ fn native_test_select_reject<'a, 'gc>(
     operands: dotnet_vm_ops::effects::NativeOperandView<'_, 'gc>,
     _: &MethodDescription,
     _: &GenericLookup,
-) -> dotnet_vm_ops::effects::NativeSelection<crate::stack::VesContext<'a, 'gc>> {
+) -> dotnet_vm_ops::effects::NativeSelection {
     assert!(matches!(operands.peek_at(0), StackValue::Int32(3)));
     dotnet_vm_ops::effects::NativeSelection::Reject(
         crate::error::ExecutionError::InternalError("test selector rejection".into()).into(),

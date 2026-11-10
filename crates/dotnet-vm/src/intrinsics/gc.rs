@@ -207,9 +207,9 @@ pub fn gc_wait_finalizers_select<'gc, T: MemoryOps<'gc>>(
     _operands: NativeOperandView<'_, 'gc>,
     _method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     if ctx.heap().processing_finalizer.get() {
-        NativeSelection::Synchronous(intrinsic_gc_wait_for_pending_finalizers::<T>)
+        NativeSelection::Fallback
     } else {
         NativeSelection::Async(NativeInvocation {
             start: 0,

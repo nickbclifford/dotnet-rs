@@ -194,19 +194,17 @@ pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     _method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
-    let fallback =
-        || NativeSelection::Synchronous(intrinsic_activator_create_instance_type_args::<T>);
+) -> NativeSelection {
     let (StackValue::ObjectRef(target), StackValue::ObjectRef(parameters)) =
         (operands.peek_at(1), operands.peek_at(0))
     else {
-        return fallback();
+        return NativeSelection::Fallback;
     };
     let Some((method, lookup)) = resolve_activator_constructor(ctx, target, parameters) else {
-        return fallback();
+        return NativeSelection::Fallback;
     };
     if !crate::methods::invoke_arguments_supported(ctx, &method, &lookup, parameters) {
-        return fallback();
+        return NativeSelection::Fallback;
     }
     tracing::debug!(reflection_invoke_path = "async");
     NativeSelection::Async(NativeInvocation {

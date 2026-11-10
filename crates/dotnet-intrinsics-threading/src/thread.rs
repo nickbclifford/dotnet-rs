@@ -158,14 +158,14 @@ pub fn sleep_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     match operands.peek_at(0) {
         StackValue::Int32(ms) if ms >= -1 => NativeSelection::Async(NativeInvocation {
             start: ms as u32 as usize,
             length: 0,
             parameter_count: method.signature().parameters.len(),
         }),
-        _ => NativeSelection::Synchronous(intrinsic_thread_sleep::<T>),
+        _ => NativeSelection::Fallback,
     }
 }
 
@@ -203,20 +203,7 @@ pub fn intrinsic_thread_spin_wait<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-pub fn yield_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    _ctx: &T,
-    _operands: NativeOperandView<'_, 'gc>,
-    method: &MethodDescription,
-    _generics: &GenericLookup,
-) -> NativeSelection<T> {
-    NativeSelection::Async(NativeInvocation {
-        start: 0,
-        length: 0,
-        parameter_count: method.signature().parameters.len(),
-    })
-}
-
-#[dotnet_intrinsic("static bool System.Threading.Thread::Yield()", select = yield_select, fallback = intrinsic_thread_yield)]
+#[dotnet_intrinsic("static bool System.Threading.Thread::Yield()", fallback = intrinsic_thread_yield)]
 pub async fn thread_yield(mut fx: VmEffects) -> NativeResult {
     std::thread::yield_now();
     fx.yield_now().await?;
@@ -228,14 +215,14 @@ pub fn spin_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     match operands.peek_at(0) {
         StackValue::Int32(count) => NativeSelection::Async(NativeInvocation {
             start: usize::from(count > 0),
             length: 0,
             parameter_count: method.signature().parameters.len(),
         }),
-        _ => NativeSelection::Synchronous(intrinsic_thread_spin_wait::<T>),
+        _ => NativeSelection::Fallback,
     }
 }
 

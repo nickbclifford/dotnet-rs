@@ -233,8 +233,10 @@ fn expand_intrinsic(
 ///
 /// Async handlers must take one `VmEffects` argument and return `NativeResult`; they require
 /// `fallback = path` and may provide `select = path`. The selector runs before operands are
-/// consumed and chooses async execution, a synchronous handler, or rejection. Calls that cannot
-/// suspend use the fallback, while synchronous registrations keep their existing convention.
+/// consumed and chooses async execution, the registered `fallback` (`NativeSelection::Fallback`,
+/// so the selector never names it), or rejection. Without a selector the whole parameter list is
+/// the invocation. Calls that cannot suspend use the fallback, while synchronous registrations
+/// keep their existing convention.
 #[proc_macro_attribute]
 pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as IntrinsicArgs);

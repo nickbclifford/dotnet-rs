@@ -101,8 +101,7 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     entry_method: &MethodDescription,
     _generics: &GenericLookup,
-) -> NativeSelection<T> {
-    let fallback = || NativeSelection::Synchronous(runtime_method_info_intrinsic_call::<T>);
+) -> NativeSelection {
     let count = entry_method.signature().parameters.len();
     let values = if count == 4 {
         [
@@ -117,13 +116,13 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
         std::array::from_fn(|index| operands.peek_at(5 - index))
     };
     if !invoke_operand_window_supported(&values) {
-        return fallback();
+        return NativeSelection::Fallback;
     }
     let StackValue::ObjectRef(method_obj @ ObjectRef(Some(_))) = values[0] else {
-        return fallback();
+        return NativeSelection::Fallback;
     };
     let Ok((method, lookup)) = crate::common::resolve_runtime_method(ctx, method_obj) else {
-        return fallback();
+        return NativeSelection::Fallback;
     };
     if matches!(
         method.signature().return_type.1,
@@ -140,32 +139,32 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
         && count != 4
         && !matches!(values[1], StackValue::ObjectRef(ObjectRef(Some(_))))
     {
-        return fallback();
+        return NativeSelection::Fallback;
     }
     if let Some(return_type) = &method.signature().return_type.1 {
         let ParameterType::Value(ty) = return_type else {
-            return fallback();
+            return NativeSelection::Fallback;
         };
         let Ok(concrete) =
             lookup.make_concrete(method.resolution(), ty.clone(), ctx.loader().as_ref())
         else {
-            return fallback();
+            return NativeSelection::Fallback;
         };
         let Ok(td) = ctx.loader().find_concrete_type(concrete.clone()) else {
-            return fallback();
+            return NativeSelection::Fallback;
         };
         let Ok(value_type) = ctx.reflection_is_value_type_with_lookup(td, &lookup) else {
-            return fallback();
+            return NativeSelection::Fallback;
         };
         if value_type && !scalar_type(&concrete) {
-            return fallback();
+            return NativeSelection::Fallback;
         }
     }
     let StackValue::ObjectRef(parameters) = values[4] else {
-        return fallback();
+        return NativeSelection::Fallback;
     };
     if !invoke_arguments_supported(ctx, &method, &lookup, parameters) {
-        return fallback();
+        return NativeSelection::Fallback;
     }
     tracing::debug!(reflection_invoke_path = "async");
     NativeSelection::Async(NativeInvocation {

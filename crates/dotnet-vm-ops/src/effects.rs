@@ -1420,9 +1420,12 @@ impl<'a, 'gc> NativeOperandView<'a, 'gc> {
 }
 
 /// Selector outcome before any operands are consumed.
-pub enum NativeSelection<T> {
+///
+/// `Fallback` runs the `fallback` handler registered on the same `#[dotnet_intrinsic]`, so a
+/// selector never names it and the two cannot drift apart.
+pub enum NativeSelection {
     Async(NativeInvocation),
-    Synchronous(NativeSyncHandler<T>),
+    Fallback,
     Reject(VmError),
 }
 pub type NativeSyncHandler<T> = fn(
@@ -1435,7 +1438,7 @@ pub type NativeSelector<'gc, T> = fn(
     NativeOperandView<'_, 'gc>,
     &dotnet_types::members::MethodDescription,
     &dotnet_types::generics::GenericLookup,
-) -> NativeSelection<T>;
+) -> NativeSelection;
 
 /// Connects a generated dispatch arm to its selector without constraining the body.
 pub trait NativeSelectorProvider<'gc, T> {

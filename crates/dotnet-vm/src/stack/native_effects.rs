@@ -705,6 +705,7 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
             method,
             generics,
             selector,
+            Some(fallback),
             NativeEntry::Intrinsic(entry),
             false,
         )
@@ -730,6 +731,7 @@ impl<'gc> VesContext<'_, 'gc> {
             method,
             &generics,
             None,
+            None,
             NativeEntry::Instruction(action),
             false,
         )
@@ -740,6 +742,7 @@ impl<'gc> VesContext<'_, 'gc> {
         method: MethodDescription,
         generics: &GenericLookup,
         selector: Option<NativeSelector<'gc, Self>>,
+        fallback: Option<NativeSyncHandler<Self>>,
         entry: NativeEntry,
         synthetic_return: bool,
     ) -> StepResult {
@@ -776,7 +779,14 @@ impl<'gc> VesContext<'_, 'gc> {
             Some(selector) => match selector(self, NativeOperandView::new(self), &method, generics)
             {
                 NativeSelection::Async(invocation) => invocation,
-                NativeSelection::Synchronous(handler) => return handler(self, method, generics),
+                NativeSelection::Fallback => {
+                    return match fallback {
+                        Some(handler) => handler(self, method, generics),
+                        None => StepResult::internal_error(
+                            "native selector requested a fallback but none is registered",
+                        ),
+                    };
+                }
                 NativeSelection::Reject(error) => return StepResult::Error(error),
             },
             None => NativeInvocation {
@@ -1102,6 +1112,7 @@ impl<'gc> VesContext<'_, 'gc> {
         Some(self.start_native_inner(
             method,
             generics,
+            None,
             None,
             NativeEntry::Intrinsic(multicast_entry),
             true,

@@ -342,23 +342,22 @@ fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     method: &MethodDescription,
     timed: bool,
     byref: bool,
-    fallback: dotnet_vm_ops::effects::NativeSyncHandler<T>,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     let count = 1 + usize::from(timed) + usize::from(byref);
     let lock_taken = if byref {
         let StackValue::ManagedPtr(ptr) = operands.peek_at(0) else {
-            return NativeSelection::Synchronous(fallback);
+            return NativeSelection::Fallback;
         };
         let supported = matches!(
             ptr.origin(),
             PointerOrigin::Heap(ObjectRef(Some(_))) | PointerOrigin::FrameHome(_)
         ) || cross_arena_origin(ptr.origin());
         if !supported {
-            return NativeSelection::Synchronous(fallback);
+            return NativeSelection::Fallback;
         }
         match read_monitor_lock_taken(ctx, &ptr) {
             Ok(value) => value,
-            Err(_) => return NativeSelection::Synchronous(fallback),
+            Err(_) => return NativeSelection::Fallback,
         }
     } else {
         false
@@ -370,14 +369,14 @@ fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     );
     let timeout = if timed {
         let StackValue::Int32(timeout) = operands.peek_at(usize::from(byref)) else {
-            return NativeSelection::Synchronous(fallback);
+            return NativeSelection::Fallback;
         };
         Some(timeout)
     } else {
         None
     };
     if monitor_argument_error(lock_taken, object_is_non_null, timeout).is_some() {
-        return NativeSelection::Synchronous(fallback);
+        return NativeSelection::Fallback;
     }
 
     // Capture the signed timeout before operand commitment so its deadline starts before
@@ -394,60 +393,32 @@ pub fn enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _: &GenericLookup,
-) -> NativeSelection<T> {
-    select_monitor(
-        ctx,
-        operands,
-        method,
-        false,
-        false,
-        intrinsic_monitor_enter_obj::<T>,
-    )
+) -> NativeSelection {
+    select_monitor(ctx, operands, method, false, false)
 }
 pub fn reliable_enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _: &GenericLookup,
-) -> NativeSelection<T> {
-    select_monitor(
-        ctx,
-        operands,
-        method,
-        false,
-        true,
-        intrinsic_monitor_reliable_enter::<T>,
-    )
+) -> NativeSelection {
+    select_monitor(ctx, operands, method, false, true)
 }
 pub fn try_enter_ref_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _: &GenericLookup,
-) -> NativeSelection<T> {
-    select_monitor(
-        ctx,
-        operands,
-        method,
-        true,
-        true,
-        intrinsic_monitor_try_enter_timeout_ref::<T>,
-    )
+) -> NativeSelection {
+    select_monitor(ctx, operands, method, true, true)
 }
 pub fn try_enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _: &GenericLookup,
-) -> NativeSelection<T> {
-    select_monitor(
-        ctx,
-        operands,
-        method,
-        true,
-        false,
-        intrinsic_monitor_try_enter_timeout::<T>,
-    )
+) -> NativeSelection {
+    select_monitor(ctx, operands, method, true, false)
 }
 
 async fn enter_effect(
@@ -526,7 +497,7 @@ pub fn wait_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     operands: NativeOperandView<'_, 'gc>,
     method: &MethodDescription,
     _: &GenericLookup,
-) -> NativeSelection<T> {
+) -> NativeSelection {
     if let (StackValue::ObjectRef(object @ ObjectRef(Some(_))), StackValue::Int32(timeout)) =
         (operands.peek_at(1), operands.peek_at(0))
         && timeout >= -1
@@ -540,7 +511,7 @@ pub fn wait_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
             parameter_count: method.signature().parameters.len(),
         });
     }
-    NativeSelection::Synchronous(intrinsic_monitor_wait::<T>)
+    NativeSelection::Fallback
 }
 
 #[dotnet_intrinsic("static bool System.Threading.Monitor::Wait(object, int)", select = wait_select, fallback = intrinsic_monitor_wait)]
