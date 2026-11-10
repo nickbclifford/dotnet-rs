@@ -50,10 +50,10 @@ In:
 - Fatal main-thread unhandled exceptions.
 
 Out:
-- Thread-pool work, timers and `Task` scheduling. `DotnetRs.Task`
-  (`dotnet-assemblies/src/support/Task.cs`, 144 lines) is a single-threaded shim, so
-  `Task.Wait`/`.Result` throw "Task has not completed" instead of blocking; deciding whether to grow
-  it or use CoreLib's `Task` is the Task-integration work in the README.
+- Thread-pool work, timers and `Task` scheduling. The VM runs `DotnetRs.Task`
+  (`dotnet-assemblies/src/support/Task.cs`), a single-threaded shim. The README's "Task and
+  thread-pool integration" entry records the decision to replace it with CoreLib's `Task`; that
+  work depends on this plan.
 - `Thread.Abort`/`Interrupt`, thread priorities, apartment states, `ThreadStatic` identity.
 - Making `Monitor.Wait` available in ST beyond what is stated under Design.
 - Running `finally` blocks on an unhandled exception: the CLR does not run them either.

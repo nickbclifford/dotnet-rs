@@ -15,5 +15,6 @@
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how `#[dotnet_intrinsic]`
 //! handlers are discovered and wired into generated dispatch tables.
 pub mod array_ops;
+pub mod debugger;
 pub mod math;
 pub mod simd;

@@ -88,22 +88,36 @@ Evidence and IDs (p01…, R01…) are defined in the
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
 - **Retired-worker resource cost:** each completed worker retains one OS thread and one arena
   until VM shutdown; process-wide arena IDs are capped at 65,535. Earlier safe retirement remains unplanned.
-- **Task and thread-pool integration:** guest `Task` scheduling is outside plan 08. The VM does
-  not run CoreLib's `Task`: `DotnetRs.Task` (`dotnet-assemblies/src/support/Task.cs`, 144 lines),
-  its `TaskCompletionSource` and the async method builders are a single-threaded shim. `Wait()`
-  and `.Result` throw "Task has not completed" instead of blocking, completion is unsynchronized,
-  and `Task.Run`, `Delay`, `WhenAll`, `ContinueWith` and cancellation do not exist. Guest
-  `async`/`await` that completes synchronously or through a `TaskCompletionSource` on one thread
-  works (fixtures under `crates/dotnet-cli/tests/fixtures/async/`). The first decision is whether
-  to grow the shim or to run CoreLib's `Task`. CoreLib's brings the real API but needs
-  `ThreadPool`, `TimerQueue` and `ManualResetEventSlim` semantics. Either way the host layer is
-  a work queue (`ThreadPool.UnsafeQueueUserWorkItem` is an accepted no-op in
-  `dotnet-intrinsics-threading/src/thread.rs`), timers (a host deadline source in the scheduler,
-  which also gives deadlock detection when every thread is parked and no deadline remains) and
-  blocking waits. Shim the managed abstraction (`ThreadPool` work queue, timer queue), not
-  individual QCalls. Prefer a small fixed set of background managed worker threads that wait on
-  the queue through the slice-5 condition-wait protocol; this reuses the multithreaded arena
-  machinery and avoids the retired-worker cost above. Green tasks on the effect scheduler would
+- **Task and thread-pool integration:** the VM runs `DotnetRs.Task`
+  (`dotnet-assemblies/src/support/Task.cs`, 144 lines) and its `[Stub(InPlaceOf)]` companions
+  (`TaskCompletionSource`, the awaiters, the async method builders, `ValueTask`), a
+  single-threaded shim: `Wait()` and `.Result` throw "Task has not completed" instead of
+  blocking, completion is unsynchronized, and `Task.Run`, `Delay`, `WhenAll`, `ContinueWith` and
+  cancellation do not exist. **Decision (2026-11-09): run CoreLib's real `Task` and delete the
+  shim.** `Task` and its neighbors have no `extern` methods of their own, and a spike with the
+  stubs removed and `Debugger.get_IsAttached` returning `false` (now in
+  `dotnet-intrinsics-core/src/debugger.rs`) passed 7 of the 9 async fixtures, plus a
+  `TaskCompletionSource` completed on another thread while main blocks on `.Result`. The earlier
+  deferred-completion failure was the `Debugger` QCall thrown inside the async builder and
+  captured into the task. What remains:
+  - `ThreadPool.RequestWorkerThread()`: `Task.Run` and `ContinueWith` reach it through
+    `ThreadPoolWorkQueue.Enqueue` (the managed queue works), then
+    `PortableThreadPool.RequestWorker` and `WorkerThread..cctor` fail at
+    `Kernel32.CreateSemaphoreEx`. Shim it to start or wake a pool worker that runs
+    `ThreadPoolWorkQueue.Dispatch`. Prefer a small fixed set of background managed worker
+    threads waiting through the slice-5 condition-wait protocol; this reuses the multithreaded
+    arena machinery and avoids the retired-worker cost above.
+  - `TimerQueue`: `Task.Delay` and `CancelAfter` fail at `TimerQueue..cctor`'s `AutoResetEvent`
+    (`Kernel32.CreateEventEx`). Replace it with a host deadline source in the scheduler, which
+    also gives deadlock detection when every thread is parked and no deadline remains.
+  - Two fixtures encode shim behavior, not the CLR's: `async_await_faulted_task_propagates` and
+    `async_await_throw_after_await` use `.Result` on a faulted task and expect the original
+    exception; the CLR throws `AggregateException`. Rewrite them when the stubs go.
+  - CoreLib resource strings are not resolved (`AggregateException_ctor_DefaultMessage`).
+  - Unmeasured: speed against the shim, and `ExecutionContext`/`SynchronizationContext`/
+    `AsyncLocal` fidelity.
+
+  Shim the managed abstraction, not individual QCalls. Green tasks on the effect scheduler would
   be deterministic but need a scheduler mechanism plan 08 does not have. Prerequisites: plan 12
   (`IsBackground`, `Monitor.Wait`/`Pulse`, `Sleep`, thread identity) and plan 11 (a thrown pool
   work item must be fatal, not swallowed).
