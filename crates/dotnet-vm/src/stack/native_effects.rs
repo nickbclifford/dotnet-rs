@@ -70,6 +70,7 @@ fn wait_test_hook(point: WaitTestPoint) {
 pub(crate) enum PendingWait {
     Monitor(PendingMonitor),
     Finalizers(u64),
+    Sleep(u64, Option<std::time::Instant>),
     Initializer(u64, Box<dyn dotnet_vm_ops::effects::NativeInitWait>),
 }
 
@@ -1196,6 +1197,28 @@ impl<'gc> VesContext<'_, 'gc> {
         StepResult::Continue
     }
 
+    fn advance_sleep(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        generation: u64,
+        deadline: Option<std::time::Instant>,
+    ) -> StepResult {
+        let stopped = self.shared.thread_manager.is_gc_stop_requested()
+            || self.local.heap.needs_full_collect.get()
+            || self.gc.needs_collection();
+        if !stopped && deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            if let Err(error) = work.owner.control.reply_sleep(generation) {
+                return StepResult::Error(error);
+            }
+            self.call_state.native.push(work);
+            StepResult::Continue
+        } else {
+            work.wait = Some(PendingWait::Sleep(generation, deadline));
+            self.call_state.native.push(work);
+            StepResult::Yield
+        }
+    }
+
     fn advance_initializer(
         &mut self,
         mut work: NativeActivation<'gc>,
@@ -1241,6 +1264,9 @@ impl<'gc> VesContext<'_, 'gc> {
             return match wait {
                 PendingWait::Monitor(wait) => self.advance_monitor(work, wait),
                 PendingWait::Finalizers(generation) => self.advance_finalizers(work, generation),
+                PendingWait::Sleep(generation, deadline) => {
+                    self.advance_sleep(work, generation, deadline)
+                }
                 PendingWait::Initializer(generation, wait) => {
                     self.advance_initializer(work, generation, wait)
                 }
@@ -1287,6 +1313,13 @@ impl<'gc> VesContext<'_, 'gc> {
                         return StepResult::Error(error);
                     }
                     self.advance_finalizers(work, generation)
+                }
+                Some(NativeEffect::Sleep(generation)) if work.operands.is_empty() => {
+                    let deadline = match work.owner.control.take_sleep(generation) {
+                        Ok(deadline) => deadline,
+                        Err(error) => return StepResult::Error(error),
+                    };
+                    self.advance_sleep(work, generation, deadline)
                 }
                 Some(NativeEffect::Initializer(generation)) if work.operands.is_empty() => {
                     let wait = match work.owner.control.take_initializer(generation) {

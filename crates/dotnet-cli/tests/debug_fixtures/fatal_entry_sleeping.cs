@@ -8,7 +8,7 @@ public static class Program
     static void Worker()
     {
         Volatile.Write(ref ready, 1);
-        while (true) Thread.Sleep(50);
+        Thread.Sleep(Timeout.Infinite);
     }
 
     public static void Main()

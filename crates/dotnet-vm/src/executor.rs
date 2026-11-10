@@ -51,6 +51,7 @@ thread_local! {
 enum NativeWaitSleep {
     Monitor(Arc<crate::sync::SyncBlock>, u64, Option<std::time::Instant>),
     Finalizers,
+    Sleep(Option<std::time::Instant>),
     Initializer(Box<dyn dotnet_vm_ops::effects::NativeInitSleeper>),
 }
 
@@ -767,6 +768,9 @@ impl Executor {
                                     Some(NativeWaitSleep::Finalizers)
                                 }
                                 crate::stack::native_effects::PendingWait::Finalizers(_) => None,
+                                crate::stack::native_effects::PendingWait::Sleep(_, deadline) => {
+                                    Some(NativeWaitSleep::Sleep(*deadline))
+                                }
                                 crate::stack::native_effects::PendingWait::Initializer(_, wait) => {
                                     (!wait.ready())
                                         .then(|| NativeWaitSleep::Initializer(wait.sleeper()))
@@ -853,6 +857,15 @@ impl Executor {
                         }
                     }
                     NativeWaitSleep::Finalizers => std::thread::sleep(interval),
+                    NativeWaitSleep::Sleep(deadline) => {
+                        let duration = deadline.map_or(interval, |d| {
+                            d.saturating_duration_since(std::time::Instant::now())
+                                .min(interval)
+                        });
+                        if !duration.is_zero() {
+                            std::thread::sleep(duration);
+                        }
+                    }
                     NativeWaitSleep::Initializer(sleeper) => sleeper.wait(interval),
                 }
             }

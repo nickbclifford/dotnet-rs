@@ -625,3 +625,13 @@ fn exceptions_fault_inside_finally_matches_dotnet() {
     }
     fs::remove_dir_all(dir).expect("remove fixture directory");
 }
+
+diff_test!(
+    threading_sleep_yield_42_matches_dotnet,
+    "tests/fixtures/threading/thread_sleep_yield_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_sleep_gc_42_matches_dotnet,
+    "tests/fixtures/threading/thread_sleep_gc_42.cs"
+);

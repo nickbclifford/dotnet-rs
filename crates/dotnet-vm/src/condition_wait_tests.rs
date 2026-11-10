@@ -2298,3 +2298,140 @@ fn finalizer_wait_rechecks_after_another_owner_finishes() {
     worker.finish().unwrap();
     assert_eq!(result, (StepResult::Jump(1), true));
 }
+
+fn sleep_test_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        fx.sleep_until(Some(
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        ))
+        .await
+    })
+}
+
+fn start_sleep(
+    executor: &mut Executor,
+    body: fn(dotnet_vm_ops::effects::VmEffects) -> dotnet_vm_ops::effects::NativeFuture,
+) -> StepResult {
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let method = condition_wait_method(executor, false);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::Int32(0));
+                ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    native_test_fallback,
+                    body,
+                )
+            })
+        })
+        .unwrap()
+}
+
+#[test]
+fn sleep_deadline_survives_collection_and_expires() {
+    use crate::stack::native_effects::PendingWait;
+    let mut executor = executor();
+    assert_eq!(
+        start_sleep(&mut executor, sleep_test_body),
+        StepResult::Yield
+    );
+    let deadline = executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                match engine
+                    .stack
+                    .execution
+                    .call_state
+                    .native
+                    .last()
+                    .unwrap()
+                    .wait
+                    .as_ref()
+                    .unwrap()
+                {
+                    PendingWait::Sleep(_, deadline) => *deadline,
+                    _ => panic!("expected sleep"),
+                }
+            })
+        })
+        .unwrap();
+    collect(&mut executor);
+    assert_eq!(resume(&mut executor), StepResult::Yield);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|_, engine| {
+                match engine
+                    .stack
+                    .execution
+                    .call_state
+                    .native
+                    .last_mut()
+                    .unwrap()
+                    .wait
+                    .as_mut()
+                    .unwrap()
+                {
+                    PendingWait::Sleep(_, current) => {
+                        assert_eq!(*current, deadline);
+                        *current = Some(std::time::Instant::now());
+                    }
+                    _ => panic!("expected sleep"),
+                }
+            })
+        })
+        .unwrap();
+    assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
+}
+
+#[cfg(feature = "multithreading")]
+fn infinite_sleep_test_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move { fx.sleep_until(None).await })
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn sleep_park_participates_in_gc_and_abort() {
+    use crate::test_utils::worker::Worker;
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut executor = executor();
+    assert_eq!(
+        start_sleep(&mut executor, infinite_sleep_test_body),
+        StepResult::Yield
+    );
+    let shared = executor.shared.clone();
+    let abort = shared.abort_signal();
+    let (start_tx, start_rx) = mpsc::channel();
+    let worker = Worker::new(
+        thread::spawn(move || {
+            let mut collector = Executor::new(shared);
+            start_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let result = collector.perform_full_gc().is_ok();
+            abort.request_abort();
+            result
+        }),
+        (),
+    );
+    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            start_tx.send(()).unwrap();
+        }))
+    });
+    assert!(matches!(executor.run(), ExecutorResult::Error(_)));
+    assert!(worker.finish().unwrap());
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| assert!(engine.stack.execution.call_state.native.is_empty()))
+        })
+        .unwrap();
+}

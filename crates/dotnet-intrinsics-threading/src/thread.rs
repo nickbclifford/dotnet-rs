@@ -1,9 +1,13 @@
 use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_value::StackValue;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_vm_data::StepResult;
-use std::time::Duration;
+use dotnet_vm_ops::effects::{
+    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
+};
+use std::time::{Duration, Instant};
 
 const PROCESSOR_ID_FALLBACK: i32 = 0;
 const NULL_THREAD_START_MSG: &str = "Thread(ThreadStart) requires a non-null ThreadStart delegate.";
@@ -59,26 +63,131 @@ pub fn intrinsic_thread_internal_finalize<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-/// System.Threading.Thread::Sleep(int millisecondsTimeout)
-///
-/// Suspends the current thread for the specified number of milliseconds.
-/// A value of 0 yields the time slice without sleeping; negative values are
-/// treated as a no-op (the managed side should validate before calling).
-#[dotnet_intrinsic("static void System.Threading.Thread::Sleep(int)")]
+/// Legacy dispatch keeps its operand and deadline across retries. Inline calls park outside
+/// the mutation through the native effect driver.
 pub fn intrinsic_thread_sleep<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let ms = ctx.peek_stack_at(0).as_i32();
+    if ms < -1 {
+        ctx.monitor_clear_retry();
+        let _ = ctx.pop_i32();
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentOutOfRangeException",
+            "The timeout must be greater than or equal to -1.",
+        );
+    }
+    if ms == 0 {
+        let _ = ctx.pop_i32();
+        std::thread::yield_now();
+        return StepResult::Continue;
+    }
+    let deadline = ctx.monitor_retry_deadline(&method, ms);
+    if ms == -1 || Instant::now() < deadline {
+        return StepResult::Yield;
+    }
+    ctx.monitor_clear_retry();
+    let _ = ctx.pop_i32();
+    StepResult::Continue
+}
+
+pub fn sleep_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    match operands.peek_at(0) {
+        StackValue::Int32(ms) if ms >= -1 => NativeSelection::Async(NativeInvocation {
+            start: ms as u32 as usize,
+            length: 0,
+            parameter_count: method.signature().parameters.len(),
+        }),
+        _ => NativeSelection::Synchronous(intrinsic_thread_sleep::<T>),
+    }
+}
+
+#[dotnet_intrinsic("static void System.Threading.Thread::Sleep(int)", select = sleep_select, fallback = intrinsic_thread_sleep)]
+pub async fn thread_sleep(mut fx: VmEffects) -> NativeResult {
+    let ms = fx.invocation().start as u32 as i32;
+    let deadline = (ms > 0).then(|| Instant::now() + Duration::from_millis(ms as u64));
+    fx.vm().await?.discard_scalars(1)?;
+    if ms == 0 {
+        std::thread::yield_now();
+        fx.yield_now().await
+    } else {
+        fx.sleep_until(deadline).await
+    }
+}
+
+pub fn intrinsic_thread_yield<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ms = ctx.pop_i32();
-    if ms > 0 {
-        std::thread::sleep(Duration::from_millis(ms as u64));
-    } else if ms == 0 {
+    std::thread::yield_now();
+    ctx.push_i32(1);
+    StepResult::Continue
+}
+
+pub fn intrinsic_thread_spin_wait<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    if ctx.pop_i32() > 0 {
         std::thread::yield_now();
     }
-    // ms < 0 (e.g. Timeout.Infinite = -1): no-op; managed callers are
-    // responsible for not passing unbounded sleeps into the VM.
     StepResult::Continue
+}
+
+pub fn yield_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    _ctx: &T,
+    _operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    NativeSelection::Async(NativeInvocation {
+        start: 0,
+        length: 0,
+        parameter_count: method.signature().parameters.len(),
+    })
+}
+
+#[dotnet_intrinsic("static bool System.Threading.Thread::Yield()", select = yield_select, fallback = intrinsic_thread_yield)]
+pub async fn thread_yield(mut fx: VmEffects) -> NativeResult {
+    std::thread::yield_now();
+    fx.yield_now().await?;
+    fx.vm().await?.push_bool(true)
+}
+
+pub fn spin_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    _ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _generics: &GenericLookup,
+) -> NativeSelection<T> {
+    match operands.peek_at(0) {
+        StackValue::Int32(count) => NativeSelection::Async(NativeInvocation {
+            start: usize::from(count > 0),
+            length: 0,
+            parameter_count: method.signature().parameters.len(),
+        }),
+        _ => NativeSelection::Synchronous(intrinsic_thread_spin_wait::<T>),
+    }
+}
+
+#[dotnet_intrinsic("static void System.Threading.Thread::SpinWait(int)", select = spin_select, fallback = intrinsic_thread_spin_wait)]
+pub async fn thread_spin_wait(mut fx: VmEffects) -> NativeResult {
+    let positive = fx.invocation().start != 0;
+    fx.vm().await?.discard_scalars(1)?;
+    if positive {
+        std::thread::yield_now();
+        fx.yield_now().await?;
+    }
+    Ok(())
 }
 
 /// System.Threading.Thread::get_CurrentThread()

@@ -601,6 +601,7 @@ enum Request {
     Call(NativeCall, bool),
     Monitor(RootedValue, Option<std::time::Instant>),
     Finalizers,
+    Sleep(Option<std::time::Instant>),
     Initializer(Box<dyn NativeInitWait>),
 }
 impl Request {
@@ -610,6 +611,7 @@ impl Request {
             Self::Call(..) => NativeEffect::Call(generation),
             Self::Monitor(..) => NativeEffect::Monitor(generation),
             Self::Finalizers => NativeEffect::Finalizers(generation),
+            Self::Sleep(..) => NativeEffect::Sleep(generation),
             Self::Initializer(..) => NativeEffect::Initializer(generation),
         }
     }
@@ -618,6 +620,7 @@ enum Reply {
     Call(Result<NativeValue, RootedValue>),
     Monitor(bool),
     Finalizers,
+    Sleep,
     Initializer,
 }
 impl Reply {
@@ -626,6 +629,7 @@ impl Reply {
             Self::Call(..) => NativeEffect::Call(generation),
             Self::Monitor(..) => NativeEffect::Monitor(generation),
             Self::Finalizers => NativeEffect::Finalizers(generation),
+            Self::Sleep => NativeEffect::Sleep(generation),
             Self::Initializer => NativeEffect::Initializer(generation),
         }
     }
@@ -672,6 +676,7 @@ pub enum NativeEffect {
     Call(u64),
     Monitor(u64),
     Finalizers(u64),
+    Sleep(u64),
     Initializer(u64),
 }
 /// One executor turn's maximum number of VM access grants.
@@ -832,6 +837,16 @@ impl NativeControl {
     }
     pub fn reply_finalizers(&self, generation: u64) -> Result<(), VmError> {
         self.transition(ControlEvent::Reply(generation, Reply::Finalizers))?;
+        Ok(())
+    }
+    pub fn take_sleep(&self, generation: u64) -> Result<Option<std::time::Instant>, VmError> {
+        match self.transition(ControlEvent::Take(NativeEffect::Sleep(generation)))? {
+            Transition::Request(Request::Sleep(deadline)) => Ok(deadline),
+            _ => unreachable!(),
+        }
+    }
+    pub fn reply_sleep(&self, generation: u64) -> Result<(), VmError> {
+        self.transition(ControlEvent::Reply(generation, Reply::Sleep))?;
         Ok(())
     }
     pub fn take_initializer(&self, generation: u64) -> Result<Box<dyn NativeInitWait>, VmError> {
@@ -1044,6 +1059,7 @@ impl VmEffects {
                     effect = Some(match kind {
                         NativeEffect::Monitor(_) => NativeEffect::Monitor(generation),
                         NativeEffect::Finalizers(_) => NativeEffect::Finalizers(generation),
+                        NativeEffect::Sleep(_) => NativeEffect::Sleep(generation),
                         NativeEffect::Initializer(_) => NativeEffect::Initializer(generation),
                         _ => unreachable!(),
                     });
@@ -1061,6 +1077,11 @@ impl VmEffects {
     /// Wait until no arena, live or retired, has queued or running finalizers.
     pub async fn wait_finalizers(&mut self) -> NativeResult {
         self.request(Request::Finalizers).await?;
+        Ok(())
+    }
+    /// Park until the absolute deadline, or indefinitely when it is absent.
+    pub async fn sleep_until(&mut self, deadline: Option<std::time::Instant>) -> NativeResult {
+        self.request(Request::Sleep(deadline)).await?;
         Ok(())
     }
     /// Wait for monitor ownership. A deadline is absolute and remains in force across stops.
@@ -1582,6 +1603,7 @@ mod tests {
                 NativeEffect::Monitor(_) => 2,
                 NativeEffect::Finalizers(_) => 3,
                 NativeEffect::Initializer(_) => 4,
+                NativeEffect::Sleep(_) => 5,
             }
         }
         fn key(state: &ControlState) -> (usize, u64) {
@@ -1601,7 +1623,8 @@ mod tests {
                         NativeEffect::Call(g)
                         | NativeEffect::Monitor(g)
                         | NativeEffect::Finalizers(g)
-                        | NativeEffect::Initializer(g) => *g,
+                        | NativeEffect::Initializer(g)
+                        | NativeEffect::Sleep(g) => *g,
                         NativeEffect::Yield => unreachable!(),
                     };
                     (12 + kind(*effect), generation)
@@ -1821,6 +1844,43 @@ mod tests {
             control.take_finalizers(2).unwrap();
             assert!(control.reply_finalizers(1).is_err());
             control.reply_finalizers(2).unwrap();
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Ready(Ok(())))
+            ));
+        });
+    }
+
+    #[test]
+    fn sleep_replies_require_matching_effect_and_generation() {
+        arena().mutate(|mc, roots| {
+            let control = NativeControl::new();
+            let mut fx = control.effects(invocation()).unwrap();
+            let mut future = Box::pin(async move {
+                fx.sleep_until(None).await?;
+                fx.sleep_until(None).await
+            });
+            let mut backend = mock();
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert_eq!(control.take_effect(), Some(NativeEffect::Sleep(1)));
+            assert!(control.take_sleep(2).is_err());
+            assert_eq!(control.take_sleep(1).unwrap(), None);
+            assert!(control.reply_sleep(2).is_err());
+            assert!(control.reply_finalizers(1).is_err());
+            control.reply_sleep(1).unwrap();
+            assert!(control.reply_sleep(1).is_err());
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert_eq!(control.take_effect(), Some(NativeEffect::Sleep(2)));
+            control.take_sleep(2).unwrap();
+            assert!(control.reply_sleep(1).is_err());
+            control.reply_sleep(2).unwrap();
             assert!(matches!(
                 poll_native(&control, future.as_mut(), &mut region),
                 Ok(Poll::Ready(Ok(())))

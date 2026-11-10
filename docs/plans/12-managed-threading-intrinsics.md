@@ -104,10 +104,13 @@ workers stop at their next safepoint and the first exception wins.
 1. **Fatal entry-thread exception (implemented).** The lock-holding entry and sleeping-worker
    fixtures compare stdout and termination with the CLR. The lock fixture does not depend on
    whether the CLR schedules the worker during termination.
-2. **`Yield`, `SpinWait`, `Sleep`.** Fixtures: `Yield`/`SpinWait` (ST and MT); `Sleep` as a timed
+2. **`Yield`, `SpinWait`, `Sleep` (implemented).** Fixtures: `Yield`/`SpinWait` (ST and MT); `Sleep` as a timed
    park, and the sleeping-worker-versus-`GC.Collect` fixture with a tight but not flaky bound;
    `Sleep(Timeout.Infinite)` ended by abort. Deterministic tests for deadline expiry, abort and a
-   GC stop while parked, using the real executor path, as in slice 5.
+   GC stop while parked, using the real executor path, as in slice 5. Inline calls park outside
+   the mutation; non-inline legacy calls retain a frame-local deadline and retry at safepoints.
+   `Yield` reports `true` after yielding because the host API does not report whether another
+   thread ran.
 3. **Thread identity and start shapes.** Fixtures for `CurrentThread` identity on the entry thread
    and on a worker, `ManagedThreadId` uniqueness, `Start(object)`, a closure target, and
    `Join(int)` timing out and succeeding. Delete the instance-target rejection.
