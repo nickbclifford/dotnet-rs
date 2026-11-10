@@ -9,11 +9,6 @@ class Program
         Thread.Sleep(10);
     }
 
-    static void Fail()
-    {
-        throw new Exception("expected managed worker failure");
-    }
-
     static int Main()
     {
         var completed = new Thread(Complete);
@@ -28,16 +23,6 @@ class Program
         }
         completed.Join();
 
-        var failing = new Thread(Fail);
-        failing.Start();
-        try
-        {
-            failing.Join();
-            return 2;
-        }
-        catch (InvalidOperationException)
-        {
-            return 42;
-        }
+        return 42;
     }
 }

@@ -688,7 +688,7 @@ fn shutdown_waits_for_active_retired_finalizer() {
     let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
     let mut executor = dotnet_vm::Executor::new(shared.clone());
     executor.entrypoint(method).unwrap();
-    let result = executor.run();
+    let result = executor.run_entrypoint();
     let storage = shared
         .statics
         .get(program.clone(), &dotnet_vm::GenericLookup::default());

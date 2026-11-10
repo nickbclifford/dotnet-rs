@@ -634,10 +634,18 @@ impl Executor {
         }
     }
 
+    /// Runs only the entry point with its arguments already on the stack. Unlike [`Self::run`],
+    /// it returns as soon as the entry method does, without waiting for workers or finalizers
+    /// (a finalizer that never returns would otherwise block it). The caller must call
+    /// [`Self::wait_for_foreground_workers`] before dropping the executor.
+    pub fn run_entrypoint(&mut self) -> ExecutorResult {
+        self.run_inner(false)
+    }
+
     /// Runs the entry point with its arguments already on the stack, and waits for foreground
     /// workers before returning. An unhandled worker exception takes precedence over its result.
     pub fn run(&mut self) -> ExecutorResult {
-        let result = self.run_inner(false);
+        let result = self.run_entrypoint();
         // Foreground workers can throw after the entry method has returned. Keep the entry
         // arena participating in GC until they stop, then return their fatal exception.
         self.wait_for_foreground_workers();
