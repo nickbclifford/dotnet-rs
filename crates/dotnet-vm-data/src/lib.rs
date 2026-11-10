@@ -25,8 +25,8 @@ pub mod frame_homes;
 pub mod stack;
 
 pub use exceptions::{
-    ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection, SearchState,
-    UnwindState, UnwindTarget,
+    ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection,
+    SavedHandlerUnwind, SearchState, UnwindState, UnwindTarget,
 };
 pub use stack::{
     BasePointer, EvaluationStack, FrameReturnAction, FrameStack, MulticastState, NativeId,
@@ -46,9 +46,8 @@ pub enum VmContinuation<'gc> {
     /// `back_up_ip` was called before yielding; IP is already restored. This marker is cleared
     /// when the executor re-enters the VM because the retry is encoded in the restored frame state.
     RetryInstruction,
-    /// Nested exception-handler unwind states suspended during `leave`.
-    /// Restored on the next exception-unwind completion.
-    HandlerUnwinds(Vec<UnwindState<'gc>>),
+    /// Nested exception-handler unwind states suspended by control flow inside a handler.
+    HandlerUnwinds(Vec<SavedHandlerUnwind<'gc>>),
 }
 
 /// Per-frame execution state for a single active method invocation.

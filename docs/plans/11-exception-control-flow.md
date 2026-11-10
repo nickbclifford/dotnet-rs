@@ -1,6 +1,6 @@
 # Exception control flow: handlers inside handlers, unhandled worker exceptions
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** A `try`/`catch`/`finally` or `lock` inside a `finally` runs and returns control to the
 enclosing `finally` (with or without an exception in flight), and an exception unhandled on a
 managed worker thread terminates the process the way an unhandled exception on the main thread
@@ -102,12 +102,12 @@ observes `Threw`. Keep the `InvalidOperationException` path only for `Error` res
 
 ## Slices
 
-1. **Handlers inside handlers.** Add fixtures for the four failing shapes above, plus the three
+1. **Handlers inside handlers (implemented).** Add fixtures for the four failing shapes above, plus the three
    passing ones as regression guards, plus escape and `fault`-in-`finally` variants. Compare
    with CLR (the exit-code `diff_test!` list in `tests/integration_tests_impl/diff_harness.rs`).
    Extend the `dotnet-exceptions` / `frame_alloc::` tests to cover the saved-state stack,
-   including discard on escape. Enabled when the fixtures pass with and without
-   `multithreading`.
+   including discard on escape. The C# fixture and generated `fault` IL match the CLR in both
+   configurations; the fault cases also have VM-level tests.
 2. **Fatal worker exceptions.** Fixtures (`multithreading` only): joined worker throws; unjoined
    worker throws while main waits; worker throws while another worker is mid-computation. The
    exit status and the stdout written before the throw are compared with CLR where the harness

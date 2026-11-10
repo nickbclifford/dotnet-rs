@@ -56,6 +56,14 @@ pub struct UnwindState<'gc> {
     pub nested_filter: Option<FilterState<'gc>>,
 }
 
+/// An unwind suspended while its finally or fault handler runs nested control flow.
+#[derive(Clone, Copy, PartialEq, Collect, Debug)]
+#[collect(no_drop)]
+pub struct SavedHandlerUnwind<'gc> {
+    pub state: UnwindState<'gc>,
+    pub handler: HandlerAddress,
+}
+
 /// The destination of the current unwind operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
 #[collect(require_static)]

@@ -539,6 +539,7 @@ impl ExceptionHandlingSystem {
 
         let managed_exc = extract_managed_exception(&gc, exception, ctx);
 
+        ctx.resume_handler_unwind(None);
         *ctx.exception_mode_mut() = ExceptionState::None;
         ctx.frame_stack_mut().clear();
         ctx.evaluation_stack_mut().clear();
@@ -735,6 +736,7 @@ impl ExceptionHandlingSystem {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame || matches!(target, UnwindTarget::Native { .. }) {
+                ctx.discard_handler_unwinds_from(frame_index);
                 ctx.unwind_frame();
 
                 // If unwinding the frame triggered a new exception (e.g. wrapping a .cctor failure),
@@ -768,12 +770,21 @@ impl ExceptionHandlingSystem {
             return self.complete_nested_filter_unwind(ctx, gc, nested);
         }
 
-        let mut resumed_handler_unwind = None;
-        if let UnwindTarget::Instruction(target_ip) = target
-            && target_ip != usize::MAX
-        {
-            resumed_handler_unwind = ctx.pop_handler_unwind();
-        }
+        let destination = match target {
+            UnwindTarget::Instruction(ip) if ip != usize::MAX => Some((target_frame, ip)),
+            UnwindTarget::Handler(h) => Some((
+                h.frame_index,
+                ctx.frame_stack().frames[h.frame_index]
+                    .state
+                    .info_handle
+                    .exceptions[h.section_index]
+                    .handlers[h.handler_index]
+                    .instructions
+                    .start,
+            )),
+            _ => None,
+        };
+        let resumed_handler_unwind = ctx.resume_handler_unwind(destination);
 
         if let Some(state) = resumed_handler_unwind {
             *ctx.exception_mode_mut() = ExceptionState::ExecutingHandler(state);

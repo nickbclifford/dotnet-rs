@@ -3297,6 +3297,51 @@ fn boundary_executor_with_initializer(
     (executor, ty)
 }
 
+#[test]
+fn handler_unwind_stack_resumes_and_discards_exited_handlers() {
+    use crate::stack::ops::VmStackOps;
+    use dotnet_vm_data::{HandlerAddress, UnwindState, UnwindTarget, exceptions::HandlerKind};
+    let (mut executor, _) = boundary_executor(false);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let mut ctx = engine.ves_context(gc);
+                ctx.current_frame_mut().state.info_handle.exceptions = vec![
+                    Arc::new(boundary_section(HandlerKind::Finally, 0..1, 1..20)),
+                    Arc::new(boundary_section(HandlerKind::Finally, 2..3, 3..10)),
+                ];
+                let state = |section_index| UnwindState {
+                    exception: None,
+                    target: UnwindTarget::Instruction(30 + section_index),
+                    cursor: HandlerAddress {
+                        frame_index: 0,
+                        section_index,
+                        handler_index: 0,
+                    },
+                    nested_filter: None,
+                };
+                ctx.current_frame_mut().state.ip = 2;
+                ctx.push_handler_unwind(state(1));
+                ctx.current_frame_mut().state.ip = 4;
+                ctx.push_handler_unwind(state(2));
+                assert_eq!(ctx.resume_handler_unwind(Some((0, 5))), Some(state(2)));
+                assert_eq!(ctx.resume_handler_unwind(Some((0, 15))), Some(state(1)));
+                ctx.current_frame_mut().state.ip = 2;
+                ctx.push_handler_unwind(state(1));
+                ctx.current_frame_mut().state.ip = 4;
+                ctx.push_handler_unwind(state(2));
+                assert_eq!(ctx.resume_handler_unwind(Some((0, 15))), Some(state(1)));
+                assert_eq!(ctx.resume_handler_unwind(Some((0, 15))), None);
+                ctx.current_frame_mut().state.ip = 2;
+                ctx.push_handler_unwind(state(1));
+                assert_eq!(ctx.resume_handler_unwind(Some((0, 25))), None);
+            })
+        })
+        .unwrap();
+}
+
 fn boundary_start(executor: &mut Executor) {
     boundary_start_with(executor, boundary_body);
 }
@@ -4552,6 +4597,13 @@ fn native_capture_child_catch_preserves_interrupted_handler() {
         .with_arena(|arena| {
             arena.mutate_root(|_, engine| {
                 engine.stack.execution.exception_mode = ExceptionState::ExecutingHandler(ambient());
+                engine
+                    .stack
+                    .execution
+                    .frame_stack
+                    .current_frame_mut()
+                    .state
+                    .ip = 1;
             })
         })
         .unwrap();
@@ -4562,7 +4614,12 @@ fn native_capture_child_catch_preserves_interrupted_handler() {
         1..2,
     )];
     assert_eq!(
-        boundary_throw(&mut executor, ty, child, vec![]),
+        boundary_throw(
+            &mut executor,
+            ty,
+            child,
+            vec![boundary_section(HandlerKind::Finally, 0..1, 1..3)],
+        ),
         StepResult::Exception
     );
     assert_eq!(boundary_handle(&mut executor, false), StepResult::Exception);

@@ -368,3 +368,180 @@ diff_test!(
     thread_finalization_matches_dotnet,
     "tests/debug_fixtures/thread_finalization_42.cs"
 );
+
+diff_test!(
+    exceptions_handlers_inside_handlers_matches_dotnet,
+    "tests/fixtures/exceptions/handlers_inside_handlers_42.cs"
+);
+diff_test!(
+    exceptions_nested_finally_replacement_matches_dotnet,
+    "tests/fixtures/exceptions/nested_finally_42.cs"
+);
+
+// C# has no fault clause. Generate the IL so the same cases run on the CLR and VM.
+#[cfg(not(feature = "fuzzing"))]
+#[test]
+fn exceptions_fault_inside_finally_matches_dotnet() {
+    use crate::integration_tests_impl::harness::TestHarness;
+    use dotnetdll::prelude::*;
+    use std::{fs, path::Path, process::Command};
+
+    let harness = TestHarness::get();
+    let reference =
+        harness.ensure_dll(Path::new("tests/fixtures/exceptions/exception_batch_42.cs"));
+    let runtime_config = fs::read(reference.with_extension("runtimeconfig.json"))
+        .expect("read fixture runtime configuration");
+    let dir = std::env::temp_dir().join(format!("dotnet-rs-fault-fixture-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("create fixture directory");
+
+    for pending in [false, true] {
+        let name = if pending {
+            "fault_pending"
+        } else {
+            "fault_normal"
+        };
+        let mut resolution = Resolution::new(Module::new(format!("{name}.dll")));
+        resolution.assembly = Some(Assembly::new(name));
+        let core = resolution.push_assembly_reference(ExternalAssemblyReference::new("mscorlib"));
+        let object = resolution.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "Object",
+            ResolutionScope::Assembly(core),
+        ));
+        let exception = resolution.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "Exception",
+            ResolutionScope::Assembly(core),
+        ));
+        let exception_type: MethodType = BaseType::class(exception).into();
+        let ctor = resolution.push_method_reference(ExternalMethodReference {
+            parent: MethodReferenceParent::Type(exception_type.clone()),
+            name: ".ctor".into(),
+            signature: ManagedMethod::instance(ReturnType::VOID, vec![]),
+            attributes: vec![],
+        });
+        let program = resolution.push_type_definition(TypeDefinition::new(None, "Program"));
+        resolution[program].set_extends(object);
+
+        let (
+            mut instructions,
+            outer_try,
+            outer_finally,
+            inner_try,
+            inner_fault,
+            inner_catch,
+            outer_end,
+            outer_catch,
+            done,
+        ) = asm! {
+            LoadConstantInt32 0;
+            StoreLocal 0;
+            +outer_try NoOperation;
+            NoOperation;
+            +outer_finally NoOperation;
+            +inner_try NewObject UserMethod::Reference(ctor);
+            Throw;
+            +inner_fault LoadConstantInt32 40;
+            StoreLocal 0;
+            EndFinally;
+            +inner_catch Pop;
+            Leave outer_end;
+            +outer_end LoadLocal 0;
+            LoadConstantInt32 1;
+            Add;
+            StoreLocal 0;
+            EndFinally;
+            +outer_catch Pop;
+            LoadLocal 0;
+            LoadConstantInt32 1;
+            Add;
+            StoreLocal 0;
+            Leave done;
+            +done LoadLocal 0;
+            Return;
+        };
+        if pending {
+            instructions[outer_try] = Instruction::NewObject(UserMethod::Reference(ctor));
+            instructions[outer_try + 1] = Instruction::Throw;
+        } else {
+            instructions[outer_try] = Instruction::Leave(done);
+            instructions[outer_try + 1] = Instruction::Leave(done);
+        }
+        let clauses = vec![
+            body::Exception {
+                kind: body::ExceptionKind::Fault,
+                try_offset: inner_try,
+                try_length: inner_fault - inner_try,
+                handler_offset: inner_fault,
+                handler_length: inner_catch - inner_fault,
+            },
+            body::Exception {
+                kind: body::ExceptionKind::TypedException(exception_type.clone()),
+                try_offset: inner_try,
+                try_length: inner_catch - inner_try,
+                handler_offset: inner_catch,
+                handler_length: outer_end - inner_catch,
+            },
+            body::Exception {
+                kind: body::ExceptionKind::Finally,
+                try_offset: outer_try,
+                try_length: outer_finally - outer_try,
+                handler_offset: outer_finally,
+                handler_length: outer_catch - outer_finally,
+            },
+            body::Exception {
+                kind: body::ExceptionKind::TypedException(exception_type),
+                try_offset: outer_try,
+                try_length: outer_catch - outer_try,
+                handler_offset: outer_catch,
+                handler_length: done - outer_catch,
+            },
+        ];
+        let main = resolution.push_method(
+            program,
+            Method::new(
+                Accessibility::Public,
+                ManagedMethod::static_member(
+                    ReturnType::value(MethodType::Base(Box::new(BaseType::Int32))),
+                    vec![],
+                ),
+                "Main",
+                Some(body::Method {
+                    data_sections: vec![body::DataSection::ExceptionHandlers(clauses)],
+                    ..body::Method::with_locals(
+                        vec![LocalVariable::new(MethodType::Base(Box::new(
+                            BaseType::Int32,
+                        )))],
+                        instructions,
+                    )
+                }),
+            ),
+        );
+        resolution.set_entry_point(main);
+        let bytes = resolution
+            .write(WriteOptions {
+                is_32_bit: false,
+                is_executable: true,
+            })
+            .expect("write fault fixture");
+        let dll = dir.join(format!("{name}.dll"));
+        fs::write(&dll, bytes).expect("write fault fixture");
+        fs::write(dll.with_extension("runtimeconfig.json"), &runtime_config)
+            .expect("write runtime configuration");
+        let clr = Command::new("dotnet")
+            .arg(&dll)
+            .output()
+            .expect("run CLR fixture");
+        let expected = if pending { 42 } else { 41 };
+        assert_eq!(
+            clr.status.code(),
+            Some(expected),
+            "CLR {name}: {}",
+            String::from_utf8_lossy(&clr.stderr)
+        );
+        let (vm_exit, vm_stdout) = harness.run_cli(&dll);
+        assert_eq!(vm_exit, expected as u8, "VM {name} exit code");
+        assert_eq!(vm_stdout.as_bytes(), clr.stdout, "{name} stdout");
+    }
+    fs::remove_dir_all(dir).expect("remove fixture directory");
+}

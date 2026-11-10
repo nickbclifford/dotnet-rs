@@ -64,6 +64,9 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             });
         }
 
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
+            self.push_handler_unwind(state);
+        }
         *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
         StepResult::Exception
     }
@@ -104,6 +107,9 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             }
         });
 
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
+            self.push_handler_unwind(state);
+        }
         *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
         StepResult::Exception
     }
@@ -112,6 +118,9 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             frame.monitor_retry = None;
+        }
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
+            self.push_handler_unwind(state);
         }
         *self.exception_mode = ExceptionState::Throwing(exception, false);
         self.handle_exception()
@@ -127,6 +136,9 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 "rethrow without active exception".into(),
             )));
         };
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
+            self.push_handler_unwind(state);
+        }
         *self.exception_mode = ExceptionState::Throwing(exception, true);
         self.handle_exception()
     }
@@ -134,8 +146,10 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn leave(&mut self, target_ip: usize) -> StepResult {
         let frame_index = self.frame_stack.len() - 1;
+        // ECMA-335 III.3.46, III.3.35 and I.12.4.2.8.2.8 require a leave
+        // inside a finally or fault to remain within that handler.
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
-            && state.cursor.frame_index < frame_index
+            && state.cursor.frame_index <= frame_index
         {
             self.push_handler_unwind(state);
         }
@@ -245,6 +259,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
             && state.cursor.frame_index == frame_index
         {
+            self.discard_handler_unwinds_from(frame_index);
             *self.exception_mode = ExceptionState::Unwinding(UnwindState {
                 exception: state.exception,
                 target: UnwindTarget::Instruction(usize::MAX),

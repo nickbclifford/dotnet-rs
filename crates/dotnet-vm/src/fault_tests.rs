@@ -325,4 +325,184 @@ mod tests {
         let final_int = run_fault_entrypoint(&shared, entrypoint);
         assert_eq!(final_int, Some(100), "Fault handler SHOULD have run");
     }
+    #[test]
+    fn test_fault_inside_finally_resumes_outer_handler() {
+        let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT fault test keeps shared state on its sole executor"
+        )]
+        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+        let (mut res, system_runtime, type_idx) =
+            make_test_assembly!("FaultNested.dll", "FaultNestedAssembly", "FaultNestedType");
+        let exception_type_ref = res.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "Exception",
+            ResolutionScope::Assembly(system_runtime),
+        ));
+        let sig = parameterless_i32_signature();
+        let ctor_sig = MethodSignature {
+            instance: true,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        };
+        let exc_ctor = res.push_method_reference(ExternalMethodReference {
+            parent: MethodReferenceParent::Type(MethodType::Base(Box::new(BaseType::class(
+                exception_type_ref,
+            )))),
+            name: ".ctor".into(),
+            signature: ctor_sig,
+            attributes: vec![],
+        });
+        let body = make_test_method!(
+            max_stack: 2,
+            instructions: vec![
+                Instruction::Leave(10),
+                Instruction::NoOperation,
+                Instruction::NewObject(UserMethod::Reference(exc_ctor)),
+                Instruction::Throw,
+                Instruction::LoadConstantInt32(42),
+                Instruction::StoreLocal(0),
+                Instruction::EndFinally,
+                Instruction::Pop,
+                Instruction::Leave(9),
+                Instruction::EndFinally,
+                Instruction::LoadLocal(0),
+                Instruction::Return,
+            ],
+            locals: vec![LocalVariable::Variable {
+                custom_modifiers: vec![], pinned: false, by_ref: false,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            }],
+            data_sections: vec![body::DataSection::ExceptionHandlers(vec![
+                body::Exception { kind: body::ExceptionKind::Fault, try_offset: 2, try_length: 2, handler_offset: 4, handler_length: 3 },
+                body::Exception { kind: body::ExceptionKind::TypedException(MethodType::Base(Box::new(BaseType::class(exception_type_ref)))), try_offset: 2, try_length: 5, handler_offset: 7, handler_length: 2 },
+                body::Exception { kind: body::ExceptionKind::Finally, try_offset: 0, try_length: 2, handler_offset: 2, handler_length: 8 },
+            ])],
+        );
+        let method_idx = res.push_method(
+            type_idx,
+            Method::new(Accessibility::Public, sig.clone(), "TestNested", Some(body)),
+        );
+        let res_s = loader.register_owned_assembly(res);
+        let _typedef = &res_s.definition()[type_idx];
+        let method_def = &res_s.definition()[method_idx];
+        let td = TypeDescription::new(res_s.clone(), type_idx);
+        let method_index = td
+            .definition()
+            .methods
+            .iter()
+            .position(|m| std::ptr::eq(m, method_def))
+            .unwrap();
+        let entrypoint = MethodDescription::new(
+            td,
+            GenericLookup::default(),
+            res_s,
+            MethodMemberIndex::Method(method_index),
+        );
+        let final_int = run_fault_entrypoint(&shared, entrypoint);
+        assert_eq!(
+            final_int,
+            Some(42),
+            "nested fault must return to the outer finally"
+        );
+    }
+    #[test]
+    fn test_fault_inside_finally_with_pending_exception() {
+        let loader = get_mock_loader();
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "the no-MT fault test keeps shared state on its sole executor"
+        )]
+        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+        let (mut res, system_runtime, type_idx) = make_test_assembly!(
+            "FaultNestedPending.dll",
+            "FaultNestedPendingAssembly",
+            "FaultNestedPendingType"
+        );
+        let exception_type_ref = res.push_type_reference(ExternalTypeReference::new(
+            Some("System".into()),
+            "Exception",
+            ResolutionScope::Assembly(system_runtime),
+        ));
+        let sig = parameterless_i32_signature();
+        let ctor_sig = MethodSignature {
+            instance: true,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        };
+        let exc_ctor = res.push_method_reference(ExternalMethodReference {
+            parent: MethodReferenceParent::Type(MethodType::Base(Box::new(BaseType::class(
+                exception_type_ref,
+            )))),
+            name: ".ctor".into(),
+            signature: ctor_sig,
+            attributes: vec![],
+        });
+        let body = make_test_method!(
+            max_stack: 2,
+            instructions: vec![
+                Instruction::NewObject(UserMethod::Reference(exc_ctor)),
+                Instruction::Throw,
+                Instruction::NewObject(UserMethod::Reference(exc_ctor)),
+                Instruction::Throw,
+                Instruction::LoadConstantInt32(42),
+                Instruction::StoreLocal(0),
+                Instruction::EndFinally,
+                Instruction::Pop,
+                Instruction::Leave(9),
+                Instruction::EndFinally,
+                Instruction::Pop,
+                Instruction::LoadLocal(0),
+                Instruction::Return,
+            ],
+            locals: vec![LocalVariable::Variable {
+                custom_modifiers: vec![], pinned: false, by_ref: false,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            }],
+            data_sections: vec![body::DataSection::ExceptionHandlers(vec![
+                body::Exception { kind: body::ExceptionKind::Fault, try_offset: 2, try_length: 2, handler_offset: 4, handler_length: 3 },
+                body::Exception { kind: body::ExceptionKind::TypedException(MethodType::Base(Box::new(BaseType::class(exception_type_ref)))), try_offset: 2, try_length: 5, handler_offset: 7, handler_length: 2 },
+                body::Exception { kind: body::ExceptionKind::Finally, try_offset: 0, try_length: 2, handler_offset: 2, handler_length: 8 },
+                body::Exception { kind: body::ExceptionKind::TypedException(MethodType::Base(Box::new(BaseType::class(exception_type_ref)))), try_offset: 0, try_length: 10, handler_offset: 10, handler_length: 3 },
+            ])],
+        );
+        let method_idx = res.push_method(
+            type_idx,
+            Method::new(
+                Accessibility::Public,
+                sig.clone(),
+                "TestNestedPending",
+                Some(body),
+            ),
+        );
+        let res_s = loader.register_owned_assembly(res);
+        let _typedef = &res_s.definition()[type_idx];
+        let method_def = &res_s.definition()[method_idx];
+        let td = TypeDescription::new(res_s.clone(), type_idx);
+        let method_index = td
+            .definition()
+            .methods
+            .iter()
+            .position(|m| std::ptr::eq(m, method_def))
+            .unwrap();
+        let entrypoint = MethodDescription::new(
+            td,
+            GenericLookup::default(),
+            res_s,
+            MethodMemberIndex::Method(method_index),
+        );
+        let final_int = run_fault_entrypoint(&shared, entrypoint);
+        assert_eq!(
+            final_int,
+            Some(42),
+            "nested fault must return to the outer finally"
+        );
+    }
 }

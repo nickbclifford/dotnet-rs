@@ -51,31 +51,88 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .push(action);
     }
 
-    /// Push a handler unwind state into `VmContinuation::HandlerUnwinds`.
-    #[inline]
+    /// Save the executing handler before starting nested exception control flow.
     pub fn push_handler_unwind(&mut self, state: dotnet_vm_data::UnwindState<'gc>) {
+        let frame_index = state.cursor.frame_index;
+        let frame = &self.frame_stack.frames[frame_index];
+        let ip = frame.state.ip;
+        let handler = frame
+            .state
+            .info_handle
+            .exceptions
+            .iter()
+            .enumerate()
+            .flat_map(|(section_index, section)| {
+                section
+                    .handlers
+                    .iter()
+                    .enumerate()
+                    .map(move |(handler_index, handler)| (section_index, handler_index, handler))
+            })
+            .filter(|(_, _, h)| {
+                matches!(
+                    h.kind,
+                    dotnet_vm_data::exceptions::HandlerKind::Finally
+                        | dotnet_vm_data::exceptions::HandlerKind::Fault
+                ) && h.instructions.contains(&ip)
+            })
+            .min_by_key(|(_, _, h)| h.instructions.end - h.instructions.start)
+            .map(
+                |(section_index, handler_index, _)| dotnet_vm_data::HandlerAddress {
+                    frame_index,
+                    section_index,
+                    handler_index,
+                },
+            )
+            .expect("executing handler must contain its frame instruction pointer");
+        let saved = dotnet_vm_data::SavedHandlerUnwind { state, handler };
         match self.continuation {
-            dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) => unwinds.push(state),
-            _ => {
-                *self.continuation = dotnet_vm_data::VmContinuation::HandlerUnwinds(vec![state]);
+            dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) => unwinds.push(saved),
+            _ => *self.continuation = dotnet_vm_data::VmContinuation::HandlerUnwinds(vec![saved]),
+        }
+    }
+
+    /// Discard suspended handlers in frames being removed.
+    pub fn discard_handler_unwinds_from(&mut self, frame_index: usize) {
+        if let dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) = self.continuation {
+            unwinds.retain(|saved| saved.handler.frame_index < frame_index);
+            if unwinds.is_empty() {
+                *self.continuation = dotnet_vm_data::VmContinuation::None;
             }
         }
     }
 
-    /// Pop a handler unwind state from `VmContinuation::HandlerUnwinds`.
-    /// Returns `None` if no pending unwinds.
-    #[inline]
-    pub fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>> {
-        match self.continuation {
-            dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) => {
-                let state = unwinds.pop();
-                if unwinds.is_empty() {
-                    *self.continuation = dotnet_vm_data::VmContinuation::None;
-                }
-                state
+    /// Discard exited handlers and resume the innermost handler containing the destination.
+    pub fn resume_handler_unwind(
+        &mut self,
+        destination: Option<(usize, usize)>,
+    ) -> Option<dotnet_vm_data::UnwindState<'gc>> {
+        let dotnet_vm_data::VmContinuation::HandlerUnwinds(unwinds) = self.continuation else {
+            return None;
+        };
+        while let Some(saved) = unwinds.last() {
+            let h = saved.handler;
+            let contains = destination.is_some_and(|(frame, ip)| {
+                h.frame_index < frame
+                    || (h.frame_index == frame
+                        && self
+                            .frame_stack
+                            .frames
+                            .get(frame)
+                            .and_then(|f| f.state.info_handle.exceptions.get(h.section_index))
+                            .and_then(|s| s.handlers.get(h.handler_index))
+                            .is_some_and(|handler| handler.instructions.contains(&ip)))
+            });
+            if contains {
+                break;
             }
-            _ => None,
+            unwinds.pop();
         }
+        let state = unwinds.pop().map(|saved| saved.state);
+        if unwinds.is_empty() {
+            *self.continuation = dotnet_vm_data::VmContinuation::None;
+        }
+        state
     }
 }
 
@@ -1064,8 +1121,15 @@ impl<'a, 'gc> VesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>> {
-        VesContext::pop_handler_unwind(self)
+    fn discard_handler_unwinds_from(&mut self, frame_index: usize) {
+        VesContext::discard_handler_unwinds_from(self, frame_index)
+    }
+
+    fn resume_handler_unwind(
+        &mut self,
+        destination: Option<(usize, usize)>,
+    ) -> Option<dotnet_vm_data::UnwindState<'gc>> {
+        VesContext::resume_handler_unwind(self, destination)
     }
 }
 

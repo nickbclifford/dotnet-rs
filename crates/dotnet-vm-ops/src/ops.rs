@@ -593,7 +593,11 @@ pub trait VesInternals<'gc> {
     fn evaluation_stack_mut(&mut self) -> &mut dotnet_vm_data::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &dotnet_vm_data::FrameStack<'gc>;
     fn frame_stack_mut(&mut self) -> &mut dotnet_vm_data::FrameStack<'gc>;
-    fn pop_handler_unwind(&mut self) -> Option<dotnet_vm_data::UnwindState<'gc>>;
+    fn discard_handler_unwinds_from(&mut self, frame_index: usize);
+    fn resume_handler_unwind(
+        &mut self,
+        destination: Option<(usize, usize)>,
+    ) -> Option<dotnet_vm_data::UnwindState<'gc>>;
 }
 
 pub trait StaticsOps<'gc> {
