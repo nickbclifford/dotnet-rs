@@ -18,7 +18,7 @@ class Program
             completed.Start();
             return 1;
         }
-        catch (InvalidOperationException)
+        catch (ThreadStateException)
         {
         }
         completed.Join();

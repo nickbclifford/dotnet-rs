@@ -134,6 +134,10 @@ impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
     fn thread_id(&self) -> ArenaId {
         self.thread_id.get()
     }
+
+    fn managed_thread_id(&self) -> i32 {
+        self.local.managed_threads.current_id()
+    }
 }
 
 impl<'a, 'gc> IntrinsicDispatchOps<'gc> for VesContext<'a, 'gc> {

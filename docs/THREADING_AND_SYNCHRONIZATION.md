@@ -52,7 +52,7 @@ The `ThreadState` enum (`threading/mod.rs`) has exactly three states:
 ### `ManagedThread` (`basic.rs`)
 Each thread has:
 - `native_id`: OS `ThreadId`
-- `managed_id`: `ArenaId` (used as the thread's identity throughout the VM)
+- `managed_id`: `ArenaId` (used for arena and GC coordination; the guest-visible managed thread ID is separate)
 - Atomic `ThreadState`
 
 ### Stop-The-World Protocol (`basic.rs` → `request_stop_the_world`)
@@ -103,20 +103,17 @@ sequenceDiagram
 
 ### Scoped managed `Thread` support
 
-With the `multithreading` feature, dotnet-rs supports the narrow lifecycle required by
-this runtime: `Thread(ThreadStart)`, parameterless `Thread.Start()`, and parameterless
-`Thread.Join()`. The `ThreadStart` must be an explicit static, parameterless method with
-a `void` return type; a supported managed thread may be started once and joined once.
-These handlers bypass CoreLib's QCall initialization for this subset.
+With the `multithreading` feature, dotnet-rs supports `ThreadStart` and
+`ParameterizedThreadStart`, including instance targets and multicast delegates, `Start()` and
+`Start(object)`, and `Join()` and `Join(int)`. Each managed thread has a stable `CurrentThread`
+object and managed ID. Thread records retain their managed objects until the worker completes;
+unstarted records remain rooted until arena teardown. The shared worker registry holds completion
+and identity metadata for access from other arenas, retaining metadata entries until VM teardown.
+These handlers bypass CoreLib's QCall initialization.
 
-This is not complete `System.Threading.Thread` compatibility. Unsupported cases include
-other constructors, `Start(object)`, timeout-bearing `Join` overloads, and ThreadStart
-delegates with an instance target (including capturing lambdas), non-static targets,
-parameters, or a non-`void` return type. Background, priority, culture, and other thread
-configuration APIs and ThreadPool scheduling are also outside this subset. In builds without
-`multithreading`, managed
-`Thread(ThreadStart)` construction and `Start()` explicitly report unsupported rather
-than spawning a worker.
+Background, priority, culture, other constructors and thread configuration APIs, and ThreadPool
+scheduling remain unsupported. Without `multithreading`, construction and starting of managed
+workers report unsupported; entry-thread identity remains available.
 
 ### Managed worker lifecycle and process exit
 

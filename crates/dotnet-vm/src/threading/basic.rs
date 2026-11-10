@@ -44,11 +44,12 @@ pub(crate) fn spawn_thread_start(
     shared: Arc<SharedGlobalState>,
     method: dotnet_types::members::MethodDescription,
     lookup: dotnet_types::generics::GenericLookup,
+    start: super::local::WorkerStart,
 ) -> Option<super::workers::WorkerCompletion> {
     let registry = &shared.workers;
     let worker_shared = shared.clone();
     Some(registry.spawn_owner(move |worker| {
-        Executor::run_thread_start(worker_shared, method, lookup, worker)
+        Executor::run_managed_thread_start(worker_shared, method, lookup, start, worker)
     }))
 }
 

@@ -400,6 +400,7 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
 
 pub trait ThreadOps {
     fn thread_id(&self) -> ArenaId;
+    fn managed_thread_id(&self) -> i32;
 }
 
 pub trait SimdCapabilityOps {

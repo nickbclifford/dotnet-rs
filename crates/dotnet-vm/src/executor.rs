@@ -411,19 +411,39 @@ impl Executor {
 
     /// Runs an already-resolved managed `ThreadStart` target in a fresh worker executor.
     ///
-    /// `method` and `generic_inst` are owned resolution metadata. In particular, this boundary
-    /// deliberately accepts no `ObjectRef`: the delegate and managed `Thread` object remain
-    /// rooted in their parent arena, while the worker constructs its own arena around the shared
-    /// VM-global state.
-    #[cfg(feature = "multithreading")]
+    /// The test seam accepts owned resolution metadata and no managed references.
+    #[cfg(all(test, feature = "multithreading"))]
     pub(crate) fn run_thread_start(
         shared: Arc<SharedGlobalState>,
         method: MethodDescription,
         generic_inst: dotnet_types::generics::GenericLookup,
         worker: crate::threading::workers::RunningWorker,
     ) {
+        Self::run_thread_start_inner(shared, method, generic_inst, None, worker);
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn run_managed_thread_start(
+        shared: Arc<SharedGlobalState>,
+        method: MethodDescription,
+        generic_inst: dotnet_types::generics::GenericLookup,
+        start: crate::threading::local::WorkerStart,
+        worker: crate::threading::workers::RunningWorker,
+    ) {
+        Self::run_thread_start_inner(shared, method, generic_inst, Some(start), worker);
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn run_thread_start_inner(
+        shared: Arc<SharedGlobalState>,
+        method: MethodDescription,
+        generic_inst: dotnet_types::generics::GenericLookup,
+        start: Option<crate::threading::local::WorkerStart>,
+        worker: crate::threading::workers::RunningWorker,
+    ) {
         let mut executor = Self::new(shared);
-        let result = match executor.install_thread_start(method, generic_inst) {
+        let retained = start.as_ref().map(|start| start.retained.clone());
+        let result = match executor.install_thread_start_with_args(method, generic_inst, start) {
             Ok(()) => executor.run_installed_thread_start(),
             Err(error) => ExecutorResult::Error(error),
         };
@@ -444,8 +464,16 @@ impl Executor {
                     .call_state
                     .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);
                 *execution = crate::stack::context::ThreadContext::default();
+                if retained.is_some() {
+                    c.stack.local.managed_threads.clear_current();
+                }
             });
         });
+        if let Some(retained) = retained
+            && cleanup.is_ok()
+        {
+            retained.store(false, std::sync::atomic::Ordering::Release);
+        }
         let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
         executor.serve_retired(worker.complete(result));
     }
@@ -534,11 +562,21 @@ impl Executor {
     }
 
     /// Installs a `ThreadStart` target without applying CLI entrypoint argument rules.
-    #[cfg(feature = "multithreading")]
+    #[cfg(all(test, feature = "multithreading"))]
     fn install_thread_start(
         &mut self,
         method: MethodDescription,
         generic_inst: dotnet_types::generics::GenericLookup,
+    ) -> Result<(), VmError> {
+        self.install_thread_start_with_args(method, generic_inst, None)
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn install_thread_start_with_args(
+        &mut self,
+        method: MethodDescription,
+        generic_inst: dotnet_types::generics::GenericLookup,
+        start: Option<crate::threading::local::WorkerStart>,
     ) -> Result<(), VmError> {
         #[cfg(feature = "memory-validation")]
         let thread_id = self.thread_id;
@@ -559,12 +597,36 @@ impl Executor {
                 let info = shared
                     .caches
                     .get_method_info(method, &generic_inst, shared.clone())?;
+                let args = if let Some(start) = start {
+                    // SAFETY: The creating and starting arenas retain these objects in traced
+                    // thread records until this worker's cleanup has completed. Those arenas
+                    // cannot be destroyed while this worker is running.
+                    let decode = |ptr: dotnet_value::object::ObjectPtr| unsafe {
+                        dotnet_value::object::ObjectRef::from_storage_ptr(
+                            ptr.as_ptr().cast_mut().cast(),
+                        )
+                    };
+                    let thread = decode(start.thread);
+                    let delegate = decode(start.delegate);
+                    let argument = start
+                        .argument
+                        .map(decode)
+                        .unwrap_or(dotnet_value::object::ObjectRef(None));
+                    c.stack.local.managed_threads.set_current(thread);
+                    c.stack.local.managed_threads.set_current_id(start.id);
+                    vec![
+                        StackValue::ObjectRef(delegate),
+                        StackValue::ObjectRef(argument),
+                    ]
+                } else {
+                    vec![]
+                };
                 let mut ctx = c.ves_context(gc_handle);
 
                 if let Some(err) = ctx.managed_frame_abort_error(&info) {
                     return Err(err);
                 }
-                ctx.entrypoint_frame(info, generic_inst, vec![])?;
+                ctx.entrypoint_frame(info, generic_inst, args)?;
                 Ok(())
             })
         })??;

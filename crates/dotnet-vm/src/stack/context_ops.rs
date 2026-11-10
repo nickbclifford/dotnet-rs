@@ -617,10 +617,38 @@ impl<'a, 'gc> dotnet_intrinsics_threading::StackSlotWriteHost<'gc> for VesContex
 }
 
 impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext<'a, 'gc> {
+    fn threading_current_thread(&mut self, thread_type: TypeDescription) -> StepResult {
+        let thread = match self.local.managed_threads.current() {
+            Some(thread) => thread,
+            None => {
+                let object = dotnet_vm_ops::vm_try!(self.new_object(thread_type));
+                let thread = ObjectRef::new(self.gc, HeapStorage::Obj(Box::new(object)));
+                self.register_new_object(&thread);
+                self.local.managed_threads.set_current(thread);
+                #[cfg(feature = "multithreading")]
+                self.shared.workers.register_managed_thread(
+                    thread.as_ptr().unwrap(),
+                    crate::threading::workers::ManagedThreadMetadata {
+                        id: self.local.managed_threads.current_id(),
+                        delegate: None,
+                        parameterized: false,
+                        started: true,
+                        completion_index: None,
+                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    },
+                );
+                thread
+            }
+        };
+        self.push_obj(thread);
+        StepResult::Continue
+    }
+
     fn threading_new_managed_thread(
         &mut self,
         thread_type: TypeDescription,
         thread_start: ObjectRef<'gc>,
+        parameterized: bool,
     ) -> StepResult {
         if !crate::threading::managed_thread_workers_supported() {
             return self.throw_by_name_with_message(
@@ -632,15 +660,35 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
         let thread = dotnet_vm_ops::vm_try!(self.new_object(thread_type));
         let thread = ObjectRef::new(self.gc, HeapStorage::Obj(Box::new(thread)));
         self.register_new_object(&thread);
+        let retained = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         self.local.managed_threads.records_write().insert(
             thread,
-            crate::threading::local::ManagedThreadRecord::new(thread_start),
+            crate::threading::local::ManagedThreadRecord::new(thread_start, retained.clone()),
         );
+        #[cfg(feature = "multithreading")]
+        self.shared.workers.register_managed_thread(
+            thread.as_ptr().unwrap(),
+            crate::threading::workers::ManagedThreadMetadata {
+                id: crate::threading::local::next_managed_id(),
+                delegate: thread_start.as_ptr(),
+                parameterized,
+                started: false,
+                completion_index: None,
+                retained,
+            },
+        );
+        #[cfg(not(feature = "multithreading"))]
+        let _ = parameterized;
         self.push_obj(thread);
         StepResult::Continue
     }
 
-    fn threading_start_managed_thread(&mut self, thread: ObjectRef<'gc>) -> StepResult {
+    fn threading_start_managed_thread(
+        &mut self,
+        thread: ObjectRef<'gc>,
+        argument: ObjectRef<'gc>,
+        has_argument: bool,
+    ) -> StepResult {
         if thread.0.is_none() {
             return self.throw_by_name_with_message(
                 "System.NullReferenceException",
@@ -655,130 +703,200 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             );
         }
 
-        let thread_start = {
-            let records = self.local.managed_threads.records_read();
-            match records.get(&thread) {
-                None => Err((
-                    "System.PlatformNotSupportedException",
-                    "Thread.Start() is supported only for Thread(ThreadStart) instances.",
-                )),
-                Some(record) if record.completion.is_some() => Err((
-                    "System.InvalidOperationException",
-                    "Thread.Start() may be called only once for a managed Thread.",
-                )),
-                Some(record) => Ok(record.thread_start),
-            }
-        };
-        let thread_start = match thread_start {
-            Ok(thread_start) => thread_start,
-            Err((exception_type, message)) => {
-                return self.throw_by_name_with_message(exception_type, message);
-            }
-        };
-
-        let (target, method_index) =
-            dotnet_intrinsics_delegates::helpers::get_delegate_info(self, thread_start);
-        if target.0.is_some() {
-            return self.throw_by_name_with_message(
-                "System.PlatformNotSupportedException",
-                "ThreadStart delegates with a target instance are not supported.",
-            );
-        }
-
-        let (method, lookup) = self.lookup_method_by_index(method_index);
-        if method.signature().instance
-            || !method.signature().parameters.is_empty()
-            || method.signature().return_type.1.is_some()
+        #[cfg(feature = "multithreading")]
         {
-            return self.throw_by_name_with_message(
-                "System.PlatformNotSupportedException",
-                "ThreadStart requires a static, parameterless void target method.",
+            let ptr = thread.as_ptr().expect("non-null thread");
+            let Some(metadata) = self.shared.workers.managed_thread(ptr) else {
+                return self.throw_by_name_with_message(
+                    "System.Threading.ThreadStateException",
+                    "Thread is not startable.",
+                );
+            };
+            if metadata.started {
+                return self.throw_by_name_with_message(
+                    "System.Threading.ThreadStateException",
+                    "Thread has already started.",
+                );
+            }
+            if has_argument && !metadata.parameterized {
+                return self.throw_by_name_with_message(
+                    "System.InvalidOperationException",
+                    "Thread was not created with a ParameterizedThreadStart.",
+                );
+            }
+            let support = self
+                .loader()
+                .get_assembly(dotnet_assemblies::SUPPORT_ASSEMBLY)
+                .expect("support assembly");
+            let (index, _) = support
+                .definition()
+                .enumerate_type_definitions()
+                .find(|(_, ty)| ty.type_name() == "DotnetRs.ThreadStartRunner")
+                .expect("thread start runner type");
+            let ty = TypeDescription::new(support.clone(), index);
+            let method_name = if metadata.parameterized {
+                "RunParameterized"
+            } else {
+                "Run"
+            };
+            let index = ty
+                .definition()
+                .methods
+                .iter()
+                .position(|method| method.name == method_name)
+                .expect("thread start runner method");
+            let runner = MethodDescription::new(
+                ty,
+                GenericLookup::default(),
+                support,
+                MethodMemberIndex::Method(index),
             );
+            if self.shared.workers.begin_managed_thread(ptr).is_none() {
+                return self.throw_by_name_with_message(
+                    "System.Threading.ThreadStateException",
+                    "Thread has already started.",
+                );
+            }
+            let delegate_ptr = metadata.delegate.expect("start delegate");
+            // SAFETY: The creating arena roots the delegate until this worker completes.
+            let delegate =
+                unsafe { ObjectRef::from_storage_ptr(delegate_ptr.as_ptr().cast_mut().cast()) };
+            {
+                let mut records = self.local.managed_threads.records_write();
+                let record = records.entry(thread).or_insert_with(|| {
+                    crate::threading::local::ManagedThreadRecord::new(
+                        delegate,
+                        metadata.retained.clone(),
+                    )
+                });
+                record.start_argument = argument;
+            }
+            let start = crate::threading::local::WorkerStart {
+                thread: ptr,
+                delegate: delegate_ptr,
+                argument: argument.as_ptr(),
+                id: metadata.id,
+                retained: metadata.retained.clone(),
+            };
+            let completion = crate::threading::spawn_thread_start(
+                self.shared.clone(),
+                runner,
+                GenericLookup::default(),
+                start,
+            )
+            .expect("multithreaded worker spawn");
+            self.shared
+                .workers
+                .publish_managed_completion(ptr, &completion);
+            StepResult::Continue
         }
-
-        let completion = crate::threading::spawn_thread_start(self.shared.clone(), method, lookup)
-            .expect("multithreaded ThreadStart spawn must produce a completion");
-        self.local
-            .managed_threads
-            .records_write()
-            .get_mut(&thread)
-            .expect("managed Thread record remains registered until Join")
-            .completion = Some(completion);
-        StepResult::Continue
+        #[cfg(not(feature = "multithreading"))]
+        {
+            let _ = (argument, has_argument);
+            unreachable!("single-threaded workers are not supported")
+        }
     }
 
-    fn threading_join_managed_thread(&mut self) -> StepResult {
-        // Do not pop the receiver until the worker is known to have completed: retaining it on
-        // the evaluation stack keeps it rooted while this instruction yields for GC safepoints.
-        let thread = self.peek_stack().as_object_ref();
+    fn threading_managed_id(&mut self, thread: ObjectRef<'gc>) -> StepResult {
         if thread.0.is_none() {
             return self.throw_by_name_with_message(
                 "System.NullReferenceException",
                 dotnet_vm_ops::NULL_REF_MSG,
             );
         }
+        if self.local.managed_threads.current() == Some(thread) {
+            self.push_i32(self.local.managed_threads.current_id());
+            return StepResult::Continue;
+        }
+        #[cfg(feature = "multithreading")]
+        if let Some(metadata) = self.shared.workers.managed_thread(thread.as_ptr().unwrap()) {
+            self.push_i32(metadata.id);
+            return StepResult::Continue;
+        }
+        self.throw_by_name_with_message(
+            "System.Threading.ThreadStateException",
+            "Unknown managed thread.",
+        )
+    }
 
-        let join_state = {
-            let records = self.local.managed_threads.records_read();
-            records.get(&thread).map(|record| {
-                record
-                    .completion
-                    .as_ref()
-                    .map(crate::threading::workers::WorkerCompletion::is_finished)
-            })
+    fn threading_join_managed_thread(&mut self, method: Option<MethodDescription>) -> StepResult {
+        let timed = method.is_some();
+        let timeout = if timed {
+            self.peek_stack_at(0).as_i32()
+        } else {
+            -1
         };
-
-        let is_finished = match join_state {
-            None => {
-                return self.throw_by_name_with_message(
-                    "System.PlatformNotSupportedException",
-                    "Thread.Join() is supported only for Thread(ThreadStart) instances.",
+        if timeout < -1 {
+            return self.throw_by_name_with_message(
+                "System.ArgumentOutOfRangeException",
+                "The timeout must be greater than or equal to -1.",
+            );
+        }
+        let thread = self.peek_stack_at(usize::from(timed)).as_object_ref();
+        if thread.0.is_none() {
+            return self.throw_by_name_with_message(
+                "System.NullReferenceException",
+                dotnet_vm_ops::NULL_REF_MSG,
+            );
+        }
+        let completion = self
+            .shared
+            .workers
+            .managed_completion(thread.as_ptr().unwrap());
+        let current = self.local.managed_threads.current() == Some(thread);
+        #[cfg(feature = "multithreading")]
+        let metadata = self.shared.workers.managed_thread(thread.as_ptr().unwrap());
+        #[cfg(feature = "multithreading")]
+        let started = current || metadata.is_some_and(|record| record.started);
+        #[cfg(not(feature = "multithreading"))]
+        let started = current;
+        if completion.is_none() && !started {
+            return self.throw_by_name_with_message(
+                "System.Threading.ThreadStateException",
+                "Thread has not been started.",
+            );
+        }
+        if completion
+            .as_ref()
+            .is_none_or(|completion| !completion.is_finished())
+        {
+            if let Some(method) = &method
+                && timeout >= 0
+            {
+                let deadline = dotnet_intrinsics_threading::MonitorHost::monitor_retry_deadline(
+                    self, method, timeout,
                 );
+                if std::time::Instant::now() >= deadline {
+                    dotnet_intrinsics_threading::MonitorHost::monitor_clear_retry(self);
+                    let _ = self.pop_i32();
+                    let _ = self.pop_obj();
+                    self.push_i32(0);
+                    return StepResult::Continue;
+                }
             }
-            Some(None) => {
-                return self.throw_by_name_with_message(
-                    "System.InvalidOperationException",
-                    "Thread.Join() requires a started managed Thread.",
-                );
-            }
-            Some(Some(is_finished)) => is_finished,
-        };
-
-        if !is_finished {
             std::thread::yield_now();
             return StepResult::Yield;
         }
-
-        let popped_thread = self.pop_obj();
-        debug_assert_eq!(popped_thread, thread);
-        let completion = self
-            .local
-            .managed_threads
-            .records_write()
-            .get_mut(&thread)
-            .expect("managed Thread record remains registered until Join")
-            .completion
-            .take()
-            .expect("managed Thread remains started until Join");
-        let worker_result = completion
-            .take_outcome()
-            .expect("completed worker published an outcome");
-        self.local
-            .managed_threads
-            .records_write()
-            .remove(&thread)
-            .expect("managed Thread record remains registered until Join");
-
-        match worker_result {
-            Ok(crate::ExecutorResult::Exited(_)) => StepResult::Continue,
-            Ok(crate::ExecutorResult::Threw(_)) => {
-                unreachable!("worker exceptions are published as process-fatal before completion")
+        if timed {
+            dotnet_intrinsics_threading::MonitorHost::monitor_clear_retry(self);
+            let _ = self.pop_i32();
+        }
+        let _ = self.pop_obj();
+        match completion.and_then(|completion| completion.take_outcome()) {
+            None | Some(Ok(crate::ExecutorResult::Exited(_))) => {
+                if timed {
+                    self.push_i32(1);
+                }
+                StepResult::Continue
             }
-            Ok(crate::ExecutorResult::Error(error)) => self.throw_by_name_with_message(
+            Some(Ok(crate::ExecutorResult::Threw(_))) => {
+                unreachable!("worker exceptions are process fatal")
+            }
+            Some(Ok(crate::ExecutorResult::Error(error))) => self.throw_by_name_with_message(
                 "System.InvalidOperationException",
                 &format!("Managed ThreadStart failed: Internal VM Error: {error}"),
             ),
-            Err(_) => self.throw_by_name_with_message(
+            Some(Err(_)) => self.throw_by_name_with_message(
                 "System.InvalidOperationException",
                 "Managed ThreadStart panicked.",
             ),

@@ -91,24 +91,37 @@ pub trait StackSlotWriteHost<'gc> {
 /// VM-local lifecycle operations for the deliberately small managed-`Thread` subset.
 ///
 /// The intrinsic crate owns the public stack contract while the VM owns the parent-arena
-/// registry and worker-executor lifecycle. In particular, implementations must not transfer
-/// either object reference to a worker arena.
+/// registry and worker-executor lifecycle. Implementations must root transferred references in
+/// their owning arenas for as long as a worker can use them.
 pub trait ManagedThreadHost<'gc> {
+    fn threading_current_thread(
+        &mut self,
+        thread_type: TypeDescription,
+    ) -> dotnet_vm_data::StepResult;
+
     fn threading_new_managed_thread(
         &mut self,
         thread_type: TypeDescription,
         thread_start: ObjectRef<'gc>,
+        parameterized: bool,
     ) -> dotnet_vm_data::StepResult;
 
     fn threading_start_managed_thread(
         &mut self,
         thread: ObjectRef<'gc>,
+        argument: ObjectRef<'gc>,
+        has_argument: bool,
     ) -> dotnet_vm_data::StepResult;
+
+    fn threading_managed_id(&mut self, thread: ObjectRef<'gc>) -> dotnet_vm_data::StepResult;
 
     /// Joins the receiver still retained on the evaluation stack.
     ///
     /// The host must leave it in place while yielding so it remains rooted across safepoints.
-    fn threading_join_managed_thread(&mut self) -> dotnet_vm_data::StepResult;
+    fn threading_join_managed_thread(
+        &mut self,
+        method: Option<dotnet_types::members::MethodDescription>,
+    ) -> dotnet_vm_data::StepResult;
 }
 
 dotnet_vm_ops::trait_alias! {

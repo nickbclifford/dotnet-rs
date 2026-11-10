@@ -95,9 +95,7 @@ pub fn intrinsic_environment_current_managed_thread_id<'gc, T: TypedStackOps<'gc
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let managed_id = ctx.thread_id();
-    let managed_id_i32 = i32::try_from(managed_id.as_u64()).unwrap_or(i32::MAX);
-    ctx.push_i32(managed_id_i32);
+    ctx.push_i32(ctx.managed_thread_id());
     StepResult::Continue
 }
 

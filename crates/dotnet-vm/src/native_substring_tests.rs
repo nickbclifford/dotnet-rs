@@ -6121,17 +6121,26 @@ fn managed_join_returns_before_native_worker_exits() {
                 // SAFETY: F1.GcHandleRooted — this engine is the live root throughout the mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 let thread = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(vec![])));
-                let mut record = crate::threading::local::ManagedThreadRecord::new(ObjectRef(None));
-                record.completion = Some(completion);
+                let ptr = thread.as_ptr().unwrap();
+                engine.stack.shared.workers.register_managed_thread(
+                    ptr,
+                    crate::threading::workers::ManagedThreadMetadata {
+                        id: 1,
+                        delegate: None,
+                        parameterized: false,
+                        started: true,
+                        completion_index: None,
+                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    },
+                );
                 engine
                     .stack
-                    .local
-                    .managed_threads
-                    .records_write()
-                    .insert(thread, record);
+                    .shared
+                    .workers
+                    .publish_managed_completion(ptr, &completion);
                 let mut ctx = engine.ves_context(gc);
                 ctx.push(StackValue::ObjectRef(thread));
-                ctx.threading_join_managed_thread()
+                ctx.threading_join_managed_thread(None)
             })
         })
         .unwrap();

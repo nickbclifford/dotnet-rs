@@ -448,6 +448,11 @@ diff_test!(
     thread_finalization_matches_dotnet,
     "tests/debug_fixtures/thread_finalization_42.cs"
 );
+#[cfg(feature = "multithreading")]
+diff_test!(
+    thread_retired_creator_finalization_matches_dotnet,
+    "tests/debug_fixtures/thread_retired_creator_finalization_42.cs"
+);
 
 diff_test!(
     exceptions_handlers_inside_handlers_matches_dotnet,
@@ -629,6 +634,25 @@ fn exceptions_fault_inside_finally_matches_dotnet() {
 diff_test!(
     threading_sleep_yield_42_matches_dotnet,
     "tests/fixtures/threading/thread_sleep_yield_42.cs"
+);
+diff_test!(
+    threading_current_identity_42_matches_dotnet,
+    "tests/fixtures/threading/thread_current_identity_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_identity_start_42_matches_dotnet,
+    "tests/fixtures/threading/thread_identity_start_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_cross_start_42_matches_dotnet,
+    "tests/fixtures/threading/thread_cross_start_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_retired_creator_42_matches_dotnet,
+    "tests/fixtures/threading/thread_retired_creator_42.cs"
 );
 #[cfg(feature = "multithreading")]
 diff_test!(

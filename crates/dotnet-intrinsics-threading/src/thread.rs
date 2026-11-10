@@ -2,7 +2,6 @@ use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::StackValue;
-use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
@@ -14,9 +13,11 @@ const NULL_THREAD_START_MSG: &str = "Thread(ThreadStart) requires a non-null Thr
 
 /// System.Threading.Thread::.ctor(System.Threading.ThreadStart)
 ///
-/// This direct intercept deliberately bypasses CoreLib's QCall initialization. It supports only
-/// the `ThreadStart` constructor; overloads remain on their existing unsupported paths.
+/// This direct intercept bypasses CoreLib's QCall initialization.
 #[dotnet_intrinsic("void System.Threading.Thread::.ctor(System.Threading.ThreadStart)")]
+#[dotnet_intrinsic(
+    "void System.Threading.Thread::.ctor(System.Threading.ParameterizedThreadStart)"
+)]
 pub fn intrinsic_thread_ctor_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -28,7 +29,15 @@ pub fn intrinsic_thread_ctor_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
             .throw_by_name_with_message("System.ArgumentNullException", NULL_THREAD_START_MSG);
     }
 
-    ctx.threading_new_managed_thread(method.parent.clone(), thread_start)
+    // Both overloads have non-primitive parameters, which intrinsic filters do not distinguish.
+    let parameterized = thread_start.as_heap_storage(|storage| match storage {
+        dotnet_value::object::HeapStorage::Obj(object) => {
+            object.description.definition().type_name()
+                == "System.Threading.ParameterizedThreadStart"
+        }
+        _ => false,
+    });
+    ctx.threading_new_managed_thread(method.parent.clone(), thread_start, parameterized)
 }
 
 /// System.Threading.Thread::Start()
@@ -39,7 +48,28 @@ pub fn intrinsic_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let thread = ctx.pop_obj();
-    ctx.threading_start_managed_thread(thread)
+    ctx.threading_start_managed_thread(thread, dotnet_value::object::ObjectRef(None), false)
+}
+
+#[dotnet_intrinsic("void System.Threading.Thread::Start(object)")]
+pub fn intrinsic_thread_start_with_argument<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let argument = ctx.pop_obj();
+    let thread = ctx.pop_obj();
+    ctx.threading_start_managed_thread(thread, argument, true)
+}
+
+#[dotnet_intrinsic("int System.Threading.Thread::get_ManagedThreadId()")]
+pub fn intrinsic_thread_managed_id<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread = ctx.pop_obj();
+    ctx.threading_managed_id(thread)
 }
 
 /// System.Threading.Thread::Join()
@@ -49,7 +79,16 @@ pub fn intrinsic_thread_join<'gc, T: ThreadingIntrinsicHost<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    ctx.threading_join_managed_thread()
+    ctx.threading_join_managed_thread(None)
+}
+
+#[dotnet_intrinsic("bool System.Threading.Thread::Join(int)")]
+pub fn intrinsic_thread_join_timeout<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.threading_join_managed_thread(Some(method))
 }
 
 /// The worker registry owns native handles independently of the managed Thread object.
@@ -192,22 +231,13 @@ pub async fn thread_spin_wait(mut fx: VmEffects) -> NativeResult {
 
 /// System.Threading.Thread::get_CurrentThread()
 ///
-/// The CoreLib implementation is `[Intrinsic]` and typically uses runtime-managed
-/// thread state. dotnet-rs does not yet model the current managed `Thread` object's identity,
-/// so returning a managed `System.Threading.Thread` instance is sufficient to unblock framework
-/// call sites that require a non-null current-thread object.
 #[dotnet_intrinsic("static System.Threading.Thread System.Threading.Thread::get_CurrentThread()")]
 pub fn intrinsic_thread_get_current_thread<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let thread_obj = dotnet_vm_ops::vm_try!(ctx.new_object(method.parent.clone()));
-    ctx.push_obj(ObjectRef::new(
-        ctx.gc_with_token(&ctx.no_active_borrows_token()),
-        HeapStorage::Obj(Box::new(thread_obj)),
-    ));
-    StepResult::Continue
+    ctx.threading_current_thread(method.parent.clone())
 }
 
 /// System.Threading.Thread::GetCurrentProcessorNumber()

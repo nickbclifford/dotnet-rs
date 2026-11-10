@@ -73,9 +73,11 @@ abort, and other negative values throw `ArgumentOutOfRangeException`. `Yield` re
 yield. `SpinWait(n)` is a bounded yield, not a busy loop.
 
 **Thread identity.** Each managed thread owns one `Thread` object, created lazily for the entry
-thread and recorded at `Start` for workers (`ManagedThreadRecord`, `context_ops.rs`). The record
-already maps the `Thread` object to its completion handle, so it is the natural home for the managed
-id, `IsBackground` and the start argument. `get_CurrentThread` returns the recorded object.
+thread and recorded at `Start` for workers. Arena-local `ManagedThreadRecord` roots keep the
+thread, delegate and start argument alive until worker completion; unstarted records remain rooted
+until arena teardown. The existing shared worker registry
+holds non-GC metadata and completion state, so other arenas can inspect and join the thread.
+`get_CurrentThread` returns the recorded object.
 `ManagedThreadId` is unique per thread, stable for its lifetime, and distinct from the OS thread id.
 `Start(object)` stores the argument, and `ThreadStart`/`ParameterizedThreadStart` targets with an
 instance (closures) are invoked through the ordinary delegate path used for `Invoke`, not rejected.
@@ -111,7 +113,7 @@ workers stop at their next safepoint and the first exception wins.
    the mutation; non-inline legacy calls retain a frame-local deadline and retry at safepoints.
    `Yield` reports `true` after yielding because the host API does not report whether another
    thread ran.
-3. **Thread identity and start shapes.** Fixtures for `CurrentThread` identity on the entry thread
+3. **Thread identity and start shapes (implemented).** Fixtures for `CurrentThread` identity on the entry thread
    and on a worker, `ManagedThreadId` uniqueness, `Start(object)`, a closure target, and
    `Join(int)` timing out and succeeding. Delete the instance-target rejection.
 4. **`IsBackground`.** Fixtures: a background worker that never returns does not keep the process

@@ -4,6 +4,10 @@ use crate::ExecutorResult;
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::{Arc, Mutex};
 #[cfg(feature = "multithreading")]
+use dotnet_value::object::ObjectPtr;
+#[cfg(feature = "multithreading")]
+use std::collections::HashMap;
+#[cfg(feature = "multithreading")]
 use std::thread::JoinHandle;
 
 type Outcome = std::thread::Result<ExecutorResult>;
@@ -29,6 +33,21 @@ struct Entry {
 #[derive(Default)]
 struct RegistryState {
     entries: Vec<Entry>,
+    // Keys and delegate pointers are inert: their allocations remain rooted by arena-local
+    // records while the worker can use them, and the registry never dereferences them.
+    // Completed entries may outlive their allocations and are replaced on address reuse.
+    threads: HashMap<ObjectPtr, ManagedThreadMetadata>,
+}
+
+#[cfg(feature = "multithreading")]
+#[derive(Clone)]
+pub(crate) struct ManagedThreadMetadata {
+    pub(crate) id: i32,
+    pub(crate) delegate: Option<ObjectPtr>,
+    pub(crate) parameterized: bool,
+    pub(crate) started: bool,
+    pub(crate) completion_index: Option<usize>,
+    pub(crate) retained: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The completion and the handle share one lifecycle lock, but only the registry owns handles.
@@ -39,6 +58,7 @@ pub(crate) struct WorkerRegistry {
 }
 
 #[cfg(feature = "multithreading")]
+#[derive(Clone)]
 pub(crate) struct WorkerCompletion {
     state: Arc<Mutex<RegistryState>>,
     index: usize,
@@ -86,6 +106,49 @@ impl WorkerCompletion {
 
 #[cfg(feature = "multithreading")]
 impl WorkerRegistry {
+    pub(crate) fn register_managed_thread(
+        &self,
+        thread: ObjectPtr,
+        metadata: ManagedThreadMetadata,
+    ) {
+        self.state.lock().threads.insert(thread, metadata);
+    }
+
+    pub(crate) fn managed_thread(&self, thread: ObjectPtr) -> Option<ManagedThreadMetadata> {
+        self.state.lock().threads.get(&thread).cloned()
+    }
+
+    pub(crate) fn begin_managed_thread(&self, thread: ObjectPtr) -> Option<ManagedThreadMetadata> {
+        let mut state = self.state.lock();
+        let metadata = state.threads.get_mut(&thread)?;
+        if metadata.started {
+            return None;
+        }
+        metadata.started = true;
+        Some(metadata.clone())
+    }
+
+    pub(crate) fn publish_managed_completion(
+        &self,
+        thread: ObjectPtr,
+        completion: &WorkerCompletion,
+    ) {
+        self.state
+            .lock()
+            .threads
+            .get_mut(&thread)
+            .expect("registered thread")
+            .completion_index = Some(completion.index);
+    }
+
+    pub(crate) fn managed_completion(&self, thread: ObjectPtr) -> Option<WorkerCompletion> {
+        let state = self.state.lock();
+        let index = state.threads.get(&thread)?.completion_index?;
+        Some(WorkerCompletion {
+            state: self.state.clone(),
+            index,
+        })
+    }
     pub(crate) fn spawn_owner(
         &self,
         run: impl FnOnce(RunningWorker) + Send + 'static,
@@ -295,6 +358,7 @@ impl RetiredWorker {
 pub(crate) struct WorkerRegistry {}
 
 #[cfg(not(feature = "multithreading"))]
+#[derive(Clone)]
 pub(crate) struct WorkerCompletion;
 
 #[cfg(not(feature = "multithreading"))]
@@ -309,6 +373,12 @@ impl WorkerCompletion {
 
 #[cfg(not(feature = "multithreading"))]
 impl WorkerRegistry {
+    pub(crate) fn managed_completion(
+        &self,
+        _thread: dotnet_value::object::ObjectPtr,
+    ) -> Option<WorkerCompletion> {
+        None
+    }
     pub(crate) fn is_quiescent(&self, finalizers_idle: impl FnOnce() -> bool) -> bool {
         finalizers_idle()
     }
@@ -340,6 +410,7 @@ mod tests {
                     lifecycle: Lifecycle::Running,
                     handle: None,
                 }],
+                threads: HashMap::new(),
             }));
             let completion = WorkerCompletion {
                 state: state.clone(),
@@ -379,6 +450,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
             }],
+            threads: HashMap::new(),
         }));
         let retired = RunningWorker {
             state: state.clone(),
@@ -404,6 +476,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
             }],
+            threads: HashMap::new(),
         }));
         let completion = WorkerCompletion {
             state: state.clone(),
@@ -435,6 +508,7 @@ mod tests {
                 lifecycle: Lifecycle::Running,
                 handle: None,
             }],
+            threads: HashMap::new(),
         }));
         let completion = WorkerCompletion {
             state: state.clone(),

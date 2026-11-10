@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | In progress; `Monitor.Wait` hits missing QCalls, no thread identity or `IsBackground` |
+| 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | In progress; `Monitor.Wait` hits missing QCalls and `IsBackground` is unsupported |
 | 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Complete; nested handlers, fatal worker exceptions and filter exception boundary verified |
 | 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Establishes the retained-arena lifecycle contract |
 | 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Validates typed field and memory-operation premises |
@@ -59,8 +59,10 @@ Evidence and IDs (p01…, R01…) are defined in the
   read its target from another, even while both arenas remain registered.
 - **Finalization and GC compatibility:** finalizers run on the interrupted mutator with its
   thread identity, so they can re-enter monitors it holds or observe an in-progress `.cctor`
-  through recursion. The resurrection and weak-handle fixtures also disagree with the CLR and
-  may be timing-dependent; resolving these behaviors requires separate GC/finalizer work.
+  through recursion. A finalizer run by a retired worker can receive a new `Thread` object with
+  the worker's ID after the original thread object has been released. The resurrection and
+  weak-handle fixtures also disagree with the CLR and may be timing-dependent; resolving these
+  behaviors requires separate GC/finalizer work.
 - **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running
   or finalizing, so a finalizer that never returns blocks every caller. The CLR does not wait for
   finalizers at exit. `Executor::run_entrypoint` returns without the wait (plan 11).
@@ -128,8 +130,7 @@ Evidence and IDs (p01…, R01…) are defined in the
   exits on an internal error.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
-  producing finalizable garbage. The behavior has not been reproduced because its required
-  lambda `ThreadStart` is unsupported.
+  producing finalizable garbage. The behavior has not been reproduced.
 - **Loom model coverage:** the hand-written `loom_stw.rs` model does not compile the production
   `WorkerRegistry` and does not cover every stop-the-world, retirement or shutdown interleaving.
 - **CI feedback:** remaining steps of the [test hierarchy](../CI.md#test-hierarchy-and-migration).
