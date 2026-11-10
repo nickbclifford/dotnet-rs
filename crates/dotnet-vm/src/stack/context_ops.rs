@@ -1519,9 +1519,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .loader
             .corlib_wkt(dotnet_types::WellKnown::RuntimeType)
             .ok()?;
-        let is_type_object = object
-            .try_as_object(|instance| instance.description == runtime_type)
-            .ok()?;
+        let is_type_object = object.as_heap_storage(|storage| {
+            matches!(storage, HeapStorage::Obj(instance) if instance.description == runtime_type)
+        });
         if !is_type_object {
             return None;
         }
