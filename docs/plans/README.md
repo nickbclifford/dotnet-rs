@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Not started; `Yield`/`SpinWait`/`Monitor.Wait` hit missing QCalls, `Sleep` stalls GC, no thread identity or `IsBackground` |
 | 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Complete; nested handlers, fatal worker exceptions and filter exception boundary verified |
 | 09 | [Retain arenas after managed thread exit](09-retired-arena-lifetime.md) | Establishes the retained-arena lifecycle contract |
 | 05 | [Safe APIs whose soundness rests on unchecked caller premises](05-safe-api-premises.md) | Validates typed field and memory-operation premises |
@@ -31,9 +32,6 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
-- **Managed threading falls through to QCalls:** `Thread.Yield` and `Thread.SpinWait` reach the
-  `QCall` native library and fail with `DllNotFoundException`. Stub these higher-level threading
-  intrinsics (and likely `Thread.Sleep` neighbors) rather than individual QCalls.
 - **Reflection compatibility and validation:** reflection calls remain transparent (guest
   exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
   rejected, both deliberate CLR deviations in the
@@ -66,8 +64,6 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Exit waits for never-returning finalizers:** `Executor::run` waits until no worker is running
   or finalizing, so a finalizer that never returns blocks every caller. The CLR does not wait for
   finalizers at exit. `Executor::run_entrypoint` returns without the wait (plan 11).
-- **`Thread.IsBackground`:** unimplemented, so every managed thread is treated as foreground at
-  exit (plan 09).
 - **Negative and wide managed-pointer offsets:** `ManagedPtr` stores a compact unsigned offset,
   so byref arithmetic that goes below the base or past the compact range (for example
   `Unsafe.Subtract`, or `Unsafe.Add` with a negative count) fails with `NotImplemented`
@@ -92,28 +88,30 @@ Evidence and IDs (p01…, R01…) are defined in the
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
 - **Retired-worker resource cost:** each completed worker retains one OS thread and one arena
   until VM shutdown; process-wide arena IDs are capped at 65,535. Earlier safe retirement remains unplanned.
-- **Task and thread-pool integration:** guest `Task` scheduling is outside plan 08. The BCL's
-  `Task`, `AsyncTaskMethodBuilder` and `TaskCompletionSource` already run as managed code; what
-  is missing is the host layer under them: a work queue (`ThreadPool.UnsafeQueueUserWorkItem`
-  is a no-op, so `Task.Run` and `ConfigureAwait` continuations never run), timers
-  (`Task.Delay`, `CancelAfter` need a host deadline source in the scheduler, which also gives
-  deadlock detection when every thread is parked and no deadline remains), and blocking waits
-  (`Task.Wait`/`.Result` go through `ManualResetEventSlim`, which needs `Monitor.Wait`/`Pulse`
-  and `Thread.Yield`/`SpinWait`). Shim the managed abstraction (`ThreadPool` work queue, timer
-  queue) rather than individual QCalls. Prefer a small fixed set of background managed worker
-  threads that wait on the queue through the slice-5 condition-wait protocol; this reuses the
-  multithreaded arena machinery and avoids the retired-worker cost above. Green tasks on the
-  effect scheduler would be deterministic but need a scheduler mechanism plan 08 does not have.
-  Prerequisites: `Thread.IsBackground`, the `Monitor.Wait`/`Pulse` and threading stubs above,
-  and plan 11 (a thrown pool work item must be fatal, not swallowed). Guest `async`/`await` that
-  completes synchronously or through `TaskCompletionSource` already works (fixtures under
-  `crates/dotnet-cli/tests/fixtures/async/`).
+- **Task and thread-pool integration:** guest `Task` scheduling is outside plan 08. The VM does
+  not run CoreLib's `Task`: `DotnetRs.Task` (`dotnet-assemblies/src/support/Task.cs`, 144 lines),
+  its `TaskCompletionSource` and the async method builders are a single-threaded shim. `Wait()`
+  and `.Result` throw "Task has not completed" instead of blocking, completion is unsynchronized,
+  and `Task.Run`, `Delay`, `WhenAll`, `ContinueWith` and cancellation do not exist. Guest
+  `async`/`await` that completes synchronously or through a `TaskCompletionSource` on one thread
+  works (fixtures under `crates/dotnet-cli/tests/fixtures/async/`). The first decision is whether
+  to grow the shim or to run CoreLib's `Task`. CoreLib's brings the real API but needs
+  `ThreadPool`, `TimerQueue` and `ManualResetEventSlim` semantics. Either way the host layer is
+  a work queue (`ThreadPool.UnsafeQueueUserWorkItem` is an accepted no-op in
+  `dotnet-intrinsics-threading/src/thread.rs`), timers (a host deadline source in the scheduler,
+  which also gives deadlock detection when every thread is parked and no deadline remains) and
+  blocking waits. Shim the managed abstraction (`ThreadPool` work queue, timer queue), not
+  individual QCalls. Prefer a small fixed set of background managed worker threads that wait on
+  the queue through the slice-5 condition-wait protocol; this reuses the multithreaded arena
+  machinery and avoids the retired-worker cost above. Green tasks on the effect scheduler would
+  be deterministic but need a scheduler mechanism plan 08 does not have. Prerequisites: plan 12
+  (`IsBackground`, `Monitor.Wait`/`Pulse`, `Sleep`, thread identity) and plan 11 (a thrown pool
+  work item must be fatal, not swallowed).
 - **Other missing or incorrect runtime behavior:** `[MethodImpl(Synchronized)]` is ignored
-  (including its effect on concurrent `Console.WriteLine`); `Monitor.Wait`, `Pulse`,
-  `IsEntered` and `Delegate.DynamicInvoke` are missing; `Thread` rejects closure targets;
-  `new string(char, int)` fails; interpolating an object prints its type name;
+  (including its effect on concurrent `Console.WriteLine`); `Monitor.IsEntered` and
+  `Delegate.DynamicInvoke` are missing; `new string(char, int)` fails; interpolating an object prints its type name;
   `TypeInitializationException.TypeName` is empty; and buffered stdout can be lost when the VM
-  exits on an internal error. `Thread.Yield` is covered by the QCall item above.
+  exits on an internal error.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
   producing finalizable garbage. The behavior has not been reproduced because its required
