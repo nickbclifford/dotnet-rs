@@ -6,7 +6,6 @@ public class Program
     int offset = 10;
     string Concat(string s, int n) => s + (n + offset);
     static void Nothing() { }
-    static int Throws() { throw new InvalidOperationException("x"); }
 
     delegate int AddDel(int a, int b);
 
@@ -22,15 +21,15 @@ public class Program
         Action a = Nothing;
         if (a.DynamicInvoke() != null) return 3;
 
-        try
-        {
-            ((Func<int>)Throws).DynamicInvoke();
-            return 4;
-        }
-        catch (System.Reflection.TargetInvocationException e)
-        {
-            if (!(e.InnerException is InvalidOperationException)) return 5;
-        }
+        Delegate multi = a;
+        multi = Delegate.Combine(multi, (Action)Nothing);
+        if (multi.DynamicInvoke() != null) return 4;
+
+        Func<int, int> twice = x => x * 2;
+        Func<int, int> chain = twice;
+        chain += x => x + 1;
+        if ((int)chain.DynamicInvoke(10) != 11) return 5;
+
         return 42;
     }
 }

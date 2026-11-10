@@ -28,8 +28,45 @@ public abstract class Delegate : ICloneable, ISerializable
     [MethodImpl(MethodImplOptions.InternalCall)]
     public extern override int GetHashCode();
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    public extern object? DynamicInvoke(params object?[]? args);
+    // Routes through the runtime's reflection invoke path, so argument conversion, by-ref write-back
+    // and TargetInvocationException wrapping match MethodInfo.Invoke. A multicast delegate invokes
+    // every entry and returns the last result, as in the CLR.
+    public object? DynamicInvoke(params object?[]? args)
+    {
+        object? result = null;
+        foreach (Delegate entry in InvocationEntries())
+        {
+            result = entry.DynamicInvokeSingle(args);
+        }
+        return result;
+    }
+
+    // The delegates DynamicInvoke runs in order. Virtual dispatch, not a type test, selects the
+    // multicast override.
+    internal virtual Delegate[] InvocationEntries() => new Delegate[] { this };
+
+    private object? DynamicInvokeSingle(object?[]? args)
+    {
+        System.Reflection.MethodInfo method = Method;
+        object? target = Target;
+        if (!method.IsStatic)
+        {
+            return method.Invoke(target, args);
+        }
+        if (target == null)
+        {
+            return method.Invoke(null, args);
+        }
+        // A static method closed over its first argument receives the target as that argument.
+        int count = args == null ? 0 : args.Length;
+        object?[] closed = new object?[count + 1];
+        closed[0] = target;
+        if (count > 0)
+        {
+            System.Array.Copy(args!, 0, closed, 1, count);
+        }
+        return method.Invoke(null, closed);
+    }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public static extern Delegate? Combine(Delegate? a, Delegate? b);

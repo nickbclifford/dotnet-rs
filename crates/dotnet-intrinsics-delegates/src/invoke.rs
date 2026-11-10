@@ -6,12 +6,11 @@ use crate::{
     DelegateInvokeHost,
     helpers::{get_delegate_info, get_multicast_targets_ref},
 };
-use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_vm_data::{MulticastState, StepResult};
 use dotnet_vm_ops::{
     intrinsic_args::{ArgPolicy, expect_stack_object_with_policy},
-    ops::{DelegateIntrinsicHost, ExceptionOps},
+    ops::DelegateIntrinsicHost,
 };
 
 pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvokeHost<'gc>>(
@@ -118,17 +117,4 @@ pub(super) fn invoke_delegate<'gc, T: DelegateIntrinsicHost<'gc> + DelegateInvok
     } else {
         ctx.delegate_dispatch_method(target_method, target_lookup)
     }
-}
-
-#[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]
-pub fn delegate_dynamic_invoke<'gc, T: ExceptionOps<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    // ...
-    ctx.throw_by_name_with_message(
-        "System.NotSupportedException",
-        "DynamicInvoke is not supported.",
-    )
 }
