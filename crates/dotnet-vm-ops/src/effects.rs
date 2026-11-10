@@ -90,15 +90,18 @@ impl RootedValue {
             StackValue::NativeInt(v) => RootedValueInner::NativeInt(v),
             StackValue::NativeFloat(v) => RootedValueInner::NativeFloat(v),
             StackValue::ObjectRef(ObjectRef(None)) => RootedValueInner::Null,
-            v @ StackValue::ObjectRef(ObjectRef(Some(_))) => RootedValueInner::Object(roots.stash(
-                mc,
-                Gc::new(
+            // A by-value struct is a plain `Object`, traced through the root cell like any other value.
+            v @ (StackValue::ObjectRef(ObjectRef(Some(_))) | StackValue::ValueType(_)) => {
+                RootedValueInner::Object(roots.stash(
                     mc,
-                    RootCell {
-                        value: RootCellValue::Value(v),
-                    },
-                ),
-            )),
+                    Gc::new(
+                        mc,
+                        RootCell {
+                            value: RootCellValue::Value(v),
+                        },
+                    ),
+                ))
+            }
             StackValue::ManagedPtr(pointer) => {
                 // INVARIANT: F6.NativePointerDescriptor — only traced heap owners,
                 // non-reused frame-home serials, static metadata, or (multithreading)

@@ -548,7 +548,6 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             &method,
             &generics,
             parameters,
-            true,
         )
         .map_err(|step| match step {
             StepResult::Error(error) => NativePrepareError::Host(error),

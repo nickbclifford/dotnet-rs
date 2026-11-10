@@ -1,4 +1,8 @@
 use crate::ReflectionIntrinsicHost;
+use crate::invoke_args::{
+    ArgPlan, ParamShape, nullable_inner, nullable_with_value, param_shape, plan_argument,
+    receiver_fits, widen_boxed,
+};
 use dotnet_intrinsics_delegates::helpers::{
     set_delegate_multicast_targets, set_delegate_target_method,
 };
@@ -31,6 +35,11 @@ fn invoke_operand_window_supported(values: &[StackValue<'_>; 6]) -> bool {
         && matches!(values[3], StackValue::ObjectRef(_))
         && matches!(values[4], StackValue::ObjectRef(_))
         && matches!(values[5], StackValue::ObjectRef(_))
+}
+
+/// Enums stay on the synchronous path: their arguments keep the registered fallback exercised.
+fn scalar_like<'gc, T: ReflectionIntrinsicHost<'gc>>(_ctx: &T, concrete: &ConcreteType) -> bool {
+    scalar_type(concrete)
 }
 
 fn scalar_type(concrete: &ConcreteType) -> bool {
@@ -79,20 +88,38 @@ pub fn invoke_arguments_supported<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let Some(args) = args else {
         return false;
     };
-    args.into_iter().zip(&method.signature().parameters).all(|(arg, param)| {
-        let (ty, byref) = match &param.1 {
-            ParameterType::Ref(ty) => (ty, true),
-            ParameterType::Value(ty) => (ty, false),
-            _ => return false,
-        };
-        let Ok(concrete) = lookup.make_concrete(method.resolution(), ty.clone(), ctx.loader().as_ref()) else { return false; };
-        let Ok(td) = ctx.loader().find_concrete_type(concrete.clone()) else { return false; };
-        let Ok(value_type) = ctx.reflection_is_value_type_with_lookup(td.clone(), lookup) else { return false; };
-        if !value_type { return true; }
-        scalar_type(&concrete) && ((byref && arg.0.is_none()) || (arg.0.is_some() && arg.as_heap_storage(|storage| {
-            matches!(storage, HeapStorage::Boxed(value) if value.description == td)
-        })))
-    })
+    args.into_iter()
+        .zip(&method.signature().parameters)
+        .all(|(arg, param)| {
+            let (ty, byref) = match &param.1 {
+                ParameterType::Ref(ty) => (ty, true),
+                ParameterType::Value(ty) => (ty, false),
+                _ => return false,
+            };
+            let Ok(shape) = param_shape(ctx, method, lookup, ty) else {
+                return false;
+            };
+            if !shape.value_type {
+                return true;
+            }
+            let plan = plan_argument(ctx, arg, &shape, byref);
+            if byref {
+                return scalar_like(ctx, &shape.concrete)
+                    && (arg.0.is_none() || plan == ArgPlan::Exact);
+            }
+            let transportable = scalar_like(ctx, &shape.concrete)
+                || (shape.td.definition().name == "Nullable`1"
+                    && nullable_inner(&shape.concrete)
+                        .is_some_and(|inner| scalar_like(ctx, &inner)));
+            transportable
+                && matches!(
+                    plan,
+                    ArgPlan::Exact
+                        | ArgPlan::Widen { .. }
+                        | ArgPlan::Default
+                        | ArgPlan::NullableSome
+                )
+        })
 }
 
 /// Choose reflection calls whose arguments and result are transportable without side effects.
@@ -138,6 +165,14 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     if method.signature().instance
         && count != 4
         && !matches!(values[1], StackValue::ObjectRef(ObjectRef(Some(_))))
+    {
+        return NativeSelection::Fallback;
+    }
+    // A receiver of the wrong type is rejected by the synchronous path, which can throw.
+    if method.signature().instance
+        && count != 4
+        && let StackValue::ObjectRef(receiver) = values[1]
+        && !crate::invoke_args::receiver_fits(ctx, &method, &lookup, receiver)
     {
         return NativeSelection::Fallback;
     }
@@ -555,6 +590,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
             let is_constructor = method.method().name == ".ctor";
 
+            if let Err(thrown) = validate_invoke_target(ctx, &method, &lookup, &this_obj) {
+                return thrown;
+            }
+
             if is_constructor {
                 ctx.push(this_obj.clone());
             }
@@ -565,7 +604,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
 
             let mut invoke_args =
-                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj, false) {
+                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
                     Ok(a) => a,
                     Err(res) => return res,
                 };
@@ -607,7 +646,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             args.push(StackValue::ObjectRef(this_obj));
 
             let mut invoke_args =
-                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj, false) {
+                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
                     Ok(a) => a,
                     Err(res) => return res,
                 };
@@ -1013,35 +1052,24 @@ struct UnboxedInvokeArg<'gc> {
     replacement_box: Option<ObjectRef<'gc>>,
 }
 
-fn make_concrete_param<'gc, T: ReflectionIntrinsicHost<'gc>>(
+fn argument_mismatch<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
-    lookup: &GenericLookup,
-    method: &MethodDescription,
-    t: &dotnetdll::prelude::MethodType,
-) -> Result<(ConcreteType, TypeDescription, bool), StepResult> {
-    let concrete_param_type =
-        match lookup.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()) {
-            Ok(v) => v,
-            Err(e) => return Err(StepResult::Error(e.into())),
-        };
-    let td = ctx
-        .loader()
-        .find_concrete_type(concrete_param_type.clone())
-        .expect("Parameter type must exist for MethodInfo.Invoke");
-    let is_value_type = match ctx.reflection_is_value_type_with_lookup(td.clone(), lookup) {
-        Ok(v) => v,
-        Err(e) => return Err(StepResult::Error(e.into())),
+    arg: ObjectRef<'gc>,
+    shape: &ParamShape,
+) -> StepResult {
+    let actual = if arg.0.is_none() {
+        "null".to_string()
+    } else {
+        ctx.get_heap_description(arg)
+            .map(|td| td.type_name())
+            .unwrap_or_else(|_| "object".to_string())
     };
-
-    Ok((concrete_param_type, td, is_value_type))
-}
-
-// A box admitted by the selector may be replaced before marshalling; that remains invalid guest
-// input, not a VM type mismatch that should escape as a host failure.
-fn changed_invoke_argument<'gc, T: ReflectionIntrinsicHost<'gc>>(ctx: &mut T) -> StepResult {
     ctx.throw_by_name_with_message(
         "System.ArgumentException",
-        "Object array element does not match the parameter type.",
+        &format!(
+            "Object of type '{actual}' cannot be converted to type '{}'.",
+            shape.td.type_name()
+        ),
     )
 }
 
@@ -1052,7 +1080,6 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     param_type: &ParameterType<dotnetdll::prelude::MethodType>,
     lookup: &GenericLookup,
     byref_slot: Option<InvokeByRefSlot<'gc>>,
-    validate_argument_box: bool,
 ) -> Result<UnboxedInvokeArg<'gc>, StepResult> {
     match param_type {
         ParameterType::TypedReference => {
@@ -1087,57 +1114,62 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
         }
         ParameterType::Value(t) => {
-            let (concrete_param_type, td, is_value_type) =
-                make_concrete_param(ctx, lookup, method, t)?;
-
-            if is_value_type {
-                if arg.0.is_none() {
-                    if validate_argument_box {
-                        return Err(changed_invoke_argument(ctx));
-                    }
-                    Ok(UnboxedInvokeArg {
-                        stack_value: StackValue::null(),
-                        replacement_box: None,
-                    })
-                } else {
-                    let val = match arg.as_heap_storage(|s| {
-                        if let HeapStorage::Boxed(o) = s {
-                            if validate_argument_box && o.description != td {
-                                return Err(format!("boxed {}", o.description.type_name()));
-                            }
-                            Ok(o.instance_storage
-                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data)))
-                        } else {
-                            Err(format!("{s:?}"))
-                        }
-                    }) {
-                        Ok(v) => v,
-                        Err(_actual) if validate_argument_box => {
-                            return Err(changed_invoke_argument(ctx));
-                        }
-                        Err(actual) => {
-                            return Err(type_mismatch("boxed value", actual));
-                        }
-                    };
-
-                    match val {
-                        Ok(v) => Ok(UnboxedInvokeArg {
-                            stack_value: v.into_stack(),
-                            replacement_box: None,
-                        }),
-                        Err(e) => Err(StepResult::Error(e.into())),
+            let shape =
+                param_shape(ctx, method, lookup, t).map_err(|e| StepResult::Error(e.into()))?;
+            let stack_value = match plan_argument(ctx, arg, &shape, false) {
+                ArgPlan::Reject => return Err(argument_mismatch(ctx, arg, &shape)),
+                ArgPlan::Reference => StackValue::ObjectRef(arg),
+                ArgPlan::Exact => {
+                    let value = arg.as_heap_storage(|s| match s {
+                        HeapStorage::Boxed(o) => Some(
+                            o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&shape.concrete, data)),
+                        ),
+                        _ => None,
+                    });
+                    match value {
+                        Some(Ok(v)) => v.into_stack(),
+                        Some(Err(e)) => return Err(StepResult::Error(e.into())),
+                        None => return Err(argument_mismatch(ctx, arg, &shape)),
                     }
                 }
-            } else {
-                Ok(UnboxedInvokeArg {
-                    stack_value: StackValue::ObjectRef(arg),
-                    replacement_box: None,
-                })
-            }
+                ArgPlan::Widen { from, to } => match widen_boxed(arg, from, to) {
+                    Some(value) => value,
+                    None => return Err(argument_mismatch(ctx, arg, &shape)),
+                },
+                ArgPlan::NullableSome => nullable_with_value(ctx, &shape, arg)?,
+                ArgPlan::Default => {
+                    let instance = ctx
+                        .reflection_new_object_with_lookup(
+                            shape.td.clone(),
+                            &shape.concrete.make_lookup(),
+                        )
+                        .map_err(|e| StepResult::Error(e.into()))?;
+                    match instance
+                        .instance_storage
+                        .with_data(|data| ctx.read_cts_value(&shape.concrete, data))
+                    {
+                        Ok(v) => v.into_stack(),
+                        Err(e) => return Err(StepResult::Error(e.into())),
+                    }
+                }
+            };
+            Ok(UnboxedInvokeArg {
+                stack_value,
+                replacement_box: None,
+            })
         }
         ParameterType::Ref(t) => {
-            let (concrete_param_type, td, is_value_type) =
-                make_concrete_param(ctx, lookup, method, t)?;
+            let shape =
+                param_shape(ctx, method, lookup, t).map_err(|e| StepResult::Error(e.into()))?;
+            if plan_argument(ctx, arg, &shape, true) == ArgPlan::Reject {
+                return Err(argument_mismatch(ctx, arg, &shape));
+            }
+            let ParamShape {
+                concrete: concrete_param_type,
+                td,
+                value_type: is_value_type,
+            } = shape.clone();
 
             if is_value_type {
                 let (arg_obj, replacement_box) = if arg.0.is_some() {
@@ -1156,12 +1188,9 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     (obj, Some(obj))
                 };
 
+                // The plan already proved a non-null argument is a box of exactly this type.
                 let data_ptr = match arg_obj.as_heap_storage(|s| {
                     if let HeapStorage::Boxed(o) = s {
-                        // Another thread can replace an array element after admission.
-                        if validate_argument_box && o.description != td {
-                            return Err(format!("boxed {}", o.description.type_name()));
-                        }
                         Ok(o.instance_storage
                             .with_data(|data| data.as_ptr() as *mut u8))
                     } else {
@@ -1169,11 +1198,8 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
                     }
                 }) {
                     Ok(v) => v,
-                    Err(_actual) if validate_argument_box => {
-                        return Err(changed_invoke_argument(ctx));
-                    }
-                    Err(actual) => {
-                        return Err(type_mismatch("boxed value", actual));
+                    Err(_actual) => {
+                        return Err(argument_mismatch(ctx, arg, &shape));
                     }
                 };
 
@@ -1222,67 +1248,111 @@ fn unbox_param_to_stack_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
-/// Marshal argument slots within the current mutation. Native callers revalidate boxes because
-/// the argument array may have changed since selection.
+fn parameter_count_mismatch<'gc, T: ReflectionIntrinsicHost<'gc>>(ctx: &mut T) -> StepResult {
+    ctx.throw_by_name_with_message(
+        "System.Reflection.TargetParameterCountException",
+        "Parameter count mismatch.",
+    )
+}
+
+/// Throw `TargetException` unless `receiver` is a valid `this` for `method`.
+///
+/// Static methods ignore the receiver, and a constructor without a receiver allocates its own.
+pub fn validate_invoke_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+    receiver: &StackValue<'gc>,
+) -> Result<(), StepResult> {
+    if !method.signature().instance {
+        return Ok(());
+    }
+    let receiver = match receiver {
+        StackValue::ObjectRef(receiver) => *receiver,
+        _ => ObjectRef(None),
+    };
+    if receiver.0.is_none() {
+        if method.method().name == ".ctor" {
+            return Ok(());
+        }
+        return Err(ctx.throw_by_name_with_message(
+            "System.Reflection.TargetException",
+            "Non-static method requires a target.",
+        ));
+    }
+    if receiver_fits(ctx, method, lookup, receiver) {
+        Ok(())
+    } else {
+        Err(ctx.throw_by_name_with_message(
+            "System.Reflection.TargetException",
+            "Object does not match target type.",
+        ))
+    }
+}
+
+/// Marshal argument slots within the current mutation. The argument array may have changed since
+/// selection, so every slot is classified again.
 pub fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &mut T,
     gc: &GCHandle<'gc>,
     method: &MethodDescription,
     lookup: &GenericLookup,
     parameters_obj: ObjectRef<'gc>,
-    validate_argument_boxes: bool,
 ) -> Result<Vec<StackValue<'gc>>, StepResult> {
     let mut args = Vec::new();
+    let expected = method.signature().parameters.len();
 
-    if parameters_obj.0.is_some() {
-        let vector = match parameters_obj.as_heap_storage(|s| match s {
-            HeapStorage::Vec(v) => Ok(v.clone()),
-            other => Err(format!("{other:?}")),
-        }) {
-            Ok(v) => v,
-            Err(actual) => {
-                return Err(type_mismatch("object[]", actual));
-            }
+    if parameters_obj.0.is_none() {
+        return if expected == 0 {
+            Ok(args)
+        } else {
+            Err(parameter_count_mismatch(ctx))
         };
+    }
 
-        let mut replacement_boxes = Vec::new();
-        let mut elements = vector.object_ref_elements(gc);
-        let element_size = vector.layout.element_layout.size();
-        for i in 0..vector.layout.length {
-            let arg_obj = elements
-                .next()
-                .expect("invoke parameters storage must match vector length");
-            let param_type = &method.signature().parameters[i].1;
-            let byref_slot = InvokeByRefSlot {
-                owner: parameters_obj,
-                offset: element_size * i,
-            };
-            let arg = unbox_param_to_stack_value(
-                ctx,
-                arg_obj,
-                method,
-                param_type,
-                lookup,
-                Some(byref_slot),
-                validate_argument_boxes,
-            )?;
+    let vector = match parameters_obj.as_heap_storage(|s| match s {
+        HeapStorage::Vec(v) => Ok(v.clone()),
+        other => Err(format!("{other:?}")),
+    }) {
+        Ok(v) => v,
+        Err(actual) => {
+            return Err(type_mismatch("object[]", actual));
+        }
+    };
+    if vector.layout.length != expected {
+        return Err(parameter_count_mismatch(ctx));
+    }
 
-            if let Some(owner) = arg.replacement_box {
-                replacement_boxes.push((i, owner));
+    let mut replacement_boxes = Vec::new();
+    let mut elements = vector.object_ref_elements(gc);
+    let element_size = vector.layout.element_layout.size();
+    for i in 0..vector.layout.length {
+        let arg_obj = elements
+            .next()
+            .expect("invoke parameters storage must match vector length");
+        let param_type = &method.signature().parameters[i].1;
+        let byref_slot = InvokeByRefSlot {
+            owner: parameters_obj,
+            offset: element_size * i,
+        };
+        let arg =
+            unbox_param_to_stack_value(ctx, arg_obj, method, param_type, lookup, Some(byref_slot))?;
+
+        if let Some(owner) = arg.replacement_box {
+            replacement_boxes.push((i, owner));
+        }
+
+        args.push(arg.stack_value);
+    }
+
+    if !replacement_boxes.is_empty() {
+        parameters_obj.as_vector_mut(*gc, |vector| {
+            let mut elements = vector.object_ref_elements(gc).collect::<Vec<_>>();
+            for (index, owner) in replacement_boxes {
+                elements[index] = owner;
             }
-
-            args.push(arg.stack_value);
-        }
-
-        if !replacement_boxes.is_empty() {
-            parameters_obj.as_vector_mut(*gc, |vector| {
-                let mut elements = vector.object_ref_elements(gc).collect::<Vec<_>>();
-                for (index, owner) in replacement_boxes {
-                    elements[index] = owner;
-                }
-                vector.write_object_ref_elements_mut(&elements);
-            });
-        }
+            vector.write_object_ref_elements_mut(&elements);
+        });
     }
 
     Ok(args)
