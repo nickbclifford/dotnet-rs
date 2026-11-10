@@ -11,7 +11,7 @@ use crate::{
     StepResult,
     stack::{
         context::VesContext,
-        ops::{ArgumentOps, EvalStackOps, ExceptionOps, ReflectionLookupOps, ThreadOps, VmCallOps},
+        ops::{ArgumentOps, EvalStackOps, ExceptionOps, ReflectionLookupOps, ThreadOps},
     },
 };
 use dotnet_types::{
