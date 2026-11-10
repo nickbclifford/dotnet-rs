@@ -115,6 +115,9 @@ pub struct StackFrame<'gc> {
     /// `ldarga`.
     pub homes: FrameHomes,
     pub constructor_result: Option<Box<crate::frame_homes::ConstructorResult>>,
+    /// Monitor object of a synchronized method (ECMA-335 §II.23.1.11): set when the frame starts
+    /// acquiring it, released when the frame returns or unwinds.
+    pub sync_lock: Option<ObjectRef<'gc>>,
 }
 
 impl<'gc> StackFrame<'gc> {
@@ -141,6 +144,7 @@ impl<'gc> StackFrame<'gc> {
             initializer_claim: None,
             homes: FrameHomes::default(),
             constructor_result: None,
+            sync_lock: None,
         }
     }
 
@@ -166,6 +170,7 @@ impl<'gc> StackFrame<'gc> {
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;
+        self.sync_lock = None;
         self.homes.release();
     }
 
@@ -184,11 +189,12 @@ impl<'gc> StackFrame<'gc> {
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;
+        self.sync_lock = None;
     }
 }
 
 // SAFETY: F5.TracesEveryGcRef — `StackFrame` traces all GC-managed fields it can contain:
-// `exception_stack` entries, optional `multicast_state`, and the references serialized in its
+// `exception_stack` entries, optional `multicast_state`, the synchronized-method `sync_lock`, and the references serialized in its
 // local `homes`. `frame_continuation` carries only `RuntimeType` metadata (`'static`) and has
 // no GC references. `reflection_pending` traces its arguments. The native return destination
 // contains only an ID and generation. Initializer claims contain synchronization state only;
@@ -201,6 +207,7 @@ unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
             exception.trace(cc);
         }
         self.multicast_state.trace(cc);
+        self.sync_lock.trace(cc);
         self.reflection_pending.trace(cc);
         self.homes.trace(cc);
     }

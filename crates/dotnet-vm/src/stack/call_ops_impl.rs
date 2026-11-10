@@ -307,6 +307,10 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         VesContext::return_frame(self)
     }
 
+    fn enter_synchronized_method(&mut self) -> StepResult {
+        VesContext::enter_synchronized_method(self)
+    }
+
     fn prepare_constructor_receiver(
         &mut self,
         instance: ObjectInstance<'gc>,

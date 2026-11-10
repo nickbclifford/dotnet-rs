@@ -77,6 +77,7 @@ mod raw_memory_ops_impl;
 mod reflection_ops_impl;
 mod resolution_ops_impl;
 mod stack_ops_impl;
+mod synchronized;
 
 pub use context::{BasePointer, PinnedLocals, ThreadContext, VesContext};
 pub use dotnet_vm_data::{EvaluationStack, ExceptionState, FrameStack, StackFrame};

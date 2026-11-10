@@ -290,11 +290,12 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     #[inline]
     pub(crate) fn pop_and_recycle_frame_with_trace(&mut self) -> bool {
-        let Some(frame) = self.frame_stack.pop() else {
+        let Some(mut frame) = self.frame_stack.pop() else {
             return false;
         };
 
         self.trace_method_exit_for_frame(&frame);
+        self.release_synchronized_lock(frame.sync_lock.take());
         self.frame_stack.recycle_frame(frame);
         true
     }
@@ -520,6 +521,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("return_frame called with empty frame stack (ret/dispatch invariant violated)");
 
         self.trace_method_exit_for_frame(&frame);
+        self.release_synchronized_lock(frame.sync_lock.take());
 
         if let Some(mut claim) = frame.initializer_claim.take() {
             claim.succeed();
@@ -670,6 +672,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("unwind_frame called with empty stack");
 
         self.unwind_native_at(self.frame_stack.len());
+        self.release_synchronized_lock(frame.sync_lock.take());
 
         // The capturing caller owns publication and wrapping of its requested initializer.
         let capturing_initializer = matches!(

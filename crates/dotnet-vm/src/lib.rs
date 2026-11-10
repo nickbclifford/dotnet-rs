@@ -109,23 +109,40 @@ pub fn build_method_info(
         }
 
         let sig = method.signature();
+        let synchronized = method.method().synchronized;
+        let (instructions, exceptions, max_stack): (&'static [Instruction], _, _) = if synchronized
+        {
+            let (instructions, exceptions) = synchronized_body(&body.instructions, exceptions);
+            (
+                Box::leak(instructions.into_boxed_slice()),
+                std::borrow::Cow::Owned(exceptions),
+                body.header.maximum_stack_size + 1,
+            )
+        } else {
+            (
+                body.instructions.as_slice(),
+                std::borrow::Cow::Borrowed(exceptions),
+                body.header.maximum_stack_size,
+            )
+        };
         Ok(MethodInfo {
             is_cctor: method.method().runtime_special_name
                 && method.method().name == ".cctor"
                 && !sig.instance
                 && sig.parameters.is_empty(),
+            synchronized,
             signature: sig,
             locals: &body.header.local_variables,
-            max_stack: body.header.maximum_stack_size,
-            exceptions: dotnet_exceptions::parse(exceptions, &ctx)?
+            max_stack,
+            exceptions: dotnet_exceptions::parse(exceptions.as_ref(), &ctx)?
                 .into_iter()
                 .map(Arc::new)
                 .collect(),
-            instructions: body.instructions.as_slice(),
+            instructions,
             homes: frame_homes::build_frame_homes(
                 &method,
                 &body.header.local_variables,
-                &body.instructions,
+                instructions,
                 &ctx,
             )?,
             source: method,
@@ -133,6 +150,7 @@ pub fn build_method_info(
     } else {
         Ok(MethodInfo {
             is_cctor: false,
+            synchronized: false,
             signature: method.signature(),
             locals: &[],
             max_stack: 0,
@@ -142,4 +160,45 @@ pub fn build_method_info(
             source: method,
         })
     }
+}
+
+/// Prepends the reserved `break` slot a synchronized method acquires its monitor in (see
+/// [`MethodInfo::synchronized`]) and shifts every instruction index in the body and its
+/// exception clauses by one.
+fn synchronized_body(
+    instructions: &[Instruction],
+    exceptions: &[body::Exception],
+) -> (Vec<Instruction>, Vec<body::Exception>) {
+    use Instruction::*;
+    let shift = |target: &usize| target + 1;
+    let shifted = instructions.iter().map(|instruction| match instruction {
+        BranchEqual(t) => BranchEqual(shift(t)),
+        BranchGreaterOrEqual(sign, t) => BranchGreaterOrEqual(*sign, shift(t)),
+        BranchGreater(sign, t) => BranchGreater(*sign, shift(t)),
+        BranchLessOrEqual(sign, t) => BranchLessOrEqual(*sign, shift(t)),
+        BranchLess(sign, t) => BranchLess(*sign, shift(t)),
+        BranchNotEqual(t) => BranchNotEqual(shift(t)),
+        Branch(t) => Branch(shift(t)),
+        BranchFalsy(t) => BranchFalsy(shift(t)),
+        BranchTruthy(t) => BranchTruthy(shift(t)),
+        Leave(t) => Leave(shift(t)),
+        Switch(targets) => Switch(targets.iter().map(shift).collect()),
+        other => other.clone(),
+    });
+    let instructions = std::iter::once(Breakpoint).chain(shifted).collect();
+    let exceptions = exceptions
+        .iter()
+        .map(|clause| body::Exception {
+            kind: match &clause.kind {
+                body::ExceptionKind::Filter { offset } => {
+                    body::ExceptionKind::Filter { offset: offset + 1 }
+                }
+                other => other.clone(),
+            },
+            try_offset: clause.try_offset + 1,
+            handler_offset: clause.handler_offset + 1,
+            ..clause.clone()
+        })
+        .collect();
+    (instructions, exceptions)
 }

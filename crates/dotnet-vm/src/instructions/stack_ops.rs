@@ -5,6 +5,13 @@ use crate::{
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 
+/// `break` is a debugger hook with no effect here, except in the slot a synchronized method
+/// reserves at index 0 for acquiring its monitor.
+#[dotnet_instruction(Breakpoint)]
+pub fn breakpoint<'gc, T: crate::stack::ops::VmCallOps<'gc>>(ctx: &mut T) -> StepResult {
+    ctx.enter_synchronized_method()
+}
+
 #[dotnet_instruction(NoOperation)]
 pub fn nop<T: ?Sized>(_ctx: &mut T) -> StepResult {
     StepResult::Continue

@@ -515,10 +515,24 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
     ) -> Self::SyncBlock {
         let blocks = &self.shared().sync_blocks;
         let mut created = None;
-        let index = object.get_or_assign_sync_block_index(gc, || {
+        let mut create = || {
             let (index, block) = blocks.create_sync_block();
             created = Some(block);
             index
+        };
+        #[cfg(feature = "multithreading")]
+        let canonical_type = self.runtime_type_of_type_object(object);
+        let index = object.get_or_assign_sync_block_index(gc, || {
+            #[cfg(feature = "multithreading")]
+            if let Some(runtime_type) = canonical_type {
+                return *self
+                    .shared()
+                    .reflection_registry
+                    .runtime_type_monitors
+                    .entry(runtime_type)
+                    .or_insert_with(&mut create);
+            }
+            create()
         });
         match created {
             Some(block) => block,
@@ -1490,5 +1504,27 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         Ok(None)
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    /// The runtime type a `System.RuntimeType` object stands for, or `None` for any other object.
+    fn runtime_type_of_type_object(
+        &self,
+        object: ObjectRef<'gc>,
+    ) -> Option<dotnet_types::runtime::RuntimeType> {
+        let runtime_type = self
+            .shared
+            .loader
+            .corlib_wkt(dotnet_types::WellKnown::RuntimeType)
+            .ok()?;
+        let is_type_object = object
+            .try_as_object(|instance| instance.description == runtime_type)
+            .ok()?;
+        if !is_type_object {
+            return None;
+        }
+        dotnet_intrinsics_reflection::common::resolve_runtime_type(self, object).ok()
     }
 }

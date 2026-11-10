@@ -275,6 +275,9 @@ pub struct SharedReflectionRegistry {
     pub runtime_types: DashMap<RuntimeType, usize>,
     pub runtime_types_rev: DashMap<usize, RuntimeType>,
     pub next_type_index: AtomicUsize,
+    /// Monitor of each runtime type. Every arena allocates its own `Type` object for a type, so
+    /// the object cannot carry the lock: each of them publishes the sync block recorded here.
+    pub runtime_type_monitors: DashMap<RuntimeType, std::num::NonZeroUsize>,
     pub runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
     pub runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
     pub next_method_index: AtomicUsize,
@@ -290,6 +293,7 @@ impl SharedReflectionRegistry {
             runtime_types: DashMap::new(),
             runtime_types_rev: DashMap::new(),
             next_type_index: AtomicUsize::new(0),
+            runtime_type_monitors: DashMap::new(),
             runtime_methods: DashMap::new(),
             runtime_methods_rev: DashMap::new(),
             next_method_index: AtomicUsize::new(0),

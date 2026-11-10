@@ -197,6 +197,10 @@ pub trait VmStaticsOps<'gc>: StaticsOps<'gc> {
 pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
     fn return_frame(&mut self) -> StepResult;
 
+    /// Runs the monitor acquisition of a synchronized method from its reserved `break` slot.
+    /// Any other `break` is a no-op.
+    fn enter_synchronized_method(&mut self) -> StepResult;
+
     fn prepare_constructor_receiver(
         &mut self,
         instance: ObjectInstance<'gc>,

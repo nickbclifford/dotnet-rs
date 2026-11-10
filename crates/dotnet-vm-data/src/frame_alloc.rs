@@ -388,6 +388,7 @@ mod tests {
                 MethodMemberIndex::Method(0),
             ),
             is_cctor: false,
+            synchronized: false,
             homes: None,
         };
         let baseline = live_blocks();

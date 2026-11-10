@@ -101,6 +101,10 @@ pub struct MethodInfo<'a> {
     pub source: MethodDescription,
     /// Whether the method is a static type initializer (`.cctor`).
     pub is_cctor: bool,
+    /// Whether the method is `MethodImplOptions.Synchronized` (ECMA-335 §II.23.1.11). Its
+    /// instruction stream starts with a reserved `break` slot at index 0 where the VM acquires
+    /// the method's monitor; the body's own instructions start at index 1.
+    pub synchronized: bool,
     /// Home block layout for the locals and arguments this method addresses with `ldloca`
     /// and `ldarga`, if any.
     pub homes: Option<Arc<frame_homes::FrameHomeLayout>>,
