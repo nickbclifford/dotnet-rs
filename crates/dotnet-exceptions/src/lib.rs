@@ -355,15 +355,11 @@ impl ExceptionHandlingSystem {
         exception: ObjectRef<'gc>,
         cursor: HandlerAddress,
     ) -> StepResult {
-        let stop_frame = if let ExceptionState::Searching(state) = ctx.exception_mode() {
-            if let Some(nested) = state.nested_filter {
-                nested.handler.frame_index
-            } else {
-                0
-            }
-        } else {
-            0
+        let filter_frame = match ctx.exception_mode() {
+            ExceptionState::Searching(state) => state.nested_filter.map(|f| f.handler.frame_index),
+            _ => None,
         };
+        let stop_frame = filter_frame.unwrap_or(0);
 
         // Search from the cursor's frame down to the stop frame
         for frame_index in (stop_frame..=cursor.frame_index).rev() {
@@ -382,6 +378,12 @@ impl ExceptionHandlingSystem {
                     nested_filter: None,
                 });
                 return self.handle_exception(ctx, gc);
+            }
+            // A filter cannot contain protected regions (ECMA-335 I.12.4.2.7).
+            // Its owning frame's handlers protect the original throw, not the
+            // filter exception. Only callees can handle the latter.
+            if filter_frame == Some(frame_index) {
+                break;
             }
             let frame = &ctx.frame_stack().frames[frame_index];
             let ip = frame.state.ip;

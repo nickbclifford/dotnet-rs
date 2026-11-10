@@ -332,6 +332,12 @@ diff_test_exit_code!(
     7
 );
 
+diff_test_exit_code!(
+    exceptions_filter_throws_keeps_original_matches_dotnet,
+    "tests/fixtures/exceptions/filter_throws_keeps_original_42.cs",
+    42
+);
+
 #[cfg(feature = "multithreading")]
 diff_test!(
     threading_monitor_contended_lock_42_matches_dotnet,

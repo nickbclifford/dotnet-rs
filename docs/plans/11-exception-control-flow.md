@@ -1,6 +1,6 @@
 # Exception control flow: handlers inside handlers, unhandled worker exceptions
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** A `try`/`catch`/`finally` or `lock` inside a `finally` runs and returns control to the
 enclosing `finally` (with or without an exception in flight), and an exception unhandled on a
 managed worker thread terminates the process the way an unhandled exception on the main thread
@@ -41,11 +41,11 @@ only for `UnwindTarget::Instruction` completions.
 the process. Slice 2 now records the first worker exception, requests executor abort, and
 returns the exception from the entry executor after foreground workers have stopped.
 
-**3. Exceptions escaping a filter: already correct.** The README previously listed this as a
-defect. `filter_throws_keeps_original` (a filter that throws `ArgumentException`, with an outer
-`catch (InvalidOperationException)` that must still see the original) passes, and
-`nested_filter_throws_42.cs` covers the nested shape. The `nested_filter` search state
-implements §III.3.34 / §I.12.4.2.7. Only the regression fixture is missing.
+**3. Exceptions escaping a filter.** The existing nested-filter fixture did not detect a search
+through handlers in the filter's own frame. A filter throwing `ArgumentException` could therefore
+reach an outer catch around the original throw instead of preserving the original exception.
+The search now stops at the filter frame, after considering handlers in called methods, and
+`filter_throws_keeps_original_42.cs` checks the original exception's identity against CLR behavior.
 
 ## Scope
 
@@ -94,6 +94,10 @@ code. The worker registry already has abort and shutdown signals (`WorkerRegistr
 `workers.rs`); use them rather than adding a new stop mechanism. `Thread.Join` then never
 observes `Threw`. Keep the `InvalidOperationException` path only for `Error` results.
 
+**Slice 3.** Stop a filter exception's search at the filter's owning frame. Only called methods
+can contain handlers for that exception (§I.12.4.2.7); the owning frame's handlers protect the
+original throw. Preserve native capture boundaries before stopping the search.
+
 ## Slices
 
 1. **Handlers inside handlers (implemented).** Add fixtures for the four failing shapes above, plus the three
@@ -110,8 +114,8 @@ observes `Threw`. Keep the `InvalidOperationException` path only for `Error` res
    `threading_join_managed_thread`'s tests in `native_substring_tests.rs` if they depend on it.
    A fourth fixture covers a worker throwing after the entry method returns. All four compare
    stdout and termination against the CLR and check the VM's exception report.
-3. **Filter regression fixture.** Add `filter_throws_keeps_original_42.cs` (shape in problem 3)
-   as an exit-code differential test.
+3. **Filter regression (implemented).** Add `filter_throws_keeps_original_42.cs` as an exit-code
+   differential test and stop the filter exception's search at the filter frame.
 
 ## Done when
 
@@ -123,6 +127,9 @@ observes `Threw`. Keep the `InvalidOperationException` path only for `Error` res
   for `dotnet-exceptions`, `dotnet-vm`, `dotnet-vm-data` and `dotnet-cli` with `-D warnings`.
 - The README's "Unhandled worker exceptions" and "Control flow and filters" entries are
   removed.
+
+The exception and threading fixture selectors, including CLR comparisons, pass in no-features
+and `multithreading`; clippy for the four named crates passes with `-D warnings` in both.
 
 ## Ask the maintainer only if
 
