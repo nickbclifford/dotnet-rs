@@ -358,8 +358,6 @@ impl TestHarness {
             }
         };
 
-        executor.wait_for_foreground_workers();
-
         // Observe scalars before the executor or its arena is torn down. This callback
         // must never block: the executor is still registered with the GC coordinator.
         observe(&shared, td, &result);
@@ -398,18 +396,17 @@ impl TestHarness {
 
     /// Runs the CLI binary as a subprocess and captures its output.
     #[cfg(not(feature = "fuzzing"))]
-    pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
+    pub fn cli_command(&self, dll_path: &Path) -> Command {
         let assemblies_path =
             assemblies::find_dotnet_app_path().expect("could not find .NET shared path");
-        let output = if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {
-            Command::new(bin_path)
-                .args([
-                    "-a",
-                    assemblies_path.to_str().unwrap(),
-                    dll_path.to_str().unwrap(),
-                ])
-                .output()
-                .expect("failed to run dotnet-rs binary")
+        if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {
+            let mut command = Command::new(bin_path);
+            command.args([
+                "-a",
+                assemblies_path.to_str().unwrap(),
+                dll_path.to_str().unwrap(),
+            ]);
+            command
         } else {
             let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
             let mut command = Command::new(cargo_bin);
@@ -437,8 +434,16 @@ impl TestHarness {
                 assemblies_path.to_str().unwrap(),
                 dll_path.to_str().unwrap(),
             ]);
-            command.output().expect("failed to run cargo run")
-        };
+            command
+        }
+    }
+
+    #[cfg(not(feature = "fuzzing"))]
+    pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
+        let output = self
+            .cli_command(dll_path)
+            .output()
+            .expect("failed to run dotnet-rs");
 
         let exit_code = output.status.code().unwrap_or(255) as u8;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

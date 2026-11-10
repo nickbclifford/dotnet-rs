@@ -77,6 +77,72 @@ macro_rules! diff_test_exit_code {
 // structs/explicit_layout_0 (real .NET exits 134); unsafe/managed_ptr_size_0 (fat pointer
 // representation); and threading/threading_*_0 (exit-code-only comparison has no signal).
 // The original expression-compilation case is retained while the canonical set expands coverage.
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing"), unix))]
+#[test]
+fn threading_fatal_worker_exceptions_match_dotnet() {
+    use crate::integration_tests_impl::harness::TestHarness;
+    use std::{
+        os::unix::process::ExitStatusExt,
+        path::Path,
+        process::{Command, Output, Stdio},
+        time::{Duration, Instant},
+    };
+
+    fn output_with_timeout(command: &mut Command) -> Output {
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                return child.wait_with_output().unwrap();
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "fixture timed out: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let harness = TestHarness::get();
+    for fixture in ["joined", "unjoined", "after_return", "computation"] {
+        let source = format!("tests/debug_fixtures/fatal_worker_{fixture}.cs");
+        let dll = harness.ensure_dll(Path::new(&source));
+        let clr = output_with_timeout(Command::new("dotnet").arg(&dll));
+        let vm = output_with_timeout(&mut harness.cli_command(&dll));
+        assert_eq!(
+            clr.status.signal(),
+            Some(6),
+            "CLR {fixture}: {:?}",
+            clr.status
+        );
+        assert_eq!(
+            vm.status.code(),
+            Some(1),
+            "VM {fixture}: {}",
+            String::from_utf8_lossy(&vm.stderr)
+        );
+        assert_eq!(vm.stdout, clr.stdout, "{fixture} stdout");
+        assert_eq!(
+            vm.stdout, b"before worker\n",
+            "{fixture} continued after throw"
+        );
+        let stderr = String::from_utf8_lossy(&vm.stderr);
+        assert!(
+            stderr.contains("System.InvalidOperationException")
+                && stderr.contains("worker failure"),
+            "VM {fixture}: {stderr}"
+        );
+    }
+}
+
 diff_test!(
     statics_cctor_filter_matches_dotnet,
     "tests/fixtures/statics/cctor_filter_42.cs"

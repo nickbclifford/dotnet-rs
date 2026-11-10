@@ -36,16 +36,10 @@ only for `UnwindTarget::Instruction` completions.
 
 `lock` and `using` in cleanup code are common, so this is the highest-value item here.
 
-**2. An unhandled exception on a worker is reported through `Thread.Join`.**
-The worker's executor returns `ExecutorResult::Threw`; `threading_join_managed_thread`
-(`dotnet-vm/src/stack/context_ops.rs`) turns it into
-`InvalidOperationException("Managed ThreadStart failed: …")`. The CLR terminates the whole
-process at the throw. Reproduced under `multithreading`: a worker that throws, joined inside
-`try/catch (InvalidOperationException)`, makes the VM exit 42; CLR aborts (exit 134). A worker
-that is never joined presumably loses its exception entirely. That was not reproduced.
-
-The same behavior is a prerequisite for thread-pool work items (see "Task and thread-pool
-integration" in the README), where a swallowed exception would hide failures.
+**2. Unhandled worker exceptions were reported through `Thread.Join`.** The worker's
+`ExecutorResult::Threw` became a catchable `InvalidOperationException` instead of terminating
+the process. Slice 2 now records the first worker exception, requests executor abort, and
+returns the exception from the entry executor after foreground workers have stopped.
 
 **3. Exceptions escaping a filter: already correct.** The README previously listed this as a
 defect. `filter_throws_keeps_original` (a filter that throws `ArgumentException`, with an outer
@@ -108,12 +102,14 @@ observes `Threw`. Keep the `InvalidOperationException` path only for `Error` res
    Extend the `dotnet-exceptions` / `frame_alloc::` tests to cover the saved-state stack,
    including discard on escape. The C# fixture and generated `fault` IL match the CLR in both
    configurations; the fault cases also have VM-level tests.
-2. **Fatal worker exceptions.** Fixtures (`multithreading` only): joined worker throws; unjoined
+2. **Fatal worker exceptions (implemented).** Fixtures (`multithreading` only): joined worker throws; unjoined
    worker throws while main waits; worker throws while another worker is mid-computation. The
    exit status and the stdout written before the throw are compared with CLR where the harness
    can (subprocess comparison: CLR 134 versus the CLI's exit code; see the rejected-candidate
    note in `diff_harness.rs`). Remove the `Thread.Join` rethrow of `Threw`, and update
    `threading_join_managed_thread`'s tests in `native_substring_tests.rs` if they depend on it.
+   A fourth fixture covers a worker throwing after the entry method returns. All four compare
+   stdout and termination against the CLR and check the VM's exception report.
 3. **Filter regression fixture.** Add `filter_throws_keeps_original_42.cs` (shape in problem 3)
    as an exit-code differential test.
 

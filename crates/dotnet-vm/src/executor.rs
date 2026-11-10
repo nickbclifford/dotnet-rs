@@ -426,6 +426,14 @@ impl Executor {
             Ok(()) => executor.run_installed_thread_start(),
             Err(error) => ExecutorResult::Error(error),
         };
+        let result = match result {
+            ExecutorResult::Threw(exception) => {
+                executor.shared.report_worker_exception(exception);
+                // Join must never turn the unhandled exception into a catchable guest error.
+                ExecutorResult::Exited(0)
+            }
+            result => result,
+        };
         // The finished segment cannot retain its stack or resume after publication.
         let cleanup = executor.with_arena(|arena| {
             arena.mutate_root(|_, c| {
@@ -447,7 +455,7 @@ impl Executor {
         if let Some(hook) = WORKER_START_TEST_HOOK.with(|slot| slot.borrow_mut().take()) {
             return hook(self);
         }
-        self.run()
+        self.run_inner(false)
     }
 
     #[cfg(feature = "multithreading")]
@@ -467,10 +475,13 @@ impl Executor {
                 .expect("retired owner must retain its arena");
             if pending && retired.begin_finalizing(&shared) {
                 let result = self.run_inner(true);
-                retired.finish_finalizing();
-                if !matches!(result, ExecutorResult::Exited(_)) {
-                    shared.abort_signal().request_abort();
+                match result {
+                    ExecutorResult::Threw(exception) => shared.report_worker_exception(exception),
+                    ExecutorResult::Error(_) => shared.abort_signal().request_abort(),
+                    ExecutorResult::Exited(_) => {}
                 }
+                // Publish failures while the registry still sees this owner as Finalizing.
+                retired.finish_finalizing();
             }
             if shared.thread_manager.wait_retired() {
                 // INVARIANT: F1.RetiredCollectionExclusion — a collection may have
@@ -588,7 +599,7 @@ impl Executor {
     }
 
     /// Keep the entry arena participating in GC while foreground workers finish.
-    /// Call after the entry point returns and before dropping this executor.
+    /// `run` calls this before returning. Call it separately if entrypoint setup fails.
     pub fn wait_for_foreground_workers(&mut self) {
         loop {
             // Observe cancellation before the registry lock: a worker either published
@@ -623,9 +634,18 @@ impl Executor {
         }
     }
 
-    // assumes args are already on stack
+    /// Runs the entry point with its arguments already on the stack, and waits for foreground
+    /// workers before returning. An unhandled worker exception takes precedence over its result.
     pub fn run(&mut self) -> ExecutorResult {
-        self.run_inner(false)
+        let result = self.run_inner(false);
+        // Foreground workers can throw after the entry method has returned. Keep the entry
+        // arena participating in GC until they stop, then return their fatal exception.
+        self.wait_for_foreground_workers();
+        #[cfg(feature = "multithreading")]
+        if let Some(exception) = self.shared.fatal_worker_exception() {
+            return ExecutorResult::Threw(exception);
+        }
+        result
     }
 
     fn run_inner(&mut self, finalizers_only: bool) -> ExecutorResult {

@@ -770,10 +770,13 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
             .expect("managed Thread record remains registered until Join");
 
         match worker_result {
-            Ok(crate::ExecutorResult::Exited(0)) => StepResult::Continue,
-            Ok(result) => self.throw_by_name_with_message(
+            Ok(crate::ExecutorResult::Exited(_)) => StepResult::Continue,
+            Ok(crate::ExecutorResult::Threw(_)) => {
+                unreachable!("worker exceptions are published as process-fatal before completion")
+            }
+            Ok(crate::ExecutorResult::Error(error)) => self.throw_by_name_with_message(
                 "System.InvalidOperationException",
-                &format!("Managed ThreadStart failed: {result}"),
+                &format!("Managed ThreadStart failed: Internal VM Error: {error}"),
             ),
             Err(_) => self.throw_by_name_with_message(
                 "System.InvalidOperationException",

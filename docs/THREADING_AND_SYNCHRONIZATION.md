@@ -131,7 +131,13 @@ only queued finalizer segments, then returns to the service loop. An abort inter
 non-terminating finalizer. The [GC contract](GC_AND_MEMORY_SAFETY.md#retired-worker-arenas) describes
 the collection-exclusion and exact-lease-drain ordering.
 
-After Main returns, `Executor::wait_for_foreground_workers` keeps the entry arena registered,
+An unhandled worker exception is recorded once in `SharedGlobalState` before worker completion
+is published, and requests the existing abort signal. Other executors stop at their next executor
+safepoint; `Join` cannot catch the exception. The entry executor returns the recorded exception to
+the CLI, which reports it as an unhandled exception. A native operation already in progress must
+return before its executor can observe the abort.
+
+After Main returns, `Executor::run` calls `wait_for_foreground_workers`, keeping the entry arena registered,
 services GC stops and its own finalizers, and waits until no worker is running or finalizing and no
 finalizer is pending, observed under one registry lock (`WorkerRegistry::is_quiescent`), before
 reporting exit. All supported workers are foreground because `IsBackground` is

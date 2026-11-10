@@ -185,7 +185,6 @@ pub fn run_cli() -> ExitCode {
     }
 
     let result = executor.run();
-    executor.wait_for_foreground_workers();
     finish_executor(executor, &shared);
     match result {
         ExecutorResult::Exited(i) => exit_fast(i as i32),
