@@ -106,7 +106,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.push(StackValue::ObjectRef(lock));
         }
         match self.monitor_enter_method() {
-            Ok(enter) => self.dispatch_method(enter, GenericLookup::default()),
+            Ok(enter) => self.dispatch_method_inline(enter, GenericLookup::default()),
             Err(step) => step,
         }
     }
