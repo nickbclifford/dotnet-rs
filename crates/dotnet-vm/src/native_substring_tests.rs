@@ -5449,6 +5449,151 @@ fn enqueue_test_finalizer(executor: &mut Executor) {
         .unwrap();
 }
 
+/// A short weak handle in arena A that targets a finalizable object arena B owns must be
+/// cleared by the collection that finds the object unreachable, whichever arena finalizes first.
+///
+/// The coordinator runs the arenas' `Finalize` commands concurrently and B's resurrects the
+/// object. The hook holds A's own `Finalize` back until B has finished, which is the order that
+/// used to leave A's handle alive; the `ClearWeak` phase before `Finalize` makes it irrelevant.
+#[cfg(feature = "multithreading")]
+#[test]
+fn foreign_short_weak_handle_clears_before_the_owner_finalizes() {
+    use crate::{
+        gc::coordinator::GcCycleGuard,
+        test_utils::{
+            foreign_reference::{decode_reference, encode_reference},
+            worker::Worker,
+        },
+        threading::{FINALIZE_TEST_HOOK, FinalizeStage, ThreadManagerOps},
+    };
+    use dotnet_utils::gc::GCHandleType;
+    use dotnet_vm_ops::MemoryOps;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        thread,
+        time::{Duration, Instant},
+    };
+
+    /// Uninstalls the hook even when an assertion fails, so other tests are unaffected.
+    struct HookGuard;
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            *FINALIZE_TEST_HOOK.lock().unwrap() = None;
+        }
+    }
+
+    let (mut a, ty) = boundary_executor(false);
+    let state = Arc::clone(&a.shared);
+    let a_thread = thread::current().id();
+
+    let (ptr_tx, ptr_rx) = mpsc::channel();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let b_state = Arc::clone(&state);
+    let owner = thread::spawn(move || {
+        let mut b = Executor::new(Arc::clone(&b_state));
+        let id = b.thread_id;
+        let storage = b
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine remains rooted for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let ctx = engine.ves_context(gc);
+                    let object = ctx.new_object(ty).unwrap();
+                    let object = ctx.alloc_obj_ref(gc, object);
+                    // `System.Object` itself never counts as finalizable; mark the instance the
+                    // way the resolver would for a type that overrides `Finalize`.
+                    object.as_object_mut(gc, |instance| instance.has_finalizer = true);
+                    ctx.register_new_object(&object);
+                    assert_eq!(
+                        engine.stack.local.heap.finalization_queue.borrow().len(),
+                        1,
+                        "the object must be registered for finalization"
+                    );
+                    encode_reference(object)
+                })
+            })
+            .unwrap();
+        ptr_tx.send((id, thread::current().id(), storage)).unwrap();
+        // Park at real safe points so the coordinator can stop and command this arena.
+        loop {
+            b_state
+                .thread_manager
+                .safe_point(id, &b_state.gc_coordinator);
+            match stop_rx.recv_timeout(Duration::from_millis(1)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                _ => break,
+            }
+        }
+    });
+    let owner = Worker::new(owner, stop_tx);
+    let (b_id, b_thread, storage) = ptr_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_ne!(a.thread_id, b_id);
+
+    a.with_arena(|arena| {
+        arena.mutate_root(|gc, engine| {
+            // SAFETY: F1.GcHandleRooted — the engine is the live root for this mutation.
+            let gc = unsafe { test_gc_handle(gc, engine) };
+            let object = decode_reference(storage, gc);
+            let mut handles = engine.stack.local.heap.gchandles.borrow_mut();
+            assert!(handles.is_empty(), "the witness must be handle slot 0");
+            handles.push(Some((object, GCHandleType::Weak)));
+        })
+    })
+    .unwrap();
+
+    let owner_finalized = Arc::new(AtomicBool::new(false));
+    let _hook = HookGuard;
+    *FINALIZE_TEST_HOOK.lock().unwrap() = Some(Arc::new({
+        let owner_finalized = Arc::clone(&owner_finalized);
+        move |stage| {
+            let me = thread::current().id();
+            if me == b_thread && stage == FinalizeStage::After {
+                owner_finalized.store(true, Ordering::Release);
+            } else if me == a_thread && stage == FinalizeStage::Before {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !owner_finalized.load(Ordering::Acquire) {
+                    assert!(Instant::now() < deadline, "the owner never finalized");
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    }));
+
+    let coordinator = Arc::clone(&state.gc_coordinator);
+    let session = coordinator.begin_collection().expect("idle coordinator");
+    let stw = state.thread_manager.request_stop_the_world();
+    let cycle = GcCycleGuard::new(session, stw);
+    cycle.collect_all_arenas(a.thread_id);
+    drop(cycle);
+    assert!(
+        owner_finalized.load(Ordering::Acquire),
+        "the hook must have forced the owner to finalize"
+    );
+
+    let cleared = a
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                let mut handles = engine.stack.local.heap.gchandles.borrow_mut();
+                let cleared = handles[0]
+                    .as_ref()
+                    .is_none_or(|(object, _)| object.0.is_none());
+                // The object is resurrected into B's finalization queue when the bug is present;
+                // drop the slot so nothing reads it after the owner goes away.
+                handles.clear();
+                cleared
+            })
+        })
+        .unwrap();
+    owner.finish().unwrap();
+    assert!(
+        cleared,
+        "a short weak handle to an unreachable object survived because its owner finalized first"
+    );
+}
+
 #[test]
 fn finalizer_preserves_filter_and_suspended_native_context() {
     use dotnet_vm_data::exceptions::HandlerKind;

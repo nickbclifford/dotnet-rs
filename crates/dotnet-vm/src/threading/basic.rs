@@ -845,6 +845,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 });
             }
             SweepPhaseCommand::Finalize => {
+                #[cfg(test)]
+                finalize_test_hook(FinalizeStage::Before);
                 with_current(|arena| {
                     if let Some(arena) = arena {
                         // Ensure we are in Marked phase
@@ -855,6 +857,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         }
                     }
                 });
+                #[cfg(test)]
+                finalize_test_hook(FinalizeStage::After);
             }
             SweepPhaseCommand::Sweep => {
                 with_current(|arena| {
@@ -865,6 +869,32 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 });
             }
         },
+    }
+}
+
+/// Where a thread is relative to its own `Finalize` command.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FinalizeStage {
+    Before,
+    After,
+}
+
+#[cfg(test)]
+type FinalizeHook = std::sync::Arc<dyn Fn(FinalizeStage) + Send + Sync>;
+
+/// Lets a test order the arenas' `Finalize` commands, which the coordinator otherwise runs
+/// concurrently. The hook runs on whichever thread executes the command and must identify
+/// itself (for example by `std::thread::current().id()`).
+#[cfg(test)]
+pub(crate) static FINALIZE_TEST_HOOK: std::sync::Mutex<Option<FinalizeHook>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn finalize_test_hook(stage: FinalizeStage) {
+    let hook = FINALIZE_TEST_HOOK.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook(stage);
     }
 }
 
