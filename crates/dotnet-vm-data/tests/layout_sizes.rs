@@ -33,9 +33,11 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Native return destinations add a stable identity and generation.
     // Reflection continuations and monitor retry metadata are heap-backed.
     // The initializer claim is an optional boxed synchronization-only interface.
+    // A synchronized method's monitor object adds an optional 8-byte reference and the
+    // `synchronized` flag pads MethodInfo by another 8 bytes.
     // (multithreading, expected_size)
-    (false, 584),
-    (true, 584),
+    (false, 600),
+    (true, 600),
 ];
 
 #[cfg(target_pointer_width = "64")]
