@@ -72,6 +72,27 @@ pub fn intrinsic_thread_managed_id<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx.threading_managed_id(thread)
 }
 
+#[dotnet_intrinsic("bool System.Threading.Thread::get_IsBackground()")]
+pub fn intrinsic_thread_get_background<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread = ctx.pop_obj();
+    ctx.threading_background(thread, None)
+}
+
+#[dotnet_intrinsic("void System.Threading.Thread::set_IsBackground(bool)")]
+pub fn intrinsic_thread_set_background<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let value = ctx.pop_i32() != 0;
+    let thread = ctx.pop_obj();
+    ctx.threading_background(thread, Some(value))
+}
+
 /// System.Threading.Thread::Join()
 #[dotnet_intrinsic("void System.Threading.Thread::Join()")]
 pub fn intrinsic_thread_join<'gc, T: ThreadingIntrinsicHost<'gc>>(

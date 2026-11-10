@@ -60,6 +60,8 @@ pub(crate) struct ManagedThreadLocalState<'gc> {
     records: RefCell<HashMap<ObjectRef<'gc>, ManagedThreadRecord<'gc>>>,
     current: RefCell<Option<ObjectRef<'gc>>>,
     current_id: Cell<i32>,
+    #[cfg(not(feature = "multithreading"))]
+    background: Cell<bool>,
 }
 
 impl<'gc> ManagedThreadLocalState<'gc> {
@@ -68,6 +70,8 @@ impl<'gc> ManagedThreadLocalState<'gc> {
             records: RefCell::new(HashMap::new()),
             current: RefCell::new(None),
             current_id: Cell::new(next_managed_id()),
+            #[cfg(not(feature = "multithreading"))]
+            background: Cell::new(false),
         }
     }
 
@@ -91,6 +95,16 @@ impl<'gc> ManagedThreadLocalState<'gc> {
     #[cfg(feature = "multithreading")]
     pub(crate) fn set_current_id(&self, id: i32) {
         self.current_id.set(id);
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    pub(crate) fn background(&self) -> bool {
+        self.background.get()
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    pub(crate) fn set_background(&self, value: bool) {
+        self.background.set(value);
     }
 
     pub(crate) fn records_write(

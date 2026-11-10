@@ -659,3 +659,13 @@ diff_test!(
     threading_sleep_gc_42_matches_dotnet,
     "tests/fixtures/threading/thread_sleep_gc_42.cs"
 );
+
+diff_test!(
+    threading_background_current_42_matches_dotnet,
+    "tests/fixtures/threading/thread_background_current_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_background_42_matches_dotnet,
+    "tests/fixtures/threading/thread_background_42.cs"
+);

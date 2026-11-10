@@ -116,7 +116,7 @@ workers stop at their next safepoint and the first exception wins.
 3. **Thread identity and start shapes (implemented).** Fixtures for `CurrentThread` identity on the entry thread
    and on a worker, `ManagedThreadId` uniqueness, `Start(object)`, a closure target, and
    `Join(int)` timing out and succeeding. Delete the instance-target rejection.
-4. **`IsBackground`.** Fixtures: a background worker that never returns does not keep the process
+4. **`IsBackground` (implemented).** Fixtures: a background worker that never returns does not keep the process
    alive; setting it after `Start`; the default for a new thread is foreground. Update the
    foreground-wait documentation in `THREADING_AND_SYNCHRONIZATION.md`.
 5. **`Monitor.Wait`/`Pulse`/`PulseAll`.** Fixtures: the producer/consumer pulse above, a timed wait

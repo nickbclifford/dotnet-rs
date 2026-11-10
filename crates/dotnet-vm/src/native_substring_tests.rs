@@ -6129,15 +6129,11 @@ fn managed_join_returns_before_native_worker_exits() {
                         delegate: None,
                         parameterized: false,
                         started: true,
-                        completion_index: None,
+                        background: false,
+                        completion_index: Some(completion.index()),
                         retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                     },
                 );
-                engine
-                    .stack
-                    .shared
-                    .workers
-                    .publish_managed_completion(ptr, &completion);
                 let mut ctx = engine.ves_context(gc);
                 ctx.push(StackValue::ObjectRef(thread));
                 ctx.threading_join_managed_thread(None)

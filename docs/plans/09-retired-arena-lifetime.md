@@ -48,9 +48,8 @@ shutdown. The accepted per-worker resource and process-wide ID costs are recorde
 Match CLR rather than encode new deviations in the shutdown protocol:
 
 - **Foreground exit.** CLR keeps the process alive until every foreground thread finishes, and
-  `new Thread` is foreground by default. When Main returns, the VM waits for every running
-  worker to complete before shutdown; with `IsBackground` unimplemented, every worker counts as
-  foreground. Shutdown never aborts a running worker except on a user/timeout abort request.
+  `new Thread` is foreground by default. The current foreground wait and background cancellation
+  behavior is described in the [worker lifecycle contract](../THREADING_AND_SYNCHRONIZATION.md#managed-worker-lifecycle-and-process-exit).
 - **`GC.WaitForPendingFinalizers`** ordinarily waits until no arena, live or retired, has a pending
   or in-progress finalizer. A call from a currently running finalizer returns immediately rather
   than waiting on its own in-progress work, matching the CLR.

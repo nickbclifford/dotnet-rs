@@ -664,16 +664,27 @@ impl Executor {
     /// Keep the entry arena participating in GC while foreground workers finish.
     /// `run` calls this before returning. Call it separately if entrypoint setup fails.
     pub fn wait_for_foreground_workers(&mut self) {
+        let mut stopping_background = false;
         loop {
             // Observe cancellation before the registry lock: a worker either published
             // Finalizing under that lock or observes the cancellation while holding it.
             let aborted = self.shared.is_abort_requested();
-            if self
+            let idle = || aborted || !self.shared.has_pending_finalizers();
+            if stopping_background {
+                if self.shared.workers.is_quiescent(idle) {
+                    break;
+                }
+            } else if self
                 .shared
                 .workers
-                .is_quiescent(|| aborted || !self.shared.has_pending_finalizers())
+                .foreground_quiescent(idle, || self.shared.abort_signal().request_abort())
             {
-                break;
+                if !self.shared.is_abort_requested() {
+                    break;
+                }
+                // Keep participating in GC until canceled workers have stopped executing.
+                stopping_background = true;
+                continue;
             }
             #[cfg(feature = "multithreading")]
             if self.shared.thread_manager.is_gc_stop_requested() {

@@ -27,6 +27,7 @@ enum Lifecycle {
 struct Entry {
     lifecycle: Lifecycle,
     handle: Option<JoinHandle<()>>,
+    background: bool,
 }
 
 #[cfg(feature = "multithreading")]
@@ -46,6 +47,7 @@ pub(crate) struct ManagedThreadMetadata {
     pub(crate) delegate: Option<ObjectPtr>,
     pub(crate) parameterized: bool,
     pub(crate) started: bool,
+    pub(crate) background: bool,
     pub(crate) completion_index: Option<usize>,
     pub(crate) retained: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -91,6 +93,11 @@ impl WorkerCompletion {
     }
 
     #[cfg(test)]
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
+
+    #[cfg(test)]
     pub(crate) fn phase(&self) -> &'static str {
         match self.state.lock().entries[self.index].lifecycle {
             Lifecycle::Running => "running",
@@ -128,17 +135,16 @@ impl WorkerRegistry {
         Some(metadata.clone())
     }
 
-    pub(crate) fn publish_managed_completion(
-        &self,
-        thread: ObjectPtr,
-        completion: &WorkerCompletion,
-    ) {
-        self.state
-            .lock()
-            .threads
-            .get_mut(&thread)
-            .expect("registered thread")
-            .completion_index = Some(completion.index);
+    pub(crate) fn set_background(&self, thread: ObjectPtr, background: bool) -> bool {
+        let mut state = self.state.lock();
+        let Some(metadata) = state.threads.get_mut(&thread) else {
+            return false;
+        };
+        metadata.background = background;
+        if let Some(index) = metadata.completion_index {
+            state.entries[index].background = background;
+        }
+        true
     }
 
     pub(crate) fn managed_completion(&self, thread: ObjectPtr) -> Option<WorkerCompletion> {
@@ -149,12 +155,34 @@ impl WorkerRegistry {
             index,
         })
     }
+    #[cfg(test)]
     pub(crate) fn spawn_owner(
         &self,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
+        self.spawn_owner_inner(None, run)
+    }
+
+    pub(crate) fn spawn_managed_owner(
+        &self,
+        thread: ObjectPtr,
+        run: impl FnOnce(RunningWorker) + Send + 'static,
+    ) -> WorkerCompletion {
+        self.spawn_owner_inner(Some(thread), run)
+    }
+
+    fn spawn_owner_inner(
+        &self,
+        thread: Option<ObjectPtr>,
+        run: impl FnOnce(RunningWorker) + Send + 'static,
+    ) -> WorkerCompletion {
         let mut state = self.state.lock();
         let index = state.entries.len();
+        let background = thread.is_some_and(|thread| {
+            let metadata = state.threads.get_mut(&thread).expect("registered thread");
+            metadata.completion_index = Some(index);
+            metadata.background
+        });
         let published = Arc::clone(&self.state);
         let handle = std::thread::spawn(move || {
             let token = RunningWorker {
@@ -180,6 +208,7 @@ impl WorkerRegistry {
         state.entries.push(Entry {
             lifecycle: Lifecycle::Running,
             handle: Some(handle),
+            background,
         });
         WorkerCompletion {
             state: Arc::clone(&self.state),
@@ -221,6 +250,31 @@ impl WorkerRegistry {
     pub(crate) fn is_quiescent(&self, finalizers_idle: impl FnOnce() -> bool) -> bool {
         let state = self.state.lock();
         Self::quiescent_locked(&state) && finalizers_idle()
+    }
+
+    /// Decide process exit and request cancellation while holding the lifecycle lock, so
+    /// background changes and worker publication cannot race the decision.
+    pub(crate) fn foreground_quiescent(
+        &self,
+        finalizers_idle: impl FnOnce() -> bool,
+        cancel_background: impl FnOnce(),
+    ) -> bool {
+        let state = self.state.lock();
+        if state.entries.iter().any(|entry| {
+            matches!(entry.lifecycle, Lifecycle::Finalizing(_))
+                || matches!(entry.lifecycle, Lifecycle::Running) && !entry.background
+        }) || !finalizers_idle()
+        {
+            return false;
+        }
+        if state
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.lifecycle, Lifecycle::Running))
+        {
+            cancel_background();
+        }
+        true
     }
 
     fn quiescent_locked(state: &RegistryState) -> bool {
@@ -382,6 +436,13 @@ impl WorkerRegistry {
     pub(crate) fn is_quiescent(&self, finalizers_idle: impl FnOnce() -> bool) -> bool {
         finalizers_idle()
     }
+    pub(crate) fn foreground_quiescent(
+        &self,
+        finalizers_idle: impl FnOnce() -> bool,
+        _cancel_background: impl FnOnce(),
+    ) -> bool {
+        finalizers_idle()
+    }
     pub(crate) fn shutdown(&self) {}
 }
 
@@ -409,6 +470,7 @@ mod tests {
                 entries: vec![Entry {
                     lifecycle: Lifecycle::Running,
                     handle: None,
+                    background: false,
                 }],
                 threads: HashMap::new(),
             }));
@@ -449,6 +511,7 @@ mod tests {
             entries: vec![Entry {
                 lifecycle: Lifecycle::Running,
                 handle: None,
+                background: false,
             }],
             threads: HashMap::new(),
         }));
@@ -475,6 +538,7 @@ mod tests {
             entries: vec![Entry {
                 lifecycle: Lifecycle::Running,
                 handle: None,
+                background: false,
             }],
             threads: HashMap::new(),
         }));
@@ -507,6 +571,7 @@ mod tests {
             entries: vec![Entry {
                 lifecycle: Lifecycle::Running,
                 handle: None,
+                background: false,
             }],
             threads: HashMap::new(),
         }));
@@ -543,6 +608,7 @@ mod tests {
         registry.state.lock().entries.push(Entry {
             lifecycle: Lifecycle::Running,
             handle: None,
+            background: false,
         });
         assert!(!registry.is_quiescent(|| true));
         let running = RunningWorker {
@@ -562,6 +628,26 @@ mod tests {
         assert!(!registry.is_quiescent(|| true));
         retired.finish_finalizing();
         assert!(registry.is_quiescent(|| true));
+    }
+
+    #[test]
+    fn foreground_exit_cancels_only_after_foreground_and_finalizers_are_idle() {
+        use std::cell::Cell;
+
+        let registry = WorkerRegistry::default();
+        registry.state.lock().entries.push(Entry {
+            lifecycle: Lifecycle::Running,
+            handle: None,
+            background: false,
+        });
+        let canceled = Cell::new(false);
+        assert!(!registry.foreground_quiescent(|| true, || canceled.set(true)));
+        registry.state.lock().entries[0].background = true;
+        assert!(!registry.foreground_quiescent(|| false, || canceled.set(true)));
+        assert!(!canceled.get());
+        assert!(registry.foreground_quiescent(|| true, || canceled.set(true)));
+        assert!(canceled.get());
+        assert!(!registry.is_quiescent(|| true));
     }
 
     #[test]

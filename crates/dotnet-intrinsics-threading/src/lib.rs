@@ -115,6 +115,12 @@ pub trait ManagedThreadHost<'gc> {
 
     fn threading_managed_id(&mut self, thread: ObjectRef<'gc>) -> dotnet_vm_data::StepResult;
 
+    fn threading_background(
+        &mut self,
+        thread: ObjectRef<'gc>,
+        value: Option<bool>,
+    ) -> dotnet_vm_data::StepResult;
+
     /// Joins the receiver still retained on the evaluation stack.
     ///
     /// The host must leave it in place while yielding so it remains rooted across safepoints.

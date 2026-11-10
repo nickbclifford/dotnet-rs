@@ -48,7 +48,7 @@ pub(crate) fn spawn_thread_start(
 ) -> Option<super::workers::WorkerCompletion> {
     let registry = &shared.workers;
     let worker_shared = shared.clone();
-    Some(registry.spawn_owner(move |worker| {
+    Some(registry.spawn_managed_owner(start.thread, move |worker| {
         Executor::run_managed_thread_start(worker_shared, method, lookup, start, worker)
     }))
 }

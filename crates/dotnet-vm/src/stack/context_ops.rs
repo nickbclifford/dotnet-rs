@@ -633,6 +633,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                         delegate: None,
                         parameterized: false,
                         started: true,
+                        background: false,
                         completion_index: None,
                         retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                     },
@@ -673,6 +674,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                 delegate: thread_start.as_ptr(),
                 parameterized,
                 started: false,
+                background: false,
                 completion_index: None,
                 retained,
             },
@@ -778,16 +780,13 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                 id: metadata.id,
                 retained: metadata.retained.clone(),
             };
-            let completion = crate::threading::spawn_thread_start(
+            crate::threading::spawn_thread_start(
                 self.shared.clone(),
                 runner,
                 GenericLookup::default(),
                 start,
             )
             .expect("multithreaded worker spawn");
-            self.shared
-                .workers
-                .publish_managed_completion(ptr, &completion);
             StepResult::Continue
         }
         #[cfg(not(feature = "multithreading"))]
@@ -811,6 +810,40 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
         #[cfg(feature = "multithreading")]
         if let Some(metadata) = self.shared.workers.managed_thread(thread.as_ptr().unwrap()) {
             self.push_i32(metadata.id);
+            return StepResult::Continue;
+        }
+        self.throw_by_name_with_message(
+            "System.Threading.ThreadStateException",
+            "Unknown managed thread.",
+        )
+    }
+
+    fn threading_background(&mut self, thread: ObjectRef<'gc>, value: Option<bool>) -> StepResult {
+        if thread.0.is_none() {
+            return self.throw_by_name_with_message(
+                "System.NullReferenceException",
+                dotnet_vm_ops::NULL_REF_MSG,
+            );
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let ptr = thread.as_ptr().unwrap();
+            if let Some(value) = value {
+                if self.shared.workers.set_background(ptr, value) {
+                    return StepResult::Continue;
+                }
+            } else if let Some(metadata) = self.shared.workers.managed_thread(ptr) {
+                self.push_i32(i32::from(metadata.background));
+                return StepResult::Continue;
+            }
+        }
+        #[cfg(not(feature = "multithreading"))]
+        if self.local.managed_threads.current() == Some(thread) {
+            if let Some(value) = value {
+                self.local.managed_threads.set_background(value);
+            } else {
+                self.push_i32(i32::from(self.local.managed_threads.background()));
+            }
             return StepResult::Continue;
         }
         self.throw_by_name_with_message(

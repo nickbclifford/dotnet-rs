@@ -111,8 +111,8 @@ unstarted records remain rooted until arena teardown. The shared worker registry
 and identity metadata for access from other arenas, retaining metadata entries until VM teardown.
 These handlers bypass CoreLib's QCall initialization.
 
-Background, priority, culture, other constructors and thread configuration APIs, and ThreadPool
-scheduling remain unsupported. Without `multithreading`, construction and starting of managed
+`IsBackground` can be read or changed before or after `Start`. Priority, culture, other
+constructors and thread configuration APIs, and ThreadPool scheduling remain unsupported. Without `multithreading`, construction and starting of managed
 workers report unsupported; entry-thread identity remains available.
 
 ### Managed worker lifecycle and process exit
@@ -134,12 +134,15 @@ safepoint; `Join` cannot catch the exception. The entry executor returns the rec
 the CLI, which reports it as an unhandled exception. A native operation already in progress must
 return before its executor can observe the abort.
 
-After Main returns, `Executor::run` calls `wait_for_foreground_workers`. (`Executor::run_entrypoint` runs only the entry method and returns without that wait; use it when a test must observe the state while a finalizer is still running, and call `wait_for_foreground_workers` before dropping the executor.) The wait keeps the entry arena registered,
-services GC stops and its own finalizers, and waits until no worker is running or finalizing and no
-finalizer is pending, observed under one registry lock (`WorkerRegistry::is_quiescent`), before
-reporting exit. All supported workers are foreground because `IsBackground` is
-unimplemented. `Thread::InternalFinalize` has no native handle to release because the registry
-owns those handles. The CLI and in-process harness explicitly call
+After Main returns, `Executor::run` calls `wait_for_foreground_workers`. (`Executor::run_entrypoint`
+runs only the entry method and returns without that wait; callers must wait before dropping the
+executor.) The entry arena remains registered and services GC stops and its own finalizers while
+foreground workers finish. The exit decision observes foreground workers, finalizing owners and
+pending finalizers under the registry lock. Once they are idle, any still-running background
+workers receive the shared abort signal and stop at their next safepoint, including in `Sleep`.
+The entry executor continues participating in GC until all canceled workers stop. A native
+operation that does not return can still delay shutdown. `Thread::InternalFinalize` has no native
+handle to release because the registry owns those handles. The CLI and in-process harness explicitly call
 `SharedGlobalState::shutdown_workers` after dropping the entry executor, but keep the entry arena's
 storage (`Executor::extract_arena`) until it returns; shutdown must not be deferred to shared-state
 destruction because worker executors hold that state. Shutdown first waits until no worker is
