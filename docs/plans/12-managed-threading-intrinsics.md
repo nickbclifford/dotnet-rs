@@ -1,6 +1,6 @@
 # Managed threading intrinsics
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** A guest program can use the common `System.Threading.Thread` and `Monitor` surface
 (`Yield`, `SpinWait`, `Sleep`, `CurrentThread`, `ManagedThreadId`, `IsBackground`,
 `Start(object)`, closure targets, `Join(int)`, `Monitor.Wait`/`Pulse`/`PulseAll`) with CLR-matching
@@ -119,7 +119,7 @@ workers stop at their next safepoint and the first exception wins.
 4. **`IsBackground` (implemented).** Fixtures: a background worker that never returns does not keep the process
    alive; setting it after `Start`; the default for a new thread is foreground. Update the
    foreground-wait documentation in `THREADING_AND_SYNCHRONIZATION.md`.
-5. **`Monitor.Wait`/`Pulse`/`PulseAll`.** Fixtures: the producer/consumer pulse above, a timed wait
+5. **`Monitor.Wait`/`Pulse`/`PulseAll` (implemented).** Fixtures: the producer/consumer pulse above, a timed wait
    that returns `false`, `PulseAll` waking several waiters, a non-owner `Wait` throwing, a
    recursive lock restored after `Wait`, and a `Pulse` with no waiters being lost. Deterministic
    schedule tests for pulse before registration, between registration and recheck, and after
@@ -144,3 +144,11 @@ workers stop at their next safepoint and the first exception wins.
   must be woken from another thread other than through the condition-wait registrations).
 - `Monitor.Wait` in ST needs a behavior other than timeout-then-`false` or a deadlock error.
 - The `ManagedThreadRecord` cannot carry the new state without a second registry.
+
+## Validation
+
+The full `dotnet-vm` library and `dotnet-cli` `integration_tests` suites pass in ST and MT,
+including the threading and exceptions fixtures and CLR comparisons. The monitor tests cover
+registration schedules, timeout and pulse ordering, cancellation, recursion restoration, the
+legacy retry path, and a real GC stop while parked. Clippy passes for the touched crates in both
+configurations with `-D warnings`.

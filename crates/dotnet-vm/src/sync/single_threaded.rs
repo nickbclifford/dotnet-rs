@@ -103,16 +103,31 @@ impl super::SyncBlockOps for SyncBlock {
         }
     }
 
-    fn wait(&self, _thread_id: ArenaId, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
-        Err("Monitor.Wait() is not supported in single-threaded mode")
+    fn is_owned(&self, _thread_id: ArenaId) -> bool {
+        self.recursion_count.load(Ordering::Relaxed) > 0
     }
-
-    fn pulse(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
-        Err("Monitor.Pulse() is not supported in single-threaded mode")
+    fn begin_wait(
+        &self,
+        thread_id: ArenaId,
+        _deadline: Option<std::time::Instant>,
+    ) -> Option<(u64, usize)> {
+        if !self.is_owned(thread_id) {
+            return None;
+        }
+        Some((0, self.recursion_count.swap(0, Ordering::Relaxed)))
     }
-
-    fn pulse_all(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
-        Err("Monitor.PulseAll() is not supported in single-threaded mode")
+    fn poll_wait(&self, _id: u64, deadline: Option<std::time::Instant>) -> Option<bool> {
+        deadline
+            .filter(|d| std::time::Instant::now() >= *d)
+            .map(|_| false)
+    }
+    fn cancel_wait(&self, _id: u64) {}
+    fn restore_wait(&self, _thread_id: ArenaId, recursion: usize) -> bool {
+        self.recursion_count.store(recursion, Ordering::Relaxed);
+        true
+    }
+    fn pulse(&self, thread_id: ArenaId, _all: bool) -> bool {
+        self.is_owned(thread_id)
     }
 }
 

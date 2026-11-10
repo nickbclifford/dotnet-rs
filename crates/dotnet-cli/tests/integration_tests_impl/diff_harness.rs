@@ -669,3 +669,13 @@ diff_test!(
     threading_background_42_matches_dotnet,
     "tests/fixtures/threading/thread_background_42.cs"
 );
+
+diff_test!(
+    threading_monitor_wait_single_matches_dotnet,
+    "tests/fixtures/threading/monitor_wait_single_42.cs"
+);
+#[cfg(feature = "multithreading")]
+diff_test!(
+    threading_monitor_wait_threads_matches_dotnet,
+    "tests/fixtures/threading/monitor_wait_threads_42.cs"
+);

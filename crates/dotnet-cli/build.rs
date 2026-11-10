@@ -245,6 +245,7 @@ fn main() {
             || file_name == "foreground_worker_42"
             || file_name == "thread_sleep_gc_42"
             || file_name == "thread_background_42"
+            || file_name == "monitor_wait_threads_42"
             || file_name == "thread_identity_start_42"
             || file_name == "thread_cross_start_42"
             || file_name == "thread_retired_creator_42"
@@ -252,7 +253,7 @@ fn main() {
             || file_name == "circular_init_mt_42"
             || file_name == "cctor_wait_success_42"
             || file_name == "cctor_wait_failure_42")
-            && (!is_multithreading_enabled || (is_fuzzing_enabled && matches!(file_name, "foreground_worker_42" | "thread_sleep_gc_42" | "thread_background_42" | "thread_identity_start_42" | "thread_cross_start_42" | "thread_retired_creator_42" | "retired_arena_cycles_42")))
+            && (!is_multithreading_enabled || (is_fuzzing_enabled && matches!(file_name, "foreground_worker_42" | "thread_sleep_gc_42" | "thread_background_42" | "monitor_wait_threads_42" | "thread_identity_start_42" | "thread_cross_start_42" | "thread_retired_creator_42" | "retired_arena_cycles_42")))
             // generic_constraints_fail_0 deliberately tests constraint-violation rejection;
             // that logic only exists under the generic-constraint-validation feature.
             || (file_name == "generic_constraints_fail_0"

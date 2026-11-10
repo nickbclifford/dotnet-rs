@@ -69,6 +69,7 @@ fn wait_test_hook(point: WaitTestPoint) {
 
 pub(crate) enum PendingWait {
     Monitor(PendingMonitor),
+    MonitorWait(PendingMonitorWait),
     Finalizers(u64),
     Sleep(u64, Option<std::time::Instant>),
     Initializer(u64, Box<dyn dotnet_vm_ops::effects::NativeInitWait>),
@@ -80,6 +81,13 @@ pub(crate) struct PendingMonitor {
     pub(crate) deadline: Option<std::time::Instant>,
     generation: u64,
     // INVARIANT: F1.GcHandleRooted — the activation's traced root set retains this object while its monitor is pending.
+    _object: dotnet_vm_ops::effects::RootedValue,
+}
+
+pub(crate) struct PendingMonitorWait {
+    pub(crate) wait: crate::sync::MonitorWait,
+    pub(crate) epoch: u64,
+    generation: u64,
     _object: dotnet_vm_ops::effects::RootedValue,
 }
 
@@ -1166,6 +1174,40 @@ impl<'gc> VesContext<'_, 'gc> {
         }
     }
 
+    fn advance_monitor_wait(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        mut pending: PendingMonitorWait,
+    ) -> StepResult {
+        let stopped = self.shared.thread_manager.is_gc_stop_requested()
+            || self.local.heap.needs_full_collect.get()
+            || self.gc.needs_collection();
+        if !stopped {
+            if let Some(pulsed) = pending.wait.poll(self.thread_id()) {
+                if let Err(error) = work.owner.control.reply_monitor(pending.generation, pulsed) {
+                    return StepResult::Error(error);
+                }
+                self.call_state.native.push(work);
+                return StepResult::Continue;
+            }
+            #[cfg(test)]
+            wait_test_hook(WaitTestPoint::Probed);
+            pending.epoch = pending.wait.block.release_epoch();
+            #[cfg(test)]
+            wait_test_hook(WaitTestPoint::Registered);
+            if let Some(pulsed) = pending.wait.poll(self.thread_id()) {
+                if let Err(error) = work.owner.control.reply_monitor(pending.generation, pulsed) {
+                    return StepResult::Error(error);
+                }
+                self.call_state.native.push(work);
+                return StepResult::Continue;
+            }
+        }
+        work.wait = Some(PendingWait::MonitorWait(pending));
+        self.call_state.native.push(work);
+        StepResult::Yield
+    }
+
     fn advance_finalizers(
         &mut self,
         mut work: NativeActivation<'gc>,
@@ -1263,6 +1305,7 @@ impl<'gc> VesContext<'_, 'gc> {
         if let Some(wait) = work.wait.take() {
             return match wait {
                 PendingWait::Monitor(wait) => self.advance_monitor(work, wait),
+                PendingWait::MonitorWait(wait) => self.advance_monitor_wait(work, wait),
                 PendingWait::Finalizers(generation) => self.advance_finalizers(work, generation),
                 PendingWait::Sleep(generation, deadline) => {
                     self.advance_sleep(work, generation, deadline)
@@ -1329,10 +1372,11 @@ impl<'gc> VesContext<'_, 'gc> {
                     self.advance_initializer(work, generation, wait)
                 }
                 Some(NativeEffect::Monitor(generation)) if work.operands.is_empty() => {
-                    let (object, deadline) = match work.owner.control.take_monitor(generation) {
-                        Ok(request) => request,
-                        Err(error) => return StepResult::Error(error),
-                    };
+                    let (object, deadline, is_wait) =
+                        match work.owner.control.take_monitor(generation) {
+                            Ok(request) => request,
+                            Err(error) => return StepResult::Error(error),
+                        };
                     let value = {
                         let mut adapter = Adapter {
                             context: self,
@@ -1349,6 +1393,31 @@ impl<'gc> VesContext<'_, 'gc> {
                         return StepResult::internal_error("invalid monitor object");
                     };
                     let block = self.monitor_get_or_create_sync_block_for_object(object_ref, gc);
+                    if is_wait {
+                        #[cfg(not(feature = "multithreading"))]
+                        if deadline.is_none() {
+                            return StepResult::internal_error(
+                                "Monitor.Wait would deadlock in single-threaded mode",
+                            );
+                        }
+                        let Some(wait) =
+                            crate::sync::MonitorWait::begin(block, self.thread_id(), deadline)
+                        else {
+                            return StepResult::internal_error(
+                                "monitor ownership changed before wait",
+                            );
+                        };
+                        let epoch = wait.block.release_epoch();
+                        return self.advance_monitor_wait(
+                            work,
+                            PendingMonitorWait {
+                                wait,
+                                epoch,
+                                generation,
+                                _object: object,
+                            },
+                        );
+                    }
                     self.advance_monitor(
                         work,
                         PendingMonitor {

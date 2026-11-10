@@ -599,7 +599,7 @@ pub struct NativeCall {
 enum Request {
     Yield,
     Call(NativeCall, bool),
-    Monitor(RootedValue, Option<std::time::Instant>),
+    Monitor(RootedValue, Option<std::time::Instant>, bool),
     Finalizers,
     Sleep(Option<std::time::Instant>),
     Initializer(Box<dyn NativeInitWait>),
@@ -821,9 +821,11 @@ impl NativeControl {
     pub fn take_monitor(
         &self,
         generation: u64,
-    ) -> Result<(RootedValue, Option<std::time::Instant>), VmError> {
+    ) -> Result<(RootedValue, Option<std::time::Instant>, bool), VmError> {
         match self.transition(ControlEvent::Take(NativeEffect::Monitor(generation)))? {
-            Transition::Request(Request::Monitor(object, deadline)) => Ok((object, deadline)),
+            Transition::Request(Request::Monitor(object, deadline, wait)) => {
+                Ok((object, deadline, wait))
+            }
             _ => unreachable!(),
         }
     }
@@ -1090,8 +1092,25 @@ impl VmEffects {
         object: RootedValue,
         deadline: Option<std::time::Instant>,
     ) -> Result<bool, NativeFailure> {
-        match self.request(Request::Monitor(object, deadline)).await? {
+        match self
+            .request(Request::Monitor(object, deadline, false))
+            .await?
+        {
             Reply::Monitor(acquired) => Ok(acquired),
+            _ => unreachable!(),
+        }
+    }
+    /// Release an owned monitor, wait for a pulse or deadline, and restore ownership.
+    pub async fn monitor_wait(
+        &mut self,
+        object: RootedValue,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<bool, NativeFailure> {
+        match self
+            .request(Request::Monitor(object, deadline, true))
+            .await?
+        {
+            Reply::Monitor(pulsed) => Ok(pulsed),
             _ => unreachable!(),
         }
     }
@@ -1581,7 +1600,7 @@ mod tests {
             match kind {
                 0 => Request::Yield,
                 1 => Request::Call(test_call(), false),
-                2 => Request::Monitor(RootedValue(RootedValueInner::Null), None),
+                2 => Request::Monitor(RootedValue(RootedValueInner::Null), None, false),
                 3 => Request::Finalizers,
                 4 => Request::Initializer(Box::new(Wait)),
                 _ => unreachable!(),

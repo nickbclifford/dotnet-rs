@@ -78,6 +78,14 @@ pub trait MonitorHost<'gc> {
     fn monitor_clear_retry(&mut self);
 
     fn monitor_exit(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;
+    fn monitor_is_owned(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;
+    fn monitor_pulse(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId, all: bool) -> bool;
+    fn monitor_wait_legacy(
+        &mut self,
+        sync_block: Self::SyncBlock,
+        method: &dotnet_types::members::MethodDescription,
+        timeout: i32,
+    ) -> dotnet_vm_data::StepResult;
 }
 
 pub trait StackSlotWriteHost<'gc> {

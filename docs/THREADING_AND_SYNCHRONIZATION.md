@@ -173,12 +173,14 @@ pending request:
   block operations, `cpblk`/`initblk`, array operations, some reflection) call the scope-aware
   `RawMemoryOps::check_gc_safe_point` on `VesContext` between chunks and yield.
 - **Waits.** Admitted native-effect calls use driver-owned condition waits: `monitor_enter` for
-  supported `Monitor` calls, `wait_finalizers` for `GC.WaitForPendingFinalizers`, and the
-  initializer registration created by `ensure_initialized`. The executor sleeps outside a
+  supported `Monitor` calls, `monitor_wait` for `Monitor.Wait`, `sleep_until` for `Thread.Sleep`,
+  `wait_finalizers` for `GC.WaitForPendingFinalizers`, and the initializer registration created by
+  `ensure_initialized`. The executor sleeps outside a
   mutation and rechecks readiness after waking; in MT these waits participate in GC-stop handling,
   and pending finalizers are scheduled before an ordinary finalizer wait sleeps. Excluded monitor
   calls retain the safe-point-aware synchronous handlers (`enter_safe` and
-  `enter_with_timeout_safe`); legacy static-initializer waiters use
+  `enter_with_timeout_safe`); legacy `Monitor.Wait` retries at safe points with a frame-owned
+  registration. Legacy static-initializer waiters use
   `StaticStorageManager::wait_for_init` and periodically check for a pending stop. See the
   [condition-wait design](plans/08-async-effects/slice-5-condition-waits.md) and
   [static-initialization design](plans/08-async-effects/slice-4-static-initialization.md).
@@ -224,13 +226,18 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
   - `enter_safe`: Blocking lock with GC safe point awareness. Periodically yields to allow STW pauses.
   - `enter_with_timeout_safe`: Timed lock with GC safe points.
   - `exit`: Release the lock (decrements recursion count; unlocks if 0).
-  - `wait` / `pulse` / `pulse_all`: Condition variable operations (Monitor.Wait/Pulse).
+  - `begin_wait` / `poll_wait` / `pulse`: Register a condition waiter, release the monitor,
+    and select waiting threads for `Monitor.Wait`, `Pulse`, and `PulseAll`.
 
 ### Threaded Implementation (`sync/threaded.rs`)
 
 - **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<NonZeroUsize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` (starting at 1) for index generation.
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
-- **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`) and `recursion_count` to support re-entrant locking by the same thread.
+- **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`), `recursion_count`, release
+  epoch and condition waiters. A wait atomically queues its waiter and releases all recursion;
+  pulse selection and timeout removal are serialized under the state lock. A selected or timed-out
+  waiter reacquires the monitor and restores its recursion before returning. Cancellation removes
+  the queue entry. In ST a timed wait returns false, while an infinite wait reports a deadlock.
 - Objects are identified by their sync block index, stored in the `ObjectInner::sync_block_index` field (`0` means none yet).
 - `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and checks `thread_manager.is_gc_stop_requested()`. If a STW pause is pending, it returns `LockResult::Yield` without calling `safe_point()` directly — the caller converts this to `StepResult::Yield`, and the executor's main loop drives the safe-point handshake on the next iteration. This prevents deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
 

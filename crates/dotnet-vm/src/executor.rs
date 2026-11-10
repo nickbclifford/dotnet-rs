@@ -833,6 +833,13 @@ impl Executor {
                                         )
                                     })
                                 }
+                                crate::stack::native_effects::PendingWait::MonitorWait(wait) => {
+                                    Some(NativeWaitSleep::Monitor(
+                                        wait.wait.block.clone(),
+                                        wait.epoch,
+                                        wait.wait.sleep_deadline(),
+                                    ))
+                                }
                                 crate::stack::native_effects::PendingWait::Finalizers(_)
                                     if has_pending
                                         || processing
@@ -1024,6 +1031,7 @@ impl Executor {
                     .chain(execution.frame_stack.pooled_frames.iter_mut())
                 {
                     frame.monitor_retry = None;
+                    frame.monitor_wait_retry = None;
                 }
                 execution
                     .call_state

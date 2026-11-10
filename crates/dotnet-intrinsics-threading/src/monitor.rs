@@ -499,3 +499,92 @@ pub async fn monitor_try_enter_ref(fx: VmEffects) -> NativeResult {
 pub async fn monitor_try_enter(fx: VmEffects) -> NativeResult {
     enter_effect(fx, true, false, true).await
 }
+
+pub fn intrinsic_monitor_wait<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    let timeout = ctx.peek_stack_at(0).as_i32();
+    let object = ctx.peek_stack_at(1).as_object_ref();
+    if let Some(error) = monitor_argument_error(false, object.0.is_some(), Some(timeout)) {
+        ctx.drop_top(2);
+        return throw_monitor_argument_error(ctx, error);
+    }
+    let Some(block) = ctx.monitor_get_sync_block_for_object(object) else {
+        ctx.drop_top(2);
+        return ctx.throw_by_name_with_message(
+            "System.Threading.SynchronizationLockException",
+            "Object not locked by current thread",
+        );
+    };
+    ctx.monitor_wait_legacy(block, &method, timeout)
+}
+
+pub fn wait_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &T,
+    operands: NativeOperandView<'_, 'gc>,
+    method: &MethodDescription,
+    _: &GenericLookup,
+) -> NativeSelection<T> {
+    if let (StackValue::ObjectRef(object @ ObjectRef(Some(_))), StackValue::Int32(timeout)) =
+        (operands.peek_at(1), operands.peek_at(0))
+        && timeout >= -1
+        && ctx
+            .monitor_get_sync_block_for_object(object)
+            .is_some_and(|block| ctx.monitor_is_owned(&block, ctx.thread_id()))
+    {
+        return NativeSelection::Async(NativeInvocation {
+            start: timeout as u32 as usize,
+            length: 0,
+            parameter_count: method.signature().parameters.len(),
+        });
+    }
+    NativeSelection::Synchronous(intrinsic_monitor_wait::<T>)
+}
+
+#[dotnet_intrinsic("static bool System.Threading.Monitor::Wait(object, int)", select = wait_select, fallback = intrinsic_monitor_wait)]
+pub async fn monitor_wait(mut fx: VmEffects) -> NativeResult {
+    let timeout = fx.invocation().start as u32 as i32;
+    let deadline = (timeout >= 0).then(|| Instant::now() + Duration::from_millis(timeout as u64));
+    let (object, _, _) = fx.vm().await?.prepare_monitor(true, false)?;
+    let pulsed = fx.monitor_wait(object, deadline).await?;
+    fx.vm().await?.push_bool(pulsed)?;
+    Ok(())
+}
+
+fn pulse<'gc, T: ThreadingIntrinsicHost<'gc>>(ctx: &mut T, all: bool) -> StepResult {
+    let object = ctx.pop_obj();
+    if object.0.is_none() {
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
+    }
+    if !ctx
+        .monitor_get_sync_block_for_object(object)
+        .is_some_and(|block| ctx.monitor_pulse(&block, ctx.thread_id(), all))
+    {
+        return ctx.throw_by_name_with_message(
+            "System.Threading.SynchronizationLockException",
+            "Object not locked by current thread",
+        );
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Threading.Monitor::Pulse(object)")]
+pub fn intrinsic_monitor_pulse<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    pulse(ctx, false)
+}
+
+#[dotnet_intrinsic("static void System.Threading.Monitor::PulseAll(object)")]
+pub fn intrinsic_monitor_pulse_all<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _: MethodDescription,
+    _: &GenericLookup,
+) -> StepResult {
+    pulse(ctx, true)
+}

@@ -142,6 +142,7 @@ impl<'gc> CallState<'gc> {
                 stack.truncate(work.stack_height);
                 let frame = frames.current_frame_mut();
                 frame.monitor_retry = None;
+                frame.monitor_wait_retry = None;
                 frame.stack_height = work
                     .stack_height
                     .checked_sub(frame.base.stack.as_usize())

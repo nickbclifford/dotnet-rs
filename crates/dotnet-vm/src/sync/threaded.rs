@@ -14,6 +14,15 @@ struct SyncBlockState {
     /// Lock recursion count (for nested locks by the same thread)
     recursion_count: usize,
     release_epoch: u64,
+    next_waiter: u64,
+    waiters: std::collections::VecDeque<Waiter>,
+}
+
+#[derive(Debug)]
+struct Waiter {
+    id: u64,
+    deadline: Option<Instant>,
+    pulsed: bool,
 }
 
 /// Represents a synchronization block for Monitor operations on .NET objects.
@@ -40,6 +49,8 @@ impl SyncBlock {
                 owner_thread_id: ArenaId::INVALID,
                 recursion_count: 0,
                 release_epoch: 0,
+                next_waiter: 0,
+                waiters: std::collections::VecDeque::new(),
             }),
             condvar: Condvar::new(),
         }
@@ -272,16 +283,90 @@ impl super::SyncBlockOps for SyncBlock {
         true
     }
 
-    fn wait(&self, _thread_id: ArenaId, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
-        Err("Monitor.Wait() is not yet implemented")
+    fn is_owned(&self, thread_id: ArenaId) -> bool {
+        thread_id != ArenaId::INVALID && self.state.lock().owner_thread_id == thread_id
     }
 
-    fn pulse(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
-        Err("Monitor.Pulse() is not yet implemented")
+    fn begin_wait(&self, thread_id: ArenaId, deadline: Option<Instant>) -> Option<(u64, usize)> {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner_thread_id != thread_id {
+            return None;
+        }
+        let recursion = state.recursion_count;
+        state.next_waiter = state
+            .next_waiter
+            .checked_add(1)
+            .expect("monitor waiter id exhausted");
+        let id = state.next_waiter;
+        state.waiters.push_back(Waiter {
+            id,
+            deadline,
+            pulsed: false,
+        });
+        state.owner_thread_id = ArenaId::INVALID;
+        state.recursion_count = 0;
+        state.release_epoch = state
+            .release_epoch
+            .checked_add(1)
+            .expect("monitor release epoch exhausted");
+        self.condvar.notify_all();
+        Some((id, recursion))
     }
 
-    fn pulse_all(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
-        Err("Monitor.PulseAll() is not yet implemented")
+    fn poll_wait(&self, id: u64, deadline: Option<Instant>) -> Option<bool> {
+        let mut state = self.state.lock();
+        let pos = state
+            .waiters
+            .iter()
+            .position(|waiter| waiter.id == id)
+            .expect("monitor waiter missing");
+        let pulsed = state.waiters[pos].pulsed;
+        if pulsed || deadline.is_some_and(|d| Instant::now() >= d) {
+            state.waiters.remove(pos);
+            Some(pulsed)
+        } else {
+            None
+        }
+    }
+
+    fn cancel_wait(&self, id: u64) {
+        self.state.lock().waiters.retain(|waiter| waiter.id != id);
+    }
+
+    fn restore_wait(&self, thread_id: ArenaId, recursion: usize) -> bool {
+        let mut state = self.state.lock();
+        if state.owner_thread_id != ArenaId::INVALID {
+            return false;
+        }
+        state.owner_thread_id = thread_id;
+        state.recursion_count = recursion;
+        true
+    }
+
+    fn pulse(&self, thread_id: ArenaId, all: bool) -> bool {
+        let mut state = self.state.lock();
+        if thread_id == ArenaId::INVALID || state.owner_thread_id != thread_id {
+            return false;
+        }
+        let now = Instant::now();
+        let mut changed = false;
+        for waiter in &mut state.waiters {
+            if !waiter.pulsed && waiter.deadline.is_none_or(|d| now < d) {
+                waiter.pulsed = true;
+                changed = true;
+                if !all {
+                    break;
+                }
+            }
+        }
+        if changed {
+            state.release_epoch = state
+                .release_epoch
+                .checked_add(1)
+                .expect("monitor release epoch exhausted");
+            self.condvar.notify_all();
+        }
+        true
     }
 }
 

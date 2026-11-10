@@ -31,11 +31,11 @@ const STACK_FRAME_SIZE_MATRIX: [(bool, usize); 2] = [
     // Frame homes add a 48-byte FrameHomes and an 8-byte MethodInfo layout handle.
     // Runtime temporary homes add a 24-byte Vec and an 8-byte completion handle.
     // Native return destinations add a stable identity and generation.
-    // Reflection continuations and monitor retry metadata are heap-backed.
+    // Reflection continuations, monitor retry metadata and legacy wait registrations are heap-backed.
     // The initializer claim is an optional boxed synchronization-only interface.
     // (multithreading, expected_size)
-    (false, 584),
-    (true, 584),
+    (false, 592),
+    (true, 592),
 ];
 
 #[cfg(target_pointer_width = "64")]

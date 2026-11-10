@@ -2435,3 +2435,272 @@ fn sleep_park_participates_in_gc_and_abort() {
         })
         .unwrap();
 }
+
+#[cfg(feature = "multithreading")]
+fn pulse_wait_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let object = fx.vm().await?.pop_object()?;
+        assert!(fx.monitor_wait(object, None).await?);
+        Ok(())
+    })
+}
+
+#[cfg(feature = "multithreading")]
+fn start_pulse_wait(
+    executor: &mut Executor,
+    hook: impl FnOnce(Arc<crate::sync::SyncBlock>),
+) -> (StepResult, Arc<crate::sync::SyncBlock>) {
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let method = condition_wait_method(executor, true);
+    let thread = executor.thread_id;
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: the engine is the root of this arena mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait")));
+                let mut ctx = engine.ves_context(gc);
+                let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
+                assert!(block.try_enter(thread));
+                assert!(block.try_enter(thread));
+                ctx.push(StackValue::Int32(0));
+                ctx.push(StackValue::ObjectRef(source));
+                hook(block.clone());
+                let result = ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    native_test_fallback,
+                    pulse_wait_body,
+                );
+                (result, block)
+            })
+        })
+        .unwrap()
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn monitor_pulse_schedules_preserve_wake_and_recursion() {
+    use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
+    use crate::sync::SyncBlockOps;
+    let other = dotnet_utils::ArenaId::new(9999);
+    for schedule in 0..3 {
+        let mut executor = executor();
+        let thread = executor.thread_id;
+        let (result, block) = start_pulse_wait(&mut executor, |block| {
+            if schedule == 2 {
+                return;
+            }
+            let mut fired = false;
+            WAIT_TEST_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |point| {
+                    if !fired
+                        && matches!(
+                            (schedule, point),
+                            (0, WaitTestPoint::Probed) | (1, WaitTestPoint::Registered)
+                        )
+                    {
+                        fired = true;
+                        assert!(block.try_enter(other));
+                        assert!(block.pulse(other, false));
+                        assert!(block.exit(other));
+                    }
+                }))
+            });
+        });
+        WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+        if schedule == 2 {
+            assert_eq!(result, StepResult::Yield);
+            collect(&mut executor);
+            assert!(block.try_enter(other));
+            assert!(block.pulse(other, false));
+            assert!(block.exit(other));
+            assert_eq!(resume(&mut executor), StepResult::Continue);
+        } else {
+            assert_eq!(result, StepResult::Jump(1));
+        }
+        assert!(block.exit(thread));
+        assert!(block.exit(thread));
+        assert!(!block.exit(thread));
+    }
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn monitor_timeout_and_pulse_are_serialized_and_cancel_removes_waiter() {
+    use crate::sync::{MonitorWait, SyncBlockOps, SyncManagerOps};
+    use std::time::{Duration, Instant};
+    let (_, block) = crate::sync::SyncBlockManager::new().create_sync_block();
+    let a = dotnet_utils::ArenaId::new(100);
+    let b = dotnet_utils::ArenaId::new(101);
+    let c = dotnet_utils::ArenaId::new(102);
+    assert!(block.try_enter(a));
+    assert!(block.pulse(a, false)); // No future waiter inherits this pulse.
+    let mut expired = MonitorWait::begin(
+        block.clone(),
+        a,
+        Some(Instant::now() - Duration::from_millis(1)),
+    )
+    .unwrap();
+    assert!(block.try_enter(b));
+    let mut live = MonitorWait::begin(block.clone(), b, None).unwrap();
+    assert!(block.try_enter(c));
+    assert!(block.pulse(c, false)); // The expired waiter is skipped.
+    assert!(block.exit(c));
+    assert_eq!(expired.poll(a), Some(false));
+    assert!(block.exit(a));
+    assert_eq!(live.poll(b), Some(true));
+    assert!(block.exit(b));
+    assert!(block.try_enter(a));
+    let mut pulsed_before_deadline = MonitorWait::begin(
+        block.clone(),
+        a,
+        Some(Instant::now() + Duration::from_secs(60)),
+    )
+    .unwrap();
+    assert!(block.try_enter(b));
+    assert!(block.pulse(b, false));
+    assert!(block.exit(b));
+    pulsed_before_deadline.expire_for_test();
+    assert_eq!(pulsed_before_deadline.poll(a), Some(true));
+    assert!(block.exit(a));
+    assert!(block.try_enter(a));
+    let cancelled = MonitorWait::begin(block.clone(), a, None).unwrap();
+    drop(cancelled);
+    assert!(block.try_enter(b));
+    assert!(block.pulse(b, false));
+    assert!(block.exit(b));
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn monitor_wait_parks_outside_mutation_during_collection() {
+    use crate::{sync::SyncBlockOps, test_utils::worker::Worker};
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut executor = executor();
+    let thread = executor.thread_id;
+    let (result, block) = start_pulse_wait(&mut executor, |_| {});
+    assert_eq!(result, StepResult::Yield);
+    let shared = executor.shared.clone();
+    let pulse_block = block.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let worker = Worker::new(
+        thread::spawn(move || {
+            let mut collector = Executor::new(shared);
+            ready_tx.send(()).unwrap();
+            let parked = parked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            let collected = parked && collector.perform_full_gc().is_ok();
+            let owner = collector.thread_id;
+            assert!(pulse_block.try_enter(owner));
+            assert!(pulse_block.pulse(owner, false));
+            assert!(pulse_block.exit(owner));
+            collected
+        }),
+        (),
+    );
+    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    crate::sync::WAIT_TEST_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let _ = parked_tx.send(());
+        }))
+    });
+    assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
+    crate::sync::WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+    assert!(
+        worker.finish().unwrap(),
+        "collection did not complete while waiting"
+    );
+    assert!(block.exit(thread));
+    assert!(block.exit(thread));
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn legacy_monitor_wait_retries_and_restores_recursion() {
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::{MonitorHost, monitor::intrinsic_monitor_wait};
+    use dotnet_vm_ops::TypedStackOps;
+    let mut executor = executor();
+    let method = condition_wait_method(&executor, true);
+    let thread = executor.thread_id;
+    let other = dotnet_utils::ArenaId::new(9999);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: the engine is the root of this arena mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("legacy wait")));
+                let mut ctx = engine.ves_context(gc);
+                let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
+                assert!(block.try_enter(thread));
+                assert!(block.try_enter(thread));
+                ctx.push(StackValue::ObjectRef(source));
+                ctx.push(StackValue::Int32(1000));
+                assert_eq!(
+                    intrinsic_monitor_wait(&mut ctx, method.clone(), &Default::default()),
+                    StepResult::Yield
+                );
+                assert!(block.try_enter(other));
+                assert!(block.pulse(other, false));
+                assert!(block.exit(other));
+                assert_eq!(
+                    intrinsic_monitor_wait(&mut ctx, method, &Default::default()),
+                    StepResult::Continue
+                );
+                assert_eq!(ctx.pop_i32(), 1);
+                assert!(block.exit(thread));
+                assert!(block.exit(thread));
+                assert!(!block.exit(thread));
+            })
+        })
+        .unwrap();
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn monitor_wait_infinite_in_single_thread_reports_deadlock() {
+    use crate::sync::SyncBlockOps;
+    use dotnet_intrinsics_threading::MonitorHost;
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    fn wait_forever(
+        mut fx: dotnet_vm_ops::effects::VmEffects,
+    ) -> dotnet_vm_ops::effects::NativeFuture {
+        Box::pin(async move {
+            let object = fx.vm().await?.pop_object()?;
+            fx.monitor_wait(object, None).await?;
+            Ok(())
+        })
+    }
+    let mut executor = executor();
+    let method = condition_wait_method(&executor, true);
+    let thread = executor.thread_id;
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: the engine is the root of this arena mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("wait")));
+                let mut ctx = engine.ves_context(gc);
+                let block = ctx.monitor_get_or_create_sync_block_for_object(source, gc);
+                assert!(block.try_enter(thread));
+                ctx.push(StackValue::ObjectRef(source));
+                let result = ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    native_test_fallback,
+                    wait_forever,
+                );
+                assert!(matches!(result, StepResult::Error(_)));
+            })
+        })
+        .unwrap();
+}
