@@ -491,11 +491,47 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
     }
 
     fn reflection_cached_runtime_type(&self, target: &RuntimeType) -> Option<ObjectRef<'gc>> {
-        self.reflection().types_read().get(target).copied()
+        if let Some(object) = self.reflection().types_read().get(target).copied() {
+            return Some(object);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let ptr = *self
+                .shared()
+                .reflection_registry
+                .runtime_type_objects
+                .get(target)?;
+            // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the shared table
+            // roots the original object and its owner arena is retained until shutdown.
+            let object = ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }));
+            self.reflection()
+                .types_write()
+                .insert(target.clone(), object);
+            Some(object)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
-    fn reflection_cache_runtime_type(&self, target: RuntimeType, object: ObjectRef<'gc>) {
+    fn reflection_cache_runtime_type(
+        &self,
+        target: RuntimeType,
+        object: ObjectRef<'gc>,
+    ) -> ObjectRef<'gc> {
+        #[cfg(feature = "multithreading")]
+        let object = {
+            let ptr = *self
+                .shared()
+                .reflection_registry
+                .runtime_type_objects
+                .entry(target.clone())
+                .or_insert(object.as_ptr().expect("type object is non-null"));
+            // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — the published
+            // winner is rooted by the table and its arena is retained until shutdown.
+            ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }))
+        };
         self.reflection().types_write().insert(target, object);
+        object
     }
 
     fn reflection_runtime_type_index_get_or_insert(&self, target: RuntimeType) -> usize {

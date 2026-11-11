@@ -603,6 +603,22 @@ are accepted operational risks rather than type-level guarantees.
 - **Limitations:** This contract relies on the coordinated protocol and caller lifetime obligations, not type-level detection. The real-VM cross-arena collection tests obtain foreign references through production field-storage encoding and decoding, covering survival, a sweep control, fixed-point payload access and bounded reclamation. This does not establish all concurrent schedules or remove the codec’s live-original-allocation contract ([evidence](pointer-provenance/INVENTORY.md#finding-to-work-map)).
 - **Scope:** Multithreading only; the single-threaded configuration has no `cross_arena_roots`.
 
+### Shared reflection roots
+
+Under `multithreading`, `SharedReflectionRegistry` publishes one `RuntimeType` object per
+runtime type. Every `CallStack` traces the shared table alongside `StaticStorageManager`.
+Its retained object pointers are converted to temporary handles for `ObjectRef::trace`, which
+marks owner-local objects and records foreign objects for the cross-arena fixed point. Local
+reflection caches also trace their handles, including foreign ones. Publication happens between
+safepoints, and retired owner arenas remain registered until collection has stopped at shutdown.
+The table and its pointers must not outlive that arena-retention contract.
+
+The support `RuntimeType` has one instance slot, a native-sized registry index. It is written
+before publication in the allocating arena and contains no per-arena GC handle. Assigning a
+foreign object's sync-block index uses the object lock without a foreign-arena write barrier:
+that assignment changes only a scalar and adds no GC references. Ordinary reference stores use
+the memory-access write barrier.
+
 ### Cross-arena owner-ID read (`ObjectRef::trace`)
 
 **Source:** the `Collect` implementation for `ObjectRef` (`ObjectRef::trace`) in `crates/dotnet-value/src/object/mod.rs`.

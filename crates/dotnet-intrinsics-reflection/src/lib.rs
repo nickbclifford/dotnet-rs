@@ -132,7 +132,12 @@ pub trait ReflectionRegistryHost<'gc> {
 
     fn reflection_cached_runtime_type(&self, target: &RuntimeType) -> Option<ObjectRef<'gc>>;
 
-    fn reflection_cache_runtime_type(&self, target: RuntimeType, object: ObjectRef<'gc>);
+    /// Publish a candidate and cache the canonical object in this arena.
+    fn reflection_cache_runtime_type(
+        &self,
+        target: RuntimeType,
+        object: ObjectRef<'gc>,
+    ) -> ObjectRef<'gc>;
 
     fn reflection_runtime_type_index_get_or_insert(&self, target: RuntimeType) -> usize;
 

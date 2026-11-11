@@ -910,6 +910,16 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::get_or_assign_sync_block_index on NULL object reference"
             )
         };
+        #[cfg(feature = "multithreading")]
+        let mut inner = if ObjectPtr::from_handle(*o).owner_id() != get_current_thread_id() {
+            // SAFETY: F1.GcHandleRooted — the object is rooted and its owner is
+            // retained. This guarded write changes only a scalar sync-block index,
+            // so no new GC children require the owner's backward barrier.
+            unsafe { o.borrow_mut_unbarriered(gc.mutation()) }
+        } else {
+            ThreadSafeLock::borrow_mut(*o, &gc)
+        };
+        #[cfg(not(feature = "multithreading"))]
         let mut inner = ThreadSafeLock::borrow_mut(*o, &gc);
         inner.validate_magic();
         inner.validate_arena_id();

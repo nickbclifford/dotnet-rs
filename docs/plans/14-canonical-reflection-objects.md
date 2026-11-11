@@ -1,6 +1,6 @@
 # Canonical reflection objects across threads
 
-**Status:** Not started
+**Status:** In progress
 **Outcome:** Under `multithreading`, every managed thread observes the same object for the same
 type, method, field, property or assembly: `ReferenceEquals(typeof(T), typeof(T))` is true across
 threads, and so is `lock (typeof(T))` mutual exclusion through the object's own monitor.
@@ -92,6 +92,14 @@ Not chosen:
      filled on one thread and read on the other, `lock (typeof(T))` mutual exclusion, and a
      static `Synchronized` method still excluding.
    - Compare the fixture against the CLR with `scripts/diff_run.sh`.
+   - Implemented: the shared type-object table is traced from each arena, and local caches retain
+     its canonical objects. The support object contains only a registry index; foreign monitor
+     assignment writes a scalar without applying a foreign owner barrier. See
+     [GC and memory safety](../GC_AND_MEMORY_SAFETY.md#shared-reflection-roots).
+   - `canonical_type_objects_42.cs` covers both owner directions, dictionary lookup, concurrent
+     publication, collection after the creator exits, and type/static synchronized monitors. It
+     matches the CLR via `scripts/diff_run.sh` and passes the multithreading integration tests
+     with and without `validation-all`.
 2. **Canonical member and assembly objects.** Route `get_runtime_method_obj`,
    `get_runtime_field_obj`, the property cache and `runtime_asms` through the same table. The
    fixture compares `GetMethod`/`GetField`/`GetProperty`/`Assembly` results by reference across

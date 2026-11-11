@@ -186,8 +186,7 @@ pub fn get_runtime_type<'gc>(
     let index = ctx.reflection_runtime_type_index_get_or_insert(target.clone());
     let obj_ref = alloc_reflection_obj(ctx, WellKnown::RuntimeType, index);
 
-    ctx.reflection_cache_runtime_type(target, obj_ref);
-    obj_ref
+    ctx.reflection_cache_runtime_type(target, obj_ref)
 }
 
 pub fn resolve_runtime_type<'gc>(

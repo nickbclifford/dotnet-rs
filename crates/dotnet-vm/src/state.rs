@@ -275,9 +275,8 @@ pub struct SharedReflectionRegistry {
     pub runtime_types: DashMap<RuntimeType, usize>,
     pub runtime_types_rev: DashMap<usize, RuntimeType>,
     pub next_type_index: AtomicUsize,
-    /// Monitor of each runtime type. Every arena allocates its own `Type` object for a type, so
-    /// the object cannot carry the lock: each of them publishes the sync block recorded here.
-    pub runtime_type_monitors: DashMap<RuntimeType, std::num::NonZeroUsize>,
+    /// Canonical type objects, rooted by every arena until VM shutdown.
+    pub(crate) runtime_type_objects: DashMap<RuntimeType, dotnet_value::object::ObjectPtr>,
     pub runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
     pub runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
     pub next_method_index: AtomicUsize,
@@ -293,7 +292,7 @@ impl SharedReflectionRegistry {
             runtime_types: DashMap::new(),
             runtime_types_rev: DashMap::new(),
             next_type_index: AtomicUsize::new(0),
-            runtime_type_monitors: DashMap::new(),
+            runtime_type_objects: DashMap::new(),
             runtime_methods: DashMap::new(),
             runtime_methods_rev: DashMap::new(),
             next_method_index: AtomicUsize::new(0),
@@ -633,6 +632,25 @@ impl Drop for SharedGlobalState {
             let stats = self.get_cache_stats();
             self.tracer
                 .msg(TraceLevel::Info, 0, format_args!("{}", stats));
+        }
+    }
+}
+
+// SAFETY: F5.TracesEveryGcRef — the table contains only type-object pointers. Each was
+// published while its allocating arena was active and stays rooted until shutdown;
+// retired arenas remain registered until collection stops. ObjectRef::trace marks
+// local objects and records foreign ones for the cross-arena fixed point.
+#[cfg(feature = "multithreading")]
+unsafe impl<'gc> Collect<'gc> for SharedReflectionRegistry {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        for entry in self.runtime_type_objects.iter() {
+            // SAFETY: F1.StwParked; F6.NoEscapeAcrossArena — the table roots the
+            // original allocation, and STW retains all owners while tracing. This
+            // temporary handle is only used by ObjectRef's owner-aware trace.
+            let object = ObjectRef(Some(unsafe {
+                gc_arena::Gc::from_ptr(entry.value().as_ptr().cast())
+            }));
+            object.trace(cc);
         }
     }
 }

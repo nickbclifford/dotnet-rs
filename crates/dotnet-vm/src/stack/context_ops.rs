@@ -520,20 +520,7 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
             created = Some(block);
             index
         };
-        #[cfg(feature = "multithreading")]
-        let canonical_type = self.runtime_type_of_type_object(object);
-        let index = object.get_or_assign_sync_block_index(gc, || {
-            #[cfg(feature = "multithreading")]
-            if let Some(runtime_type) = canonical_type {
-                return *self
-                    .shared()
-                    .reflection_registry
-                    .runtime_type_monitors
-                    .entry(runtime_type)
-                    .or_insert_with(&mut create);
-            }
-            create()
-        });
+        let index = object.get_or_assign_sync_block_index(gc, &mut create);
         match created {
             Some(block) => block,
             // Sync blocks are never removed, so an index published on an object always resolves.
@@ -1504,27 +1491,5 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         Ok(None)
-    }
-}
-
-#[cfg(feature = "multithreading")]
-impl<'a, 'gc> VesContext<'a, 'gc> {
-    /// The runtime type a `System.RuntimeType` object stands for, or `None` for any other object.
-    fn runtime_type_of_type_object(
-        &self,
-        object: ObjectRef<'gc>,
-    ) -> Option<dotnet_types::runtime::RuntimeType> {
-        let runtime_type = self
-            .shared
-            .loader
-            .corlib_wkt(dotnet_types::WellKnown::RuntimeType)
-            .ok()?;
-        let is_type_object = object.as_heap_storage(|storage| {
-            matches!(storage, HeapStorage::Obj(instance) if instance.description == runtime_type)
-        });
-        if !is_type_object {
-            return None;
-        }
-        dotnet_intrinsics_reflection::common::resolve_runtime_type(self, object).ok()
     }
 }
