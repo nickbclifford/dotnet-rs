@@ -104,6 +104,13 @@ Not chosen:
    `get_runtime_field_obj`, the property cache and `runtime_asms` through the same table. The
    fixture compares `GetMethod`/`GetField`/`GetProperty`/`Assembly` results by reference across
    threads.
+   - Implemented: member and assembly caches publish canonical objects through shared traced
+     tables. Assembly resolution has a shared reverse lookup for objects passed between threads.
+     `canonical_member_objects_42.cs` exercises both owner directions, concurrent publication,
+     and use after the creator exits and collection runs.
+   - The existing member cache keys are retained. A property accessor is not currently identical
+     to the result of looking it up with `GetMethod`; reconciling those metadata paths and
+     `ReflectedType` behavior remains separate from cross-thread publication.
 
 ## Done when
 

@@ -75,6 +75,34 @@ fn shared_reflection_by_index<V: Clone>(
         .expect(invalid_index_message)
 }
 
+// Published objects are rooted by the shared table and their owner arenas remain
+// registered until shutdown. The returned handle is used only within this arena.
+#[cfg(feature = "multithreading")]
+fn shared_reflection_object<'gc>(ptr: dotnet_value::object::ObjectPtr) -> ObjectRef<'gc> {
+    // SAFETY: F1.GcHandleRooted; F6.NoEscapeAcrossArena — see above.
+    ObjectRef(Some(unsafe { gc_arena::Gc::from_ptr(ptr.as_ptr().cast()) }))
+}
+
+#[cfg(feature = "multithreading")]
+fn shared_reflection_object_get<'gc, K: Eq + std::hash::Hash>(
+    table: &DashMap<K, dotnet_value::object::ObjectPtr>,
+    key: &K,
+) -> Option<ObjectRef<'gc>> {
+    table.get(key).map(|entry| shared_reflection_object(*entry))
+}
+
+#[cfg(feature = "multithreading")]
+fn shared_reflection_object_publish<'gc, K: Eq + std::hash::Hash>(
+    table: &DashMap<K, dotnet_value::object::ObjectPtr>,
+    key: K,
+    object: ObjectRef<'gc>,
+) -> ObjectRef<'gc> {
+    let ptr = *table
+        .entry(key)
+        .or_insert(object.as_ptr().expect("reflection object is non-null"));
+    shared_reflection_object(ptr)
+}
+
 #[cfg(not(feature = "multithreading"))]
 fn local_reflection_index_get_or_insert<V: PartialEq>(list: &mut Vec<V>, value: V) -> usize {
     if let Some(existing) = list.iter().position(|entry| entry == &value) {
@@ -468,26 +496,86 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         &self,
         resolution: ResolutionS,
     ) -> Option<ObjectRef<'gc>> {
-        self.reflection().asms_read().get(&resolution).copied()
+        if let Some(object) = self.reflection().asms_read().get(&resolution).copied() {
+            return Some(object);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let object = shared_reflection_object_get(
+                &self.shared().reflection_registry.runtime_assembly_objects,
+                &resolution,
+            )?;
+            self.reflection()
+                .asms_write()
+                .insert(resolution.clone(), object);
+            self.reflection()
+                .asm_resolutions_write()
+                .insert(object, resolution);
+            Some(object)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
-    fn reflection_cache_runtime_assembly(&self, resolution: ResolutionS, object: ObjectRef<'gc>) {
+    fn reflection_cache_runtime_assembly(
+        &self,
+        resolution: ResolutionS,
+        object: ObjectRef<'gc>,
+    ) -> ObjectRef<'gc> {
+        #[cfg(feature = "multithreading")]
+        let object = {
+            let registry = &self.shared().reflection_registry;
+            let ptr = match registry.runtime_assembly_objects.entry(resolution.clone()) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let ptr = object.as_ptr().expect("assembly object is non-null");
+                    // Publish the reverse mapping before making the object visible.
+                    registry
+                        .runtime_assembly_resolutions
+                        .insert(ptr, resolution.clone());
+                    entry.insert(ptr);
+                    ptr
+                }
+            };
+            shared_reflection_object(ptr)
+        };
         self.reflection()
             .asms_write()
             .insert(resolution.clone(), object);
         self.reflection()
             .asm_resolutions_write()
             .insert(object, resolution);
+        object
     }
 
     fn reflection_runtime_assembly_resolution(
         &self,
         object: ObjectRef<'gc>,
     ) -> Option<ResolutionS> {
-        self.reflection()
+        if let Some(resolution) = self
+            .reflection()
             .asm_resolutions_read()
             .get(&object)
             .cloned()
+        {
+            return Some(resolution);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let ptr = object.as_ptr()?;
+            let resolution = self
+                .shared()
+                .reflection_registry
+                .runtime_assembly_resolutions
+                .get(&ptr)?
+                .clone();
+            self.reflection()
+                .asm_resolutions_write()
+                .insert(object, resolution.clone());
+            Some(resolution)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
     fn reflection_cached_runtime_type(&self, target: &RuntimeType) -> Option<ObjectRef<'gc>> {
@@ -700,10 +788,21 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         method: &MethodDescription,
         lookup: &GenericLookup,
     ) -> Option<ObjectRef<'gc>> {
-        self.reflection()
-            .method_objs_read()
-            .get(&(method.clone(), lookup.clone()))
-            .copied()
+        let key = (method.clone(), lookup.clone());
+        if let Some(object) = self.reflection().method_objs_read().get(&key).copied() {
+            return Some(object);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let object = shared_reflection_object_get(
+                &self.shared().reflection_registry.runtime_method_objects,
+                &key,
+            )?;
+            self.reflection().method_objs_write().insert(key, object);
+            Some(object)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
     fn reflection_cache_runtime_method_obj(
@@ -711,10 +810,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         method: MethodDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    ) {
-        self.reflection()
-            .method_objs_write()
-            .insert((method, lookup), object);
+    ) -> ObjectRef<'gc> {
+        let key = (method, lookup);
+        #[cfg(feature = "multithreading")]
+        let object = shared_reflection_object_publish(
+            &self.shared().reflection_registry.runtime_method_objects,
+            key.clone(),
+            object,
+        );
+        self.reflection().method_objs_write().insert(key, object);
+        object
     }
 
     fn reflection_cached_runtime_field_obj(
@@ -722,10 +827,21 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         field: &FieldDescription,
         lookup: &GenericLookup,
     ) -> Option<ObjectRef<'gc>> {
-        self.reflection()
-            .field_objs_read()
-            .get(&(field.clone(), lookup.clone()))
-            .copied()
+        let key = (field.clone(), lookup.clone());
+        if let Some(object) = self.reflection().field_objs_read().get(&key).copied() {
+            return Some(object);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let object = shared_reflection_object_get(
+                &self.shared().reflection_registry.runtime_field_objects,
+                &key,
+            )?;
+            self.reflection().field_objs_write().insert(key, object);
+            Some(object)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
     fn reflection_cache_runtime_field_obj(
@@ -733,10 +849,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         field: FieldDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    ) {
-        self.reflection()
-            .field_objs_write()
-            .insert((field, lookup), object);
+    ) -> ObjectRef<'gc> {
+        let key = (field, lookup);
+        #[cfg(feature = "multithreading")]
+        let object = shared_reflection_object_publish(
+            &self.shared().reflection_registry.runtime_field_objects,
+            key.clone(),
+            object,
+        );
+        self.reflection().field_objs_write().insert(key, object);
+        object
     }
 
     fn reflection_cached_runtime_property_obj(
@@ -744,10 +866,21 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         accessor: &MethodDescription,
         lookup: &GenericLookup,
     ) -> Option<ObjectRef<'gc>> {
-        self.reflection()
-            .property_objs_read()
-            .get(&(accessor.clone(), lookup.clone()))
-            .copied()
+        let key = (accessor.clone(), lookup.clone());
+        if let Some(object) = self.reflection().property_objs_read().get(&key).copied() {
+            return Some(object);
+        }
+        #[cfg(feature = "multithreading")]
+        {
+            let object = shared_reflection_object_get(
+                &self.shared().reflection_registry.runtime_property_objects,
+                &key,
+            )?;
+            self.reflection().property_objs_write().insert(key, object);
+            Some(object)
+        }
+        #[cfg(not(feature = "multithreading"))]
+        None
     }
 
     fn reflection_cache_runtime_property_obj(
@@ -755,10 +888,16 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ReflectionRegistryHost<'gc> for VesC
         accessor: MethodDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    ) {
-        self.reflection()
-            .property_objs_write()
-            .insert((accessor, lookup), object);
+    ) -> ObjectRef<'gc> {
+        let key = (accessor, lookup);
+        #[cfg(feature = "multithreading")]
+        let object = shared_reflection_object_publish(
+            &self.shared().reflection_registry.runtime_property_objects,
+            key.clone(),
+            object,
+        );
+        self.reflection().property_objs_write().insert(key, object);
+        object
     }
 }
 

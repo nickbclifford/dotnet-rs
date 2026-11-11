@@ -605,16 +605,21 @@ are accepted operational risks rather than type-level guarantees.
 
 ### Shared reflection roots
 
-Under `multithreading`, `SharedReflectionRegistry` publishes one `RuntimeType` object per
-runtime type. Every `CallStack` traces the shared table alongside `StaticStorageManager`.
+Under `multithreading`, `SharedReflectionRegistry` publishes canonical type, method, field,
+property and assembly objects for their existing reflection cache keys. Every `CallStack` traces
+the shared tables alongside `StaticStorageManager`.
 Its retained object pointers are converted to temporary handles for `ObjectRef::trace`, which
 marks owner-local objects and records foreign objects for the cross-arena fixed point. Local
 reflection caches also trace their handles, including foreign ones. Publication happens between
 safepoints, and retired owner arenas remain registered until collection has stopped at shutdown.
 The table and its pointers must not outlive that arena-retention contract.
 
-The support `RuntimeType` has one instance slot, a native-sized registry index. It is written
-before publication in the allocating arena and contains no per-arena GC handle. Assigning a
+The support `RuntimeType`, method, constructor and field wrappers hold native-sized registry
+indices, written before publication. Property wrappers hold managed references to their name,
+accessors and types, initialized in the owning arena before publication; those references are
+traced normally, including across arenas. Runtime assemblies are allocated without running a
+constructor and their resolution is kept in a shared reverse map, published before the object
+becomes visible. These VM-initialized fields contain no per-arena GC handles. Assigning a
 foreign object's sync-block index uses the object lock without a foreign-arena write barrier:
 that assignment changes only a scalar and adds no GC references. Ordinary reference stores use
 the memory-access write barrier.

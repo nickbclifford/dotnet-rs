@@ -125,7 +125,11 @@ pub trait ReflectionRegistryHost<'gc> {
     fn reflection_cached_runtime_assembly(&self, resolution: ResolutionS)
     -> Option<ObjectRef<'gc>>;
 
-    fn reflection_cache_runtime_assembly(&self, resolution: ResolutionS, object: ObjectRef<'gc>);
+    fn reflection_cache_runtime_assembly(
+        &self,
+        resolution: ResolutionS,
+        object: ObjectRef<'gc>,
+    ) -> ObjectRef<'gc>;
 
     fn reflection_runtime_assembly_resolution(&self, object: ObjectRef<'gc>)
     -> Option<ResolutionS>;
@@ -173,7 +177,7 @@ pub trait ReflectionRegistryHost<'gc> {
         method: MethodDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    );
+    ) -> ObjectRef<'gc>;
 
     fn reflection_cached_runtime_field_obj(
         &self,
@@ -186,7 +190,7 @@ pub trait ReflectionRegistryHost<'gc> {
         field: FieldDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    );
+    ) -> ObjectRef<'gc>;
 
     fn reflection_cached_runtime_property_obj(
         &self,
@@ -199,7 +203,7 @@ pub trait ReflectionRegistryHost<'gc> {
         accessor: MethodDescription,
         lookup: GenericLookup,
         object: ObjectRef<'gc>,
-    );
+    ) -> ObjectRef<'gc>;
 }
 
 dotnet_vm_ops::trait_alias! {

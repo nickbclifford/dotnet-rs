@@ -211,7 +211,7 @@ pub fn handle_get_assembly<'gc, T: ReflectionIntrinsicHost<'gc>>(
     let assembly_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(asm_handle)));
     ctx.register_new_object(&assembly_obj);
 
-    ctx.reflection_cache_runtime_assembly(resolution, assembly_obj);
+    let assembly_obj = ctx.reflection_cache_runtime_assembly(resolution, assembly_obj);
     ctx.push_obj(assembly_obj);
     StepResult::Continue
 }
@@ -1647,11 +1647,11 @@ fn create_runtime_property_obj<'gc, T: ReflectionIntrinsicHost<'gc>>(
             .write(property_type_obj);
     });
 
-    if let Some(accessor) = accessor {
-        ctx.reflection_cache_runtime_property_obj(accessor, lookup.clone(), property_info_obj);
-    }
-
-    Ok(property_info_obj)
+    Ok(if let Some(accessor) = accessor {
+        ctx.reflection_cache_runtime_property_obj(accessor, lookup.clone(), property_info_obj)
+    } else {
+        property_info_obj
+    })
 }
 
 pub fn handle_get_properties<'gc, T: ReflectionIntrinsicHost<'gc>>(

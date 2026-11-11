@@ -354,6 +354,12 @@ diff_test!(
 
 #[cfg(feature = "multithreading")]
 diff_test!(
+    canonical_member_objects_42_matches_dotnet,
+    "tests/fixtures/threading/canonical_member_objects_42.cs"
+);
+
+#[cfg(feature = "multithreading")]
+diff_test!(
     threading_monitor_contended_lock_42_matches_dotnet,
     "tests/fixtures/threading/monitor_contended_lock_42.cs"
 );

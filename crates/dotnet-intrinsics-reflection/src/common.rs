@@ -432,8 +432,7 @@ pub fn get_runtime_method_obj<'gc>(
 
     let obj_ref = alloc_reflection_obj(ctx, class, index);
 
-    ctx.reflection_cache_runtime_method_obj(method, lookup, obj_ref);
-    obj_ref
+    ctx.reflection_cache_runtime_method_obj(method, lookup, obj_ref)
 }
 
 pub fn get_runtime_field_obj<'gc>(
@@ -448,6 +447,5 @@ pub fn get_runtime_field_obj<'gc>(
     let index = get_runtime_field_index(ctx, field.clone(), lookup.clone()) as usize;
     let obj_ref = alloc_reflection_obj(ctx, WellKnown::SupportFieldInfo, index);
 
-    ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref);
-    obj_ref
+    ctx.reflection_cache_runtime_field_obj(field, lookup, obj_ref)
 }
