@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | Not started |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
 | 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Complete; managed threads and monitor condition waits are supported |
@@ -104,39 +105,6 @@ Evidence and IDs (p01…, R01…) are defined in the
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
 - **Retired-worker resource cost:** each completed worker retains one OS thread and one arena
   until VM shutdown; process-wide arena IDs are capped at 65,535. Earlier safe retirement remains unplanned.
-- **Task and thread-pool integration:** the VM runs `DotnetRs.Task`
-  (`dotnet-assemblies/src/support/Task.cs`, 144 lines) and its `[Stub(InPlaceOf)]` companions
-  (`TaskCompletionSource`, the awaiters, the async method builders, `ValueTask`), a
-  single-threaded shim: `Wait()` and `.Result` throw "Task has not completed" instead of
-  blocking, completion is unsynchronized, and `Task.Run`, `Delay`, `WhenAll`, `ContinueWith` and
-  cancellation do not exist. **Decision (2026-11-09): run CoreLib's real `Task` and delete the
-  shim.** `Task` and its neighbors have no `extern` methods of their own, and a spike with the
-  stubs removed and `Debugger.get_IsAttached` returning `false` (now in
-  `dotnet-intrinsics-core/src/debugger.rs`) passed 7 of the 9 async fixtures, plus a
-  `TaskCompletionSource` completed on another thread while main blocks on `.Result`. The earlier
-  deferred-completion failure was the `Debugger` QCall thrown inside the async builder and
-  captured into the task. What remains:
-  - `ThreadPool.RequestWorkerThread()`: `Task.Run` and `ContinueWith` reach it through
-    `ThreadPoolWorkQueue.Enqueue` (the managed queue works), then
-    `PortableThreadPool.RequestWorker` and `WorkerThread..cctor` fail at
-    `Kernel32.CreateSemaphoreEx`. Shim it to start or wake a pool worker that runs
-    `ThreadPoolWorkQueue.Dispatch`. Prefer a small fixed set of background managed worker
-    threads waiting through the slice-5 condition-wait protocol; this reuses the multithreaded
-    arena machinery and avoids the retired-worker cost above.
-  - `TimerQueue`: `Task.Delay` and `CancelAfter` fail at `TimerQueue..cctor`'s `AutoResetEvent`
-    (`Kernel32.CreateEventEx`). Replace it with a host deadline source in the scheduler, which
-    also gives deadlock detection when every thread is parked and no deadline remains.
-  - Two fixtures encode shim behavior, not the CLR's: `async_await_faulted_task_propagates` and
-    `async_await_throw_after_await` use `.Result` on a faulted task and expect the original
-    exception; the CLR throws `AggregateException`. Rewrite them when the stubs go.
-  - CoreLib resource strings are not resolved (`AggregateException_ctor_DefaultMessage`).
-  - Unmeasured: speed against the shim, and `ExecutionContext`/`SynchronizationContext`/
-    `AsyncLocal` fidelity.
-
-  Shim the managed abstraction, not individual QCalls. Green tasks on the effect scheduler would
-  be deterministic but need a scheduler mechanism plan 08 does not have. Prerequisites: plan 12
-  (`IsBackground`, `Monitor.Wait`/`Pulse`, `Sleep`, thread identity) and plan 11 (a thrown pool
-  work item must be fatal, not swallowed).
 - **Other missing or incorrect runtime behavior:**
   - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
