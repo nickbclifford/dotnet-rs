@@ -130,12 +130,16 @@ fn reflection_tail_dispatch_matches_dotnet() {
         })),
     );
     assert_eq!(
-        tracing::subscriber::with_default(subscriber, || harness.run(&dll)),
+        crate::integration_tests_impl::harness::with_counting_subscriber(subscriber, || harness
+            .run(&dll)),
         42
     );
-    assert!(
-        fallback_count.load(Ordering::Relaxed) > 0,
-        "excluded reflection shapes must retain fallback"
+    // Plan 16 slice 1 admits struct constructor and `Activator` results, the last shapes this
+    // fixture sent to the synchronous fallback; slice 3 removes that fallback.
+    assert_eq!(
+        fallback_count.load(Ordering::Relaxed),
+        0,
+        "every reflection shape in this fixture is transportable"
     );
     assert!(
         async_count.load(Ordering::Relaxed) >= 8,

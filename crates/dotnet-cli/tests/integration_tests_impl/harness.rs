@@ -20,6 +20,86 @@ pub fn get_test_timeout(default_secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
+thread_local! {
+    static PATH_EVENT_CAPTURE: std::cell::RefCell<Option<tracing::Dispatch>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether `metadata` is one of the native-path selection events the selection tests count.
+fn is_path_event(metadata: &tracing::Metadata<'_>) -> bool {
+    metadata.is_event()
+        && (metadata.fields().field("multicast_path").is_some()
+            || metadata.fields().field("reflection_invoke_path").is_some())
+}
+
+/// Global subscriber layer that forwards path-selection events to this thread's capture.
+struct PathEventForward;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PathEventForward {
+    fn register_callsite(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if is_path_event(metadata) {
+            tracing::subscriber::Interest::sometimes()
+        } else {
+            tracing::subscriber::Interest::never()
+        }
+    }
+
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        is_path_event(metadata) && PATH_EVENT_CAPTURE.with(|capture| capture.borrow().is_some())
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        PATH_EVENT_CAPTURE.with(|capture| {
+            if let Some(dispatch) = capture.borrow().as_ref()
+                && dispatch.enabled(event.metadata())
+            {
+                dispatch.event(event);
+            }
+        });
+    }
+}
+
+/// Runs `f` while path-selection events emitted on this thread reach `subscriber`.
+///
+/// A scoped `with_default` subscriber is not reliable here. `tracing` caches each callsite's
+/// interest process-wide and recomputes it whenever a dispatcher is created, so a parallel
+/// test that creates or drops one can leave a counted callsite cached as uninteresting (the
+/// selection tests then saw `(0, 0, 0)` for their first fixture). One permanent global
+/// dispatcher, interested in exactly the counted callsites, never changes that answer.
+/// Rebuilding once per call repairs a callsite that was mid-registration when it was installed.
+pub fn with_counting_subscriber<S, R>(subscriber: S, f: impl FnOnce() -> R) -> R
+where
+    S: tracing::Subscriber + Send + Sync + 'static,
+{
+    use tracing_subscriber::layer::SubscriberExt;
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(PathEventForward),
+        )
+        .expect("no other global tracing subscriber in the integration tests");
+    });
+    tracing::callsite::rebuild_interest_cache();
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PATH_EVENT_CAPTURE.with(|capture| capture.borrow_mut().take());
+        }
+    }
+    PATH_EVENT_CAPTURE.with(|capture| {
+        *capture.borrow_mut() = Some(tracing::Dispatch::new(subscriber));
+    });
+    let _reset = Reset;
+    f()
+}
+
 pub struct TestHarness {
     pub loader: Arc<assemblies::AssemblyLoader>,
 }

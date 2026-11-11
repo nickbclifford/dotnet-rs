@@ -142,9 +142,10 @@ fn multicast_selection_precedes_operand_commitment() {
         let dll = harness.ensure_dll(Path::new(&path));
         let counts = SyncArc::new(Counts::default());
         let subscriber = tracing_subscriber::registry().with(Capture(SyncArc::clone(&counts)));
-        let result = tracing::subscriber::with_default(subscriber, || {
-            harness.run_with_timeout(&dll, std::time::Duration::from_secs(60))
-        });
+        let result =
+            crate::integration_tests_impl::harness::with_counting_subscriber(subscriber, || {
+                harness.run_with_timeout(&dll, std::time::Duration::from_secs(60))
+            });
         assert_eq!(result.exit_code, 42, "{fixture}: {:?}", result.stderr);
         assert_eq!(
             (
@@ -246,7 +247,9 @@ fn reflection_path_selection() {
                 }),
             ));
         assert_eq!(
-            tracing::subscriber::with_default(subscriber, || harness.run(&dll)),
+            crate::integration_tests_impl::harness::with_counting_subscriber(subscriber, || {
+                harness.run(&dll)
+            }),
             42,
             "{path}"
         );
