@@ -10,6 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
+| 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Not started |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
 | 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Complete; managed threads and monitor condition waits are supported |
 | 11 | [Exception control flow: handlers inside handlers, unhandled worker exceptions](11-exception-control-flow.md) | Complete; nested handlers, fatal worker exceptions and filter exception boundary verified |
@@ -141,12 +142,8 @@ Evidence and IDs (p01…, R01…) are defined in the
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes
     stdio on every exit path), so a repro (a fixture that writes, then fails with `Internal VM
     error`) is needed first.
-  - `MethodInfo.Invoke`, and so `Delegate.DynamicInvoke`, lets the target's exception escape
-    instead of wrapping it in `TargetInvocationException`.
   - `Delegate.GetInvocationList` is missing on `System.Delegate` (only `MulticastDelegate`
     has it), and `delegate is MulticastDelegate` is false for a runtime delegate type.
-  - `System.Type` objects are per-arena, so `typeof(T) == typeof(T)` is false across managed
-    threads. `Monitor` on a `Type` object is canonical per type; reference equality is not.
   - A `Synchronized` instance method on a value type runs without taking a monitor.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
