@@ -82,7 +82,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         if frame.state.ip != 0 || !frame.state.info_handle.synchronized {
             return StepResult::Continue;
         }
-        // A yielded or parked acquisition re-runs this slot with the monitor object still on
+        // `sync_lock` records the monitor object, not ownership (see `held_monitor`). A yielded
+        // or parked acquisition re-runs this slot with the monitor object still on
         // the stack, so it is pushed once.
         if frame.sync_lock.is_none() {
             let lock = if frame.state.info_handle.signature.instance {
@@ -113,17 +114,50 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
     /// Releases the monitor a synchronized frame holds, if any. The lock is released after the
     /// method's own handlers have run, matching a JIT-emitted `try`/`finally` around the body.
-    pub(crate) fn release_synchronized_lock(&mut self, lock: Option<ObjectRef<'gc>>) {
-        let Some(lock) = lock else { return };
+    pub(crate) fn release_synchronized_lock(
+        &mut self,
+        frame: &mut dotnet_vm_data::StackFrame<'gc>,
+    ) {
+        let pending = frame.sync_lock.take();
+        let Some(lock) = held_monitor(pending, frame.state.ip) else {
+            return;
+        };
         let thread_id = ThreadOps::thread_id(self);
-        if let Some(block) = lock.sync_block_index().and_then(|index| {
-            use crate::sync::SyncManagerOps;
-            self.shared.sync_blocks.get_sync_block(index)
-        }) {
-            use crate::sync::SyncBlockOps;
-            // Exit fails only if this frame never completed its acquisition (an aborted
-            // thread), in which case there is nothing to release.
-            let _ = block.exit(thread_id);
-        }
+        let released = lock
+            .sync_block_index()
+            .and_then(|index| {
+                use crate::sync::SyncManagerOps;
+                self.shared.sync_blocks.get_sync_block(index)
+            })
+            .is_some_and(|block| {
+                use crate::sync::SyncBlockOps;
+                block.exit(thread_id)
+            });
+        // The frame moved past the acquisition slot, so it holds one level of this monitor.
+        debug_assert!(released, "synchronized frame lost its monitor");
+    }
+}
+
+/// The monitor a frame holds. `sync_lock` is set when the acquisition slot starts, before
+/// `Monitor.Enter` has completed, so the frame holds it only once execution has moved past
+/// index 0. Releasing earlier would drop a level of an outer recursive hold of the same monitor.
+fn held_monitor<T>(pending: Option<T>, ip: usize) -> Option<T> {
+    pending.filter(|_| ip > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::held_monitor;
+
+    #[test]
+    fn unfinished_acquisition_holds_nothing() {
+        assert_eq!(held_monitor(Some(1), 0), None);
+    }
+
+    #[test]
+    fn completed_acquisition_holds_the_monitor() {
+        assert_eq!(held_monitor(Some(1), 1), Some(1));
+        assert_eq!(held_monitor(Some(1), 40), Some(1));
+        assert_eq!(held_monitor::<i32>(None, 5), None);
     }
 }

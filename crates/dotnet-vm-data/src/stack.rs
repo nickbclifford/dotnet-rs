@@ -116,7 +116,8 @@ pub struct StackFrame<'gc> {
     pub homes: FrameHomes,
     pub constructor_result: Option<Box<crate::frame_homes::ConstructorResult>>,
     /// Monitor object of a synchronized method (ECMA-335 §II.23.1.11): set when the frame starts
-    /// acquiring it, released when the frame returns or unwinds.
+    /// acquiring it. The frame holds it only once execution is past index 0; it is released when
+    /// the frame returns or unwinds.
     pub sync_lock: Option<ObjectRef<'gc>>,
 }
 

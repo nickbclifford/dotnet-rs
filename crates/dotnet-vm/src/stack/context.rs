@@ -295,7 +295,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         };
 
         self.trace_method_exit_for_frame(&frame);
-        self.release_synchronized_lock(frame.sync_lock.take());
+        self.release_synchronized_lock(&mut frame);
         self.frame_stack.recycle_frame(frame);
         true
     }
@@ -521,7 +521,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("return_frame called with empty frame stack (ret/dispatch invariant violated)");
 
         self.trace_method_exit_for_frame(&frame);
-        self.release_synchronized_lock(frame.sync_lock.take());
+        self.release_synchronized_lock(&mut frame);
 
         if let Some(mut claim) = frame.initializer_claim.take() {
             claim.succeed();
@@ -672,7 +672,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("unwind_frame called with empty stack");
 
         self.unwind_native_at(self.frame_stack.len());
-        self.release_synchronized_lock(frame.sync_lock.take());
+        self.release_synchronized_lock(&mut frame);
 
         // The capturing caller owns publication and wrapping of its requested initializer.
         let capturing_initializer = matches!(

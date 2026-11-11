@@ -113,6 +113,10 @@ pub fn build_method_info(
         let (instructions, exceptions, max_stack): (&'static [Instruction], _, _) = if synchronized
         {
             let (instructions, exceptions) = synchronized_body(&body.instructions, exceptions);
+            // The leak is bounded: `GlobalCaches::get_method_info` caches by (method, generics) in
+            // an unbounded store by default, so each synchronized method instantiation leaks one
+            // body (concurrent misses may each build it once). The `'static` instruction slice
+            // outlives every frame that executes it.
             (
                 Box::leak(instructions.into_boxed_slice()),
                 std::borrow::Cow::Owned(exceptions),
