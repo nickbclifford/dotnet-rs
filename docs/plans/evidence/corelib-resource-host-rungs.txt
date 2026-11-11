@@ -1,0 +1,234 @@
+Host differential evidence — 2026-11-11
+Feature-matched CLI rebuilt before each configuration. Each command used DOTNET_RS_BIN pointing at target/debug/dotnet-rs, then timeout 180 bash scripts/diff_run.sh --host <input>. The harness captures guest stdout and exits, and emits stderr directly. PASS means it compared matching stdout and exit.
+The existing EF obj directory was moved aside and restored around the successful runs; the original project build with external intermediates otherwise includes the old obj-generated C# and fails with duplicate assembly attributes.
+Before = SR intrinsic present; final = managed SR active, identity BitCast support present.
+
+--- before st expression exit=0
+input: crates/dotnet-cli/tests/fixtures/expressions/expression_compile_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- before st newtonsoft exit=1
+input: crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip/NewtonsoftRoundtrip.csproj
+stdout:
+(empty)
+stderr:
+Unhandled Exception: System.InvalidCastException: Specified cast is not valid.
+Stack Trace:
+   at DotnetRs.SZArrayHelper`1.CopyTo(T0[] array, int arrayIndex) in IP 36
+   at System.Collections.Generic.List`1..ctor(System.Collections.Generic.IEnumerable`1<T0> collection) in IP 28
+   at System.Linq.Enumerable.ToList([System.Runtime]System.Collections.Generic.IEnumerable`1<M0> source) in IP 15
+   at Newtonsoft.Json.JsonWriter.BuildStateArray() in IP 1
+   at Newtonsoft.Json.JsonWriter..cctor() in IP 67
+   at Newtonsoft.Json.JsonTextWriter..ctor([System.Runtime]System.IO.TextWriter textWriter) in IP 1
+   at Newtonsoft.Json.JsonConvert.SerializeObjectInternal(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializer jsonSerializer) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializerSettings settings) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value) in IP 3
+   at Program.Main() in IP 10
+
+FAIL: outputs diverged (dotnet vs dotnet-rs, mode=host)
+--- /tmp/dotnet-rs-diff-run.rjC6qB/dotnet.report	2026-11-11 12:46:52.904450912 -0600
++++ /tmp/dotnet-rs-diff-run.rjC6qB/dotnet-rs.report	2026-11-11 12:46:52.904450912 -0600
+@@ -1,3 +1,2 @@
+-exit_code=42
++exit_code=1
+ stdout:
+-{"name":"test","value":42}
+
+--- before st ef exit=0
+input: crates/dotnet-benchmarks/fixtures/ef_inmemory/EfInMemory.csproj
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- before st benchmark exit=0
+input: crates/dotnet-benchmarks/fixtures/exception_messages/ExceptionMessages_0.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- before mt expression exit=0
+input: crates/dotnet-cli/tests/fixtures/expressions/expression_compile_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- before mt newtonsoft exit=1
+input: crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip/NewtonsoftRoundtrip.csproj
+stdout:
+(empty)
+stderr:
+Unhandled Exception: System.InvalidCastException: Specified cast is not valid.
+Stack Trace:
+   at DotnetRs.SZArrayHelper`1.CopyTo(T0[] array, int arrayIndex) in IP 36
+   at System.Collections.Generic.List`1..ctor(System.Collections.Generic.IEnumerable`1<T0> collection) in IP 28
+   at System.Linq.Enumerable.ToList([System.Runtime]System.Collections.Generic.IEnumerable`1<M0> source) in IP 15
+   at Newtonsoft.Json.JsonWriter.BuildStateArray() in IP 1
+   at Newtonsoft.Json.JsonWriter..cctor() in IP 67
+   at Newtonsoft.Json.JsonTextWriter..ctor([System.Runtime]System.IO.TextWriter textWriter) in IP 1
+   at Newtonsoft.Json.JsonConvert.SerializeObjectInternal(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializer jsonSerializer) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializerSettings settings) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value) in IP 3
+   at Program.Main() in IP 10
+
+FAIL: outputs diverged (dotnet vs dotnet-rs, mode=host)
+--- /tmp/dotnet-rs-diff-run.nGlhJx/dotnet.report	2026-11-11 12:46:59.046139569 -0600
++++ /tmp/dotnet-rs-diff-run.nGlhJx/dotnet-rs.report	2026-11-11 12:46:59.046139569 -0600
+@@ -1,3 +1,2 @@
+-exit_code=42
++exit_code=1
+ stdout:
+-{"name":"test","value":42}
+
+--- before mt ef exit=0
+input: crates/dotnet-benchmarks/fixtures/ef_inmemory/EfInMemory.csproj
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- before mt benchmark exit=0
+input: crates/dotnet-benchmarks/fixtures/exception_messages/ExceptionMessages_0.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final st expression exit=0
+input: crates/dotnet-cli/tests/fixtures/expressions/expression_compile_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final st newtonsoft exit=1
+input: crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip/NewtonsoftRoundtrip.csproj
+stdout:
+(empty)
+stderr:
+Unhandled Exception: System.InvalidCastException: Specified cast is not valid.
+Stack Trace:
+   at DotnetRs.SZArrayHelper`1.CopyTo(T0[] array, int arrayIndex) in IP 36
+   at System.Collections.Generic.List`1..ctor(System.Collections.Generic.IEnumerable`1<T0> collection) in IP 28
+   at System.Linq.Enumerable.ToList([System.Runtime]System.Collections.Generic.IEnumerable`1<M0> source) in IP 15
+   at Newtonsoft.Json.JsonWriter.BuildStateArray() in IP 1
+   at Newtonsoft.Json.JsonWriter..cctor() in IP 67
+   at Newtonsoft.Json.JsonTextWriter..ctor([System.Runtime]System.IO.TextWriter textWriter) in IP 1
+   at Newtonsoft.Json.JsonConvert.SerializeObjectInternal(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializer jsonSerializer) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializerSettings settings) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value) in IP 3
+   at Program.Main() in IP 10
+
+FAIL: outputs diverged (dotnet vs dotnet-rs, mode=host)
+--- /tmp/dotnet-rs-diff-run.3ZN5UJ/dotnet.report	2026-11-11 13:07:13.076231620 -0600
++++ /tmp/dotnet-rs-diff-run.3ZN5UJ/dotnet-rs.report	2026-11-11 13:07:13.076231620 -0600
+@@ -1,3 +1,2 @@
+-exit_code=42
++exit_code=1
+ stdout:
+-{"name":"test","value":42}
+
+--- final st ef exit=0
+input: crates/dotnet-benchmarks/fixtures/ef_inmemory/EfInMemory.csproj
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final st benchmark exit=0
+input: crates/dotnet-benchmarks/fixtures/exception_messages/ExceptionMessages_0.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final st messages exit=0
+input: crates/dotnet-cli/tests/fixtures/exceptions/resource_messages_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final st bitcast exit=0
+input: crates/dotnet-cli/tests/fixtures/basic/unsafe_bitcast_identity_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final mt expression exit=0
+input: crates/dotnet-cli/tests/fixtures/expressions/expression_compile_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final mt newtonsoft exit=1
+input: crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip/NewtonsoftRoundtrip.csproj
+stdout:
+(empty)
+stderr:
+Unhandled Exception: System.InvalidCastException: Specified cast is not valid.
+Stack Trace:
+   at DotnetRs.SZArrayHelper`1.CopyTo(T0[] array, int arrayIndex) in IP 36
+   at System.Collections.Generic.List`1..ctor(System.Collections.Generic.IEnumerable`1<T0> collection) in IP 28
+   at System.Linq.Enumerable.ToList([System.Runtime]System.Collections.Generic.IEnumerable`1<M0> source) in IP 15
+   at Newtonsoft.Json.JsonWriter.BuildStateArray() in IP 1
+   at Newtonsoft.Json.JsonWriter..cctor() in IP 67
+   at Newtonsoft.Json.JsonTextWriter..ctor([System.Runtime]System.IO.TextWriter textWriter) in IP 1
+   at Newtonsoft.Json.JsonConvert.SerializeObjectInternal(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializer jsonSerializer) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value, [System.Runtime]System.Type type, Newtonsoft.Json.JsonSerializerSettings settings) in IP 6
+   at Newtonsoft.Json.JsonConvert.SerializeObject(object value) in IP 3
+   at Program.Main() in IP 10
+
+FAIL: outputs diverged (dotnet vs dotnet-rs, mode=host)
+--- /tmp/dotnet-rs-diff-run.tq071n/dotnet.report	2026-11-11 13:07:34.085595794 -0600
++++ /tmp/dotnet-rs-diff-run.tq071n/dotnet-rs.report	2026-11-11 13:07:34.085595794 -0600
+@@ -1,3 +1,2 @@
+-exit_code=42
++exit_code=1
+ stdout:
+-{"name":"test","value":42}
+
+--- final mt ef exit=0
+input: crates/dotnet-benchmarks/fixtures/ef_inmemory/EfInMemory.csproj
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final mt benchmark exit=0
+input: crates/dotnet-benchmarks/fixtures/exception_messages/ExceptionMessages_0.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final mt messages exit=0
+input: crates/dotnet-cli/tests/fixtures/exceptions/resource_messages_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- final mt bitcast exit=0
+input: crates/dotnet-cli/tests/fixtures/basic/unsafe_bitcast_identity_42.cs
+stdout:
+PASS: exit code and stdout match (mode=host)
+stderr:
+(empty)
+
+--- cross-slice recheck (2026-11-11)
+The no-feature and `multithreading` CLI binaries were rebuilt separately before their host-mode comparisons. Commands used `DOTNET_RS_BIN="$PWD/target/debug/dotnet-rs" timeout 180 bash scripts/diff_run.sh --host <input>`; project runs preserved/restored the existing EF `obj` directory. Standard output for each successful rung was `PASS: exit code and stdout match (mode=host)` and stderr was empty.
+
+No-feature fixture comparisons passed: `async_await_task_completion_source_deferred_42.cs`, both async fault fixtures, `event_basic_42.cs`, and `resource_messages_42.cs`. No-feature host rungs passed: expression compilation, EF InMemory, exception benchmark, and resource-message fixture.
+
+Multithreaded fixture comparisons passed: the deferred and blocking task fixtures, incomplete finite Wait, both task-fault fixtures, Task.Run/ContinueWith/async Main Yield/WhenAll/once/fault, both AsyncLocal async cases, Delay/CancelAfter/WhenAny, safe and unsafe pool queue cases, pool identity/isolation, event basic/workers, timer callback pool identity, timer-idle exit, and resource messages. Multithreaded host rungs passed: expression compilation, EF InMemory, exception benchmark, and resource messages.
+
+Newtonsoft remained the one expected rung failure in both configurations (exit 1); stdout was empty. Captured stderr began `Unhandled Exception: System.InvalidCastException: Specified cast is not valid.` and the stack still starts at `DotnetRs.SZArrayHelper<T>.CopyTo`, followed by `List<T>..ctor`, `Enumerable.ToList`, and `Newtonsoft.Json.JsonWriter.BuildStateArray`. The CLR produced exit 42 and `{"name":"test","value":42}`. This reproduces the already-recorded unrelated array-copy failure, not a task/pool/event/resource regression.
+

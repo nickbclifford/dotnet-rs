@@ -364,8 +364,16 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             TypeIdentityComparison::DefinitionNameFallback => {
                 let left_definition = left.definition();
                 let right_definition = right.definition();
-                left_definition.name == right_definition.name
-                    && left_definition.namespace == right_definition.namespace
+                (left_definition.name == right_definition.name
+                    && left_definition.namespace == right_definition.namespace)
+                    || {
+                        let left_name = left.type_name();
+                        let right_name = right.type_name();
+                        let left_canonical = self.loader.canonical_type_name(&left_name);
+                        let right_canonical = self.loader.canonical_type_name(&right_name);
+                        (left_canonical != left_name || right_canonical != right_name)
+                            && left_canonical == right_canonical
+                    }
             }
         }
     }

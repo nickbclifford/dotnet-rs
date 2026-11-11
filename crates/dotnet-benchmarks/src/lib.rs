@@ -7,6 +7,10 @@
 //! - [`JSON_BENCHMARK`]: JSON parsing and serialization throughput.
 //! - [`ARITHMETIC_BENCHMARK`]: Tight arithmetic loop — baseline execution throughput.
 //! - [`GC_BENCHMARK`]: Allocation pressure and GC throughput.
+//! - [`EXCEPTION_MESSAGES_BENCHMARK`]: Repeated thrown exceptions and default message lookup.
+//! - [`RESOURCE_COLD_LOAD_BENCHMARK`]: First resource lookups in a fresh VM.
+//! - [`RESOURCE_WARM_LOOKUP_BENCHMARK`]: Repeated lookups in an initialized VM.
+//! - [`ASYNC_AWAIT_BENCHMARK`]: TaskCompletionSource suspension and completed ValueTask awaits.
 //!
 //! See `docs/BENCHMARK_WORKFLOW.md` for PGO and profile guidance.
 use dotnet_types::{TypeDescription, members::MethodDescription};
@@ -200,7 +204,42 @@ pub const EF_INMEMORY_BENCHMARK: BenchmarkCase = BenchmarkCase {
     expected_exit_code: 0,
 };
 
-pub const BENCHMARK_CASES: [BenchmarkCase; 19] = [
+/// Core task and value-task await paths, including a caller-completed suspension.
+pub const ASYNC_AWAIT_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "async_await",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/async_await/AsyncAwaitBenchmark_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+pub const EXCEPTION_MESSAGES_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "exception_messages",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/exception_messages/ExceptionMessages_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+/// First lookups of the two exception messages in a fresh VM.
+pub const RESOURCE_COLD_LOAD_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "resource_cold_load",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/exception_messages/ResourceColdLoad_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+/// Repeated lookups of the same exception messages after VM initialization.
+pub const RESOURCE_WARM_LOOKUP_BENCHMARK: BenchmarkCase = BenchmarkCase {
+    name: "resource_warm_lookup",
+    fixture: BenchmarkFixture::SingleFile {
+        source: "fixtures/exception_messages/ResourceWarmLookup_0.cs",
+    },
+    expected_exit_code: 0,
+};
+
+pub const BENCHMARK_CASES: [BenchmarkCase; 23] = [
     JSON_BENCHMARK,
     ARITHMETIC_BENCHMARK,
     GC_BENCHMARK,
@@ -220,6 +259,10 @@ pub const BENCHMARK_CASES: [BenchmarkCase; 19] = [
     JSON_DOM_BENCHMARK,
     LINQ_PIPELINE_BENCHMARK,
     EF_INMEMORY_BENCHMARK,
+    ASYNC_AWAIT_BENCHMARK,
+    EXCEPTION_MESSAGES_BENCHMARK,
+    RESOURCE_COLD_LOAD_BENCHMARK,
+    RESOURCE_WARM_LOOKUP_BENCHMARK,
 ];
 
 pub struct BenchHarness {
@@ -387,6 +430,17 @@ impl BenchHarness {
     }
 
     pub fn run_prepared_with_metrics(&self, prepared: &PreparedBenchmark) -> BenchRunResult {
+        let mut run = self.prepare_repeated(prepared);
+        let exit_code = run.run();
+        BenchRunResult {
+            exit_code,
+            metrics: run.executor.get_runtime_metrics_snapshot(),
+        }
+    }
+
+    /// Prepare a reusable VM. When calling repeatedly, the fixture must have a void entry point
+    /// so return values do not accumulate on the evaluation stack. The caller warms it up.
+    pub fn prepare_repeated(&self, prepared: &PreparedBenchmark) -> RepeatedBenchmark {
         let resolution = prepared
             .loader
             .load_resolution_from_file(&prepared.dll_path)
@@ -397,7 +451,7 @@ impl BenchHarness {
             reason = "the no-MT benchmark executor confines shared state to its run thread"
         )]
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&prepared.loader)));
-        let mut executor = vm::Executor::new(shared);
+        let executor = vm::Executor::new(shared);
 
         let entry_method = match resolution.entry_point {
             Some(EntryPoint::Method(m)) => m,
@@ -424,21 +478,30 @@ impl BenchHarness {
             resolution,
             MethodMemberIndex::Method(method_index),
         );
-        executor
-            .entrypoint(entrypoint)
-            .expect("failed to initialize benchmark entrypoint");
+        RepeatedBenchmark {
+            executor,
+            entrypoint,
+        }
+    }
+}
 
-        let exit_code = match executor.run() {
+/// A single VM and entry point reused across calls, including its managed static state.
+pub struct RepeatedBenchmark {
+    executor: vm::Executor,
+    entrypoint: MethodDescription,
+}
+
+impl RepeatedBenchmark {
+    pub fn run(&mut self) -> u8 {
+        self.executor
+            .entrypoint(self.entrypoint.clone())
+            .expect("failed to initialize benchmark entrypoint");
+        match self.executor.run() {
             ExecutorResult::Exited(code) => code,
             ExecutorResult::Threw(exc) => {
                 panic!("benchmark fixture threw managed exception: {exc}")
             }
             ExecutorResult::Error(err) => panic!("benchmark fixture failed with VM error: {err}"),
-        };
-
-        BenchRunResult {
-            exit_code,
-            metrics: executor.get_runtime_metrics_snapshot(),
         }
     }
 }
@@ -604,4 +667,37 @@ fn project_inputs_are_fresh(dir: &Path, dll_modified: std::time::SystemTime) -> 
     }
 
     Ok(true)
+}
+
+#[cfg(all(test, not(miri)))]
+mod tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn repeated_runs_retain_managed_static_state() {
+        let harness = BenchHarness::new();
+        let probe = BenchmarkCase {
+            name: "repeated_state_probe",
+            fixture: BenchmarkFixture::SingleFile {
+                source: "fixtures/exception_messages/RepeatedStateProbe_0.cs",
+            },
+            expected_exit_code: 0,
+        };
+        let fixture = harness.prepare_case(probe);
+        let mut run = harness.prepare_repeated(&fixture);
+        assert_eq!(run.run(), 0);
+        assert_eq!(run.run(), 0);
+        let failure = catch_unwind(AssertUnwindSafe(|| run.run()))
+            .expect_err("third run must observe the retained counter");
+        let message = failure.downcast_ref::<String>().expect("panic message");
+        assert!(message.contains("System.InvalidOperationException: state retained"));
+        drop(run);
+
+        let fixture = harness.prepare_case(RESOURCE_WARM_LOOKUP_BENCHMARK);
+        let mut run = harness.prepare_repeated(&fixture);
+        for _ in 0..3 {
+            assert_eq!(run.run(), 0);
+        }
+    }
 }

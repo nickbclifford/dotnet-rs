@@ -60,6 +60,9 @@ The fuzz crate Cargo.toml files (`crates/dotnet-vm/fuzz/Cargo.toml`, `crates/dot
 
 The shared feature matrix (used by CI and `./check.sh --full`) has a `fuzzing` leg;
 `./check.sh --fast` does not.
+The native-denying sandbox uses a deterministic `System.Marvin.GenerateSeed` intrinsic for
+managed string hashing; other native calls remain denied. Builds without `fuzzing` execute
+CoreLib's entropy-backed implementation.
 
 ## Fuzz Targets
 

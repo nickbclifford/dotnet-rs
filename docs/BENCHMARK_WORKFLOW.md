@@ -17,6 +17,15 @@ cargo bench --profile bench-fat -p dotnet-benchmarks --bench end_to_end -- --sam
 
 The end-to-end suite includes both focused runtime loops and heavier framework workloads:
 
+- `exception_messages`: thrown default aggregate and cancellation exceptions and message lookup
+  in a fresh VM (the comparison baseline).
+- `resource_cold_load`: a fresh VM and the first lookup of each of those two messages; the
+  prepared loader and compiled fixture are reused, but managed static state is not.
+- `resource_warm_lookup`: the same 128-exception loop after an untimed priming run, reentering
+  a void entry point in the same VM. Each iteration includes entrypoint and exception overhead,
+  not only dictionary lookup; it excludes VM creation and the first resource load.
+- `async_await`: repeated `TaskCompletionSource<T>` awaits that are completed synchronously by
+  the caller, plus already-completed `ValueTask<T>` awaits.
 - `json_dom`: repeated `System.Text.Json` DOM parse and property traversal.
 - `linq_pipeline`: filtering, projection, grouping, ordering, and aggregation over an in-memory dataset.
 - `ef_inmemory`: EF Core InMemory model discovery, change tracking, save, and translated query execution.

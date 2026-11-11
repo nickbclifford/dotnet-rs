@@ -361,6 +361,10 @@ pub fn intrinsic_unsafe_bitcast<'gc, T: UnsafeIntrinsicHost<'gc>>(
 
     let src_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(0));
     let dst_type = dotnet_vm_ops::vm_try!(generics.cloned_method_arg(1));
+    // INVARIANT: F5.TracesEveryGcRef — the unchanged stack value retains its traced fields, including byrefs.
+    if src_type == dst_type && src_type.is_value_type(ctx.loader().as_ref()) {
+        return StepResult::Continue;
+    }
     let src_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(src_type));
     let dst_layout = dotnet_vm_ops::vm_try!(ctx.unsafe_type_layout(dst_type));
     let src_size = src_layout.size().as_usize();

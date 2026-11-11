@@ -38,3 +38,14 @@ pub fn intrinsic_eventpipe_create_provider<'gc, T: EvalStackOps<'gc> + TypedStac
 
     StepResult::Continue
 }
+
+#[dotnet_intrinsic("static ulong System.Marvin::GenerateSeed()")]
+pub fn intrinsic_fuzzing_marvin_seed<'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    // The fuzzing sandbox denies native entropy and uses a deterministic seed.
+    ctx.push_i64(0x6d61_7276_696e_2021);
+    StepResult::Continue
+}

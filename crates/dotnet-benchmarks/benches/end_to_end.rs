@@ -1,10 +1,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use dotnet_benchmarks::{
-    ALLOC_THROUGHPUT_BENCHMARK, ARITHMETIC_BENCHMARK, BenchHarness, DISPATCH_BENCHMARK,
-    EF_INMEMORY_BENCHMARK, GC_BENCHMARK, GC_CROSS_ARENA_BENCHMARK, GENERICS_BENCHMARK,
-    HEAP_ACCESS_BENCHMARK, JSON_BENCHMARK, JSON_DOM_BENCHMARK, LINQ_PIPELINE_BENCHMARK,
-    MEMORY_BENCHMARK, REFLECTION_BENCHMARK, SPAN_BENCHMARK, SPAN_EQUALITY_BENCHMARK,
-    STACK_BENCHMARK, STRING_BENCHMARK, UNSAFE_BUFFER_BENCHMARK,
+    ALLOC_THROUGHPUT_BENCHMARK, ARITHMETIC_BENCHMARK, ASYNC_AWAIT_BENCHMARK, BenchHarness,
+    DISPATCH_BENCHMARK, EF_INMEMORY_BENCHMARK, EXCEPTION_MESSAGES_BENCHMARK, GC_BENCHMARK,
+    GC_CROSS_ARENA_BENCHMARK, GENERICS_BENCHMARK, HEAP_ACCESS_BENCHMARK, JSON_BENCHMARK,
+    JSON_DOM_BENCHMARK, LINQ_PIPELINE_BENCHMARK, MEMORY_BENCHMARK, REFLECTION_BENCHMARK,
+    RESOURCE_COLD_LOAD_BENCHMARK, RESOURCE_WARM_LOOKUP_BENCHMARK, SPAN_BENCHMARK,
+    SPAN_EQUALITY_BENCHMARK, STACK_BENCHMARK, STRING_BENCHMARK, UNSAFE_BUFFER_BENCHMARK,
 };
 
 #[cfg(feature = "bench-instrumentation")]
@@ -58,6 +59,18 @@ fn run_case(c: &mut Criterion, case: dotnet_benchmarks::BenchmarkCase) {
     }
 }
 
+fn run_warm_resource_case(c: &mut Criterion) {
+    let case = RESOURCE_WARM_LOOKUP_BENCHMARK;
+    let harness = BenchHarness::new();
+    c.bench_function(case.name, |b| {
+        let fixture = harness.prepare_case(case);
+        let mut vm = harness.prepare_repeated(&fixture);
+        // ResourceManager and both keys must already be loaded before timing begins.
+        assert_eq!(vm.run(), case.expected_exit_code);
+        b.iter(|| assert_eq!(vm.run(), case.expected_exit_code));
+    });
+}
+
 fn benchmarks(c: &mut Criterion) {
     run_case(c, JSON_BENCHMARK);
     run_case(c, ARITHMETIC_BENCHMARK);
@@ -77,6 +90,10 @@ fn benchmarks(c: &mut Criterion) {
     run_case(c, JSON_DOM_BENCHMARK);
     run_case(c, LINQ_PIPELINE_BENCHMARK);
     run_case(c, EF_INMEMORY_BENCHMARK);
+    run_case(c, ASYNC_AWAIT_BENCHMARK);
+    run_case(c, EXCEPTION_MESSAGES_BENCHMARK);
+    run_case(c, RESOURCE_COLD_LOAD_BENCHMARK);
+    run_warm_resource_case(c);
 }
 
 #[cfg(feature = "bench-instrumentation")]

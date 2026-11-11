@@ -178,6 +178,34 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(miri))]
+    fn marvin_seed_uses_intrinsic_only_in_fuzzing() {
+        use dotnet_types::generics::GenericLookup;
+        use dotnetdll::prelude::MethodMemberIndex;
+
+        let runtime = dotnet_assemblies::find_dotnet_app_path().unwrap();
+        let loader = AssemblyLoader::new(runtime.to_string_lossy().into_owned()).unwrap();
+        let ty = loader.corlib_type("System.Marvin").unwrap();
+        let index = ty
+            .definition()
+            .methods
+            .iter()
+            .position(|m| m.name == "GenerateSeed")
+            .unwrap();
+        let method = MethodDescription::new(
+            ty.clone(),
+            GenericLookup::default(),
+            ty.resolution.clone(),
+            MethodMemberIndex::Method(index),
+        );
+        let registry = IntrinsicRegistry::initialize();
+        assert_eq!(
+            registry.get_metadata(&method, &loader).is_some(),
+            cfg!(feature = "fuzzing")
+        );
+    }
+
+    #[test]
     fn test_intrinsic_kind_categories() {
         // Test that we have the three expected categories
         assert_ne!(IntrinsicKind::Static, IntrinsicKind::VirtualOverride);

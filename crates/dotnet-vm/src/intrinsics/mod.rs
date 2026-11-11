@@ -252,6 +252,11 @@ impl IntrinsicRegistry {
         let key = self.build_method_key(method, loader, &mut buf)?;
         let range = INTRINSIC_LOOKUP.get(key)?;
         for entry in &INTRINSIC_ENTRIES[range.start..range.start + range.len] {
+            // The managed seed uses native entropy outside the native-denying fuzzing sandbox.
+            #[cfg(not(feature = "fuzzing"))]
+            if entry.type_name == "System.Marvin" && entry.member_name == "GenerateSeed" {
+                continue;
+            }
             if let StaticIntrinsicHandler::Method(h) = entry.handler
                 && entry.filter.is_none_or(|f| f(method))
             {

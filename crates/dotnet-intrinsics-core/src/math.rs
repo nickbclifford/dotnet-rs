@@ -859,31 +859,3 @@ pub fn intrinsic_eventsource_disabled<'gc, T: TypedStackOps<'gc>>(
     ctx.push_i32(0);
     StepResult::Continue
 }
-
-#[dotnet_intrinsic("static string System.SR::GetResourceString(string)")]
-#[dotnet_intrinsic("static string System.SR::GetResourceString(string, string)")]
-#[dotnet_intrinsic("static string System.SR::InternalGetResourceString(string)")]
-pub fn intrinsic_sr_get_resource_string<'gc, T: TypedStackOps<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let arity = method.signature().parameters.len();
-    let key = if arity == 2 {
-        let fallback = ctx.pop();
-        let key = ctx.pop();
-        if matches!(key, StackValue::ObjectRef(ObjectRef(Some(_)))) {
-            key
-        } else {
-            fallback
-        }
-    } else {
-        ctx.pop()
-    };
-
-    match key {
-        StackValue::ObjectRef(o) => ctx.push_obj(o),
-        _ => ctx.push_obj(ObjectRef(None)),
-    }
-    StepResult::Continue
-}
