@@ -57,6 +57,10 @@ name = "static_fields"
 harness = false
 
 [[bench]]
+name = "runtime_type"
+harness = false
+
+[[bench]]
 name = "metadata_load"
 harness = false
 

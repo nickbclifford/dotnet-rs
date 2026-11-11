@@ -1,6 +1,6 @@
 # Canonical reflection objects across threads
 
-**Status:** In progress
+**Status:** Complete
 **Outcome:** Under `multithreading`, every managed thread observes the same object for the same
 type, method, field, property or assembly: `ReferenceEquals(typeof(T), typeof(T))` is true across
 threads, and so is `lock (typeof(T))` mutual exclusion through the object's own monitor.
@@ -111,6 +111,20 @@ Not chosen:
    - The existing member cache keys are retained. A property accessor is not currently identical
      to the result of looking it up with `GetMethod`; reconciling those metadata paths and
      `ReflectedType` behavior remains separate from cross-thread publication.
+
+## Verification
+
+- Both canonical-object fixtures pass with `multithreading` and with
+  `multithreading,validation-all`, including comparisons with .NET through the integration
+  harness and `scripts/diff_run.sh`.
+- The single-threaded `runtime_type` Criterion benchmark performs 30,000 `typeof` lookups per
+  iteration. With `--no-default-features`, 30 samples, two seconds of warmup and five seconds of
+  measurement, the pre-plan revision `c5da3950` measured 52.292 ms and the completed plan
+  measured 51.864 ms. Criterion estimated -0.82% (95% interval -1.28% to -0.28%), within its
+  noise threshold. An earlier comparison while a fixture build ran measured +0.50% (95%
+  interval -0.03% to +1.04%, p = 0.08), with no significant change.
+  Run the benchmark with `cargo bench -p dotnet-benchmarks --bench runtime_type
+  --no-default-features`.
 
 ## Done when
 
