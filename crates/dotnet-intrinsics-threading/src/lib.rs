@@ -12,8 +12,8 @@
 //! ## Host Trait
 //!
 //! VM contexts integrate this crate through [`ThreadingIntrinsicHost<'gc>`],
-//! which composes [`ThreadingBaseOps<'gc>`], [`MonitorHost<'gc>`],
-//! [`RawMemoryOps<'gc>`], [`StackSlotWriteHost<'gc>`], and [`ManagedThreadHost<'gc>`].
+//! which composes [`ThreadingBaseOps<'gc>`], [`MonitorHost<'gc>`], [`RawMemoryOps<'gc>`],
+//! [`StackSlotWriteHost<'gc>`], [`ManagedThreadHost<'gc>`], and [`PoolHost<'gc>`].
 //!
 //! [`MonitorHost<'gc>`] defines the monitor-specific synchronization hooks used
 //! by `Monitor.Enter`/`TryEnter`/`Exit` handlers: sync-block lookup/creation
@@ -32,8 +32,11 @@ use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingBaseOps};
 use std::time::Instant;
 
 pub(crate) mod atomic_dispatch;
+pub mod events;
 pub mod interlocked;
+pub mod low_level_lock;
 pub mod monitor;
+pub mod pool;
 pub mod thread;
 pub mod volatile;
 
@@ -132,11 +135,26 @@ pub trait ManagedThreadHost<'gc> {
     ) -> dotnet_vm_data::StepResult;
 }
 
+/// VM-owned accounting and worker lifecycle for CoreLib's managed work queue.
+pub trait PoolHost<'gc> {
+    fn pool_request(&mut self) -> dotnet_vm_data::StepResult;
+    fn pool_placeholder(&mut self) -> dotnet_vm_data::StepResult;
+    fn pool_complete(&self);
+    fn pool_completed_count(&self) -> i64;
+    fn pool_worker_count(&self) -> i32;
+    fn pool_set_min(&self, worker: i32, io: i32) -> bool;
+    fn pool_set_max(&self, worker: i32, io: i32) -> bool;
+    fn pool_min(&self) -> (i32, i32);
+    fn pool_max(&self) -> (i32, i32);
+    fn pool_available(&self) -> (i32, i32);
+}
+
 dotnet_vm_ops::trait_alias! {
     pub trait ThreadingIntrinsicHost<'gc> =
         ThreadingBaseOps<'gc>
         + MonitorHost<'gc>
         + RawMemoryOps<'gc>
         + StackSlotWriteHost<'gc>
-        + ManagedThreadHost<'gc>;
+        + ManagedThreadHost<'gc>
+        + PoolHost<'gc>;
 }

@@ -82,10 +82,12 @@ pub unsafe fn unmanaged_ptr_from_addr(addr: usize) -> *mut u8 {
     std::ptr::with_exposed_provenance_mut::<u8>(addr)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StaticMetadata {
     pub type_desc: TypeDescription,
     pub generics: GenericLookup,
+    /// The owning executor for a thread-static field, or None for ordinary statics.
+    pub thread_id: Option<u64>,
 }
 
 pub(crate) fn static_registry() -> &'static DashMap<u32, Arc<StaticMetadata>> {
@@ -93,8 +95,8 @@ pub(crate) fn static_registry() -> &'static DashMap<u32, Arc<StaticMetadata>> {
     REGISTRY.get_or_init(DashMap::new)
 }
 
-pub(crate) fn static_dedup_map() -> &'static DashMap<(TypeDescription, GenericLookup), u32> {
-    static DEDUP: OnceLock<DashMap<(TypeDescription, GenericLookup), u32>> = OnceLock::new();
+pub(crate) fn static_dedup_map() -> &'static DashMap<StaticMetadata, u32> {
+    static DEDUP: OnceLock<DashMap<StaticMetadata, u32>> = OnceLock::new();
     DEDUP.get_or_init(DashMap::new)
 }
 
@@ -792,7 +794,23 @@ impl<'gc> ManagedPtr<'gc> {
         pinned: bool,
         offset: ByteOffset,
     ) -> Self {
-        let origin = PointerOrigin::new_static(type_desc, generics);
+        Self::new_static_for_thread(value, inner_type, type_desc, generics, None, pinned, offset)
+    }
+
+    pub fn new_static_for_thread(
+        value: Option<NonNull<u8>>,
+        inner_type: TypeDescription,
+        type_desc: TypeDescription,
+        generics: GenericLookup,
+        thread_id: Option<u64>,
+        pinned: bool,
+        offset: ByteOffset,
+    ) -> Self {
+        let origin = PointerOrigin::Static(Arc::new(StaticMetadata {
+            type_desc,
+            generics,
+            thread_id,
+        }));
         Self {
             magic: ValidationTag::new(MANAGED_PTR_MAGIC as u64),
             _value: value,

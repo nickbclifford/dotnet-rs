@@ -187,9 +187,7 @@ struct VesManagedPtrResolver<'a, 'gc> {
 
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesManagedPtrResolver<'a, 'gc> {
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
-        let storage = self
-            .statics
-            .get(metadata.type_desc.clone(), &metadata.generics);
+        let storage = self.statics.get_for_metadata(metadata);
         storage
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))

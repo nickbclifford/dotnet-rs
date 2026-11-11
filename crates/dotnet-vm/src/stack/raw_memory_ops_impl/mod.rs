@@ -176,9 +176,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage.storage.with_data_mut(|data| {
                     let mut memory = RawMemoryAccess::new(&self.local.heap);
                     // SAFETY: F10.RawMemoryAccessValid — the static storage stays borrowed for the closure, the helper bounds-checks
@@ -277,9 +275,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage.storage.with_data(|data| {
                     let memory = RawMemoryAccess::new(&self.local.heap);
                     // SAFETY: F10.RawMemoryAccessValid — the static storage stays borrowed for the closure, the helper bounds-checks
@@ -355,9 +351,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.write_bytes_ptr(ptr, data) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage
                     .storage
                     .with_data_mut(|obj_data| bounds_checked_slice_copy(obj_data, data, offset))
@@ -416,9 +410,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe { memory.read_bytes_ptr(ptr, dest) }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage
                     .storage
                     .with_data(|obj_data| bounds_checked_slice_read(obj_data, dest, offset))
@@ -487,9 +479,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage.storage.with_data_mut(|data| {
                     let end = offset
                         .as_usize()
@@ -577,9 +567,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
                 // operation below synchronizes the access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
@@ -683,9 +671,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
                 // operation below synchronizes the access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
@@ -774,9 +760,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 // SAFETY: F10.BorrowedStorageStable — `storage` is retained by the statics registry for this call, and the atomic
                 // operation below synchronizes the access.
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
@@ -857,9 +841,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage.storage.with_data(|data| {
                     // SAFETY: F10.RawMemoryAccessValid — Static-field metadata keeps `offset` within this live storage.
                     let abs_ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
@@ -943,9 +925,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
             }
             PointerOrigin::Static(metadata) => {
-                let storage = self
-                    .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                let storage = self.statics().get_for_metadata(&metadata);
                 storage.storage.with_data_mut(|data| {
                     // SAFETY: F10.RawMemoryAccessValid — Static-field metadata keeps `offset` within this live storage.
                     let abs_ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
@@ -1028,7 +1008,7 @@ impl<'a, 'gc> VmRawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Static(metadata) => {
                 let storage = self
                     .statics()
-                    .get(metadata.type_desc.clone(), &metadata.generics);
+                    .get_for_metadata(metadata);
                 storage.storage.with_data(|data| {
                     #[expect(clippy::multiple_unsafe_ops_per_block, reason = "forming the static offset address and wrapping its proven non-null result share one storage proof")]
                     // SAFETY: F10.RawMemoryAccessValid — Static origins use the unchecked
@@ -1182,6 +1162,7 @@ mod safe_api_tests {
             let metadata = Arc::new(StaticMetadata {
                 type_desc: td,
                 generics: GenericLookup::default(),
+                thread_id: None,
             });
             let generics = GenericLookup::default();
             ctx.shared
@@ -1194,7 +1175,7 @@ mod safe_api_tests {
                 .unwrap();
             let static_len = ctx
                 .statics()
-                .get(metadata.type_desc.clone(), &metadata.generics)
+                .get_for_metadata(&metadata)
                 .storage
                 .with_data(|data| data.len());
             let layout = LayoutManager::Scalar(Scalar::Int32);
@@ -1245,6 +1226,55 @@ mod safe_api_tests {
                     unsafe { ctx.read_unaligned(origin, (len - 4).into(), &layout, None) }.unwrap();
                 assert!(matches!(read, StackValue::Int32(42)));
             }
+
+            // A serialized byref must keep the original thread's storage, even when
+            // the executor resolving it is a different thread.
+            let first = Arc::new(StaticMetadata {
+                type_desc: entry.parent.clone(),
+                generics: generics.clone(),
+                thread_id: Some(100),
+            });
+            let second = Arc::new(StaticMetadata {
+                thread_id: Some(200),
+                ..(*first).clone()
+            });
+            let first_origin = PointerOrigin::Static(first.clone());
+            let second_origin = PointerOrigin::Static(second);
+            let address = ctx
+                .resolve_address(&first_origin, ByteOffset::ZERO)
+                .unwrap();
+            let pointer = dotnet_value::pointer::ManagedPtr::new_static_for_thread(
+                Some(address),
+                TypeDescription::NULL,
+                first.type_desc.clone(),
+                generics,
+                first.thread_id,
+                false,
+                ByteOffset::ZERO,
+            );
+            let mut encoded = dotnet_value::pointer::ManagedPtr::serialization_buffer();
+            pointer.write(&mut encoded);
+            // SAFETY: F10.RawMemoryAccessValid — the bytes were written above and static storage remains rooted by shared state.
+            let restored = unsafe {
+                dotnet_value::pointer::ManagedPtr::read_resolved_unchecked(&encoded, &ctx)
+            }
+            .unwrap();
+            // SAFETY: F10.RawMemoryAccessValid — both addresses refer to integer slots in retained static allocations.
+            unsafe {
+                ctx.write_unaligned(
+                    restored.origin.clone(),
+                    ByteOffset::ZERO,
+                    StackValue::Int32(73),
+                    &layout,
+                )
+            }
+            .unwrap();
+            let read = |origin| {
+                // SAFETY: F10.RawMemoryAccessValid — both origins own the same valid integer layout.
+                unsafe { ctx.read_unaligned(origin, ByteOffset::ZERO, &layout, None) }.unwrap()
+            };
+            assert!(matches!(read(first_origin), StackValue::Int32(73)));
+            assert!(matches!(read(second_origin), StackValue::Int32(0)));
         });
     }
 

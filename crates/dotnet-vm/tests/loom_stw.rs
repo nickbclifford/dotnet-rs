@@ -906,3 +906,32 @@ fn shutdown_removes_registration_before_draining_leases() {
         assert!(!state.registered);
     });
 }
+
+#[test]
+fn registration_is_serialized_with_stopped_world_publication() {
+    check_stw_model(|| {
+        let coordination = Arc::new(loom::sync::Mutex::new(()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let registered = Arc::new(AtomicBool::new(false));
+        let (gc_lock, gc_stopped, gc_registered) =
+            (coordination.clone(), stopped.clone(), registered.clone());
+        let gc = thread::spawn(move || {
+            let _guard = gc_lock.lock().unwrap();
+            gc_stopped.store(true, Ordering::Release);
+            let initial = gc_registered.load(Ordering::Acquire);
+            thread::yield_now();
+            assert_eq!(gc_registered.load(Ordering::Acquire), initial);
+            gc_stopped.store(false, Ordering::Release);
+        });
+        let (register_lock, register_stopped, register_done) =
+            (coordination.clone(), stopped.clone(), registered.clone());
+        let worker = thread::spawn(move || {
+            let _guard = register_lock.lock().unwrap();
+            assert!(!register_stopped.load(Ordering::Acquire));
+            register_done.store(true, Ordering::Release);
+        });
+        gc.join().unwrap();
+        worker.join().unwrap();
+        assert!(registered.load(Ordering::Acquire));
+    });
+}

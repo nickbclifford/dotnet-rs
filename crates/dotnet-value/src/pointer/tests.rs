@@ -1305,6 +1305,49 @@ fn test_static_registry_deduplication() {
 }
 
 #[test]
+fn thread_static_pointer_serialization_preserves_owner() {
+    let _guard = static_reg_test_lock().lock().unwrap();
+    reset_static_registry();
+    let mut backing = 0u64;
+    let address = NonNull::new((&mut backing as *mut u64).cast());
+    let make = |thread| {
+        ManagedPtr::new_static_for_thread(
+            address,
+            TypeDescription::NULL,
+            TypeDescription::NULL,
+            GenericLookup::default(),
+            thread,
+            false,
+            ByteOffset::ZERO,
+        )
+    };
+    let mut first = ManagedPtr::serialization_buffer();
+    let mut second = ManagedPtr::serialization_buffer();
+    let mut ordinary = ManagedPtr::serialization_buffer();
+    make(Some(1)).write(&mut first);
+    make(Some(2)).write(&mut second);
+    make(None).write(&mut ordinary);
+    let id =
+        |bytes: &[u8]| (usize::from_ne_bytes(bytes[0..8].try_into().unwrap()) >> 6) & 0xffffffff;
+    assert_ne!(id(&first), id(&second));
+    assert_ne!(id(&first), id(&ordinary));
+    assert_eq!(
+        static_registry()
+            .get(&(id(&first) as u32))
+            .unwrap()
+            .thread_id,
+        Some(1)
+    );
+    assert_eq!(
+        static_registry()
+            .get(&(id(&second) as u32))
+            .unwrap()
+            .thread_id,
+        Some(2)
+    );
+}
+
+#[test]
 fn test_managed_ptr_unmanaged_roundtrip_miri() {
     let mut buf = [0u8; ManagedPtr::SIZE];
     let addr = 0xAAAA_BBBB_CCCC_DDDDusize;

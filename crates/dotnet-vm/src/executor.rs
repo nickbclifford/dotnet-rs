@@ -50,6 +50,11 @@ thread_local! {
 
 enum NativeWaitSleep {
     Monitor(Arc<crate::sync::SyncBlock>, u64, Option<std::time::Instant>),
+    Event(
+        crate::threading::events::EventRef<crate::threading::events::Event>,
+        u64,
+        Option<std::time::Instant>,
+    ),
     Finalizers,
     Sleep(Option<std::time::Instant>),
     Initializer(Box<dyn dotnet_vm_ops::effects::NativeInitSleeper>),
@@ -478,6 +483,137 @@ impl Executor {
         executor.serve_retired(worker.complete(result));
     }
 
+    /// Run each claimed request through CoreLib's managed dispatcher on one reusable executor.
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn run_pool_worker(
+        shared: Arc<SharedGlobalState>,
+        dispatch: MethodDescription,
+        setter: MethodDescription,
+        worker: crate::threading::workers::RunningWorker,
+    ) {
+        use crate::stack::ops::TypedStackOps;
+        use dotnet_intrinsics_threading::ManagedThreadHost;
+        let mut executor = Self::new(shared);
+        executor.shared.pool.worker_started();
+        #[cfg(feature = "memory-validation")]
+        let thread_id = executor.thread_id;
+        let setup = executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, c| -> Result<(), VmError> {
+                    let gc = GCHandle::new(
+                        gc,
+                        // SAFETY: F1.GcHandleRooted — this mutation holds the owning arena root.
+                        unsafe { c.stack.arena_inner_gc() },
+                        #[cfg(feature = "memory-validation")]
+                        thread_id,
+                    );
+                    let shared = c.stack.shared.clone();
+                    let info = shared.caches.get_method_info(
+                        setter.clone(),
+                        &Default::default(),
+                        shared.clone(),
+                    )?;
+                    let mut ctx = c.ves_context(gc);
+                    match ctx.threading_current_thread(setter.parent.clone()) {
+                        StepResult::Continue => (),
+                        StepResult::Error(error) => return Err(error),
+                        other => {
+                            return Err(ExecutionError::InternalError(
+                                format!("pool thread setup: {other:?}").into(),
+                            )
+                            .into());
+                        }
+                    }
+                    let thread = ctx.pop_obj();
+                    worker.attach_pool_thread(thread.as_ptr().expect("current thread"));
+                    ctx.entrypoint_frame(
+                        info,
+                        Default::default(),
+                        vec![StackValue::ObjectRef(thread), StackValue::Int32(1)],
+                    )?;
+                    Ok(())
+                })
+            })
+            .and_then(|result| result);
+        let mut result = match setup {
+            Ok(()) => executor.run_inner(false),
+            Err(error) => ExecutorResult::Error(error),
+        };
+        loop {
+            match result {
+                ExecutorResult::Threw(exception) => {
+                    executor.shared.report_fatal_exception(exception);
+                    result = ExecutorResult::Exited(0);
+                    break;
+                }
+                ExecutorResult::Error(ref error) => {
+                    if !executor.shared.is_abort_requested() {
+                        executor.shared.report_worker_error(error.clone());
+                    }
+                    break;
+                }
+                ExecutorResult::Exited(_) => (),
+            }
+            if let Err(error) = executor.with_arena(|arena| {
+                arena.mutate_root(|_, c| {
+                    c.stack.execution = crate::stack::context::ThreadContext::default();
+                })
+            }) {
+                executor.shared.report_worker_error(error.clone());
+                result = ExecutorResult::Error(error);
+                break;
+            }
+            if executor.shared.is_abort_requested() {
+                break;
+            }
+            if executor.shared.thread_manager.is_gc_stop_requested() {
+                executor
+                    .shared
+                    .thread_manager
+                    .safe_point(executor.thread_id, &executor.shared.gc_coordinator);
+            }
+            let pending_finalizers = match executor.with_arena_ref(|arena| {
+                arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers())
+            }) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    executor.shared.report_worker_error(error.clone());
+                    result = ExecutorResult::Error(error);
+                    break;
+                }
+            };
+            if pending_finalizers {
+                result = executor.run_inner(true);
+                continue;
+            }
+            if !executor.shared.pool.claim_or_wait() {
+                continue;
+            }
+            result = match executor.install_thread_start_with_args(
+                dispatch.clone(),
+                Default::default(),
+                None,
+            ) {
+                Ok(()) => executor.run_inner(false),
+                Err(error) => ExecutorResult::Error(error),
+            };
+        }
+        executor.shared.pool.worker_exited();
+        let cleanup = executor.with_arena(|arena| {
+            arena.mutate_root(|_, c| {
+                c.retire_finalizer_segment();
+                let execution = &mut c.stack.execution;
+                execution
+                    .call_state
+                    .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);
+                *execution = crate::stack::context::ThreadContext::default();
+                c.stack.local.managed_threads.clear_current();
+            })
+        });
+        let result = cleanup.map_or_else(ExecutorResult::Error, |_| result);
+        executor.serve_retired(worker.complete(result));
+    }
+
     #[cfg(feature = "multithreading")]
     fn run_installed_thread_start(&mut self) -> ExecutorResult {
         #[cfg(test)]
@@ -734,6 +870,10 @@ impl Executor {
         if let Some(exception) = self.shared.fatal_exception() {
             return ExecutorResult::Threw(exception);
         }
+        #[cfg(feature = "multithreading")]
+        if let Some(error) = self.shared.fatal_worker_error() {
+            return ExecutorResult::Error(error);
+        }
         result
     }
 
@@ -840,6 +980,13 @@ impl Executor {
                                         wait.wait.sleep_deadline(),
                                     ))
                                 }
+                                crate::stack::native_effects::PendingWait::Event(wait) => {
+                                    Some(NativeWaitSleep::Event(
+                                        wait.wait.event.clone(),
+                                        wait.epoch,
+                                        wait.wait.deadline,
+                                    ))
+                                }
                                 crate::stack::native_effects::PendingWait::Finalizers(_)
                                     if has_pending
                                         || processing
@@ -934,6 +1081,16 @@ impl Executor {
                         });
                         if !duration.is_zero() {
                             block.wait_for_release(epoch, duration);
+                        }
+                    }
+                    NativeWaitSleep::Event(event, epoch, deadline) => {
+                        let duration = deadline.map_or(interval, |deadline| {
+                            deadline
+                                .saturating_duration_since(std::time::Instant::now())
+                                .min(interval)
+                        });
+                        if !duration.is_zero() {
+                            event.wait_for_change(epoch, duration);
                         }
                     }
                     NativeWaitSleep::Finalizers => std::thread::sleep(interval),

@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | Not started |
+| 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
 | 12 | [Managed threading intrinsics](12-managed-threading-intrinsics.md) | Complete; managed threads and monitor condition waits are supported |
@@ -35,6 +35,18 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Managed resource lookup cost:** after plan 15 removed the `SR` resource-string intrinsic, the
+  `exception_messages` benchmark (cold first `ResourceManager` load plus 127 lookups, fresh VM
+  per iteration) went from about 3.4 ms to about 121 ms (~35x). Accepted by the maintainer for
+  correctness (CLR-matching messages, no VM-side decoder). Fresh-VM first lookups account for
+  substantial cost and repeated exception/message lookups also cost time; profile (samply) and
+  optimize. The warm case includes exception handling rather than isolating dictionary lookup.
+  Numbers and commands are in
+  [plan 15](15-corelib-task-and-thread-pool.md).
+- **Newtonsoft array copying:** the pinned host roundtrip in
+  `crates/dotnet-cli/tests/host_projects/newtonsoft_roundtrip` fails in
+  `DotnetRs.SZArrayHelper<T>.CopyTo` with `InvalidCastException` while initializing
+  `JsonWriter`; the CLR serializes and deserializes successfully.
 - **Reflection compatibility and validation:** reflection calls remain transparent (guest
   exceptions are not wrapped in `TargetInvocationException`) and declared byref returns are
   rejected, both deliberate CLR deviations in the
@@ -103,8 +115,16 @@ Evidence and IDs (p01…, R01…) are defined in the
   (`ThreadSafeLock::borrow_mut_unbarriered`). Fold into R09/R12 and R10/R11.
 - **Resumable bulk operations and barriers:** `cpblk`/`initblk`/`Memmove`/`Array.Copy`/`Fill`
   that keep progress across safepoints and apply GC write barriers to reference slots (R10/R11).
-- **Retired-worker resource cost:** each completed worker retains one OS thread and one arena
-  until VM shutdown; process-wide arena IDs are capped at 65,535. Earlier safe retirement remains unplanned.
+- **Retired-worker resource cost:** each completed explicit managed worker retains one OS thread
+  and one arena until VM shutdown; process-wide arena IDs are capped at 65,535. Pool workers never
+  retire between requests and are capped at `max(2, available_parallelism)`. Earlier safe retirement
+  remains unplanned.
+- **Thread-static retention:** thread-static storage and its object references remain rooted until
+  VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
+  Reclaiming these values when no byref can reach them remains unplanned.
+- **Reflection race witness:** `invoke_argument_race_42` uses bounded concurrent churn, so the
+  CLR can finish without observing the intended `ArgumentException` and its differential sanity
+  check can fail despite correct execution.
 - **Other missing or incorrect runtime behavior:**
   - Buffered stdout lost on an internal-error exit: not reproduced. The VM has no stdout buffer
     of its own (`Console` writes reach `write(2)` through the native shim, and the CLI flushes

@@ -419,9 +419,7 @@ impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {}
 impl<'a, 'gc, 'resolver> ManagedPtrResolver<'resolver> for VesContext<'a, 'gc> {
     #[inline]
     fn static_storage_base(&self, metadata: &StaticMetadata) -> Option<NonNull<u8>> {
-        let storage = self
-            .statics()
-            .get(metadata.type_desc.clone(), &metadata.generics);
+        let storage = self.statics().get_for_metadata(metadata);
         storage
             .storage
             .with_data(|data| NonNull::new(data.as_ptr().cast_mut()))
@@ -955,6 +953,145 @@ impl<'a, 'gc> dotnet_intrinsics_threading::ManagedThreadHost<'gc> for VesContext
                 "Managed ThreadStart panicked.",
             ),
         }
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_threading::PoolHost<'gc> for VesContext<'a, 'gc> {
+    #[cfg(feature = "multithreading")]
+    fn pool_request(&mut self) -> StepResult {
+        let spawn = self.shared.pool.request();
+        if spawn {
+            let corlib = self
+                .loader()
+                .corlib_wkt(WellKnown::Object)
+                .expect("CoreLib Object")
+                .resolution;
+            let resolve = |type_name: &str, method_name: &str| -> Option<MethodDescription> {
+                let (index, _) = corlib
+                    .definition()
+                    .enumerate_type_definitions()
+                    .find(|(_, ty)| ty.type_name() == type_name)?;
+                let ty = TypeDescription::new(corlib.clone(), index);
+                let index = ty
+                    .definition()
+                    .methods
+                    .iter()
+                    .position(|m| m.name == method_name)
+                    .map(MethodMemberIndex::Method)
+                    .or_else(|| {
+                        ty.definition()
+                            .properties
+                            .iter()
+                            .position(|p| p.setter.as_ref().is_some_and(|m| m.name == method_name))
+                            .map(MethodMemberIndex::PropertySetter)
+                    })?;
+                Some(MethodDescription::new(
+                    ty,
+                    GenericLookup::default(),
+                    corlib.clone(),
+                    index,
+                ))
+            };
+            let Some(dispatch) = resolve("System.Threading.ThreadPoolWorkQueue", "Dispatch") else {
+                return StepResult::Error(
+                    ExecutionError::InternalError("CoreLib pool dispatcher not found".into())
+                        .into(),
+                );
+            };
+            let signature = dispatch.signature();
+            if signature.instance
+                || !signature.parameters.is_empty()
+                || !matches!(
+                    &signature.return_type.1,
+                    Some(dotnetdll::prelude::ParameterType::Value(MethodType::Base(base)))
+                        if matches!(base.as_ref(), dotnetdll::prelude::BaseType::Boolean)
+                )
+            {
+                return StepResult::Error(
+                    ExecutionError::InternalError(
+                        "CoreLib pool dispatcher has unexpected signature".into(),
+                    )
+                    .into(),
+                );
+            }
+            let Some(setter) = resolve("System.Threading.Thread", "set_IsThreadPoolThread") else {
+                return StepResult::Error(
+                    ExecutionError::InternalError("CoreLib pool-thread setter not found".into())
+                        .into(),
+                );
+            };
+            let signature = setter.signature();
+            if !signature.instance
+                || signature.parameters.len() != 1
+                || signature.return_type.1.is_some()
+                || !matches!(&signature.parameters[0].1,
+                    dotnetdll::prelude::ParameterType::Value(MethodType::Base(base))
+                        if matches!(base.as_ref(), dotnetdll::prelude::BaseType::Boolean))
+            {
+                return StepResult::Error(
+                    ExecutionError::InternalError(
+                        "CoreLib pool-thread setter has unexpected signature".into(),
+                    )
+                    .into(),
+                );
+            }
+            let shared = self.shared.clone();
+            let worker_shared = shared.clone();
+            shared.workers.spawn_pool_owner(move |running| {
+                let fatal_shared = worker_shared.clone();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::Executor::run_pool_worker(worker_shared, dispatch, setter, running);
+                }));
+                if let Err(panic) = result {
+                    fatal_shared.report_worker_error(
+                        ExecutionError::InternalError("ThreadPool worker panicked".into()).into(),
+                    );
+                    std::panic::resume_unwind(panic);
+                }
+            });
+        }
+        StepResult::Continue
+    }
+    #[cfg(not(feature = "multithreading"))]
+    fn pool_request(&mut self) -> StepResult {
+        self.shared.pool.request();
+        StepResult::Continue
+    }
+    fn pool_placeholder(&mut self) -> StepResult {
+        let ty = self
+            .loader()
+            .corlib_wkt(WellKnown::Object)
+            .expect("CoreLib Object");
+        let object = dotnet_vm_ops::vm_try!(self.new_object(ty));
+        let candidate = ObjectRef::new(self.gc, HeapStorage::Obj(Box::new(object)));
+        self.register_new_object(&candidate);
+        let placeholder = self.shared.statics.pool_placeholder(candidate);
+        self.push_obj(placeholder);
+        StepResult::Continue
+    }
+    fn pool_complete(&self) {
+        self.shared.pool.completed();
+    }
+    fn pool_completed_count(&self) -> i64 {
+        self.shared.pool.completed_count()
+    }
+    fn pool_worker_count(&self) -> i32 {
+        self.shared.pool.worker_count()
+    }
+    fn pool_set_min(&self, worker: i32, io: i32) -> bool {
+        self.shared.pool.set_min(worker, io)
+    }
+    fn pool_set_max(&self, worker: i32, io: i32) -> bool {
+        self.shared.pool.set_max(worker, io)
+    }
+    fn pool_min(&self) -> (i32, i32) {
+        self.shared.pool.min()
+    }
+    fn pool_max(&self) -> (i32, i32) {
+        self.shared.pool.max()
+    }
+    fn pool_available(&self) -> (i32, i32) {
+        self.shared.pool.available()
     }
 }
 

@@ -53,6 +53,11 @@ pub(crate) fn spawn_thread_start(
     }))
 }
 
+#[cfg(test)]
+thread_local! {
+    static REGISTER_WAIT_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
 #[cfg(debug_assertions)]
 macro_rules! debug_assert_top_level_gc_lock_order {
     ($manager:expr, $context:expr) => {
@@ -226,8 +231,10 @@ pub struct ThreadManager {
     all_threads_stopped: Condvar,
     /// Mutex for GC coordination
     gc_coordination: OrderedMutex<levels::GcCoordination, ()>,
-    /// Flag indicating if a stop-the-world pause is in progress
+    /// Collection session state, including the period before all mutators park.
     stw_in_progress: Arc<AtomicBool>,
+    /// True only after all registered mutators have parked.
+    world_stopped: Arc<AtomicBool>,
     /// Weak GC-coordinator back-reference used for resume signaling.
     ///
     /// This infrastructure mutex is exempt from the ordered-lock DAG: it is
@@ -249,6 +256,7 @@ impl ThreadManager {
             all_threads_stopped: Condvar::new(),
             gc_coordination: OrderedMutex::new(()),
             stw_in_progress,
+            world_stopped: Arc::new(AtomicBool::new(false)),
             coordinator: Mutex::new(None),
             #[cfg(feature = "deadlock-diagnostics")]
             _deadlock_reporter: DeadlockReporter::start(),
@@ -256,6 +264,7 @@ impl ThreadManager {
     }
 
     pub(super) fn resume_threads(&self) {
+        self.world_stopped.store(false, Ordering::Release);
         self.gc_stop_requested.store(false, Ordering::Release);
         self.all_threads_stopped.notify_all();
 
@@ -304,8 +313,28 @@ impl super::ThreadManagerBackend for ThreadManager {
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
 
+        // INVARIANT: F1.StwParked — a newly registering executor must not appear after the
+        // collector has counted participants. A previously registered caller can still join a pending stop while
+        // waiting for the coordination lock.
+        let coordination = loop {
+            if let Some(guard) = self.gc_coordination.try_lock() {
+                break guard;
+            }
+            #[cfg(test)]
+            REGISTER_WAIT_TEST_HOOK.with(|hook| {
+                if let Some(callback) = hook.borrow_mut().take() {
+                    callback();
+                }
+            });
+            if let Some(id) = self.current_thread_id()
+                && let Some(coordinator) = self.get_coordinator()
+            {
+                self.safe_point(id, &coordinator);
+            }
+            thread::yield_now();
+        };
         {
-            let mut threads = self.threads.lock();
+            let mut threads = self.threads.lock_after(coordination.held_level());
             threads.insert(managed_id, thread_info);
         }
 
@@ -315,8 +344,8 @@ impl super::ThreadManagerBackend for ThreadManager {
         // Defensive: clear any leaked state from a previous test on this OS thread
         IS_PERFORMING_GC.set(false);
 
-        #[cfg(feature = "multithreading")]
-        register_arena(managed_id, self.stw_in_progress.clone());
+        register_arena(managed_id, self.world_stopped.clone());
+        drop(coordination);
 
         managed_id
     }
@@ -605,6 +634,7 @@ impl<'a> StopTheWorldGuard<'a> {
         start_time: Instant,
     ) -> Self {
         IS_PERFORMING_GC.set(true);
+        manager.world_stopped.store(true, Ordering::Release);
         Self {
             manager,
             _lock: lock,
@@ -903,6 +933,33 @@ mod tests {
     use super::*;
     use crate::threading::ThreadManagerOps;
     use std::{sync::mpsc, thread, time::Duration};
+
+    #[test]
+    fn registration_waits_until_stopped_world_resumes() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+        let guard = manager.request_stop_the_world();
+        assert!(manager.world_stopped.load(Ordering::Acquire));
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (registered_tx, registered_rx) = mpsc::channel();
+        let other = manager.clone();
+        let child = thread::spawn(move || {
+            REGISTER_WAIT_TEST_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    attempt_tx.send(()).unwrap();
+                }))
+            });
+            let id = other.register_thread();
+            registered_tx.send(()).unwrap();
+            other.unregister_thread(id);
+        });
+        attempt_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(manager.thread_count(), 0);
+        assert!(registered_rx.try_recv().is_err());
+        drop(guard);
+        registered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        child.join().unwrap();
+        assert!(!manager.world_stopped.load(Ordering::Acquire));
+    }
 
     /// Harvest preserves a
     /// live identity and discards a queued stale generation before conversion.

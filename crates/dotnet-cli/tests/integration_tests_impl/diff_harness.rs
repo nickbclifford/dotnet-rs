@@ -113,6 +113,7 @@ fn threading_fatal_exceptions_match_dotnet() {
 
     let harness = TestHarness::get();
     for (fixture, expected_stdout, expected_message) in [
+        ("pool_callback", "before worker\n", "worker failure"),
         ("worker_joined", "before worker\n", "worker failure"),
         ("worker_unjoined", "before worker\n", "worker failure"),
         ("worker_after_return", "before worker\n", "worker failure"),
@@ -141,6 +142,12 @@ fn threading_fatal_exceptions_match_dotnet() {
             vm.stdout,
             expected_stdout.as_bytes(),
             "{fixture} continued after throw"
+        );
+        let clr_stderr = String::from_utf8_lossy(&clr.stderr);
+        assert!(
+            clr_stderr.contains("System.InvalidOperationException")
+                && clr_stderr.contains(expected_message),
+            "CLR {fixture}: {clr_stderr}"
         );
         let stderr = String::from_utf8_lossy(&vm.stderr);
         assert!(
@@ -714,4 +721,66 @@ diff_test!(
 diff_test!(
     delegate_substring_chunks_42_matches_dotnet,
     "tests/fixtures/strings/delegate_substring_chunks_42.cs"
+);
+
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    async_pool_asynclocal_task_run_matches_dotnet,
+    "tests/fixtures/async/async_pool_asynclocal_task_run_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    async_pool_asynclocal_yield_matches_dotnet,
+    "tests/fixtures/async/async_pool_asynclocal_yield_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_pool_asynclocal_isolation_matches_dotnet,
+    "tests/fixtures/threading/threading_pool_asynclocal_isolation_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_pool_asynclocal_safe_matches_dotnet,
+    "tests/fixtures/threading/threading_pool_asynclocal_safe_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_pool_asynclocal_unsafe_matches_dotnet,
+    "tests/fixtures/threading/threading_pool_asynclocal_unsafe_42.cs"
+);
+
+diff_test!(
+    threading_event_basic_matches_dotnet,
+    "tests/fixtures/threading/event_basic_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_event_workers_matches_dotnet,
+    "tests/fixtures/threading/event_workers_42.cs"
+);
+
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    async_task_delay_elapsed_matches_dotnet,
+    "tests/fixtures/async/async_task_delay_elapsed_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    async_task_delay_cancel_after_matches_dotnet,
+    "tests/fixtures/async/async_task_delay_cancel_after_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    async_task_when_any_timeout_matches_dotnet,
+    "tests/fixtures/async/async_task_when_any_timeout_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_timer_callback_pool_thread_matches_dotnet,
+    "tests/fixtures/threading/threading_timer_callback_pool_thread_42.cs"
+);
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+diff_test!(
+    threading_timer_idle_background_exit_matches_dotnet,
+    "tests/fixtures/threading/threading_timer_idle_background_exit_42.cs"
 );

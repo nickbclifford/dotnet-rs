@@ -14,16 +14,25 @@ public static class Program
         throw new InvalidOperationException("boom");
     }
 
+    private static async Task<bool> CheckAwait(Task<int> task)
+    {
+        try { await task; return false; }
+        catch (InvalidOperationException ex) { return ex.Message == "boom"; }
+    }
+
     public static int Main()
     {
+        Task<int> task = ComputeAsync();
         try
         {
-            _ = ComputeAsync().Result;
+            _ = task.Result;
             return 1;
         }
-        catch (InvalidOperationException ex)
+        catch (AggregateException ex)
         {
-            return ex.Message == "boom" ? 42 : 2;
+            if (ex.InnerException is not InvalidOperationException inner || inner.Message != "boom")
+                return 2;
         }
+        return CheckAwait(task).Result ? 42 : 3;
     }
 }

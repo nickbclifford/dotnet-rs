@@ -491,7 +491,7 @@ impl<'gc> ManagedPtr<'gc> {
                 (w0, w1)
             }
             PointerOrigin::Static(metadata) => {
-                let key = (metadata.type_desc.clone(), metadata.generics.clone());
+                let key = metadata.as_ref().clone();
                 let id = *super::static_dedup_map().entry(key).or_insert_with(|| {
                     let new_id = super::NEXT_STATIC_ID.fetch_add(1, super::AtomicOrdering::SeqCst);
                     super::static_registry().insert(new_id, metadata.clone());

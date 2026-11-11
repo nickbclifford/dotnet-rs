@@ -139,6 +139,73 @@ fn test_corlib_well_known_cache_and_dynamic_fallback() {
 }
 
 #[test]
+#[cfg(not(miri))]
+fn task_types_resolve_to_corelib_without_support_replacements() {
+    let runtime_path = crate::find_dotnet_app_path().expect("could not find .NET shared path");
+    let loader = AssemblyLoader::new(runtime_path.to_string_lossy().into_owned())
+        .expect("failed to create loader");
+    for name in [
+        "System.Threading.Tasks.Task",
+        "System.Threading.Tasks.Task`1",
+        "System.Threading.Tasks.TaskCompletionSource`1",
+        "System.Threading.Tasks.ValueTask",
+        "System.Threading.Tasks.ValueTask`1",
+        "System.Runtime.CompilerServices.TaskAwaiter",
+        "System.Runtime.CompilerServices.TaskAwaiter`1",
+        "System.Runtime.CompilerServices.ValueTaskAwaiter",
+        "System.Runtime.CompilerServices.ValueTaskAwaiter`1",
+        "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
+        "System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1",
+        "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder",
+        "System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder`1",
+    ] {
+        assert!(
+            !loader.stubs.contains_key(name),
+            "unexpected replacement for {name}"
+        );
+        let ty = loader
+            .corlib_type(name)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(ty.definition().type_name(), name);
+        assert_eq!(
+            ty.resolution.definition().assembly.as_ref().unwrap().name,
+            "System.Private.CoreLib"
+        );
+    }
+}
+
+#[test]
+#[cfg(not(miri))]
+fn concrete_types_match_corelib_definitions_to_support_stubs() {
+    use dotnet_types::{TypeDescription, generics::ConcreteType};
+
+    let runtime_path = crate::find_dotnet_app_path().expect("could not find .NET shared path");
+    let loader = AssemblyLoader::new(runtime_path.to_string_lossy().into_owned())
+        .expect("failed to create loader");
+    let corlib = loader.get_assembly("System.Private.CoreLib").unwrap();
+    let comparer = loader.comparer();
+    let mut pairs = Vec::new();
+    for name in ["System.RuntimeType", "System.RuntimeTypeHandle"] {
+        let index = corlib
+            .definition()
+            .type_definitions
+            .iter()
+            .position(|ty| ty.type_name() == name)
+            .unwrap();
+        let raw =
+            TypeDescription::new(corlib.clone(), corlib.type_definition_index(index).unwrap());
+        let replacement = loader.corlib_type(name).unwrap();
+        assert_ne!(raw, replacement);
+        let raw = ConcreteType::from(raw);
+        let replacement = ConcreteType::from(replacement);
+        assert!(comparer.concrete_types_equal(&raw, &replacement));
+        assert!(comparer.concrete_types_equal(&replacement, &raw));
+        pairs.push((raw, replacement));
+    }
+    assert!(!comparer.concrete_types_equal(&pairs[0].0, &pairs[1].1));
+}
+
+#[test]
 fn test_corlib_wkt_resolution_failures_are_retryable() {
     let mut loader =
         AssemblyLoader::new_bare("test_root".to_string()).expect("failed to create loader");

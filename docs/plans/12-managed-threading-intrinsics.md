@@ -52,11 +52,11 @@ In:
 - Fatal main-thread unhandled exceptions.
 
 Out:
-- Thread-pool work, timers and `Task` scheduling. The VM runs `DotnetRs.Task`
-  (`dotnet-assemblies/src/support/Task.cs`), a single-threaded shim. The README's "Task and
-  thread-pool integration" entry records the decision to replace it with CoreLib's `Task`; that
-  work depends on this plan.
-- `Thread.Abort`/`Interrupt`, thread priorities, apartment states, `ThreadStatic` identity.
+- Thread-pool work, timers and `Task` scheduling. At the time of this plan the VM used a
+  single-threaded `DotnetRs.Task` shim; [plan 15](15-corelib-task-and-thread-pool.md) subsequently
+  replaced it with CoreLib tasks and implemented the pool and timer paths.
+- `Thread.Abort`/`Interrupt`, thread priorities, apartment states and `ThreadStatic` identity.
+  Plan 15 subsequently implemented per-executor thread-static storage.
 - Making `Monitor.Wait` available in ST beyond what is stated under Design.
 - Changing `finally` execution on an unhandled exception.
 

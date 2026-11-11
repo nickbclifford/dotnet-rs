@@ -88,6 +88,12 @@ sequenceDiagram
     Thread C->>Thread C: State = Running, Resumes
 ```
 
+New executor registration is serialized with `gc_coordination`, so a thread cannot join after
+the collector has counted participants. The collection-session flag covers the lead-in to a pause;
+the arena-registry stopped-world flag is published only after the registered mutators have parked
+and is cleared before they resume. This distinction permits cross-arena mutator access during
+stop-request propagation while still validating accesses during collection.
+
 1. **Initiation**: The acquiring thread calls `request_stop_the_world`, which acquires the main thread lock and sets `gc_stop_requested = true`. It records a `start_time` (`Instant::now()`).
 2. **Synchronization**: It loops over all registered threads, waiting on a condition variable until every thread's state transitions to `AtSafePoint` (or is already `Exited`).
 3. **Execution**: Returns a `StopTheWorldGuard`. The coordinator now has exclusive access to the heap and issues commands via `execute_gc_command_for_current_thread`.
@@ -104,16 +110,44 @@ sequenceDiagram
 ### Scoped managed `Thread` support
 
 With the `multithreading` feature, dotnet-rs supports `ThreadStart` and
-`ParameterizedThreadStart`, including instance targets and multicast delegates, `Start()` and
-`Start(object)`, and `Join()` and `Join(int)`. Each managed thread has a stable `CurrentThread`
-object and managed ID. Thread records retain their managed objects until the worker completes;
-unstarted records remain rooted until arena teardown. The shared worker registry holds completion
-and identity metadata for access from other arenas, retaining metadata entries until VM teardown.
-These handlers bypass CoreLib's QCall initialization.
+`ParameterizedThreadStart`, including instance targets and multicast delegates, `Start()`,
+`Start(object)` and `UnsafeStart()`, and `Join()` and `Join(int)`. Each managed thread has a stable
+`CurrentThread` object and managed ID. Thread records retain their managed objects until the worker
+completes; unstarted records remain rooted until arena teardown. The shared worker registry holds
+completion and identity metadata for access from other arenas, retaining metadata entries until VM
+teardown. These handlers bypass CoreLib's QCall initialization. `Thread.Name` remains available
+through its managed field; the runtime omits the optional native OS thread-name notification.
 
 `IsBackground` can be read or changed before or after `Start`. Priority, culture, other
-constructors and thread configuration APIs, and ThreadPool scheduling remain unsupported. Without `multithreading`, construction and starting of managed
-workers report unsupported; entry-thread identity remains available.
+constructors and thread configuration APIs remain unsupported. Without `multithreading`,
+construction and starting of managed workers report unsupported; entry-thread identity remains
+available.
+
+### Managed ThreadPool work
+
+With `multithreading`, CoreLib retains its own work queues and `ThreadPoolWorkQueue.Dispatch`.
+Pool management forwards reserve requests under a shared lock and create registered background
+executor owners up to `max(2, available_parallelism)`. A worker claims one request, invokes
+`Dispatch` once, and reuses its executor and stable managed `Thread` identity. CoreLib's internal
+setter marks it as a pool thread. Workers remain live between requests; idle workers register,
+recheck and wait on a condition variable outside arena mutations, periodically participating in GC
+and observing abort. Process exit cancels them rather than waiting for background work. Unhandled
+callback exceptions follow the same fatal publication path as other managed workers; exceptions
+caught by `Task` remain task faults.
+
+CoreLib's queue-assignment `LowLevelLock` uses its object monitor through the VM monitor path.
+Initialization does not create a native `LowLevelMonitor`, and lock acquisition, try-acquisition
+and release retain the queue's managed critical section without entering that native API.
+
+Completion notifications count individual dispatched work items. Min/max settings are validated and
+reported but do not resize the capped worker set; available-thread reports are approximate. A
+traced shared placeholder supplies the completion-count object expected by CoreLib. Fields marked
+`ThreadStatic` use zero-initialized storage per executor and constructed generic type. Field
+addresses retain the originating executor identity, including when serialized. Storage and its
+managed references remain rooted until VM shutdown so that outstanding byrefs remain valid;
+this also retains values from completed threads.
+Without `multithreading`, requests are recorded without creating workers or draining the queue;
+an infinite wait for queued work reports the host single-threaded deadlock error.
 
 ### Managed worker lifecycle and process exit
 
@@ -187,6 +221,35 @@ pending request:
 There are two `check_gc_safe_point` methods. `CallStack::check_gc_safe_point` is a bare
 `is_gc_stop_requested()` load. `VesContext`'s `RawMemoryOps::check_gc_safe_point`
 (`stack/raw_memory_ops_impl/mod.rs`) also consults the `GcScopeGuard` counter.
+
+### Unnamed events and single-handle waits
+
+`EventWaitHandle.CreateEventCore` creates a VM-owned event and installs a real non-owning
+`SafeWaitHandle` through its managed constructor and `WaitHandle.SafeWaitHandle` setter. Positive
+IDs are never reused; the shared registry retains all event records until VM teardown. Disposal and
+finalization therefore never close a native handle. CoreLib's `WaitOne` performs its usual
+`DangerousAddRef`/release and disposal checks; the event Set/Reset intrinsics check the managed
+handle state and reject unknown IDs. Named events, multi-handle waits, mutexes and semaphores remain
+unsupported.
+
+`EventWait` registers and probes under the event lock. An auto-reset Set grants one live waiter or
+stores one signal; a manual-reset Set grants every live waiter and stays signaled until Reset.
+Reset cannot revoke a grant; timeouts, Set and cancellation are serialized, with a canceled auto
+waiter's grant transferred to another waiter or retained as a signal. Each wait keeps its absolute
+deadline across stops. The native effect driver probes, records an epoch and rechecks; the executor
+parks outside mutation with no branded reference or arena lease, bounded by the deadline and the
+GC/abort polling interval. Wakeups merely cause another probe. In single-threaded mode a signaled
+wait succeeds, a finite wait can time out, and an unsignaled infinite wait reports a host deadlock.
+
+### Managed timers
+
+CoreLib's `TimerQueue` and timer thread remain managed. With `multithreading`, the timer thread
+starts through `Thread.UnsafeStart`, waits on its unnamed auto-reset event, and queues expired timer
+work to CoreLib's thread pool. Timer callbacks therefore run on the capped background pool workers.
+`Task.Delay`, `CancellationTokenSource.CancelAfter` and `System.Threading.Timer` use this same path;
+the VM does not create host timers. Without `multithreading`, timer-thread startup reports the
+existing `PlatformNotSupportedException` for managed thread creation. Timer and pool workers are
+background threads, so idle workers do not keep the process alive after the entry point returns.
 
 ### Safe Point ↔ GcScopeGuard Interaction
 When a `GcScopeGuard` is active (the `active_borrows` scope counter > 0), `VesContext`'s `RawMemoryOps::check_gc_safe_point` returns `false` early without blocking. (The plain `CallStack::check_gc_safe_point` does *not* consult the counter — it only loads `is_gc_stop_requested()`.) This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
@@ -333,6 +396,7 @@ an unqualified acquisition merely because another guard happens to be in scope.
 | GC cross-arena table | `GCCoordinator::collection_lock` → `GCCoordinator::cross_arena_refs` | `CollectionSession::collect_all_arenas` |
 | Static init deadlock detection | `StaticStorage::init_mutex` → `StaticStorageManager::wait_graph` | `StaticStorageManager::init` (`InitState::Initializing` branch) |
 | Monitor metadata allocation | `SyncBlockManager::blocks` → `SyncBlockManager::next_index` | `SyncBlockManager::get_or_create_sync_block` |
+| Event state | `Event::state` is a leaf lock | event grants, reset, wait registration and cancellation |
 | Per-monitor ownership | `SyncBlock::state` is a leaf lock | `SyncBlock::{enter,enter_safe,exit}` |
 
 ### Forbidden Inversions
@@ -435,7 +499,7 @@ Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **do
 - `try_recv()` returns `Err(TryRecvError::Empty)` immediately when the channel is empty.
 
 #### Current usage in this codebase
-- The tracer (`crates/dotnet-tracer/src/lib.rs`) uses a **bounded** channel with `TRACER_CHANNEL_CAPACITY = 8_192` and `try_send` on the hot path. Events dropped due to a full channel are counted in `dropped_by_backpressure` (`AtomicU64`) and reported as a `LogEntry::DroppedByBackpressure(u64)` summary entry in the flusher, so loss is always visible in logs.
+- The tracer (`crates/dotnet-tracer/src/lib.rs`) uses a **bounded** channel with `TRACER_CHANNEL_CAPACITY = 8_192` and `try_send` on the hot path. Events dropped due to a full channel are counted in `dropped_by_backpressure` (`AtomicU64`) and reported by the flusher. An explicit flush waits for queued entries and reports pending drops; concurrent emitters can still produce events or drops after the flush barrier. Reports are visible when the `tracer` warning target is enabled.
 - Any new diagnostic or inter-thread channel must use `bounded` with an explicit capacity and a documented policy for `TrySendError::Full` (drop-newest, drop-oldest, or block).
 - **Never use `send()` (blocking) on a channel from the VM execution thread** — this stalls managed code execution and can interact with the STW safe-point protocol, potentially causing a deadlock if the receiver thread is itself waiting at a safe point.
 - **`select!` with multiple bounded channels**: if all branches are full and no receiver is draining, the `select!` macro will block indefinitely. Prefer `try_send`/`try_recv` variants (`select!` with `default`) in hot paths.

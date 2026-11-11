@@ -61,7 +61,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn wait_test_hook(point: WaitTestPoint) {
+pub(crate) fn wait_test_hook(point: WaitTestPoint) {
     WAIT_TEST_HOOK.with(|hook| {
         if let Some(callback) = hook.borrow_mut().as_mut() {
             callback(point);
@@ -72,9 +72,16 @@ fn wait_test_hook(point: WaitTestPoint) {
 pub(crate) enum PendingWait {
     Monitor(PendingMonitor),
     MonitorWait(PendingMonitorWait),
+    Event(PendingEvent),
     Finalizers(u64),
     Sleep(u64, Option<std::time::Instant>),
     Initializer(u64, Box<dyn dotnet_vm_ops::effects::NativeInitWait>),
+}
+
+pub(crate) struct PendingEvent {
+    pub(crate) wait: crate::threading::events::EventWait,
+    pub(crate) epoch: u64,
+    generation: u64,
 }
 
 pub(crate) struct PendingMonitor {
@@ -150,7 +157,131 @@ struct Adapter<'a, 'b, 'gc> {
     outputs: &'a mut Vec<StackValue<'gc>>,
 }
 
+fn event_method(
+    loader: &dotnet_assemblies::AssemblyLoader,
+    type_name: &str,
+    method_name: &str,
+    parameters: usize,
+) -> Result<MethodDescription, VmError> {
+    use dotnetdll::prelude::MethodMemberIndex;
+    let ty = loader.corlib_type(type_name)?;
+    let methods = &ty.definition().methods;
+    let method = methods
+        .iter()
+        .enumerate()
+        .find_map(|(index, method)| {
+            if method.name != method_name {
+                return None;
+            }
+            let description = MethodDescription::new(
+                ty.clone(),
+                GenericLookup::default(),
+                ty.resolution.clone(),
+                MethodMemberIndex::Method(index),
+            );
+            (description.signature().parameters.len() == parameters).then_some(description)
+        })
+        .or_else(|| {
+            ty.definition()
+                .properties
+                .iter()
+                .enumerate()
+                .find_map(|(index, property)| {
+                    let getter = property
+                        .getter
+                        .as_ref()
+                        .filter(|method| method.name == method_name)
+                        .map(|_| MethodMemberIndex::PropertyGetter(index));
+                    let setter = property
+                        .setter
+                        .as_ref()
+                        .filter(|method| method.name == method_name)
+                        .map(|_| MethodMemberIndex::PropertySetter(index));
+                    let description = MethodDescription::new(
+                        ty.clone(),
+                        GenericLookup::default(),
+                        ty.resolution.clone(),
+                        getter.or(setter)?,
+                    );
+                    (description.signature().parameters.len() == parameters).then_some(description)
+                })
+        });
+    method.ok_or_else(|| {
+        dotnet_types::error::ExecutionError::InternalError("CoreLib event method not found".into())
+            .into()
+    })
+}
+
 impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
+    fn event_methods(&mut self) -> Result<dotnet_vm_ops::effects::NativeEventMethods, VmError> {
+        let loader = &self.context.shared.loader;
+        Ok(dotnet_vm_ops::effects::NativeEventMethods {
+            constructor: event_method(
+                loader,
+                "Microsoft.Win32.SafeHandles.SafeWaitHandle",
+                ".ctor",
+                2,
+            )?,
+            setter: event_method(
+                loader,
+                "System.Threading.WaitHandle",
+                "set_SafeWaitHandle",
+                1,
+            )?,
+            getter: event_method(
+                loader,
+                "System.Threading.WaitHandle",
+                "get_SafeWaitHandle",
+                0,
+            )?,
+            is_closed: event_method(
+                loader,
+                "System.Runtime.InteropServices.SafeHandle",
+                "get_IsClosed",
+                0,
+            )?,
+            get_handle: event_method(
+                loader,
+                "System.Runtime.InteropServices.SafeHandle",
+                "DangerousGetHandle",
+                0,
+            )?,
+        })
+    }
+    fn event_create(
+        &mut self,
+        manual: bool,
+        signaled: bool,
+    ) -> Result<(ObjectRef<'gc>, isize), VmError> {
+        let ty = self
+            .context
+            .shared
+            .loader
+            .corlib_type("Microsoft.Win32.SafeHandles.SafeWaitHandle")?;
+        let object = self.context.new_object(ty)?;
+        let object = self.context.alloc_obj_ref(self.context.gc, object);
+        let id = self
+            .context
+            .shared
+            .events
+            .create(manual, signaled)
+            .ok_or_else(|| {
+                dotnet_types::error::ExecutionError::InternalError("event IDs exhausted".into())
+            })?;
+        Ok((object, id))
+    }
+    fn event_update(&mut self, id: isize, set: bool) -> Result<(), VmError> {
+        let event = self.context.shared.events.get(id).ok_or_else(|| {
+            dotnet_types::error::ExecutionError::InternalError("unsupported event handle".into())
+        })?;
+        if set {
+            event.set();
+        } else {
+            event.reset();
+        }
+        Ok(())
+    }
+
     fn stop_requested(&self) -> bool {
         self.context.shared.thread_manager.is_gc_stop_requested()
             || self.context.local.heap.needs_full_collect.get()
@@ -1313,6 +1444,44 @@ impl<'gc> VesContext<'_, 'gc> {
         StepResult::Yield
     }
 
+    // INVARIANT: F6.EventWaitRegistration — notifications only trigger another locked probe; the owned registration is retired on completion or cancellation.
+    fn advance_event_wait(
+        &mut self,
+        mut work: NativeActivation<'gc>,
+        mut pending: PendingEvent,
+    ) -> StepResult {
+        let stopped = self.shared.thread_manager.is_gc_stop_requested()
+            || self.local.heap.needs_full_collect.get()
+            || self.gc.needs_collection();
+        if !stopped {
+            let mut result = pending.wait.poll();
+            if result.is_none() {
+                #[cfg(test)]
+                wait_test_hook(WaitTestPoint::Probed);
+                pending.epoch = pending.wait.event.epoch();
+                #[cfg(test)]
+                wait_test_hook(WaitTestPoint::Registered);
+                result = pending.wait.poll();
+            }
+            if let Some(signaled) = result {
+                if let Err(error) = work.owner.control.reply_event(pending.generation, signaled) {
+                    return StepResult::Error(error);
+                }
+                self.call_state.native.push(work);
+                return StepResult::Continue;
+            }
+            #[cfg(not(feature = "multithreading"))]
+            if pending.wait.deadline.is_none() {
+                return StepResult::internal_error(
+                    "event wait would deadlock in single-threaded mode",
+                );
+            }
+        }
+        work.wait = Some(PendingWait::Event(pending));
+        self.call_state.native.push(work);
+        StepResult::Yield
+    }
+
     fn advance_finalizers(
         &mut self,
         mut work: NativeActivation<'gc>,
@@ -1411,6 +1580,7 @@ impl<'gc> VesContext<'_, 'gc> {
             return match wait {
                 PendingWait::Monitor(wait) => self.advance_monitor(work, wait),
                 PendingWait::MonitorWait(wait) => self.advance_monitor_wait(work, wait),
+                PendingWait::Event(wait) => self.advance_event_wait(work, wait),
                 PendingWait::Finalizers(generation) => self.advance_finalizers(work, generation),
                 PendingWait::Sleep(generation, deadline) => {
                     self.advance_sleep(work, generation, deadline)
@@ -1475,6 +1645,25 @@ impl<'gc> VesContext<'_, 'gc> {
                         Err(error) => return StepResult::Error(error),
                     };
                     self.advance_initializer(work, generation, wait)
+                }
+                Some(NativeEffect::Event(generation)) if work.operands.is_empty() => {
+                    let (id, deadline) = match work.owner.control.take_event(generation) {
+                        Ok(request) => request,
+                        Err(error) => return StepResult::Error(error),
+                    };
+                    let Some(event) = self.shared.events.get(id) else {
+                        return StepResult::internal_error("unsupported wait handle");
+                    };
+                    let wait = event.begin(deadline);
+                    let epoch = event.epoch();
+                    self.advance_event_wait(
+                        work,
+                        PendingEvent {
+                            wait,
+                            epoch,
+                            generation,
+                        },
+                    )
                 }
                 Some(NativeEffect::Monitor(generation)) if work.operands.is_empty() => {
                     let (object, deadline, is_wait) =

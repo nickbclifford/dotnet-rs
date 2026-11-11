@@ -65,7 +65,9 @@ use dotnet_tracer::Tracer;
 
 #[cfg(feature = "multithreading")]
 mod basic;
+pub(crate) mod events;
 pub(crate) mod local;
+pub(crate) mod pool;
 #[cfg(not(feature = "multithreading"))]
 mod stub;
 pub(crate) mod workers;

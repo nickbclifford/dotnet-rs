@@ -745,3 +745,121 @@ fn retired_finalizer_keeps_entry_arena_until_completion() {
     });
     assert_eq!(result.exit_code, 42);
 }
+
+#[cfg(all(not(feature = "multithreading"), not(feature = "fuzzing")))]
+#[test]
+fn async_task_delay_requires_multithreading() {
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/async/async_task_delay_elapsed_42.cs",
+    ));
+    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "single-threaded executor owns the state"
+    )]
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+    let result = harness.run_with_shared(resolution, shared);
+
+    assert_eq!(result.exit_code, 254, "{result:?}");
+    let stderr = result.stderr.unwrap_or_default();
+    assert!(
+        stderr.contains("Managed Thread(ThreadStart) requires the multithreading feature."),
+        "Task.Delay did not fail at managed timer-thread startup: {stderr}"
+    );
+    assert!(
+        !stderr.contains("CreateEventEx") && !stderr.contains("WaitHandle_WaitOneCore"),
+        "Task.Delay failed through a native event path: {stderr}"
+    );
+}
+
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+#[test]
+fn async_task_delay_elapsed_lower_bound() {
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/async/async_task_delay_elapsed_42.cs",
+    ));
+    let result = harness.run_with_timeout(&dll, std::time::Duration::from_secs(60));
+    assert_eq!(result.exit_code, 42, "{result:?}");
+    assert_eq!(
+        result.stderr, None,
+        "Task.Delay threw instead of completing"
+    );
+}
+
+#[cfg(all(feature = "multithreading", not(feature = "fuzzing")))]
+#[test]
+fn threading_timer_background_threads_do_not_hold_process_open() {
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/threading/threading_timer_idle_background_exit_42.cs",
+    ));
+    let mut command = harness.cli_command(&dll);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start dotnet-rs timer lifecycle fixture");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child
+            .try_wait()
+            .expect("failed to poll timer fixture")
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .expect("failed to collect timer fixture output");
+            assert_eq!(
+                output.status.code(),
+                Some(42),
+                "timer fixture did not exit after its background timer and pool became idle: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            return;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("failed to stop stuck timer fixture");
+            let output = child
+                .wait_with_output()
+                .expect("failed to collect stuck timer fixture output");
+            panic!(
+                "timer/pool background workers held the process open: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn async_queued_task_result_reports_single_threaded_deadlock() {
+    let harness = TestHarness::get();
+    let dll = harness.ensure_dll(Path::new(
+        "tests/fixtures/async/async_pool_run_result_42.cs",
+    ));
+    let resolution = harness.loader.load_resolution_from_file(&dll).unwrap();
+    #[allow(
+        clippy::arc_with_non_send_sync,
+        reason = "single-threaded executor owns the state"
+    )]
+    let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&harness.loader)));
+    let result = harness.run_with_shared(resolution, shared);
+    assert_eq!(result.exit_code, 255, "{result:?}");
+    assert!(
+        result
+            .stderr
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Monitor.Wait would deadlock in single-threaded mode"),
+        "{result:?}"
+    );
+}

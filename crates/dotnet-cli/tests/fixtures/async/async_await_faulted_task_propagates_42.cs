@@ -9,16 +9,25 @@ public static class Program
         return 0;
     }
 
+    private static async Task<bool> CheckAwait(Task<int> task)
+    {
+        try { await task; return false; }
+        catch (ApplicationException ex) { return ex.Message == "faulted-task"; }
+    }
+
     public static int Main()
     {
+        Task<int> task = ComputeAsync();
         try
         {
-            _ = ComputeAsync().Result;
+            _ = task.Result;
             return 1;
         }
-        catch (ApplicationException ex)
+        catch (AggregateException ex)
         {
-            return ex.Message == "faulted-task" ? 42 : 2;
+            if (ex.InnerException is not ApplicationException inner || inner.Message != "faulted-task")
+                return 2;
         }
+        return CheckAwait(task).Result ? 42 : 3;
     }
 }

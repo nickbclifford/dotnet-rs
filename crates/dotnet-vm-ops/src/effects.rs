@@ -241,9 +241,32 @@ enum RootedInitProbe {
     Waiting(Box<dyn NativeInitWait>),
 }
 
+/// CoreLib methods used for VM-owned event handles.
+pub struct NativeEventMethods {
+    pub constructor: dotnet_types::members::MethodDescription,
+    pub setter: dotnet_types::members::MethodDescription,
+    pub getter: dotnet_types::members::MethodDescription,
+    pub is_closed: dotnet_types::members::MethodDescription,
+    pub get_handle: dotnet_types::members::MethodDescription,
+}
+
 /// Adapter supplied for one poll. It owns no native future and must not dispatch recursively.
 pub trait NativeBackend<'gc> {
     fn stop_requested(&self) -> bool;
+    fn event_methods(&mut self) -> Result<NativeEventMethods, VmError> {
+        Err(internal("native events unavailable"))
+    }
+    fn event_create(
+        &mut self,
+        _manual: bool,
+        _signaled: bool,
+    ) -> Result<(ObjectRef<'gc>, isize), VmError> {
+        Err(internal("native events unavailable"))
+    }
+    fn event_update(&mut self, _id: isize, _set: bool) -> Result<(), VmError> {
+        Err(internal("native events unavailable"))
+    }
+
     fn active_scope_depth(&self) -> usize;
     fn probe_initializer(
         &mut self,
@@ -381,6 +404,28 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         backend: &'a mut dyn NativeBackend<'gc>,
     ) -> Self {
         Self { mc, roots, backend }
+    }
+    pub fn event_methods(&mut self) -> Result<NativeEventMethods, VmError> {
+        self.backend.event_methods()
+    }
+    pub fn event_create(
+        &mut self,
+        manual: bool,
+        signaled: bool,
+    ) -> Result<(RootedValue, RootedValue), VmError> {
+        let (object, id) = self.backend.event_create(manual, signaled)?;
+        // INVARIANT: F6.NativeRootTransfer — the new object is stashed in this activation
+        // within its allocation mutation; child calls bridge it through rooted stack slots.
+        Ok((
+            self.root(StackValue::ObjectRef(object))?,
+            self.root(StackValue::NativeInt(id))?,
+        ))
+    }
+    pub fn event_update(&mut self, id: isize, set: bool) -> Result<(), VmError> {
+        self.backend.event_update(id, set)
+    }
+    pub fn push_int(&mut self, value: i32) -> Result<(), VmError> {
+        self.backend.push_output(StackValue::Int32(value))
     }
     /// Return a value only while this region's brand is live.
     pub fn fetch(&self, value: &RootedValue) -> Result<StackValue<'gc>, VmError> {
@@ -664,6 +709,7 @@ enum Request {
     Yield,
     Call(NativeCall, bool),
     Monitor(RootedValue, Option<std::time::Instant>, bool),
+    Event(isize, Option<std::time::Instant>),
     Finalizers,
     Sleep(Option<std::time::Instant>),
     Initializer(Box<dyn NativeInitWait>),
@@ -674,6 +720,7 @@ impl Request {
             Self::Yield => NativeEffect::Yield,
             Self::Call(..) => NativeEffect::Call(generation),
             Self::Monitor(..) => NativeEffect::Monitor(generation),
+            Self::Event(..) => NativeEffect::Event(generation),
             Self::Finalizers => NativeEffect::Finalizers(generation),
             Self::Sleep(..) => NativeEffect::Sleep(generation),
             Self::Initializer(..) => NativeEffect::Initializer(generation),
@@ -683,6 +730,7 @@ impl Request {
 enum Reply {
     Call(Result<NativeValue, RootedValue>),
     Monitor(bool),
+    Event(bool),
     Finalizers,
     Sleep,
     Initializer,
@@ -692,6 +740,7 @@ impl Reply {
         match self {
             Self::Call(..) => NativeEffect::Call(generation),
             Self::Monitor(..) => NativeEffect::Monitor(generation),
+            Self::Event(..) => NativeEffect::Event(generation),
             Self::Finalizers => NativeEffect::Finalizers(generation),
             Self::Sleep => NativeEffect::Sleep(generation),
             Self::Initializer => NativeEffect::Initializer(generation),
@@ -739,6 +788,7 @@ pub enum NativeEffect {
     Yield,
     Call(u64),
     Monitor(u64),
+    Event(u64),
     Finalizers(u64),
     Sleep(u64),
     Initializer(u64),
@@ -895,6 +945,19 @@ impl NativeControl {
     }
     pub fn reply_monitor(&self, generation: u64, acquired: bool) -> Result<(), VmError> {
         self.transition(ControlEvent::Reply(generation, Reply::Monitor(acquired)))?;
+        Ok(())
+    }
+    pub fn take_event(
+        &self,
+        generation: u64,
+    ) -> Result<(isize, Option<std::time::Instant>), VmError> {
+        match self.transition(ControlEvent::Take(NativeEffect::Event(generation)))? {
+            Transition::Request(Request::Event(id, deadline)) => Ok((id, deadline)),
+            _ => unreachable!(),
+        }
+    }
+    pub fn reply_event(&self, generation: u64, signaled: bool) -> Result<(), VmError> {
+        self.transition(ControlEvent::Reply(generation, Reply::Event(signaled)))?;
         Ok(())
     }
     pub fn take_finalizers(&self, generation: u64) -> Result<(), VmError> {
@@ -1124,6 +1187,7 @@ impl VmEffects {
                 Ok(generation) => {
                     effect = Some(match kind {
                         NativeEffect::Monitor(_) => NativeEffect::Monitor(generation),
+                        NativeEffect::Event(_) => NativeEffect::Event(generation),
                         NativeEffect::Finalizers(_) => NativeEffect::Finalizers(generation),
                         NativeEffect::Sleep(_) => NativeEffect::Sleep(generation),
                         NativeEffect::Initializer(_) => NativeEffect::Initializer(generation),
@@ -1175,6 +1239,17 @@ impl VmEffects {
             .await?
         {
             Reply::Monitor(pulsed) => Ok(pulsed),
+            _ => unreachable!(),
+        }
+    }
+    /// Wait on a VM-owned event until granted or its absolute deadline expires.
+    pub async fn event_wait(
+        &mut self,
+        id: isize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<bool, NativeFailure> {
+        match self.request(Request::Event(id, deadline)).await? {
+            Reply::Event(signaled) => Ok(signaled),
             _ => unreachable!(),
         }
     }
@@ -1748,6 +1823,7 @@ mod tests {
                 NativeEffect::Finalizers(_) => 3,
                 NativeEffect::Initializer(_) => 4,
                 NativeEffect::Sleep(_) => 5,
+                NativeEffect::Event(_) => 6,
             }
         }
         fn key(state: &ControlState) -> (usize, u64) {
@@ -1768,7 +1844,8 @@ mod tests {
                         | NativeEffect::Monitor(g)
                         | NativeEffect::Finalizers(g)
                         | NativeEffect::Initializer(g)
-                        | NativeEffect::Sleep(g) => *g,
+                        | NativeEffect::Sleep(g)
+                        | NativeEffect::Event(g) => *g,
                         NativeEffect::Yield => unreachable!(),
                     };
                     (12 + kind(*effect), generation)
@@ -1988,6 +2065,35 @@ mod tests {
             control.take_finalizers(2).unwrap();
             assert!(control.reply_finalizers(1).is_err());
             control.reply_finalizers(2).unwrap();
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Ready(Ok(())))
+            ));
+        });
+    }
+
+    #[test]
+    fn event_replies_require_matching_effect_and_generation() {
+        arena().mutate(|mc, roots| {
+            let control = NativeControl::new();
+            let mut fx = control.effects(invocation()).unwrap();
+            let mut future = Box::pin(async move {
+                assert!(fx.event_wait(3, None).await?);
+                Ok(())
+            });
+            let mut backend = mock();
+            let mut region = NativeRegion::new(mc, *roots, &mut backend);
+            assert!(matches!(
+                poll_native(&control, future.as_mut(), &mut region),
+                Ok(Poll::Pending)
+            ));
+            assert_eq!(control.take_effect(), Some(NativeEffect::Event(1)));
+            assert!(control.take_event(2).is_err());
+            assert_eq!(control.take_event(1).unwrap().0, 3);
+            assert!(control.reply_monitor(1, true).is_err());
+            assert!(control.reply_event(2, true).is_err());
+            control.reply_event(1, true).unwrap();
+            assert!(control.reply_event(1, true).is_err());
             assert!(matches!(
                 poll_native(&control, future.as_mut(), &mut region),
                 Ok(Poll::Ready(Ok(())))

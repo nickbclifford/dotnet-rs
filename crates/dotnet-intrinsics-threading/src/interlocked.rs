@@ -54,8 +54,21 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, T: ThreadingIntrinsicHost<'gc
         generics,
         "intrinsic_interlocked_compare_exchange",
     ));
+    let dispatch = match target_type.get() {
+        dotnetdll::prelude::BaseType::Type { .. } => {
+            let resolved =
+                dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(target_type.clone()));
+            match resolved.is_enum() {
+                Some(dotnetdll::prelude::MemberType::Base(underlying)) => {
+                    interlocked_atomic_dispatch(&**underlying)
+                }
+                _ => interlocked_atomic_dispatch(target_type.get()),
+            }
+        }
+        base_type => interlocked_atomic_dispatch(base_type),
+    };
 
-    match interlocked_atomic_dispatch(target_type.get()) {
+    match dispatch {
         InterlockedAtomicTypeDispatch::Byte => {
             let is_signed = matches!(target_type.get(), dotnetdll::prelude::BaseType::Int8);
             let comparand = ctx.pop_i32() as u8;
@@ -509,5 +522,16 @@ pub fn intrinsic_interlocked_exchange_add<'gc, T: ThreadingIntrinsicHost<'gc>>(
         }
     }
 
+    StepResult::Continue
+}
+
+/// Orders memory operations across the calling thread's interlocked barrier.
+#[dotnet_intrinsic("static void System.Threading.Interlocked::MemoryBarrier()")]
+pub fn intrinsic_interlocked_memory_barrier<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    _ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    dotnet_utils::sync::fence(Ordering::SeqCst);
     StepResult::Continue
 }

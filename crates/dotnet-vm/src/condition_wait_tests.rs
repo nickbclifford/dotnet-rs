@@ -3721,3 +3721,572 @@ fn engine_host_entries_use_retained_monitor_byref_fallback() {
         assert_eq!(*flag, 1);
     }
 }
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn pool_worker_parks_participates_in_gc_reuses_executor_and_shuts_down() {
+    use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
+    use std::{sync::mpsc, time::Duration};
+
+    let mut executor = executor();
+    let mut corlib = Resolution::new(Module::new("mscorlib.dll"));
+    corlib.assembly = Some(Assembly::new("mscorlib"));
+    for name in ["Object", "Enum", "ValueType"] {
+        let mut ty = TypeDefinition::new(None, name);
+        ty.namespace = Some("System".into());
+        corlib.push_type_definition(ty);
+    }
+    executor.shared.loader.register_owned_assembly(corlib);
+    let (mut res, _, type_idx) = make_test_assembly!("PoolWorker.dll", "PoolWorker", "Worker");
+    res[type_idx].extends = None;
+    let mut setter_sig = crate::test_utils::parameterless_i32_signature();
+    setter_sig.instance = true;
+    setter_sig.parameters.push(Parameter(
+        vec![],
+        ParameterType::Value(MethodType::Base(Box::new(BaseType::Boolean))),
+    ));
+    setter_sig.return_type = ReturnType(vec![], None);
+    let setter_idx = res.push_method(
+        type_idx,
+        Method::new(
+            Accessibility::Public,
+            setter_sig,
+            "SetPoolThread",
+            Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::Return])),
+        ),
+    );
+    let dispatch_idx = res.push_method(type_idx, Method::new(Accessibility::Public, crate::test_utils::parameterless_i32_signature(), "Dispatch", Some(make_test_method!(max_stack: 1, instructions: vec![Instruction::LoadConstantInt32(1), Instruction::Return]))));
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let ty = TypeDescription::new(res.clone(), type_idx);
+    let describe = |index| {
+        let i = ty
+            .definition()
+            .methods
+            .iter()
+            .position(|m| std::ptr::eq(m, &res.definition()[index]))
+            .unwrap();
+        MethodDescription::new(
+            ty.clone(),
+            GenericLookup::default(),
+            res.clone(),
+            MethodMemberIndex::Method(i),
+        )
+    };
+    let setter = describe(setter_idx);
+    let dispatch = describe(dispatch_idx);
+    let shared = executor.shared.clone();
+    assert!(shared.pool.request());
+    let worker_shared = shared.clone();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let request_when_registered = Arc::new(dotnet_utils::sync::AtomicBool::new(false));
+    let request_flag = request_when_registered.clone();
+    let hook_shared = shared.clone();
+    let completion = shared.workers.spawn_pool_owner(move |running| {
+        let mut announced = false;
+        let mut requested = false;
+        WAIT_TEST_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |point| {
+                if matches!(point, WaitTestPoint::Registered) {
+                    if request_flag.swap(false, dotnet_utils::sync::Ordering::SeqCst) {
+                        assert!(!hook_shared.pool.request());
+                        requested = true;
+                        let _ = parked_tx.send(true);
+                    } else if requested {
+                        requested = false;
+                        let _ = parked_tx.send(false);
+                    } else if !announced {
+                        announced = true;
+                        let _ = parked_tx.send(false);
+                    }
+                }
+            }))
+        });
+        Executor::run_pool_worker(worker_shared, dispatch, setter, running);
+    });
+    assert!(
+        !parked_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("worker should park after dispatch")
+    );
+    collect(&mut executor);
+    request_when_registered.store(true, dotnet_utils::sync::Ordering::SeqCst);
+    assert!(
+        parked_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("worker should register again")
+    );
+    assert!(
+        !parked_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("worker should dispatch and park again")
+    );
+    assert_eq!(shared.pool.pending_requests_for_test(), 0);
+    assert_eq!(shared.pool.worker_count(), 1);
+    shared.abort_signal().request_abort();
+    executor.wait_for_foreground_workers();
+    drop(executor);
+    shared.shutdown_workers();
+    assert!(completion.is_finished());
+}
+
+#[test]
+fn pool_tuning_out_parameters_write_checked_frame_homes() {
+    use dotnet_value::pointer::ManagedPtr;
+    let mut executor = executor();
+    let method = condition_wait_method(&executor, false);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let frames = &mut engine.stack.execution.frame_stack;
+                let serial = frames.issue_home_serial();
+                let layout = dotnet_value::layout::FieldLayoutManager {
+                    fields: Default::default(),
+                    total_size: 8,
+                    alignment: 4,
+                    gc_desc: Default::default(),
+                    has_ref_fields: false,
+                };
+                let layout = dotnet_vm_data::frame_homes::FrameHomeLayout::new(
+                    layout,
+                    Box::new([]),
+                    Box::new([]),
+                );
+                frames.current_frame_mut().homes =
+                    dotnet_vm_data::frame_homes::FrameHomes::allocate(Arc::new(layout), serial)
+                        .unwrap();
+                let (address, _) = frames.home_block(serial).unwrap();
+                let pointer = |offset| {
+                    ManagedPtr::new_frame_home(
+                        address,
+                        TypeDescription::NULL,
+                        serial,
+                        dotnet_utils::ByteOffset::new(offset),
+                        false,
+                    )
+                };
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::ManagedPtr(pointer(0).into()));
+                ctx.push(StackValue::ManagedPtr(pointer(4).into()));
+                assert_eq!(
+                    dotnet_intrinsics_threading::pool::get_max(
+                        &mut ctx,
+                        method,
+                        &GenericLookup::default()
+                    ),
+                    StepResult::Continue
+                );
+                // SAFETY: F10.FrameHomeChecked — the live frame owns the eight-byte block.
+                let worker = unsafe { address.as_ptr().cast::<i32>().read_unaligned() };
+                let io_address = address.as_ptr().wrapping_add(4).cast::<i32>();
+                // SAFETY: F10.FrameHomeChecked — the second four-byte read fits the same block.
+                let io = unsafe { io_address.read_unaligned() };
+                assert_eq!((worker, io), (32767, 1000));
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn pool_placeholder_is_retained_and_shared_across_collection() {
+    let mut executor = executor();
+    let original = executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let candidate =
+                    ObjectRef::new(gc, HeapStorage::Str(CLRString::from("pool placeholder")));
+                engine.ves_context(gc).register_new_object(&candidate);
+                engine
+                    .stack
+                    .shared
+                    .statics
+                    .pool_placeholder(candidate)
+                    .as_ptr()
+                    .unwrap()
+            })
+        })
+        .unwrap();
+    collect(&mut executor);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine remains the live arena root during mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let candidate = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("other")));
+                engine.ves_context(gc).register_new_object(&candidate);
+                let placeholder = engine.stack.shared.statics.pool_placeholder(candidate);
+                assert_eq!(placeholder.as_ptr(), Some(original));
+                assert_ne!(placeholder.as_ptr(), candidate.as_ptr());
+            })
+        })
+        .unwrap();
+}
+
+fn event_wait_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        assert!(fx.event_wait(1, None).await?);
+        Ok(())
+    })
+}
+
+#[test]
+fn event_wait_signaled_before_registration() {
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    event.set();
+    assert_eq!(
+        start_sleep(&mut executor, event_wait_body),
+        StepResult::Jump(1)
+    );
+    assert_eq!(event.waiter_count(), 0);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_registration_rechecks_set() {
+    use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
+    for after_registration in [false, true] {
+        let mut executor = executor();
+        let id = executor.shared.events.create(false, false).unwrap();
+        let event = executor.shared.events.get(id).unwrap();
+        let signal = event.clone();
+        WAIT_TEST_HOOK.with(|hook| {
+            let mut fired = false;
+            *hook.borrow_mut() = Some(Box::new(move |point| {
+                if !fired
+                    && matches!(
+                        (after_registration, point),
+                        (false, WaitTestPoint::Probed) | (true, WaitTestPoint::Registered)
+                    )
+                {
+                    fired = true;
+                    signal.set();
+                }
+            }));
+        });
+        assert_eq!(
+            start_sleep(&mut executor, event_wait_body),
+            StepResult::Jump(1)
+        );
+        WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+        assert_eq!(event.waiter_count(), 0);
+    }
+}
+
+#[cfg(feature = "multithreading")]
+fn rooted_event_wait_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let root = fx.vm().await?.pop_string()?;
+        assert!(fx.event_wait(1, None).await?);
+        let mut chars = Vec::new();
+        fx.vm().await?.string(&root).copy_chunk(0, 7, &mut chars)?;
+        assert_eq!(chars, "witness".encode_utf16().collect::<Vec<_>>());
+        Ok(())
+    })
+}
+
+#[cfg(feature = "multithreading")]
+fn start_rooted_event_wait(executor: &mut Executor) -> StepResult {
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
+    let method = condition_wait_method(executor, true);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live root of this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let source = ObjectRef::new(gc, HeapStorage::Str(CLRString::from("witness")));
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::Int32(0));
+                ctx.push(StackValue::ObjectRef(source));
+                ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    Some(native_test_fallback),
+                    rooted_event_wait_body,
+                )
+            })
+        })
+        .unwrap()
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_parked_gc_and_signal() {
+    use crate::test_utils::worker::Worker;
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    assert_eq!(start_rooted_event_wait(&mut executor), StepResult::Yield);
+    let shared = executor.shared.clone();
+    let signal = event.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (start_tx, start_rx) = mpsc::channel();
+    let worker = Worker::new(
+        thread::spawn(move || {
+            let mut collector = Executor::new(shared);
+            ready_tx.send(()).unwrap();
+            start_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let collected = collector.perform_full_gc().is_ok();
+            signal.set();
+            collected
+        }),
+        (),
+    );
+    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    crate::executor::WAIT_TEST_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            start_tx.send(()).unwrap();
+        }))
+    });
+    assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
+    assert!(worker.finish().unwrap());
+    assert_eq!(event.waiter_count(), 0);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_spurious_wakes_and_abort_remove_registration() {
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    assert_eq!(
+        start_sleep(&mut executor, event_wait_body),
+        StepResult::Yield
+    );
+    event.notify_spurious();
+    event.notify_spurious();
+    assert_eq!(resume(&mut executor), StepResult::Yield);
+    let abort = executor.shared.abort_signal();
+    crate::executor::WAIT_TEST_HOOK
+        .with(|hook| *hook.borrow_mut() = Some(Box::new(move || abort.request_abort())));
+    assert!(matches!(executor.run(), ExecutorResult::Error(_)));
+    assert_eq!(event.waiter_count(), 0);
+    event.set();
+    assert_eq!(event.begin(None).poll(), Some(true));
+}
+
+#[cfg(not(feature = "multithreading"))]
+fn timed_event_wait_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(20);
+        assert!(!fx.event_wait(1, Some(deadline)).await?);
+        assert!(std::time::Instant::now() >= deadline);
+        Ok(())
+    })
+}
+
+#[cfg(not(feature = "multithreading"))]
+#[test]
+fn event_wait_single_thread_timeout_and_deadlock() {
+    let mut timed_executor = executor();
+    let id = timed_executor.shared.events.create(false, false).unwrap();
+    let event = timed_executor.shared.events.get(id).unwrap();
+    assert_eq!(
+        start_sleep(&mut timed_executor, timed_event_wait_body),
+        StepResult::Yield
+    );
+    assert!(matches!(timed_executor.run(), ExecutorResult::Exited(0)));
+    assert_eq!(event.waiter_count(), 0);
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    assert!(matches!(
+        start_sleep(&mut executor, event_wait_body),
+        StepResult::Error(_)
+    ));
+    assert_eq!(event.waiter_count(), 0);
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_parked_spurious_wakes_recheck_without_grant() {
+    use crate::test_utils::worker::Worker;
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    assert_eq!(
+        start_sleep(&mut executor, event_wait_body),
+        StepResult::Yield
+    );
+    let signal = event.clone();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let worker = Worker::new(
+        thread::spawn(move || {
+            let first = parked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            if first {
+                signal.notify_spurious();
+                signal.notify_spurious();
+            }
+            let second = parked_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            signal.set();
+            first && second
+        }),
+        (),
+    );
+    crate::sync::WAIT_TEST_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let _ = parked_tx.send(());
+        }))
+    });
+    assert!(matches!(executor.run(), ExecutorResult::Exited(0)));
+    crate::sync::WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+    assert!(worker.finish().unwrap());
+    assert_eq!(event.waiter_count(), 0);
+}
+
+#[cfg(feature = "multithreading")]
+fn timed_event_expected_signal(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        assert!(
+            fx.event_wait(
+                1,
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(60))
+            )
+            .await?
+        );
+        Ok(())
+    })
+}
+#[cfg(feature = "multithreading")]
+fn timed_event_expected_timeout(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        assert!(
+            !fx.event_wait(
+                1,
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(60))
+            )
+            .await?
+        );
+        Ok(())
+    })
+}
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_timeout_and_set_both_orders() {
+    use crate::stack::native_effects::{WAIT_TEST_HOOK, WaitTestPoint};
+    for set_first in [true, false] {
+        let mut executor = executor();
+        let id = executor.shared.events.create(false, false).unwrap();
+        let event = executor.shared.events.get(id).unwrap();
+        let signal = event.clone();
+        WAIT_TEST_HOOK.with(|hook| {
+            let mut fired = false;
+            *hook.borrow_mut() = Some(Box::new(move |point| {
+                if !fired && matches!(point, WaitTestPoint::Probed) {
+                    fired = true;
+                    if set_first {
+                        signal.set();
+                    }
+                    signal.expire_waiters_for_test();
+                    if !set_first {
+                        signal.set();
+                    }
+                }
+            }));
+        });
+        let body = if set_first {
+            timed_event_expected_signal
+        } else {
+            timed_event_expected_timeout
+        };
+        assert_eq!(start_sleep(&mut executor, body), StepResult::Jump(1));
+        WAIT_TEST_HOOK.with(|hook| drop(hook.borrow_mut().take()));
+        assert_eq!(
+            event.begin(Some(std::time::Instant::now())).poll(),
+            Some(!set_first)
+        );
+    }
+}
+
+fn unknown_event_wait_body(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let _ = fx.event_wait(999, Some(std::time::Instant::now())).await?;
+        Ok(())
+    })
+}
+#[test]
+fn event_wait_rejects_unknown_handle() {
+    let mut executor = executor();
+    assert!(matches!(
+        start_sleep(&mut executor, unknown_event_wait_body),
+        StepResult::Error(_)
+    ));
+}
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn event_wait_deadline_survives_collection() {
+    use crate::stack::native_effects::PendingWait;
+    let mut executor = executor();
+    let id = executor.shared.events.create(false, false).unwrap();
+    let event = executor.shared.events.get(id).unwrap();
+    assert_eq!(
+        start_sleep(&mut executor, timed_event_expected_signal),
+        StepResult::Yield
+    );
+    let deadline = executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                match engine
+                    .stack
+                    .execution
+                    .call_state
+                    .native
+                    .last()
+                    .unwrap()
+                    .wait
+                    .as_ref()
+                    .unwrap()
+                {
+                    PendingWait::Event(wait) => wait.wait.deadline,
+                    _ => panic!("expected event wait"),
+                }
+            })
+        })
+        .unwrap();
+    assert!(deadline.is_some());
+    collect(&mut executor);
+    assert_eq!(resume(&mut executor), StepResult::Yield);
+    executor
+        .with_arena(|arena| {
+            arena.mutate(|_, engine| {
+                match engine
+                    .stack
+                    .execution
+                    .call_state
+                    .native
+                    .last()
+                    .unwrap()
+                    .wait
+                    .as_ref()
+                    .unwrap()
+                {
+                    PendingWait::Event(wait) => assert_eq!(wait.wait.deadline, deadline),
+                    _ => panic!("expected event wait"),
+                }
+            })
+        })
+        .unwrap();
+    event.set();
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+}

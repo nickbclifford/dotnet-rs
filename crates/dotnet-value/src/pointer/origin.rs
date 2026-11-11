@@ -133,6 +133,7 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
             2 => Ok(Self::Static(Arc::new(StaticMetadata {
                 type_desc: u.arbitrary()?,
                 generics: u.arbitrary()?,
+                thread_id: None,
             }))),
             3 => Ok(Self::Unmanaged),
             // Unscoped fuzz bytes cannot establish a live pointer/identity pair.
@@ -170,6 +171,7 @@ impl<'gc> PointerOrigin<'gc> {
         Self::Static(Arc::new(StaticMetadata {
             type_desc,
             generics,
+            thread_id: None,
         }))
     }
 

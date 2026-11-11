@@ -8,7 +8,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{
     DebugStr,
-    sync::{Arc, AtomicU64, Condvar, OrderedMutex, Ordering, RwLock, levels},
+    sync::{Arc, AtomicU64, Condvar, Mutex, OrderedMutex, Ordering, RwLock, levels},
 };
 use dotnet_value::{
     layout::{FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout, LayoutManager, Scalar},
@@ -209,8 +209,13 @@ pub struct StaticStorageManager {
     /// We use a striped lock table for better performance and to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
     shards: [RwLock<StaticMap>; 16],
+    // INVARIANT: F6.ThreadStaticRoot — retained with the VM, like retired executor arenas: managed byrefs can outlive
+    // the thread that first obtained the address.
+    thread_statics: RwLock<HashMap<(TypeDescription, GenericLookup, u64), Arc<StaticStorage>>>,
     /// Active initialization dependencies, including independently parked segments on one thread.
     wait_graph: OrderedMutex<levels::StaticWaitGraph, WaitGraph>,
+    pool_placeholder: FieldStorage,
+    pool_placeholder_lock: Mutex<()>,
 }
 
 const NUM_SHARDS: usize = 16;
@@ -340,9 +345,20 @@ impl Drop for StaticWaitRegistration {
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
 // Release builds read each shard without its lock, relying on the stop-the-world pause.
-// The `wait_graph` contains only primitive IDs and does not need tracing.
+// The pool placeholder is a traced object slot. The `wait_graph` and placeholder lock
+// contain no GC references and do not need tracing.
 unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        self.pool_placeholder.trace(cc);
+        // INVARIANT: F6.ThreadStaticRoot — all mutators are stopped and every retained allocation is traced.
+        for storage in self
+            .thread_statics
+            .try_read()
+            .expect("thread statics locked during GC")
+            .values()
+        {
+            storage.trace(cc);
+        }
         for shard in &self.shards {
             #[cfg(debug_assertions)]
             {
@@ -431,7 +447,52 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
+            thread_statics: RwLock::new(HashMap::new()),
             wait_graph: OrderedMutex::new(WaitGraph::default()),
+            pool_placeholder: {
+                let mut fields = hashbrown::HashMap::new();
+                fields.insert(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "placeholder".into(),
+                    },
+                    FieldLayout {
+                        position: dotnet_utils::ByteOffset::new(0),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::ObjectRef)),
+                    },
+                );
+                let mut gc_desc = GcDesc::default();
+                gc_desc.set(0);
+                FieldStorage::new(
+                    Arc::new(FieldLayoutManager {
+                        fields,
+                        total_size: ObjectRef::SIZE,
+                        alignment: 8,
+                        gc_desc,
+                        has_ref_fields: true,
+                    }),
+                    vec![0; ObjectRef::SIZE],
+                )
+            },
+            pool_placeholder_lock: Mutex::new(()),
+        }
+    }
+
+    /// Publish one traced completion placeholder and return its stable identity.
+    pub(crate) fn pool_placeholder<'gc>(&self, candidate: ObjectRef<'gc>) -> ObjectRef<'gc> {
+        let _lock = self.pool_placeholder_lock.lock();
+        let slot = self
+            .pool_placeholder
+            .field_at_offset::<ObjectRef<'gc>>(0)
+            .expect("pool placeholder layout");
+        // INVARIANT: F6.PoolPlaceholderRoot — the candidate is live in the current mutation and
+        // the published slot is traced by every CallStack before its object can be collected.
+        let existing = slot.read();
+        if existing.0.is_some() {
+            existing
+        } else {
+            slot.write(candidate);
+            candidate
         }
     }
 
@@ -469,6 +530,48 @@ impl Default for StaticStorageManager {
 }
 
 impl StaticStorageManager {
+    /// Returns a per-executor zero-initialized copy of the static field layout.
+    /// Type initialization is still shared with ordinary static fields.
+    pub fn get_for_thread(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+        thread_id: u64,
+    ) -> Arc<StaticStorage> {
+        let key = (description.clone(), generics.clone(), thread_id);
+        if let Some(storage) = self.thread_statics.read().get(&key) {
+            return storage.clone();
+        }
+        let shared = self.get(description, generics);
+        let layout = shared.layout();
+        let mut map = self.thread_statics.write();
+        map.entry(key)
+            .or_insert_with(|| {
+                #[allow(
+                    clippy::arc_with_non_send_sync,
+                    reason = "single-threaded storage is executor confined"
+                )]
+                Arc::new(StaticStorage {
+                    initialization: shared.initialization.clone(),
+                    storage: FieldStorage::new(layout.clone(), vec![0; layout.size().as_usize()]),
+                    failure: RwLock::new(None),
+                    init_cond: shared.init_cond.clone(),
+                    init_mutex: shared.init_mutex.clone(),
+                })
+            })
+            .clone()
+    }
+
+    pub fn get_for_metadata(
+        &self,
+        metadata: &dotnet_value::pointer::StaticMetadata,
+    ) -> Arc<StaticStorage> {
+        match metadata.thread_id {
+            Some(id) => self.get_for_thread(metadata.type_desc.clone(), &metadata.generics, id),
+            None => self.get(metadata.type_desc.clone(), &metadata.generics),
+        }
+    }
+
     fn lookup_in_shard(
         &self,
         description: TypeDescription,

@@ -39,6 +39,37 @@ fn canonical_static_lookup(field: &FieldDescription, lookup: &GenericLookup) -> 
     )
 }
 
+fn static_field_thread<'gc, T: VesOps<'gc>>(ctx: &T, field: &FieldDescription) -> Option<u64> {
+    let resolution = field.parent.resolution.definition();
+    let attributes = resolution
+        .field_index(field.parent.index, field.index)
+        .and_then(|index| resolution.field_attributes(index).ok())
+        .unwrap_or_default();
+    attributes
+        .iter()
+        .any(|attribute| {
+            ctx.loader()
+                .locate_attribute(field.parent.resolution.clone(), attribute)
+                .is_ok_and(|ctor| ctor.parent.type_name() == "System.ThreadStaticAttribute")
+        })
+        .then(|| ctx.thread_id().as_u64())
+}
+
+fn static_field_storage<'gc, T: VesOps<'gc>>(
+    ctx: &T,
+    field: &FieldDescription,
+    generics: &GenericLookup,
+) -> (crate::sync::Arc<crate::statics::StaticStorage>, Option<u64>) {
+    let thread = static_field_thread(ctx, field);
+    let storage = match thread {
+        Some(id) => ctx
+            .statics()
+            .get_for_thread(field.parent.clone(), generics, id),
+        None => ctx.statics().get(field.parent.clone(), generics),
+    };
+    (storage, thread)
+}
+
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: bool) -> StepResult {
     let (field, lookup) = dotnet_vm_ops::vm_try!(ctx.locate_field(*param0));
@@ -264,7 +295,7 @@ fn complete_load<'gc, T: VesOps<'gc>>(
     };
 
     // Thread-safe path: use GlobalState
-    let storage = ctx.statics().get(field.parent.clone(), &static_lookup);
+    let (storage, _) = static_field_storage(ctx, &field, &static_lookup);
     let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(&field.field().return_type));
     let val_bytes = storage
         .storage
@@ -314,7 +345,7 @@ fn complete_store<'gc, T: VesOps<'gc>>(
     };
 
     // Thread-safe path: use GlobalState
-    let storage = ctx.statics().get(field.parent.clone(), &static_lookup);
+    let (storage, _) = static_field_storage(ctx, &field, &static_lookup);
     let t = dotnet_vm_ops::vm_try!(res_ctx.make_concrete(&field.field().return_type));
 
     let layout = storage.layout();
@@ -518,7 +549,7 @@ fn complete_address<'gc, T: VesOps<'gc>>(
         .for_type_with_generics(field.parent.clone(), &static_lookup);
     let name = &field.field().name;
 
-    let storage = ctx.statics().get(field.parent.clone(), &static_lookup);
+    let (storage, thread_id) = static_field_storage(ctx, &field, &static_lookup);
     // SAFETY: F10.RawMemoryAccessValid — Initialized static storage owns a fixed backing allocation that remains live through
     // the returned Arc; this captures its base for an owner-described static ManagedPtr.
     let base_ptr = unsafe { storage.storage.raw_data_ptr() };
@@ -535,11 +566,12 @@ fn complete_address<'gc, T: VesOps<'gc>>(
     let target_type = dotnet_vm_ops::vm_try!(ctx.loader().find_concrete_type(t));
 
     ctx.push(StackValue::ManagedPtr(
-        ManagedPtr::new_static(
+        ManagedPtr::new_static_for_thread(
             NonNull::new(field_ptr),
             target_type,
             field.parent,
             static_lookup,
+            thread_id,
             false,
             field_layout.position,
         )

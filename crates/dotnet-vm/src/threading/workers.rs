@@ -160,7 +160,7 @@ impl WorkerRegistry {
         &self,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
-        self.spawn_owner_inner(None, run)
+        self.spawn_owner_inner(None, false, run)
     }
 
     pub(crate) fn spawn_managed_owner(
@@ -168,21 +168,30 @@ impl WorkerRegistry {
         thread: ObjectPtr,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
-        self.spawn_owner_inner(Some(thread), run)
+        self.spawn_owner_inner(Some(thread), false, run)
+    }
+
+    pub(crate) fn spawn_pool_owner(
+        &self,
+        run: impl FnOnce(RunningWorker) + Send + 'static,
+    ) -> WorkerCompletion {
+        self.spawn_owner_inner(None, true, run)
     }
 
     fn spawn_owner_inner(
         &self,
         thread: Option<ObjectPtr>,
+        pool_background: bool,
         run: impl FnOnce(RunningWorker) + Send + 'static,
     ) -> WorkerCompletion {
         let mut state = self.state.lock();
         let index = state.entries.len();
-        let background = thread.is_some_and(|thread| {
-            let metadata = state.threads.get_mut(&thread).expect("registered thread");
-            metadata.completion_index = Some(index);
-            metadata.background
-        });
+        let background = pool_background
+            || thread.is_some_and(|thread| {
+                let metadata = state.threads.get_mut(&thread).expect("registered thread");
+                metadata.completion_index = Some(index);
+                metadata.background
+            });
         let published = Arc::clone(&self.state);
         let handle = std::thread::spawn(move || {
             let token = RunningWorker {
@@ -332,6 +341,16 @@ pub(crate) struct RetiredWorker(RunningWorker);
 
 #[cfg(feature = "multithreading")]
 impl RunningWorker {
+    pub(crate) fn attach_pool_thread(&self, thread: ObjectPtr) {
+        let mut state = self.state.lock();
+        let metadata = state
+            .threads
+            .get_mut(&thread)
+            .expect("registered pool thread");
+        metadata.background = true;
+        metadata.completion_index = Some(self.index);
+    }
+
     pub(crate) fn complete(self, result: ExecutorResult) -> CompletedWorker {
         {
             let mut state = self.state.lock();

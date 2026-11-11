@@ -51,6 +51,17 @@ pub fn intrinsic_thread_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx.threading_start_managed_thread(thread, dotnet_value::object::ObjectRef(None), false)
 }
 
+/// TimerQueue uses UnsafeStart so its background thread does not capture an ExecutionContext.
+#[dotnet_intrinsic("void System.Threading.Thread::UnsafeStart()")]
+pub fn intrinsic_thread_unsafe_start<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let thread = ctx.pop_obj();
+    ctx.threading_start_managed_thread(thread, dotnet_value::object::ObjectRef(None), false)
+}
+
 #[dotnet_intrinsic("void System.Threading.Thread::Start(object)")]
 pub fn intrinsic_thread_start_with_argument<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
@@ -91,6 +102,18 @@ pub fn intrinsic_thread_set_background<'gc, T: ThreadingIntrinsicHost<'gc>>(
     let value = ctx.pop_i32() != 0;
     let thread = ctx.pop_obj();
     ctx.threading_background(thread, Some(value))
+}
+
+/// CoreLib stores the name on the managed Thread object; only its optional OS notification is absent.
+#[dotnet_intrinsic("void System.Threading.Thread::ThreadNameChanged(string)")]
+pub fn intrinsic_thread_name_changed<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _name = ctx.pop_obj();
+    let _thread = ctx.pop_obj();
+    StepResult::Continue
 }
 
 /// System.Threading.Thread::Join()
@@ -232,21 +255,22 @@ pub fn intrinsic_thread_get_current_processor_fallback<'gc, T: ThreadingIntrinsi
     StepResult::Continue
 }
 
-/// System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)
-///
-/// dotnet-rs does not implement general ThreadPool work-item scheduling. Queue requests from DI
-/// warm-up paths are therefore treated as accepted no-ops; this is separate from the narrowly
-/// supported explicit `Thread(ThreadStart)` lifecycle.
-#[dotnet_intrinsic(
-    "static bool System.Threading.ThreadPool::UnsafeQueueUserWorkItem(System.Threading.WaitCallback, object)"
-)]
-pub fn intrinsic_threadpool_unsafe_queue_user_work_item<'gc, T: ThreadingIntrinsicHost<'gc>>(
+/// CoreLib task waits notify the pool before blocking. No compensation worker is available.
+#[dotnet_intrinsic("static bool System.Threading.ThreadPool::NotifyThreadBlocked()")]
+pub fn intrinsic_threadpool_notify_thread_blocked<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _state = ctx.pop();
-    let _callback = ctx.pop();
-    ctx.push_i32(1);
+    ctx.push_i32(0);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static void System.Threading.ThreadPool::NotifyThreadUnblocked()")]
+pub fn intrinsic_threadpool_notify_thread_unblocked<'gc, T: ThreadingIntrinsicHost<'gc>>(
+    _ctx: &mut T,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
     StepResult::Continue
 }

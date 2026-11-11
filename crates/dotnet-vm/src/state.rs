@@ -376,8 +376,12 @@ pub struct SharedGlobalState {
     pub sync_blocks: SyncBlockManager,
     pub thread_manager: Arc<ThreadManager>,
     pub(crate) workers: crate::threading::workers::WorkerRegistry,
+    pub(crate) pool: crate::threading::pool::ThreadPool,
+    pub(crate) events: crate::threading::events::Events,
     #[cfg(feature = "multithreading")]
     fatal_exception: Mutex<Option<dotnet_vm_data::ManagedException>>,
+    #[cfg(feature = "multithreading")]
+    fatal_worker_error: Mutex<Option<crate::error::VmError>>,
     pending_finalizer_arenas: AtomicUsize,
     pub metrics: Arc<RuntimeMetrics>,
     pub tracer: Tracer,
@@ -467,8 +471,12 @@ impl SharedGlobalState {
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(stw_in_progress.clone()),
             workers: crate::threading::workers::WorkerRegistry::default(),
+            pool: crate::threading::pool::ThreadPool::default(),
+            events: crate::threading::events::Events::default(),
             #[cfg(feature = "multithreading")]
             fatal_exception: Mutex::new(None),
+            #[cfg(feature = "multithreading")]
+            fatal_worker_error: Mutex::new(None),
             pending_finalizer_arenas: AtomicUsize::new(0),
             metrics,
             tracer,
@@ -548,6 +556,20 @@ impl SharedGlobalState {
     #[cfg(feature = "multithreading")]
     pub(crate) fn fatal_exception(&self) -> Option<dotnet_vm_data::ManagedException> {
         self.fatal_exception.lock().clone()
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn report_worker_error(&self, error: crate::error::VmError) {
+        let mut fatal = self.fatal_worker_error.lock();
+        if fatal.is_none() {
+            *fatal = Some(error);
+        }
+        self.abort_signal().request_abort();
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn fatal_worker_error(&self) -> Option<crate::error::VmError> {
+        self.fatal_worker_error.lock().clone()
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {
