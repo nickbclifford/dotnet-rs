@@ -161,9 +161,18 @@ exclusions. The remaining order is reflection, non-inline producers, then blocki
    any now-unused `MonitorHost` methods. Also settle the Transient/Unmanaged question here and
    either admit `Unmanaged` (deleting the byref monitor fallbacks and, if nothing else uses it,
    `monitor_retry`) or record both shapes in "Kept".
+   - The retained `MulticastState` (see "Kept") calls each target through non-inline dispatch,
+     where an async intrinsic without a fallback returns `NotImplemented`. Today only targets
+     whose own signature has an excluded shape reach it, and the one such async intrinsic,
+     `Monitor.Enter(object, ref bool)` with an `Unmanaged` flag, keeps its fallback. Admitting
+     `Unmanaged` in `stash` and deleting the Monitor byref fallbacks therefore also requires
+     admitting `Unmanaged` origins in the multicast byref check (`try_start_multicast`);
+     otherwise a multicast `ref bool` delegate over an unmanaged flag breaks.
    - Tests: existing join/monitor/GC fixtures in ST and `multithreading`; a timed `Join` whose
      deadline survives a GC stop; `GC.Collect` observed by a finalizer fixture; a unit test per
-     removed fallback that fails if the registration reappears.
+     removed fallback that fails if the registration reappears; a registry test that every
+     async intrinsic without a fallback has a signature the native multicast and reflection
+     selectors admit, so no retained continuation can reach it.
 6. **Bulk intrinsics.** `mem_helpers`/`buffer` first (correctness), then string, then span
    equality, one family per commit, each gated on a benchmark comparison against the parent
    commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
