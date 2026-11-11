@@ -28,24 +28,16 @@ state on the caller's frame:
 
 ### Declined shapes (why the continuations are still live)
 
-Multicast and reflection decline the same transport gap. `RootedValue::stash` can already root a
-`StackValue::ValueType`, but the native-call output and argument shapes cannot describe one:
+Slice 1 added native-call transport for plain value types and enums, and admitted `Static` byref
+origins. The remaining declined shapes are:
 
-- `NativeOutput` (`stack/context.rs`) has no value-type variant, so `multicast_value_shape`
-  returns `Unsupported` for every non-primitive struct argument or return
-  (`Func<DateTime>`, `Action<CancellationToken>`, `EventHandler<TStruct>`, `Func<int?>`).
-- Reflection's selector falls back for any non-scalar value-type return, and for **enums
-  deliberately** ("Enums stay on the synchronous path: their arguments keep the registered
-  fallback exercised", `methods.rs`), while the multicast selector already maps enums to their
-  underlying type.
-- Byref arguments are admitted only for `Heap`/`FrameHome` (+ MT cross-arena) origins whose
-  target type contains no managed pointers. `Static` byref origins are declined here even though
-  `stash` admits them since plan 13.
+- Byref arguments require `Heap`, `FrameHome`, `Static` or MT cross-arena origins, and a target
+  type without managed pointers.
 - Byref returns and `TypedReference` are declined in both.
 - Ref-struct arguments (`Span<T>`, `SpanAction`) carry `ManagedPtr` fields whose origins may be
   `Transient` or `Unmanaged`; `stash` rejects those, so they cannot simply be admitted as values.
 
-Until struct values cross a native call, deleting either continuation breaks valid programs.
+Deleting either continuation still requires a decision for the remaining declined shapes.
 
 ### Native calls still use legacy initialization
 
@@ -83,8 +75,8 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | `GC.Collect` x3 | **Remove** | The `increment_ip` + `Yield` trick is a hand-written effect. Needs an effect that requests a full collect and resumes after the stop. |
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
-| Multicast `Invoke` (`MulticastState`) | **Remove after struct transport** | The native body exists. What is missing is value-type arguments and returns, `Static` byref origins and enum parity with reflection. Ref-struct arguments, byref returns and `TypedReference` need a decision: admit, or keep the continuation for exactly those with a "Kept" row. The `retrying_initializer` flag goes with the static-init slice. |
-| Reflection `InvokeReturn` / `reflection_pending` | **Remove after struct transport** | The same value-type gap, plus enums (declined on purpose to keep the fallback exercised, which is no longer a reason), wrong receiver type and argument validation (plan 13's throw helper moves these into the body), byref write-back after a throw (a README deviation, fixed in the body). Ambiguous-match "first best match" behaviour is unchanged unless deleting a fallback requires it. Deleting `reflection_pending` also removes the per-instruction pending-reflection check (README "Pending-reflection instruction cost"); measure it. |
+| Multicast `Invoke` (`MulticastState`) | **Remove after struct transport** | The native body admits plain values and static byrefs. Ref-struct arguments, byref returns and `TypedReference` need a decision: admit, or keep the continuation for exactly those with a "Kept" row. The `retrying_initializer` flag goes with the static-init slice. |
+| Reflection `InvokeReturn` / `reflection_pending` | **Remove after struct transport** | Wrong receiver type and argument validation still fall back (plan 13's throw helper moves these into the body); byref write-back after a throw is a README deviation to fix in the body. Ambiguous-match "first best match" behaviour is unchanged unless deleting a fallback requires it. Deleting `reflection_pending` also removes the per-instruction pending-reflection check (README "Pending-reflection instruction cost"); measure it. |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Verify, then likely keep** | `lock` statements use a local (`FrameHome`), admitted. A `Transient` `bool&` has no obvious producer in C# or CoreLib; confirm by grepping producers and by a handwritten-IL probe. `Unmanaged` stashing is *not* a new hazard: the legacy retry also writes the raw address after yielding, with the same unchecked trust (`F10.RawMemoryAccessValid`), so plan 13's "stability" objection does not distinguish the two paths. Admitting it is cheap; admitting `Transient` is not (would need tracing a stack-resident value). |
 | `newobj` of an intrinsic constructor (`execute_intrinsic_call`) | **Remove** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`); today `newobj` returns their `Yield` without completing the receiver and re-allocates on retry. Converting the string constructors in the bulk slice depends on this slice. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
@@ -124,12 +116,12 @@ The original ordering put blocking intrinsics first. A body-only `GC.Collect` fa
 the still-live non-inline reflection and multicast continuations: both
 `reflection_retry_completed_collection_does_not_retry` and
 `multicast_fallback_completes_collection_targets` return `NotImplemented` in ST and
-`multithreading`. Those tests force the fallback through a test seam; the real reason the
-continuations are live is the declined shapes above. So the order is: transport, then the
+`multithreading`. Those tests force the fallback through a test seam; before slice 1 the
+continuations were also needed for plain value types. So the order is: transport, then the
 continuations that transport retires, then the remaining non-inline producers, then the
 intrinsics that lose their fallbacks.
 
-1. **Value types across native calls.** Add a value-type shape to `NativeOutput` and the
+1. **Value types across native calls (complete).** Add a value-type shape to `NativeOutput` and the
    argument check, map enums to their underlying type in reflection as multicast already does,
    and admit `Static` byref origins in the multicast argument check. Both selectors stop
    declining these shapes. Continuations are not deleted yet.
@@ -137,6 +129,11 @@ intrinsics that lose their fallbacks.
      with an object field, `Nullable<int>`, `DateTime`, an enum), each through a target that
      suspends and with a GC between targets; `tracing` asserts `multicast_path = "async"` and
      `reflection_invoke_path = "async"` for them.
+   - The selectors retain fallback for value types containing managed pointers. The multicast
+     ref-struct fixture checks both argument and return exclusions; the existing static-byref
+     fixtures now assert the async path.
+   - Validation: VM library tests and the selection and CLR differential fixtures passed in ST
+     and `multithreading` with `DOTNET_SKIP_BUILD=1` (new fixtures built on demand).
 2. **Multicast continuation.** Delete `MulticastState`, `handle_multicast_step`, the checks at
    `call_ops_impl.rs:1090` and `context.rs:464`, `MULTICAST_FALLBACK_TEST` and the non-inline
    (`synthetic`) branch of `try_start_multicast`, or record in "Kept" exactly which shape keeps

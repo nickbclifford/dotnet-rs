@@ -36,6 +36,7 @@ pub(crate) enum NativeOutput {
     NativeInt,
     NativeFloat,
     Object,
+    ValueType,
     Unsupported,
 }
 

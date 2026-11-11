@@ -118,16 +118,18 @@ fn multicast_selection_precedes_operand_commitment() {
         ("delegate_multicast_42.cs", (1, 0, 0)),
         ("delegate_multicast_many_42.cs", (1, 0, 0)),
         ("delegate_multicast_refs_42.cs", (2, 0, 0)),
-        ("delegate_multicast_finalizers_42.cs", (1, 1, 0)),
+        ("delegate_multicast_finalizers_42.cs", (2, 0, 0)),
         ("delegate_multicast_filters_42.cs", (4, 0, 0)),
-        ("delegate_multicast_static_ref_filters_42.cs", (0, 2, 0)),
+        ("delegate_multicast_static_ref_filters_42.cs", (2, 0, 0)),
         ("delegate_multicast_cctor_42.cs", (1, 0, 0)),
         ("delegate_multicast_ref_cctor_42.cs", (1, 0, 0)),
         ("delegate_multicast_scalar_42.cs", (1, 0, 0)),
         ("delegate_multicast_reflection_42.cs", (10, 0, 0)),
-        ("delegate_multicast_static_ref_42.cs", (0, 1, 0)),
-        ("delegate_multicast_static_ref_cctor_42.cs", (0, 1, 0)),
-        ("delegate_multicast_aggregate_42.cs", (0, 0, 1)),
+        ("delegate_multicast_static_ref_42.cs", (1, 0, 0)),
+        ("delegate_multicast_static_ref_cctor_42.cs", (1, 0, 0)),
+        ("delegate_multicast_aggregate_42.cs", (1, 0, 0)),
+        ("delegate_multicast_values_42.cs", (5, 0, 0)),
+        ("delegate_multicast_ref_struct_42.cs", (0, 1, 1)),
     ] {
         let harness = TestHarness::get();
         let path = format!("tests/fixtures/delegates/{fixture}");
@@ -217,7 +219,8 @@ fn reflection_path_selection() {
             "tests/fixtures/reflection/invoke_constructors_42.cs",
             (7, 0, 0),
         ),
-        ("tests/fixtures/reflection/invoke_fallback_42.cs", (0, 5, 2)),
+        ("tests/fixtures/reflection/invoke_fallback_42.cs", (5, 0, 0)),
+        ("tests/fixtures/reflection/invoke_values_42.cs", (6, 0, 0)),
         (
             "tests/fixtures/reflection/invoke_byref_writethrough_42.cs",
             (1, 0, 0),

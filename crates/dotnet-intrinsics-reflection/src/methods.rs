@@ -1,7 +1,7 @@
 use crate::ReflectionIntrinsicHost;
 use crate::invoke_args::{
-    ArgPlan, ParamShape, nullable_inner, nullable_with_value, param_shape, plan_argument,
-    receiver_fits, widen_boxed,
+    ArgPlan, ParamShape, nullable_with_value, param_shape, plan_argument, receiver_fits,
+    widen_boxed,
 };
 use dotnet_intrinsics_delegates::helpers::{
     set_delegate_multicast_targets, set_delegate_target_method,
@@ -37,29 +37,13 @@ fn invoke_operand_window_supported(values: &[StackValue<'_>; 6]) -> bool {
         && matches!(values[5], StackValue::ObjectRef(_))
 }
 
-/// Enums stay on the synchronous path: their arguments keep the registered fallback exercised.
-fn scalar_like<'gc, T: ReflectionIntrinsicHost<'gc>>(_ctx: &T, concrete: &ConcreteType) -> bool {
-    scalar_type(concrete)
-}
-
-fn scalar_type(concrete: &ConcreteType) -> bool {
-    matches!(
-        concrete.get(),
-        BaseType::Boolean
-            | BaseType::Char
-            | BaseType::Int8
-            | BaseType::UInt8
-            | BaseType::Int16
-            | BaseType::UInt16
-            | BaseType::Int32
-            | BaseType::UInt32
-            | BaseType::Int64
-            | BaseType::UInt64
-            | BaseType::IntPtr
-            | BaseType::UIntPtr
-            | BaseType::Float32
-            | BaseType::Float64
-    )
+/// Values with embedded managed pointers cannot be retained by native effects.
+fn transportable_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    concrete: &ConcreteType,
+) -> bool {
+    ctx.reflection_type_layout(concrete.clone())
+        .is_ok_and(|layout| !layout.has_managed_ptrs())
 }
 
 /// Check that argument marshalling can be rooted before selecting an effects call.
@@ -104,13 +88,10 @@ pub fn invoke_arguments_supported<'gc, T: ReflectionIntrinsicHost<'gc>>(
             }
             let plan = plan_argument(ctx, arg, &shape, byref);
             if byref {
-                return scalar_like(ctx, &shape.concrete)
+                return transportable_value(ctx, &shape.concrete)
                     && (arg.0.is_none() || plan == ArgPlan::Exact);
             }
-            let transportable = scalar_like(ctx, &shape.concrete)
-                || (shape.td.definition().name == "Nullable`1"
-                    && nullable_inner(&shape.concrete)
-                        .is_some_and(|inner| scalar_like(ctx, &inner)));
+            let transportable = transportable_value(ctx, &shape.concrete);
             transportable
                 && matches!(
                     plan,
@@ -191,7 +172,7 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
         let Ok(value_type) = ctx.reflection_is_value_type_with_lookup(td, &lookup) else {
             return NativeSelection::Fallback;
         };
-        if value_type && !scalar_type(&concrete) {
+        if value_type && !transportable_value(ctx, &concrete) {
             return NativeSelection::Fallback;
         }
     }

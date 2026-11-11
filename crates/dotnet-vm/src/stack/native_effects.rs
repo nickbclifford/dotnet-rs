@@ -815,6 +815,15 @@ fn multicast_value_shape(
         BaseType::IntPtr | BaseType::UIntPtr => NativeOutput::NativeInt,
         BaseType::Float32 | BaseType::Float64 => NativeOutput::NativeFloat,
         _ if concrete.is_class(ctx.loader().as_ref()) => NativeOutput::Object,
+        BaseType::Type { .. }
+            if ctx
+                .current_context()
+                .resolver()
+                .type_layout_cached_with_lookup(concrete.clone(), method.resolution(), generics)
+                .is_ok_and(|layout| !layout.has_managed_ptrs()) =>
+        {
+            NativeOutput::ValueType
+        }
         _ => NativeOutput::Unsupported,
     }
 }
@@ -839,6 +848,7 @@ fn multicast_argument_supported(shape: NativeOutput, value: &StackValue<'_>) -> 
             | (NativeOutput::NativeInt, StackValue::NativeInt(_))
             | (NativeOutput::NativeFloat, StackValue::NativeFloat(_))
             | (NativeOutput::Object, StackValue::ObjectRef(_))
+            | (NativeOutput::ValueType, StackValue::ValueType(_))
     )
 }
 
@@ -1271,7 +1281,8 @@ impl<'gc> VesContext<'_, 'gc> {
                     {
                         match pointer.origin() {
                             dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
-                            | dotnet_value::pointer::PointerOrigin::FrameHome(_) => true,
+                            | dotnet_value::pointer::PointerOrigin::FrameHome(_)
+                            | dotnet_value::pointer::PointerOrigin::Static(_) => true,
                             #[cfg(feature = "multithreading")]
                             dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => true,
                             _ => false,
@@ -1770,6 +1781,9 @@ impl<'gc> VesContext<'_, 'gc> {
                         }
                         NativeOutput::Object => {
                             matches!(work.outputs.as_slice(), [StackValue::ObjectRef(_)])
+                        }
+                        NativeOutput::ValueType => {
+                            matches!(work.outputs.as_slice(), [StackValue::ValueType(_)])
                         }
                         NativeOutput::Unsupported => false,
                     };

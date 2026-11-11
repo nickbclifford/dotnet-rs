@@ -190,6 +190,18 @@ diff_test!(
     "tests/fixtures/reflection/invoke_fallback_42.cs"
 );
 diff_test!(
+    reflection_invoke_values_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_values_42.cs"
+);
+diff_test!(
+    delegates_multicast_values_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_values_42.cs"
+);
+diff_test!(
+    delegates_multicast_ref_struct_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_ref_struct_42.cs"
+);
+diff_test!(
     reflection_invoke_constructors_42_matches_dotnet,
     "tests/fixtures/reflection/invoke_constructors_42.cs"
 );
