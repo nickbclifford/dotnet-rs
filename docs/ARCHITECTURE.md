@@ -37,7 +37,7 @@ The project is divided into several crates, each with a focused responsibility:
 - **dotnet-intrinsics-unsafe**: Unsafe/marshalling intrinsic handlers and host seams.
 - **dotnet-simd**: Shared SIMD byte-operation helpers with scalar fallback, used by intrinsic crates.
 - **dotnet-metrics**: Standalone crate for `RuntimeMetrics` with per-cache hit/miss tracking (`CacheKind`, `CacheEvent`, `CacheStats`, `CacheStat`), serializable via `serde`.
-- **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides guarded emit/span helpers, structured logging via the `tracing` crate with configurable levels (`DOTNET_RS_TRACE` env), optional JSON output (`DOTNET_RS_TRACE_FORMAT=json`), and an async flusher thread via `crossbeam-channel`.
+- **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides guarded emit/span helpers, structured logging via the `tracing` crate with configurable output (`DOTNET_RS_TRACE`) and levels (`RUST_LOG` or `DOTNET_RS_TRACE_LEVEL`), optional JSON output (`DOTNET_RS_TRACE_FORMAT=json`), and an async flusher thread via `crossbeam-channel`.
 - **dotnet-assemblies**: Handles loading and resolving .NET assemblies. It also includes a support library of C# stubs for core types.
 - **dotnet-value**: Defines the representation of all .NET values at runtime, including stack values, managed/unmanaged pointers, heap objects, and field storage layouts.
 - **dotnet-types**: Implements the .NET type system, including type descriptors, method/field info, generics, and type comparison logic.

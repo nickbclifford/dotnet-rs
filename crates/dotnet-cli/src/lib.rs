@@ -38,6 +38,8 @@ fn finish_executor(executor: vm::Executor, shared: &Arc<state::SharedGlobalState
     shared.shutdown_workers();
     #[cfg(feature = "multithreading")]
     drop(arena);
+    // Worker traces may have been emitted after the entry executor's flush.
+    shared.tracer.flush();
 }
 
 /// Initialize the rayon global thread pool to a bounded size before any assembly parsing begins.

@@ -89,10 +89,14 @@ The pinned Miri lanes run without that feature, so these tests execute there.
 In addition to feature flags, some components use environment variables for extra tracing:
 
 - `DOTNET_TRACE_GC_PTR_READ=1`: Enables tracing of every GC pointer read (very verbose).
-- `DOTNET_RS_TRACE=info`: Configures the global tracing level (uses `env_filter` syntax).
+- `DOTNET_RS_TRACE`: Selects `stdout` (also `1` or `true`), `stderr`, or a file path for trace output.
+- `RUST_LOG`: Configures trace levels with `env_filter` syntax; `DOTNET_RS_TRACE_LEVEL`, when set,
+  instead selects a predefined level for VM trace targets.
+- `DOTNET_RS_TRACE_METHODS`: Optional comma-separated method-name substrings selecting method
+  entry and exit events only; other event categories are unaffected. An empty list selects all.
 - `DOTNET_RS_TRACE_FORMAT=json`: Changes tracing output format to JSON.
 
 Example:
 ```bash
-DOTNET_RS_TRACE=dotnet_vm=debug cargo test --features validation-all
+DOTNET_RS_TRACE=stderr RUST_LOG=dotnet_vm=debug cargo test --features validation-all
 ```

@@ -1,8 +1,10 @@
 //! Structured logging and diagnostics for the dotnet-rs VM.
 //!
 //! This crate wraps the `tracing` ecosystem, providing a bounded back-pressure channel
-//! (`TRACER_CHANNEL_CAPACITY = 8_192`) for VM trace events. Configure via the
-//! `DOTNET_RS_TRACE` environment variable (e.g. `info`, `dotnet_vm=debug`).
+//! (`TRACER_CHANNEL_CAPACITY = 8_192`) for VM trace events. `DOTNET_RS_TRACE` selects
+//! stdout, stderr, or an output file; configure levels with `RUST_LOG` or
+//! `DOTNET_RS_TRACE_LEVEL`. Set `DOTNET_RS_TRACE_METHODS` to a comma-separated list of
+//! method-name substrings to bound method entry/exit tracing to selected members.
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use dotnet_metrics::{CacheStats, RuntimeMetrics};
 use gc_arena::static_collect;
@@ -67,7 +69,7 @@ enum LogEntry {
     DumpGcStats(usize, usize, usize, usize, usize),
     DumpRuntimeMetrics(u64, u64, u64, u64, Box<dotnet_metrics::CacheStats>),
     DroppedByBackpressure(u64),
-    Flush,
+    Flush(u64, Sender<()>),
 }
 
 /// Guarded trace emitter bound to an indentation level.
@@ -87,6 +89,7 @@ pub struct TraceSpan {
 pub struct Tracer {
     sender: Option<Sender<LogEntry>>,
     dropped_by_backpressure: Arc<AtomicU64>,
+    method_filter: Option<Vec<String>>,
 }
 
 static_collect!(Tracer);
@@ -123,17 +126,21 @@ impl<'a> TraceSink<'a> {
 
     #[inline]
     pub fn method_entry(&self, name: &str, signature: &str) {
-        self.tracer.send(LogEntry::MethodEntry(
-            self.indent,
-            name.to_string(),
-            signature.to_string(),
-        ));
+        if self.tracer.method_is_selected(name) {
+            self.tracer.send(LogEntry::MethodEntry(
+                self.indent,
+                name.to_string(),
+                signature.to_string(),
+            ));
+        }
     }
 
     #[inline]
     pub fn method_exit(&self, name: &str) {
-        self.tracer
-            .send(LogEntry::MethodExit(self.indent, name.to_string()));
+        if self.tracer.method_is_selected(name) {
+            self.tracer
+                .send(LogEntry::MethodExit(self.indent, name.to_string()));
+        }
     }
 
     #[inline]
@@ -215,11 +222,23 @@ impl Tracer {
         INIT.call_once(|| {
             init_tracing();
         });
+        let method_filter = env::var("DOTNET_RS_TRACE_METHODS")
+            .ok()
+            .map(|filter| {
+                filter
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|filter| !filter.is_empty());
 
         if !tracing::enabled!(Level::ERROR) && env::var("DOTNET_RS_TRACE").is_err() {
             return Self {
                 sender: None,
                 dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+                method_filter,
             };
         }
 
@@ -232,7 +251,14 @@ impl Tracer {
         Self {
             sender: Some(sender),
             dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            method_filter,
         }
+    }
+
+    fn method_is_selected(&self, name: &str) -> bool {
+        self.method_filter
+            .as_ref()
+            .is_none_or(|filter| filter.iter().any(|part| name.contains(part)))
     }
 
     fn flusher(receiver: Receiver<LogEntry>) {
@@ -401,8 +427,11 @@ impl Tracer {
                         dropped
                     );
                 }
-                LogEntry::Flush => {
-                    // Force flush if supported by subscriber (standard fmt doesn't have a flush)
+                LogEntry::Flush(dropped, ack) => {
+                    if dropped != 0 {
+                        warn!(target: "tracer", "dropped {} trace event(s) because tracer channel was full", dropped);
+                    }
+                    let _ = ack.send(());
                 }
             }
         }
@@ -474,8 +503,20 @@ impl Tracer {
         self.send(LogEntry::Msg(level, indent, msg));
     }
 
+    /// Wait until the flusher has processed all entries queued before this barrier.
+    /// Concurrent emitters can still enqueue or drop events after the barrier.
     pub fn flush(&self) {
-        self.send(LogEntry::Flush);
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let dropped = self.dropped_by_backpressure.swap(0, Ordering::Relaxed);
+        let (ack, done) = bounded(1);
+        if sender.send(LogEntry::Flush(dropped, ack)).is_ok() {
+            let _ = done.recv();
+        } else {
+            self.dropped_by_backpressure
+                .fetch_add(dropped, Ordering::Relaxed);
+        }
     }
 
     pub fn trace_exception(&self, indent: usize, exception: &str, location: &str) {
@@ -787,6 +828,36 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn method_filter_selects_entries_and_exits_without_filtering_interop() {
+        let (sender, receiver) = bounded::<LogEntry>(8);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            method_filter: Some(vec!["Selected".into()]),
+        };
+        let sink = TraceSink {
+            tracer: &tracer,
+            indent: 0,
+        };
+        sink.method_entry("SelectedMethod", "signature");
+        sink.method_exit("SelectedMethod");
+        sink.method_entry("OtherMethod", "signature");
+        sink.method_exit("OtherMethod");
+        sink.interop("CALL", "OtherMethod");
+        assert!(
+            matches!(receiver.try_recv(), Ok(LogEntry::MethodEntry(_, name, _)) if name == "SelectedMethod")
+        );
+        assert!(
+            matches!(receiver.try_recv(), Ok(LogEntry::MethodExit(_, name)) if name == "SelectedMethod")
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(LogEntry::Interop(_, _, _))
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
     fn backpressure_drops_events_when_channel_is_full() {
         const TOTAL: usize = 10_000;
         let dropped = Arc::new(AtomicU64::new(0));
@@ -794,6 +865,7 @@ mod tests {
         let tracer = Tracer {
             sender: Some(sender),
             dropped_by_backpressure: dropped.clone(),
+            method_filter: None,
         };
 
         for i in 0..TOTAL {
@@ -805,6 +877,36 @@ mod tests {
     }
 
     #[test]
+    fn flush_waits_for_queued_entries_and_reports_pending_drops() {
+        let (sender, receiver) = bounded::<LogEntry>(1);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            method_filter: None,
+        };
+        tracer.send(LogEntry::Msg(TraceLevel::Info, 0, "queued".into()));
+        tracer.send(LogEntry::Msg(TraceLevel::Info, 0, "dropped".into()));
+        let (finished, completion) = bounded(1);
+        let worker = thread::spawn(move || {
+            tracer.flush();
+            finished.send(()).unwrap();
+        });
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(5)),
+            Ok(LogEntry::Msg(..))
+        ));
+        let LogEntry::Flush(dropped, ack) = receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("expected flush barrier");
+        };
+        assert_eq!(dropped, 1);
+        assert!(completion.try_recv().is_err());
+        ack.send(()).unwrap();
+        completion.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn tracer_channel_throughput_accounting_under_backpressure() {
         const TOTAL: usize = 50_000;
         let dropped = Arc::new(AtomicU64::new(0));
@@ -812,6 +914,7 @@ mod tests {
         let tracer = Tracer {
             sender: Some(sender),
             dropped_by_backpressure: dropped.clone(),
+            method_filter: None,
         };
 
         let worker = thread::spawn(move || {
@@ -842,6 +945,7 @@ mod tests {
         let tracer = Tracer {
             sender: None,
             dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            method_filter: None,
         };
         let called = std::sync::atomic::AtomicBool::new(false);
 
@@ -859,6 +963,7 @@ mod tests {
         let tracer = Tracer {
             sender: Some(sender),
             dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            method_filter: None,
         };
         let metrics = RuntimeMetrics::new();
         let mut sizes = CacheSizes::default();
@@ -886,6 +991,7 @@ mod tests {
         let tracer = Tracer {
             sender: Some(sender),
             dropped_by_backpressure,
+            method_filter: None,
         };
 
         {

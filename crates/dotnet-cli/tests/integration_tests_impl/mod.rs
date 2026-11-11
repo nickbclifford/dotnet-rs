@@ -7,3 +7,5 @@ pub mod harness;
 
 #[cfg(not(feature = "fuzzing"))]
 mod reflection_tail;
+#[cfg(not(feature = "fuzzing"))]
+mod trace_audit;
