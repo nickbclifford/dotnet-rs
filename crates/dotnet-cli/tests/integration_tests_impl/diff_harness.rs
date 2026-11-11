@@ -197,6 +197,23 @@ diff_test!(
     delegates_multicast_values_42_matches_dotnet,
     "tests/fixtures/delegates/delegate_multicast_values_42.cs"
 );
+#[cfg(feature = "multithreading")]
+diff_test!(
+    delegates_multicast_contended_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_contended_42.cs"
+);
+diff_test!(
+    delegates_multicast_unmanaged_ref_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_unmanaged_ref_42.cs"
+);
+diff_test!(
+    delegates_multicast_typed_reference_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_typed_reference_42.cs"
+);
+diff_test!(
+    delegates_multicast_byref_return_42_matches_dotnet,
+    "tests/fixtures/delegates/delegate_multicast_byref_return_42.cs"
+);
 diff_test!(
     delegates_multicast_ref_struct_42_matches_dotnet,
     "tests/fixtures/delegates/delegate_multicast_ref_struct_42.cs"

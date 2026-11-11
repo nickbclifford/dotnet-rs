@@ -56,8 +56,6 @@ thread_local! {
     pub(crate) static WAIT_TEST_HOOK: std::cell::RefCell<Option<WaitTestHook>> = std::cell::RefCell::new(None);
     pub(crate) static MONITOR_FLAG_WRITES: std::cell::RefCell<Option<Vec<bool>>> =
         const { std::cell::RefCell::new(None) };
-    pub(crate) static MULTICAST_FALLBACK_TEST: std::cell::Cell<Option<usize>> =
-        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1229,19 +1227,6 @@ impl<'gc> VesContext<'_, 'gc> {
                     && vector.object_ref_elements(self.gc.mutation()).next() != Some(receiver))
         });
         if !multicast {
-            return None;
-        }
-        // `GC.Collect`'s delegate signatures are normally admitted; exercise the
-        // fallback continuation with those same targets without changing dispatch.
-        #[cfg(test)]
-        if MULTICAST_FALLBACK_TEST.with(|slot| {
-            if let Some(count) = slot.get() {
-                slot.set(Some(count + 1));
-                true
-            } else {
-                false
-            }
-        }) {
             return None;
         }
         if matches!(

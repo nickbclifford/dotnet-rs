@@ -129,15 +129,23 @@ fn multicast_selection_precedes_operand_commitment() {
         ("delegate_multicast_static_ref_cctor_42.cs", (1, 0, 0)),
         ("delegate_multicast_aggregate_42.cs", (1, 0, 0)),
         ("delegate_multicast_values_42.cs", (5, 0, 0)),
-        ("delegate_multicast_ref_struct_42.cs", (0, 1, 1)),
+        ("delegate_multicast_ref_struct_42.cs", (0, 2, 1)),
+        ("delegate_multicast_byref_return_42.cs", (0, 0, 1)),
+        ("delegate_multicast_typed_reference_42.cs", (0, 1, 0)),
+        ("delegate_multicast_unmanaged_ref_42.cs", (0, 1, 0)),
+        ("delegate_multicast_gc_collect_42.cs", (3, 0, 0)),
+        #[cfg(feature = "multithreading")]
+        ("delegate_multicast_contended_42.cs", (1, 0, 0)),
     ] {
         let harness = TestHarness::get();
         let path = format!("tests/fixtures/delegates/{fixture}");
         let dll = harness.ensure_dll(Path::new(&path));
         let counts = SyncArc::new(Counts::default());
         let subscriber = tracing_subscriber::registry().with(Capture(SyncArc::clone(&counts)));
-        let code = tracing::subscriber::with_default(subscriber, || harness.run(&dll));
-        assert_eq!(code, 42, "{fixture}");
+        let result = tracing::subscriber::with_default(subscriber, || {
+            harness.run_with_timeout(&dll, std::time::Duration::from_secs(60))
+        });
+        assert_eq!(result.exit_code, 42, "{fixture}: {:?}", result.stderr);
         assert_eq!(
             (
                 counts.asynchronous.load(Ordering::Relaxed),

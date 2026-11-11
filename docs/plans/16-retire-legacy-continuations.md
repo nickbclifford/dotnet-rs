@@ -21,7 +21,7 @@ state on the caller's frame:
 | Bulk loops that yield at `check_gc_safe_point` | string `operations`/`constructors`/`search`, `mem_helpers`, `buffer`, span `equality`, `cpblk`/`initblk` (`instructions/memory.rs`) |
 | `MulticastState` on `StackFrame` (+ `handle_multicast_step`, `dispatch/mod.rs`; `call_ops_impl.rs:1090`, `context.rs:464`) | multicast `Invoke` shapes that `try_start_multicast` (`native_effects.rs`) declines; a native multicast body (`multicast_body`) already serves the rest |
 | `FrameReturnAction::InvokeReturn` + `apply_frame_return_actions` + `reflection_pending` | reflection `Invoke`/`CreateInstance` fallbacks for shapes `invoke_select`/`activator_select` decline; `run_reflection_call` already serves the rest |
-| Test seams that force a fallback (`MULTICAST_FALLBACK_TEST` in `native_effects.rs`, the reflection retry equivalent) | `multicast_fallback_completes_collection_targets`, `reflection_retry_completed_collection_does_not_retry`: they drive `GC.Collect` targets through the legacy continuations because no natural shape of that signature declines |
+| Reflection retry test seam | `reflection_retry_completed_collection_does_not_retry` drives a `GC.Collect` target through the legacy continuation |
 | `StackFrame::monitor_retry` + `monitor_retry_deadline`/`monitor_clear_retry` | timed byref `Monitor` fallbacks (Transient/Unmanaged `bool&`) and `Thread.Join(int)` |
 | `NativeDispatchMode::Other` + `fallback =` registration | the residual callers in plan 13 |
 | `prepare_method_initialization`, `newobj` and `RunClassConstructor` initialization | legacy static-init triggers (README "Legacy static-initialization triggers") |
@@ -75,7 +75,7 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | `GC.Collect` x3 | **Remove** | The `increment_ip` + `Yield` trick is a hand-written effect. Needs an effect that requests a full collect and resumes after the stop. |
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
-| Multicast `Invoke` (`MulticastState`) | **Remove after struct transport** | The native body admits plain values and static byrefs. Ref-struct arguments, byref returns and `TypedReference` need a decision: admit, or keep the continuation for exactly those with a "Kept" row. The `retrying_initializer` flag goes with the static-init slice. |
+| Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
 | Reflection `InvokeReturn` / `reflection_pending` | **Remove after struct transport** | Wrong receiver type and argument validation still fall back (plan 13's throw helper moves these into the body); byref write-back after a throw is a README deviation to fix in the body. Ambiguous-match "first best match" behaviour is unchanged unless deleting a fallback requires it. Deleting `reflection_pending` also removes the per-instruction pending-reflection check (README "Pending-reflection instruction cost"); measure it. |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Verify, then likely keep** | `lock` statements use a local (`FrameHome`), admitted. A `Transient` `bool&` has no obvious producer in C# or CoreLib; confirm by grepping producers and by a handwritten-IL probe. `Unmanaged` stashing is *not* a new hazard: the legacy retry also writes the raw address after yielding, with the same unchecked trust (`F10.RawMemoryAccessValid`), so plan 13's "stability" objection does not distinguish the two paths. Admitting it is cheap; admitting `Transient` is not (would need tracing a stack-resident value). |
 | `newobj` of an intrinsic constructor (`execute_intrinsic_call`) | **Remove** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`); today `newobj` returns their `Yield` without completing the receiver and re-allocates on retry. Converting the string constructors in the bulk slice depends on this slice. |
@@ -112,14 +112,11 @@ Reuse plan 13's API (body-only registration, `vm.exception(..)` for throws, opti
 
 ## Slices
 
-The original ordering put blocking intrinsics first. A body-only `GC.Collect` fails through
-the still-live non-inline reflection and multicast continuations: both
-`reflection_retry_completed_collection_does_not_retry` and
-`multicast_fallback_completes_collection_targets` return `NotImplemented` in ST and
-`multithreading`. Those tests force the fallback through a test seam; before slice 1 the
-continuations were also needed for plain value types. So the order is: transport, then the
-continuations that transport retires, then the remaining non-inline producers, then the
-intrinsics that lose their fallbacks.
+The original ordering put blocking intrinsics first. A body-only `GC.Collect` would fail through
+the still-live non-inline reflection continuation: `reflection_retry_completed_collection_does_not_retry`
+constructs that route. Before slice 1, multicast also needed the legacy continuation for plain
+values; slice 2 moved its collection regression to the native path and recorded its remaining
+exclusions. The remaining order is reflection, non-inline producers, then blocking intrinsics.
 
 1. **Value types across native calls (complete).** Add a value-type shape to `NativeOutput` and the
    argument check, map enums to their underlying type in reflection as multicast already does,
@@ -134,13 +131,19 @@ intrinsics that lose their fallbacks.
      fixtures now assert the async path.
    - Validation: VM library tests and the selection and CLR differential fixtures passed in ST
      and `multithreading` with `DOTNET_SKIP_BUILD=1` (new fixtures built on demand).
-2. **Multicast continuation.** Delete `MulticastState`, `handle_multicast_step`, the checks at
+2. **Multicast continuation (complete with retained exclusions).** Delete `MulticastState`, `handle_multicast_step`, the checks at
    `call_ops_impl.rs:1090` and `context.rs:464`, `MULTICAST_FALLBACK_TEST` and the non-inline
    (`synthetic`) branch of `try_start_multicast`, or record in "Kept" exactly which shape keeps
    them (ref-struct arguments, byref return, `TypedReference`).
    - Tests: diff fixtures for a throwing target, ordering, last return value, targets that
      suspend (`Thread.Sleep`, contended `Monitor.Enter`), and targets that trigger static
      initialization. Port `multicast_fallback_completes_collection_targets` to the native path.
+   - The forced-fallback hook is removed. The collection fixture now asserts three async
+     selections and compares all three calls with the CLR. The legacy continuation and synthetic
+     branch remain for the cases in "Kept"; they are revisited in slices 3 and 4.
+   - Validation: VM library tests, the selection test and all multicast CLR differential tests
+     passed in ST and `multithreading` with `DOTNET_SKIP_BUILD=1`. A source search confirms the
+     forced multicast fallback hook and its test have no remaining code users.
 3. **Reflection continuation.** Move receiver and argument validation and byref write-back into
    the body. Delete `InvokeReturn`, `FrameReturnAction`, `reflection_pending` with its
    per-instruction check, and the two reflection fallbacks, or record which shape keeps each.
@@ -188,11 +191,12 @@ intrinsics that lose their fallbacks.
   harness are green.
 - The README items above are rewritten to describe only what remains.
 
-## Kept (fill in as slices land)
+## Kept
 
 | Item | Reason | Test that fails if the reason stops being true |
 |---|---|---|
-| | | |
+| `MulticastState`, its step/return/tail-call checks, and initializer retry | Ref-struct values or byref targets containing managed pointers, byref returns, `TypedReference`, and byrefs with origins other than non-null heap, frame home, static or MT cross-arena object cannot use native transport. Unresolvable or mismatched shapes also decline. | `multicast_selection_precedes_operand_commitment` checks the ref-struct value, byref target, byref return, `TypedReference` and unmanaged byref exclusions; their CLR differential fixtures check execution. Transient byrefs have no known guest producer (slice 5). |
+| Synthetic multicast activation | Non-inline `VmContext` and `ExecutionEngineApi` dispatch can select an otherwise transportable multicast; the synthetic frame gives it a completion destination. Remove with those routes in slices 3–4. | The existing non-inline engine dispatch and reflection continuation tests exercise the routes; no focused test currently asserts synthetic multicast selection. |
 
 ## Ask the maintainer only if
 
