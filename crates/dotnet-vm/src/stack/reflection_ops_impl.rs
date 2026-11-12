@@ -4,8 +4,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            EvalStackOps, IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ReflectionOps,
-            ThreadOps, VmCallOps, VmLoaderOps, VmReflectionOps, VmResolutionOps, VmStaticsOps,
+            IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ThreadOps, VmCallOps,
+            VmLoaderOps, VmReflectionOps, VmResolutionOps, VmStaticsOps,
         },
     },
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
@@ -20,10 +20,7 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_utils::ArenaId;
-use dotnet_value::{
-    StackValue,
-    object::{Object, ObjectRef},
-};
+use dotnet_value::object::{Object, ObjectRef};
 use dotnetdll::prelude::{FieldSource, MethodType as DllMethodType, UserType};
 
 #[cfg(feature = "multithreading")]
@@ -199,94 +196,6 @@ impl<'a, 'gc> IntrinsicDispatchOps<'gc> for VesContext<'a, 'gc> {
     }
 }
 
-impl<'gc> VesContext<'_, 'gc> {
-    pub(crate) fn retry_reflection_target(&mut self) -> StepResult {
-        let Some(pending) = self
-            .frame_stack
-            .current_frame_mut()
-            .reflection_pending
-            .take()
-        else {
-            return StepResult::internal_error("missing pending reflection target");
-        };
-        if self.top_of_stack() < pending.base {
-            return StepResult::internal_error("reflection argument base changed");
-        }
-        while self.top_of_stack() > pending.base {
-            self.pop();
-        }
-        for argument in &pending.arguments {
-            self.push(argument.clone());
-        }
-        let depth = self.frame_stack.len();
-        let saved_ip = *self.original_ip;
-        let saved_height = *self.original_stack_height;
-        let ip_before = self.frame_stack.state().ip;
-        *self.original_ip = ip_before;
-        *self.original_stack_height = self.top_of_stack();
-        let actions = std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
-        let arm_base = self.call_state.reflection_arming.len();
-        self.call_state
-            .reflection_arming
-            .extend(actions.into_iter().rev().map(Some));
-        let result = self.dispatch_method(pending.method.clone(), pending.generics.clone());
-        let actions = self
-            .call_state
-            .reflection_arming
-            .drain(arm_base..)
-            .rev()
-            .flatten()
-            .collect::<Vec<_>>();
-        self.frame_stack.frames[depth - 1]
-            .frame_continuation
-            .extend(actions);
-        *self.original_ip = saved_ip;
-        *self.original_stack_height = saved_height;
-        let initializer = matches!(result, StepResult::FramePushed)
-            && self.frame_stack.len() == depth + 1
-            && self.frame_stack.current_frame().state.info_handle.is_cctor
-            && self.frame_stack.current_frame().state.info_handle.source != pending.method;
-        // A synchronous target that advanced this frame's IP and then yielded (`GC.Collect`)
-        // has completed; only a yield that left the IP alone asks for a retry.
-        let completed_yield = matches!(result, StepResult::Yield)
-            && self.frame_stack.len() == depth
-            && self.frame_stack.state().ip != ip_before;
-        if (initializer || (matches!(result, StepResult::Yield) && !completed_yield))
-            && self.frame_stack.frames[depth - 1]
-                .reflection_pending
-                .is_none()
-        {
-            self.frame_stack.frames[depth - 1].reflection_pending = Some(pending);
-        }
-        match result {
-            StepResult::Continue | StepResult::Jump(_) => {
-                let actions =
-                    std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
-                match self.apply_frame_return_actions(actions) {
-                    Ok(()) => result,
-                    Err(error) => StepResult::Error(error),
-                }
-            }
-            StepResult::Yield if completed_yield => {
-                let actions =
-                    std::mem::take(&mut self.frame_stack.current_frame_mut().frame_continuation);
-                match self.apply_frame_return_actions(actions) {
-                    Ok(()) => result,
-                    Err(error) => StepResult::Error(error),
-                }
-            }
-            StepResult::FramePushed | StepResult::NativeSuspended(_) | StepResult::Yield => result,
-            _ => {
-                self.frame_stack.frames[depth - 1]
-                    .frame_continuation
-                    .clear();
-                self.frame_stack.frames[depth - 1].reflection_pending = None;
-                result
-            }
-        }
-    }
-}
-
 impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesContext<'a, 'gc> {
     fn reflection_make_runtime_type_with_lookup(
         &self,
@@ -353,132 +262,6 @@ impl<'a, 'gc> dotnet_intrinsics_reflection::ResolutionContextHost<'gc> for VesCo
 
     fn reflection_empty_generics(&self) -> GenericLookup {
         self.shared().empty_generics.clone()
-    }
-
-    fn reflection_dispatch_method(
-        &mut self,
-        method: MethodDescription,
-        mut lookup: GenericLookup,
-    ) -> StepResult {
-        // The continuation belongs to this dispatch, including nested synchronous dispatches.
-        let action = self
-            .frame_stack
-            .current_frame_mut()
-            .frame_continuation
-            .pop();
-        tracing::debug!(reflection_invoke_path = "fallback");
-        let mut dispatch_method = method;
-
-        if dispatch_method.signature().instance && dispatch_method.method().virtual_member {
-            let num_args = 1 + dispatch_method.signature().parameters.len();
-            if let StackValue::ObjectRef(this_obj) = self.peek_stack_at(num_args - 1)
-                && this_obj.0.is_some()
-            {
-                let this_type = dotnet_vm_ops::vm_try!(self.get_heap_description(this_obj));
-                dispatch_method = dotnet_vm_ops::vm_try!(self.resolver().resolve_virtual_method(
-                    dispatch_method,
-                    this_type,
-                    &lookup,
-                    &self.current_context(),
-                ));
-
-                let parent_arity = dispatch_method.parent.definition().generic_parameters.len();
-                if parent_arity == 0 {
-                    lookup.set_type_generics(Vec::new().into());
-                } else if dispatch_method.parent_generics.type_generics.len() == parent_arity {
-                    lookup.set_type_generics(dispatch_method.parent_generics.type_generics.clone());
-                } else {
-                    let type_generics = lookup
-                        .type_generics
-                        .iter()
-                        .take(parent_arity)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .into();
-                    lookup.set_type_generics(type_generics);
-                }
-            }
-        }
-
-        let depth = self.frame_stack.len();
-        let count = dispatch_method.signature().parameters.len()
-            + usize::from(dispatch_method.signature().instance);
-        let Some(base) = self.top_of_stack().checked_sub(count) else {
-            return StepResult::internal_error("reflected target argument underflow");
-        };
-        let arguments = (0..count)
-            .rev()
-            .map(|offset| self.peek_stack_at(offset))
-            .collect();
-        let saved_ip = *self.original_ip;
-        let saved_height = *self.original_stack_height;
-        let ip_before = self.frame_stack.state().ip;
-        *self.original_ip = ip_before;
-        *self.original_stack_height = self.top_of_stack();
-        self.call_state.reflection_arming.push(action);
-        let result = self.dispatch_method(dispatch_method.clone(), lookup.clone());
-        let action = self
-            .call_state
-            .reflection_arming
-            .pop()
-            .expect("reflection dispatch scope");
-        *self.original_ip = saved_ip;
-        *self.original_stack_height = saved_height;
-        let initializer = matches!(result, StepResult::FramePushed)
-            && self.frame_stack.len() == depth + 1
-            && self.frame_stack.current_frame().state.info_handle.is_cctor
-            && self.frame_stack.current_frame().state.info_handle.source != dispatch_method;
-        // A synchronous target that advanced this frame's IP and then yielded (`GC.Collect`)
-        // has completed; only a yield that left the IP alone asks for a retry.
-        let completed_yield = matches!(result, StepResult::Yield)
-            && self.frame_stack.len() == depth
-            && self.frame_stack.state().ip != ip_before;
-        let caller = &mut self.frame_stack.frames[depth - 1];
-        match result {
-            StepResult::Yield if completed_yield => {
-                match self.apply_frame_return_actions(action.into_iter().collect()) {
-                    Ok(()) => result,
-                    Err(error) => StepResult::Error(error),
-                }
-            }
-            StepResult::FramePushed | StepResult::NativeSuspended(_) | StepResult::Yield => {
-                if let Some(action) = action {
-                    caller.frame_continuation.push(action);
-                }
-                if (initializer || matches!(result, StepResult::Yield))
-                    && !self.has_staged_native_call(depth)
-                    && self
-                        .call_state
-                        .native
-                        .last()
-                        .is_none_or(|work| work.caller_depth != depth)
-                    && self.frame_stack.frames[depth - 1]
-                        .reflection_pending
-                        .is_none()
-                {
-                    tracing::debug!(reflection_invoke_path = "retry");
-                    self.frame_stack.frames[depth - 1].reflection_pending =
-                        Some(Box::new(dotnet_vm_data::stack::ReflectionPending {
-                            method: dispatch_method,
-                            generics: lookup,
-                            arguments,
-                            base,
-                        }));
-                }
-                result
-            }
-            StepResult::Continue | StepResult::Jump(_) => {
-                match self.apply_frame_return_actions(action.into_iter().collect()) {
-                    Ok(()) => result,
-                    Err(error) => StepResult::Error(error),
-                }
-            }
-            _ => result,
-        }
-    }
-
-    fn set_frame_return_action(&mut self, action: dotnet_vm_data::FrameReturnAction) {
-        VesContext::set_frame_return_action(self, action);
     }
 
     fn reflection_constructor_frame(

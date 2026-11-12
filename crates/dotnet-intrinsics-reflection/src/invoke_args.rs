@@ -201,6 +201,41 @@ pub(crate) fn param_shape<'gc, T: ReflectionIntrinsicHost<'gc>>(
     })
 }
 
+const IS_BYREF_LIKE_ATTRIBUTE: &str = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
+
+/// Whether `td` is byref-like: a C# `ref struct`, or a CoreLib type such as `Span<T>` or
+/// `TypedReference`. ECMA-335 has no byref-like flag; compilers and CoreLib mark these types with
+/// `IsByRefLikeAttribute`. Reflection cannot box their values, so the CLR rejects them as
+/// invocation arguments, returns and `Activator` targets with `NotSupportedException`.
+///
+/// The loader parses attributes lazily, so they are read through `type_attributes`, not
+/// `TypeDefinition::attributes`, which stays empty.
+pub(crate) fn is_byref_like<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    td: &TypeDescription,
+) -> bool {
+    td.resolution
+        .definition()
+        .type_attributes(td.index)
+        .unwrap_or_default()
+        .iter()
+        .any(|attribute| {
+            ctx.loader()
+                .locate_attribute(td.resolution.clone(), attribute)
+                .is_ok_and(|ctor| ctor.parent.type_name() == IS_BYREF_LIKE_ATTRIBUTE)
+        })
+}
+
+/// Throw the CLR's `NotSupportedException` for a byref-like value reflection would have to box.
+pub(crate) fn throw_byref_like_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+) -> StepResult {
+    ctx.throw_by_name_with_message(
+        "System.NotSupportedException",
+        "Cannot create boxed ByRef-like values.",
+    )
+}
+
 fn is_nullable(td: &TypeDescription) -> bool {
     let definition = td.definition();
     definition.name == "Nullable`1" && definition.namespace.as_deref() == Some("System")

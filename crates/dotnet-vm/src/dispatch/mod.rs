@@ -241,25 +241,17 @@ impl<'gc> ExecutionEngine<'gc> {
     /// 3. Traces the instruction if enabled.
     /// 4. Dispatches the instruction to its handler.
     /// 5. Handles the result (Continue, Jump, Call, Return, etc.).
+    ///
+    /// Kept out of line. When plan 16 removed the per-instruction reflection-pending check,
+    /// LLVM inlined this function into `run`; the merged multithreaded loop then reloaded each
+    /// step's `StepResult` from the stack with wide loads straight after a narrower store, and
+    /// `dispatch` slowed by about 41% (store-to-load forwarding stalls) with fewer instructions.
+    #[inline(never)]
     pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
         if self.stack.execution.frame_stack.is_empty() {
             return StepResult::Return;
         }
 
-        if self.stack.current_frame().reflection_pending.is_some() {
-            let result = self.ves_context(gc).retry_reflection_target();
-            return match result {
-                StepResult::Continue => {
-                    self.stack.increment_ip();
-                    StepResult::Continue
-                }
-                StepResult::Jump(target) => {
-                    self.stack.branch(target);
-                    StepResult::Continue
-                }
-                other => other,
-            };
-        }
         if self.stack.current_frame().multicast_state.is_some() {
             return self.handle_multicast_step(gc);
         }
@@ -579,16 +571,13 @@ impl<'gc> ExecutionEngine<'gc> {
                 || (matches!(result, StepResult::Yield)
                     && ctx.frame_stack.len() == depth
                     && ctx.state().ip == ip_before);
-            let reflection_pending = ctx.frame_stack.frames[depth - 1]
-                .reflection_pending
-                .is_some();
             if let Some(state) = ctx
                 .frame_stack
                 .frames
                 .get_mut(depth - 1)
                 .and_then(|frame| frame.multicast_state.as_mut())
             {
-                if initializer && !reflection_pending {
+                if initializer {
                     state.retrying_initializer = true;
                 } else {
                     state.next_index += 1;

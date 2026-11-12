@@ -1089,8 +1089,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             || frame.is_finalizer
             || frame.multicast_state.is_some()
             || frame.native_return.is_some()
-            || !frame.frame_continuation.is_empty()
-            || frame.reflection_pending.is_some()
             || frame.constructor_result.is_some()
         {
             return false;

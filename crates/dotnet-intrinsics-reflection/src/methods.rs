@@ -20,13 +20,14 @@ use dotnet_value::{
     layout::HasLayout,
     object::{CTSValue, HeapStorage, ObjectRef},
 };
-use dotnet_vm_data::{FrameReturnAction, StepResult};
+use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
-    NativeInvocation, NativeOperandView, NativeResult, NativeSelection, NativeValue, VmEffects,
+    NativeInvocation, NativeOperandView, NativeReflectionStep, NativeResult, NativeSelection,
+    NativeValue, VmEffects,
 };
 use dotnet_vm_ops::intrinsic_args::type_mismatch;
-use dotnetdll::prelude::{BaseType, ParameterType};
+use dotnetdll::prelude::ParameterType;
 
 fn invoke_operand_window_supported(values: &[StackValue<'_>; 6]) -> bool {
     matches!(values[0], StackValue::ObjectRef(_))
@@ -37,73 +38,19 @@ fn invoke_operand_window_supported(values: &[StackValue<'_>; 6]) -> bool {
         && matches!(values[5], StackValue::ObjectRef(_))
 }
 
-/// Values with embedded managed pointers cannot be retained by native effects.
-fn transportable_value<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &T,
-    concrete: &ConcreteType,
-) -> bool {
-    ctx.reflection_type_layout(concrete.clone())
-        .is_ok_and(|layout| !layout.has_managed_ptrs())
+fn invalid_invoke_operands(what: &str) -> NativeSelection {
+    NativeSelection::Reject(
+        dotnet_types::error::ExecutionError::InternalError(
+            format!("reflection Invoke operands: {what}").into(),
+        )
+        .into(),
+    )
 }
 
-/// Check that argument marshalling can be rooted before selecting an effects call.
-pub fn invoke_arguments_supported<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &T,
-    method: &MethodDescription,
-    lookup: &GenericLookup,
-    parameters: ObjectRef<'gc>,
-) -> bool {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let args = if parameters.0.is_none() {
-        method.signature().parameters.is_empty().then(Vec::new)
-    } else {
-        parameters.as_heap_storage(|storage| {
-            let HeapStorage::Vec(vector) = storage else {
-                return None;
-            };
-            if vector.layout.length != method.signature().parameters.len()
-                || !matches!(vector.element.get(), BaseType::Object)
-            {
-                return None;
-            }
-            Some(vector.object_ref_elements(&gc).collect::<Vec<_>>())
-        })
-    };
-    let Some(args) = args else {
-        return false;
-    };
-    args.into_iter()
-        .zip(&method.signature().parameters)
-        .all(|(arg, param)| {
-            let (ty, byref) = match &param.1 {
-                ParameterType::Ref(ty) => (ty, true),
-                ParameterType::Value(ty) => (ty, false),
-                _ => return false,
-            };
-            let Ok(shape) = param_shape(ctx, method, lookup, ty) else {
-                return false;
-            };
-            if !shape.value_type {
-                return true;
-            }
-            let plan = plan_argument(ctx, arg, &shape, byref);
-            if byref {
-                return transportable_value(ctx, &shape.concrete)
-                    && (arg.0.is_none() || plan == ArgPlan::Exact);
-            }
-            let transportable = transportable_value(ctx, &shape.concrete);
-            transportable
-                && matches!(
-                    plan,
-                    ArgPlan::Exact
-                        | ArgPlan::Widen { .. }
-                        | ArgPlan::Default
-                        | ArgPlan::NullableSome
-                )
-        })
-}
-
-/// Choose reflection calls whose arguments and result are transportable without side effects.
+/// Select the native body for every reflection invocation. Target, argument and result
+/// validation runs in the body, which raises the CLR's managed exceptions; only values with
+/// embedded managed pointers cannot be transported, and those are all byref-like values the CLR
+/// itself refuses to box (`NotSupportedException`) before the target runs.
 pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
@@ -124,13 +71,13 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
         std::array::from_fn(|index| operands.peek_at(5 - index))
     };
     if !invoke_operand_window_supported(&values) {
-        return NativeSelection::Fallback;
+        return invalid_invoke_operands("unexpected operand types");
     }
     let StackValue::ObjectRef(method_obj @ ObjectRef(Some(_))) = values[0] else {
-        return NativeSelection::Fallback;
+        return invalid_invoke_operands("null method object");
     };
-    let Ok((method, lookup)) = crate::common::resolve_runtime_method(ctx, method_obj) else {
-        return NativeSelection::Fallback;
+    let Ok((method, _)) = crate::common::resolve_runtime_method(ctx, method_obj) else {
+        return invalid_invoke_operands("unresolvable method object");
     };
     if matches!(
         method.signature().return_type.1,
@@ -143,45 +90,6 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
             .into(),
         );
     }
-    if method.signature().instance
-        && count != 4
-        && !matches!(values[1], StackValue::ObjectRef(ObjectRef(Some(_))))
-    {
-        return NativeSelection::Fallback;
-    }
-    // A receiver of the wrong type is rejected by the synchronous path, which can throw.
-    if method.signature().instance
-        && count != 4
-        && let StackValue::ObjectRef(receiver) = values[1]
-        && !crate::invoke_args::receiver_fits(ctx, &method, &lookup, receiver)
-    {
-        return NativeSelection::Fallback;
-    }
-    if let Some(return_type) = &method.signature().return_type.1 {
-        let ParameterType::Value(ty) = return_type else {
-            return NativeSelection::Fallback;
-        };
-        let Ok(concrete) =
-            lookup.make_concrete(method.resolution(), ty.clone(), ctx.loader().as_ref())
-        else {
-            return NativeSelection::Fallback;
-        };
-        let Ok(td) = ctx.loader().find_concrete_type(concrete.clone()) else {
-            return NativeSelection::Fallback;
-        };
-        let Ok(value_type) = ctx.reflection_is_value_type_with_lookup(td, &lookup) else {
-            return NativeSelection::Fallback;
-        };
-        if value_type && !transportable_value(ctx, &concrete) {
-            return NativeSelection::Fallback;
-        }
-    }
-    let StackValue::ObjectRef(parameters) = values[4] else {
-        return NativeSelection::Fallback;
-    };
-    if !invoke_arguments_supported(ctx, &method, &lookup, parameters) {
-        return NativeSelection::Fallback;
-    }
     tracing::debug!(reflection_invoke_path = "async");
     NativeSelection::Async(NativeInvocation {
         start: 0,
@@ -190,17 +98,23 @@ pub fn invoke_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     })
 }
 
-#[dotnet_intrinsic("object DotnetRs.ConstructorInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select, fallback = runtime_method_info_intrinsic_call)]
-#[dotnet_intrinsic("object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select, fallback = runtime_method_info_intrinsic_call)]
-#[dotnet_intrinsic("object DotnetRs.MethodInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select, fallback = runtime_method_info_intrinsic_call)]
+#[dotnet_intrinsic("object DotnetRs.ConstructorInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select)]
+#[dotnet_intrinsic("object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select)]
+#[dotnet_intrinsic("object DotnetRs.MethodInfo::Invoke(object, System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)", select = invoke_select)]
 pub async fn invoke_async(fx: VmEffects) -> NativeResult {
     run_reflection_call(fx).await
 }
 
 pub async fn run_reflection_call(mut fx: VmEffects) -> NativeResult {
-    let (call, constructor_result) = {
+    let step = {
         let mut vm = fx.vm().await?;
         vm.prepare_reflection()?
+    };
+    let (call, constructor_result) = match step {
+        NativeReflectionStep::Call(call, constructor_result) => (call, constructor_result),
+        NativeReflectionStep::Value(value) => {
+            return fx.vm().await?.push_value(NativeValue::Value(value));
+        }
     };
     let method = call.method.clone();
     let generics = call.generics.clone();
@@ -547,101 +461,6 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: ReflectionIntrinsicHost<'gc>>(
             let method_obj = crate::common::get_runtime_method_obj(ctx, method, definition_lookup);
             ctx.push_obj(method_obj);
             Some(StepResult::Continue)
-        }
-        ("Invoke", 5) => {
-            let _culture = ctx.pop();
-            let parameters_obj = ctx.pop_obj();
-            let _binder = ctx.pop();
-            let _flags = ctx.pop_i32();
-            let this_obj = ctx.pop();
-            let method_obj = ctx.pop_obj();
-
-            let (method, lookup) =
-                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
-            if matches!(
-                method.signature().return_type.1,
-                Some(ParameterType::Ref(_))
-            ) {
-                return StepResult::Error(
-                    dotnet_types::error::ExecutionError::NotImplemented(
-                        "reflection invocation with a byref return".into(),
-                    )
-                    .into(),
-                );
-            }
-            let is_constructor = method.method().name == ".ctor";
-
-            if let Err(thrown) = validate_invoke_target(ctx, &method, &lookup, &this_obj) {
-                return thrown;
-            }
-
-            if is_constructor {
-                ctx.push(this_obj.clone());
-            }
-
-            let mut args = Vec::new();
-            if method.signature().instance {
-                args.push(this_obj);
-            }
-
-            let mut invoke_args =
-                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
-                    Ok(a) => a,
-                    Err(res) => return res,
-                };
-            args.append(&mut invoke_args);
-
-            let return_type = if is_constructor {
-                RuntimeType::Type(method.parent.clone())
-            } else {
-                resolve_return_type(ctx, &method, &lookup)
-            };
-
-            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(return_type));
-
-            for arg in args {
-                ctx.push(arg);
-            }
-
-            return ctx.reflection_dispatch_method(method, lookup);
-        }
-        ("Invoke", 4) => {
-            let _culture = ctx.pop();
-            let parameters_obj = ctx.pop_obj();
-            let _binder = ctx.pop();
-            let _flags = ctx.pop_i32();
-            let method_obj = ctx.pop_obj();
-
-            let (method, lookup) =
-                dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_method(ctx, method_obj));
-
-            let instance = dotnet_vm_ops::vm_try!(
-                ctx.reflection_new_object_with_lookup(method.parent.clone(), &lookup)
-            );
-            let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
-            ctx.register_new_object(&this_obj);
-
-            ctx.push_obj(this_obj);
-
-            let mut args = Vec::new();
-            args.push(StackValue::ObjectRef(this_obj));
-
-            let mut invoke_args =
-                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
-                    Ok(a) => a,
-                    Err(res) => return res,
-                };
-            args.append(&mut invoke_args);
-
-            ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(RuntimeType::Type(
-                method.parent.clone(),
-            )));
-
-            for arg in args {
-                ctx.push(arg);
-            }
-
-            return ctx.reflection_dispatch_method(method, lookup);
         }
         ("MakeGenericMethod", 1) => {
             let type_args_obj = ctx.pop_obj();
@@ -1269,6 +1088,41 @@ pub fn validate_invoke_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
     }
 }
 
+fn parameter_is_byref_like<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+    parameter: &ParameterType<dotnetdll::prelude::MethodType>,
+) -> bool {
+    match parameter {
+        ParameterType::TypedReference => true,
+        ParameterType::Value(ty) | ParameterType::Ref(ty) => param_shape(ctx, method, lookup, ty)
+            .is_ok_and(|shape| crate::invoke_args::is_byref_like(ctx, &shape.td)),
+    }
+}
+
+/// Throw the CLR's `NotSupportedException` when `method` returns a byref-like value, which
+/// reflection cannot box. Called before arguments are marshalled.
+pub fn validate_invoke_return<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+) -> Result<(), StepResult> {
+    let byref_like = match &method.signature().return_type.1 {
+        Some(ParameterType::TypedReference) => true,
+        Some(ParameterType::Value(ty)) => param_shape(ctx, method, lookup, ty)
+            .is_ok_and(|shape| crate::invoke_args::is_byref_like(ctx, &shape.td)),
+        Some(ParameterType::Ref(_)) | None => false,
+    };
+    if byref_like {
+        return Err(ctx.throw_by_name_with_message(
+            "System.NotSupportedException",
+            "Specified method is not supported.",
+        ));
+    }
+    Ok(())
+}
+
 /// Marshal argument slots within the current mutation. The argument array may have changed since
 /// selection, so every slot is classified again.
 pub fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
@@ -1300,6 +1154,12 @@ pub fn unmarshal_invoke_params<'gc, T: ReflectionIntrinsicHost<'gc>>(
     };
     if vector.layout.length != expected {
         return Err(parameter_count_mismatch(ctx));
+    }
+    // Checked before any slot is converted, so a rejected call leaves the array untouched.
+    for parameter in &method.signature().parameters {
+        if parameter_is_byref_like(ctx, method, lookup, &parameter.1) {
+            return Err(crate::invoke_args::throw_byref_like_value(ctx));
+        }
     }
 
     let mut replacement_boxes = Vec::new();

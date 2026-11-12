@@ -29,8 +29,8 @@ pub use exceptions::{
     SavedHandlerUnwind, SearchState, UnwindState, UnwindTarget,
 };
 pub use stack::{
-    BasePointer, EvaluationStack, FrameReturnAction, FrameStack, MulticastState, NativeId,
-    NativeReturnDestination, PinnedLocals, StackFrame,
+    BasePointer, EvaluationStack, FrameStack, MulticastState, NativeId, NativeReturnDestination,
+    PinnedLocals, StackFrame,
 };
 
 /// A `Collect`-able unified encoding of cross-GC-safe-point VM resumption state.

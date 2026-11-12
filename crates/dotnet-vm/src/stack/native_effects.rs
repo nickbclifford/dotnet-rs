@@ -31,6 +31,32 @@ enum NativeEntry {
     Instruction(StaticFieldAction),
 }
 
+fn reflection_prepare_error<'gc>(
+    context: &VesContext<'_, 'gc>,
+    step: StepResult,
+) -> NativePrepareError<'gc> {
+    match step {
+        StepResult::Error(error) => NativePrepareError::Host(error),
+        StepResult::Exception => match context.exception_mode() {
+            dotnet_vm_data::ExceptionState::Throwing(exception, _) => {
+                NativePrepareError::Managed(*exception)
+            }
+            _ => NativePrepareError::Host(
+                dotnet_types::error::ExecutionError::InternalError(
+                    "reflection validation threw without an exception".into(),
+                )
+                .into(),
+            ),
+        },
+        _ => NativePrepareError::Host(
+            dotnet_types::error::ExecutionError::InternalError(
+                "unexpected reflection validation result".into(),
+            )
+            .into(),
+        ),
+    }
+}
+
 pub(crate) struct PendingCall {
     pub(super) generation: u64,
     pub(super) capture: bool,
@@ -535,24 +561,30 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
     fn reflection_call(
         &mut self,
-    ) -> Result<dotnet_vm_ops::effects::NativePreparedCall<'gc>, NativePrepareError<'gc>> {
+    ) -> Result<dotnet_vm_ops::effects::NativeReflectionPlan<'gc>, NativePrepareError<'gc>> {
         let (mut method, mut generics, receiver, parameters) = match self.operands.as_slice() {
             [
                 StackValue::ObjectRef(target),
                 StackValue::ObjectRef(parameters),
             ] => {
-                let (method, generics) =
-                    dotnet_intrinsics_reflection::types::resolve_activator_constructor(
-                        self.context,
-                        *target,
-                        *parameters,
-                    )
-                    .ok_or_else(|| {
-                        dotnet_types::error::ExecutionError::InternalError(
-                            "invalid Activator operands".into(),
-                        )
-                    })?;
-                (method, generics, None, *parameters)
+                let (target, parameters) = (*target, *parameters);
+                match dotnet_intrinsics_reflection::types::activator_target(
+                    self.context,
+                    target,
+                    parameters,
+                )
+                .map_err(|step| reflection_prepare_error(self.context, step))?
+                {
+                    dotnet_intrinsics_reflection::types::ActivatorTarget::Constructor(
+                        method,
+                        generics,
+                    ) => (method, generics, None, parameters),
+                    dotnet_intrinsics_reflection::types::ActivatorTarget::Default(value) => {
+                        return Ok(dotnet_vm_ops::effects::NativeReflectionPlan::Value(
+                            StackValue::ObjectRef(value),
+                        ));
+                    }
+                }
             }
             [
                 StackValue::ObjectRef(obj),
@@ -591,6 +623,21 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             }
         };
         let is_constructor = method.method().name == ".ctor";
+        if let Some(receiver) = &receiver {
+            dotnet_intrinsics_reflection::methods::validate_invoke_target(
+                self.context,
+                &method,
+                &generics,
+                receiver,
+            )
+            .map_err(|step| reflection_prepare_error(self.context, step))?;
+        }
+        dotnet_intrinsics_reflection::methods::validate_invoke_return(
+            self.context,
+            &method,
+            &generics,
+        )
+        .map_err(|step| reflection_prepare_error(self.context, step))?;
         let mut constructor_result = None;
         let receiver = if is_constructor && receiver.is_none() {
             let instance = dotnet_intrinsics_reflection::ResolutionContextHost::reflection_new_object_with_lookup(self.context, method.parent.clone(), &generics)?;
@@ -667,26 +714,7 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
             &generics,
             parameters,
         )
-        .map_err(|step| match step {
-            StepResult::Error(error) => NativePrepareError::Host(error),
-            StepResult::Exception => match self.context.exception_mode() {
-                dotnet_vm_data::ExceptionState::Throwing(exception, _) => {
-                    NativePrepareError::Managed(*exception)
-                }
-                _ => NativePrepareError::Host(
-                    dotnet_types::error::ExecutionError::InternalError(
-                        "reflection marshalling threw without an exception".into(),
-                    )
-                    .into(),
-                ),
-            },
-            _ => NativePrepareError::Host(
-                dotnet_types::error::ExecutionError::InternalError(
-                    "unexpected reflection marshalling result".into(),
-                )
-                .into(),
-            ),
-        })?;
+        .map_err(|step| reflection_prepare_error(self.context, step))?;
         if method.signature().instance {
             arguments.insert(
                 0,
@@ -697,12 +725,14 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
                 })?,
             );
         }
-        Ok(dotnet_vm_ops::effects::NativePreparedCall {
-            method,
-            generics,
-            arguments,
-            constructor_result,
-        })
+        Ok(dotnet_vm_ops::effects::NativeReflectionPlan::Call(
+            dotnet_vm_ops::effects::NativePreparedCall {
+                method,
+                generics,
+                arguments,
+                constructor_result,
+            },
+        ))
     }
     fn reflection_result(
         &mut self,
@@ -1036,21 +1066,6 @@ impl<'gc> VesContext<'_, 'gc> {
             return StepResult::internal_error("native activation identity exhausted");
         };
         let roots = DynamicRootSet::new(self.gc.mutation());
-        let mut reflection_actions = if matches!(entry, NativeEntry::Instruction(_)) {
-            Vec::new()
-        } else {
-            self.call_state
-                .reflection_arming
-                .iter_mut()
-                .rev()
-                .filter_map(Option::take)
-                .collect::<Vec<_>>()
-        };
-        if synthetic_return && !reflection_actions.is_empty() {
-            let caller_index = self.frame_stack.len() - 2;
-            let caller = &mut self.frame_stack.frames[caller_index];
-            caller.frame_continuation.append(&mut reflection_actions);
-        }
         let mut operands = self.pop_multiple(count);
         if matches!(&entry, NativeEntry::Intrinsic(_)) {
             for value in &mut operands {
@@ -1112,7 +1127,6 @@ impl<'gc> VesContext<'_, 'gc> {
             stack_height: self.top_of_stack(),
             output,
             synthetic_return,
-            reflection_actions,
         });
         if parent_destination.is_some() {
             let child_id = dotnet_vm_data::NativeId(
@@ -1793,23 +1807,6 @@ impl<'gc> VesContext<'_, 'gc> {
                     };
                 }
                 if let Some(destination) = work.parent_destination {
-                    if !work.reflection_actions.is_empty() {
-                        for value in work.outputs.drain(..) {
-                            self.push(value);
-                        }
-                        let actions = std::mem::take(&mut work.reflection_actions);
-                        if let Err(error) = self.apply_frame_return_actions(actions) {
-                            work.cleanup();
-                            return StepResult::Error(error);
-                        }
-                        let value = Some(self.pop());
-                        let result = self.deliver_native_return(destination, value);
-                        work.cleanup();
-                        return match result {
-                            Ok(()) => StepResult::Yield,
-                            Err(error) => StepResult::Error(error),
-                        };
-                    }
                     // INVARIANT: F6.NativeRootTransfer — fetch from the child's set, copy
                     // into the parent's set, then release the child's root.
                     let output = work.outputs.pop();
@@ -1847,11 +1844,6 @@ impl<'gc> VesContext<'_, 'gc> {
                 }
                 for value in work.outputs.drain(..) {
                     self.push(value);
-                }
-                let actions = std::mem::take(&mut work.reflection_actions);
-                if let Err(error) = self.apply_frame_return_actions(actions) {
-                    work.cleanup();
-                    return StepResult::Error(error);
                 }
                 let next = work.caller_ip + 1;
                 let synthetic_return = work.synthetic_return;
@@ -2042,12 +2034,6 @@ impl<'gc> VesContext<'_, 'gc> {
                 let final_return = if let Some((final_return, base)) =
                     self.redirected_native_return(destination)
                 {
-                    let actions = std::mem::take(
-                        &mut self.frame_stack.current_frame_mut().frame_continuation,
-                    );
-                    if let Err(error) = self.apply_frame_return_actions(actions) {
-                        return StepResult::Error(error);
-                    }
                     if self.top_of_stack() != base + usize::from(final_return) {
                         return StepResult::internal_error("native call result shape mismatch");
                     }
@@ -2121,8 +2107,6 @@ impl<'gc> VesContext<'_, 'gc> {
         self.evaluation_stack.truncate(work.stack_height);
         let frame = self.frame_stack.current_frame_mut();
         frame.stack_height = work.stack_height.saturating_sub_idx(frame.base.stack);
-        frame.frame_continuation.clear();
-        frame.reflection_pending = None;
         let gc = self.gc;
         // INVARIANT: F6.NativeRootTransfer — the exception remains traced by the
         // unwind state until it is copied into the waiting activation's root set.

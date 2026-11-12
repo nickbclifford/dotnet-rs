@@ -11,7 +11,6 @@ use dotnet_types::{
     error::{ExecutionError, TypeResolutionError},
     generics::GenericLookup,
     members::MethodDescription,
-    runtime::RuntimeType,
 };
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{
@@ -20,7 +19,7 @@ use dotnet_value::{
     pointer::{ManagedPtrInfo, ManagedPtrResolver, StaticMetadata},
     storage::FieldStorage,
 };
-use dotnet_vm_data::{FrameReturnAction, frame_homes::FrameHomeLayout};
+use dotnet_vm_data::frame_homes::FrameHomeLayout;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Mutation};
 use std::ptr::NonNull;
@@ -76,8 +75,6 @@ pub(crate) struct NativeActivation<'gc> {
     #[collect(require_static)]
     pub output: NativeOutput,
     pub synthetic_return: bool,
-    #[collect(require_static)]
-    pub reflection_actions: Vec<FrameReturnAction>,
 }
 
 #[derive(Collect)]
@@ -96,8 +93,6 @@ pub struct CallState<'gc> {
     pub(crate) native: Vec<NativeActivation<'gc>>,
     pub(crate) suspended_native: Vec<(usize, Vec<NativeActivation<'gc>>)>,
     pub(crate) last_native_id: u64,
-    #[collect(require_static)]
-    pub(crate) reflection_arming: Vec<Option<FrameReturnAction>>,
     #[collect(require_static)]
     pub(crate) native_entry_depth: Option<std::rc::Rc<std::cell::Cell<usize>>>,
 }
@@ -568,26 +563,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             return StepResult::Error(error.into());
         }
 
-        let pending_initializer = frame.state.info_handle.is_cctor
-            && (self.call_state.native.last().is_some_and(|work| {
-                work.pending.is_some() && work.caller_depth == self.frame_stack.len()
-            }) || self
-                .frame_stack
-                .current_frame_opt_mut()
-                .is_some_and(|caller| caller.reflection_pending.is_some()));
-        let actions = if pending_initializer {
-            Vec::new()
-        } else {
-            self.frame_stack
-                .current_frame_opt_mut()
-                .map(|caller| std::mem::take(&mut caller.frame_continuation))
-                .unwrap_or_default()
-        };
-        if let Err(error) = self.apply_frame_return_actions(actions) {
-            self.frame_stack.recycle_frame(frame);
-            return StepResult::Error(error);
-        }
-
         self.frame_stack.recycle_frame(frame);
         if let (Some(destination), Some((has_return, base))) = (destination, redirected) {
             if self.top_of_stack() != base + usize::from(has_return) {
@@ -600,32 +575,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             };
         }
         StepResult::Continue
-    }
-
-    pub(crate) fn apply_frame_return_actions(
-        &mut self,
-        actions: Vec<FrameReturnAction>,
-    ) -> Result<(), crate::error::VmError> {
-        for FrameReturnAction::InvokeReturn(return_type) in actions {
-            if matches!(return_type, RuntimeType::Void) {
-                self.push(StackValue::null());
-            } else {
-                let val = self.pop();
-                let return_concrete = return_type.to_concrete(&*self.shared.loader);
-                let td = self
-                    .shared
-                    .loader
-                    .find_concrete_type(return_concrete.clone())?;
-                if td.is_value_type(&self.current_context())? {
-                    let boxed =
-                        dotnet_vm_ops::ops::MemoryOps::box_value(self, &return_concrete, val)?;
-                    self.push_obj(boxed);
-                } else {
-                    self.push(val);
-                }
-            }
-        }
-        Ok(())
     }
 
     #[inline]
@@ -723,10 +672,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.local.heap.processing_finalizer.set(false);
         }
         self.clear_evaluation_stack_from(frame.base.arguments);
-        if let Some(caller) = self.frame_stack.current_frame_opt_mut() {
-            caller.frame_continuation.clear();
-            caller.reflection_pending = None;
-        }
         self.frame_stack.recycle_frame(frame);
     }
 

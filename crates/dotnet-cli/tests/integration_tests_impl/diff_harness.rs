@@ -194,6 +194,22 @@ diff_test!(
     "tests/fixtures/reflection/invoke_values_42.cs"
 );
 diff_test!(
+    reflection_invoke_byref_like_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_byref_like_42.cs"
+);
+diff_test!(
+    reflection_invoke_target_validation_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_target_validation_42.cs"
+);
+diff_test!(
+    reflection_invoke_argument_count_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_argument_count_42.cs"
+);
+diff_test!(
+    reflection_invoke_argument_types_42_matches_dotnet,
+    "tests/fixtures/reflection/invoke_argument_types_42.cs"
+);
+diff_test!(
     delegates_multicast_values_42_matches_dotnet,
     "tests/fixtures/delegates/delegate_multicast_values_42.cs"
 );

@@ -5,6 +5,11 @@
 boxed results and preserve byref write-through. Corrected legacy return handling remains only
 for reflection calls excluded from effects.
 
+**Superseded in part:** [plan 16](../16-retire-legacy-continuations.md) slice 3 deleted the
+synchronous fallbacks and `InvokeReturn`; every reflection call now takes the native body. The
+"Consumers and current path" and "Scoped reflection fallback" sections below describe the design
+as this slice left it.
+
 ## Consumers and current path
 
 `runtime_method_info_intrinsic_call` handles `MethodInfo.Invoke` and both
@@ -47,9 +52,11 @@ through the production codec. Materialize byrefs immediately before the managed 
 inside the same mutation. Neither the future nor the effect-control state retains a branded `ManagedPtr`.
 Preserve the original box and array-slot identity; deferred copy-in/copy-out is not equivalent.
 
-The selector's box check is a snapshot. In multithreaded builds, another mutator can replace an
-`object[]` value box before preparation; `unmarshal_invoke_params` checks the box again and raises
-a managed `System.ArgumentException` for a mismatch. `NativePrepareError::Managed` carries that
+The selectors only capture the operands; preparation validates the receiver, the argument values
+and byref-like shapes. Activator also uses argument values to choose a constructor. In multithreaded
+builds, another mutator can replace an `object[]` value box before
+preparation; `unmarshal_invoke_params` raises a managed `System.ArgumentException` for a mismatch.
+`NativePrepareError::Managed` carries that
 exception into the activation root set before the VM dispatches it, matching the CLR rather than
 turning the race into a host error.
 
@@ -87,6 +94,11 @@ Extending the existing continuation with invocation-specific state and initializ
 authorized; it must not introduce an independent frame stack or scheduler. Use the existing
 native pending-target protocol where applicable. Keep exception propagation transparent and
 use managed errors for supported guest failures rather than panics.
+
+[Plan 16](../16-retire-legacy-continuations.md) slice 3 removed the synchronous fallbacks and the
+caller-frame return continuation (`InvokeReturn`, `reflection_pending`): every
+`MethodInfo`/`ConstructorInfo.Invoke` and `Activator.CreateInstance(Type, object[])` runs in
+this activation, and byref-like shapes raise the CLR's `NotSupportedException` in the body.
 
 ### Constructor result rooting
 

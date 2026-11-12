@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; value-type transport and multicast audit complete, followed by reflection continuations |
+| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; value-type transport, multicast audit and reflection continuation removal complete; next is intrinsic-constructor `newobj` and non-inline dispatch |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
@@ -57,29 +57,27 @@ Evidence and IDs (p01…, R01…) are defined in the
   match its parameter exactly (the CLR widens and writes back), `Nullable<T>` accepts only a
   boxed `T` (no widening), and `Activator.CreateInstance(Type, object[])` and
   `GetConstructor(Type[])` return the first best match rather than throwing
-  `AmbiguousMatchException`.
+  `AmbiguousMatchException`. `Activator.CreateInstance(typeof(string), args)` throws
+  `ArgumentException("Arg_MustBeType")`; the CLR runs the string constructor, which the VM
+  implements only through the intrinsic-constructor `newobj` protocol.
 - **Reflection byref write-back after throws:** byref arguments are written back when the invoked guest method throws, unlike the CLR.
 - **Legacy static-initialization triggers:** `newobj`, eligible calls through
   `prepare_method_initialization` and `RuntimeHelpers.RunClassConstructor` retain the legacy
   `unwind_frame` wrapper, after outer filters have already run on the original exception. Their
   timing and wrapping differ from the field-instruction effect path described in the
   [static-initialization slice](08-async-effects/slice-4-static-initialization.md).
-- **Fallback continuations for excluded shapes:** `MulticastState`, `InvokeReturn` and the
+- **Fallback continuations for excluded shapes:** `MulticastState` and the
   frame retry deadline remain necessary until a plan covers invocation and wait
   shapes excluded from native effects; the retry record serves timed Transient/Unmanaged byref
   monitor fallbacks and independently Thread.Join. Monitor.Wait uses a native wait. Their ownership
   and admitted shapes are defined by [plan 08](08-async-effects.md). Threading and string bodies now validate admitted operands;
   single-cast delegates and other IL calls now forward inline. Guest non-inline routes remain
-  `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
+  `MulticastState`, intrinsic-constructor `newobj`, and the
   managed-body-only cctor, span equality slow path and Expression.Compile redirect. Public
   `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` are also non-inline.
   Non-inline calls use a registered fallback or return `NotImplemented` when absent, as for
-  `Thread.Yield`, `Thread.SpinWait` and `Monitor.Wait`. Monitor byref and reflection exclusions
-  remain; Substring retains its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
-- **Pending-reflection instruction cost:** the per-instruction check for a pending reflection
-  continuation adds interpreter work. Disabling it in an experimental build changed ST dispatch
-  timings by +0.54%, -2.72%, -3.08% and -2.17%, but also changed code layout and broke retry;
-  its exact time cost is not isolated. See the [throughput audit](08-async-effects.md#final-branch-throughput-audit).
+  `Thread.Yield`, `Thread.SpinWait` and `Monitor.Wait`. Monitor byref exclusions
+  remain (reflection's were removed by [plan 16](16-retire-legacy-continuations.md) slice 3); Substring retains its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
 - **Cross-thread GC handles:** `intrinsic_gchandle_internal_get` and related operations index the
   calling arena's local handle table, so a `WeakReference` created on one thread cannot reliably
   read its target from another, even while both arenas remain registered.
@@ -134,6 +132,11 @@ Evidence and IDs (p01…, R01…) are defined in the
   - `Delegate.GetInvocationList` is missing on `System.Delegate` (only `MulticastDelegate`
     has it), and `delegate is MulticastDelegate` is false for a runtime delegate type.
   - A `Synchronized` instance method on a value type runs without taking a monitor.
+  - `Type.ToString()` returns `"Type: Name"` where the CLR returns the type name, so
+    `$"{obj.GetType()}"` and a boxed struct's default `ToString()` (through
+    `ValueType.ToString`) differ from the CLR.
+  - `Type.IsByRefLike` always returns `false`; reflection invocation now detects byref-like
+    types (`invoke_args::is_byref_like`), but the property does not use it.
 - **`GC.WaitForPendingFinalizers` global quiescence:** it waits until no arena has pending or
   in-progress finalizers, rather than completing one pass, and can livelock while a thread keeps
   producing finalizable garbage. The behavior has not been reproduced.

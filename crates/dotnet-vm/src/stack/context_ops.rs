@@ -19,7 +19,6 @@ use dotnet_value::{
     object::{HeapStorage, Object, ObjectRef},
     pointer::{ManagedPtrResolver, StaticMetadata},
 };
-use dotnet_vm_data::FrameReturnAction;
 use dotnet_vm_ops::MemoryOps;
 use dotnetdll::prelude::{MethodMemberIndex, MethodType};
 use std::ptr::NonNull;
@@ -40,15 +39,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         self.back_up_ip();
         StepResult::Yield
-    }
-
-    /// Set the frame return action before an excluded reflection invocation's fallback call.
-    #[inline]
-    pub fn set_frame_return_action(&mut self, action: FrameReturnAction) {
-        self.frame_stack
-            .current_frame_mut()
-            .frame_continuation
-            .push(action);
     }
 
     /// Save the executing handler before starting nested exception control flow.

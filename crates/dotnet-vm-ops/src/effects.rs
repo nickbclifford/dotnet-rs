@@ -315,7 +315,7 @@ pub trait NativeBackend<'gc> {
     ) -> Result<Option<NativeTarget<'gc>>, VmError> {
         Err(internal("native multicast unavailable"))
     }
-    fn reflection_call(&mut self) -> Result<NativePreparedCall<'gc>, NativePrepareError<'gc>> {
+    fn reflection_call(&mut self) -> Result<NativeReflectionPlan<'gc>, NativePrepareError<'gc>> {
         Err(NativePrepareError::Host(internal(
             "native reflection unavailable",
         )))
@@ -358,6 +358,20 @@ pub struct NativeTarget<'gc> {
     pub method: dotnet_types::members::MethodDescription,
     pub generics: dotnet_types::generics::GenericLookup,
     pub receiver: Option<StackValue<'gc>>,
+}
+
+/// What a reflection invocation does once its operands are validated.
+pub enum NativeReflectionPlan<'gc> {
+    /// Call the target with marshalled arguments.
+    Call(NativePreparedCall<'gc>),
+    /// Return this value without calling anything (`Activator` creating a default struct).
+    Value(StackValue<'gc>),
+}
+
+/// A prepared reflection invocation whose values are rooted for the activation.
+pub enum NativeReflectionStep {
+    Call(NativeCall, Option<RootedValue>),
+    Value(RootedValue),
 }
 
 /// Arguments produced during one synchronous reflection marshalling operation.
@@ -449,9 +463,14 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         self.backend.operands().clear();
         Ok((receiver, arguments))
     }
-    fn prepare_reflection(&mut self) -> Result<(NativeCall, Option<RootedValue>), NativeFailure> {
+    fn prepare_reflection(&mut self) -> Result<NativeReflectionStep, NativeFailure> {
         let prepared = match self.backend.reflection_call() {
-            Ok(prepared) => prepared,
+            Ok(NativeReflectionPlan::Call(prepared)) => prepared,
+            Ok(NativeReflectionPlan::Value(value)) => {
+                let value = self.root(value)?;
+                self.backend.operands().clear();
+                return Ok(NativeReflectionStep::Value(value));
+            }
             Err(NativePrepareError::Host(error)) => return Err(error.into()),
             Err(NativePrepareError::Managed(exception)) => {
                 return Err(NativeFailure::Managed(
@@ -471,7 +490,7 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
             .map(|value| self.root(value))
             .collect::<Result<Vec<_>, _>>()?;
         self.backend.operands().clear();
-        Ok((
+        Ok(NativeReflectionStep::Call(
             NativeCall {
                 method: prepared.method,
                 generics: prepared.generics,
@@ -1376,9 +1395,7 @@ impl<'fx> VmAccess<'fx> {
     pub fn prepare_multicast(&mut self) -> Result<(RootedValue, Vec<RootedValue>), NativeFailure> {
         Ok(self.with(|region| region.prepare_multicast())??)
     }
-    pub fn prepare_reflection(
-        &mut self,
-    ) -> Result<(NativeCall, Option<RootedValue>), NativeFailure> {
+    pub fn prepare_reflection(&mut self) -> Result<NativeReflectionStep, NativeFailure> {
         self.with(|region| region.prepare_reflection())?
     }
     pub fn multicast_call(

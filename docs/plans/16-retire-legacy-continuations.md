@@ -76,7 +76,7 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
 | Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
-| Reflection `InvokeReturn` / `reflection_pending` | **Remove after struct transport** | Wrong receiver type and argument validation still fall back (plan 13's throw helper moves these into the body); byref write-back after a throw is a README deviation to fix in the body. Ambiguous-match "first best match" behaviour is unchanged unless deleting a fallback requires it. Deleting `reflection_pending` also removes the per-instruction pending-reflection check (README "Pending-reflection instruction cost"); measure it. |
+| Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Verify, then likely keep** | `lock` statements use a local (`FrameHome`), admitted. A `Transient` `bool&` has no obvious producer in C# or CoreLib; confirm by grepping producers and by a handwritten-IL probe. `Unmanaged` stashing is *not* a new hazard: the legacy retry also writes the raw address after yielding, with the same unchecked trust (`F10.RawMemoryAccessValid`), so plan 13's "stability" objection does not distinguish the two paths. Admitting it is cheap; admitting `Transient` is not (would need tracing a stack-resident value). |
 | `newobj` of an intrinsic constructor (`execute_intrinsic_call`) | **Remove** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`); today `newobj` returns their `Yield` without completing the receiver and re-allocates on retry. Converting the string constructors in the bulk slice depends on this slice. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
@@ -116,7 +116,7 @@ The original ordering put blocking intrinsics first. A body-only `GC.Collect` wo
 the still-live non-inline reflection continuation: `reflection_retry_completed_collection_does_not_retry`
 constructs that route. Before slice 1, multicast also needed the legacy continuation for plain
 values; slice 2 moved its collection regression to the native path and recorded its remaining
-exclusions. The remaining order is reflection, non-inline producers, then blocking intrinsics.
+exclusions. Slice 3 then removed the reflection continuation; the remaining order is non-inline producers, then blocking intrinsics.
 
 1. **Value types across native calls (complete).** Add a value-type shape to `NativeOutput` and the
    argument check, map enums to their underlying type in reflection as multicast already does,
@@ -144,7 +144,7 @@ exclusions. The remaining order is reflection, non-inline producers, then blocki
    - Validation: VM library tests, the selection test and all multicast CLR differential tests
      passed in ST and `multithreading` with `DOTNET_SKIP_BUILD=1`. A source search confirms the
      forced multicast fallback hook and its test have no remaining code users.
-3. **Reflection continuation.** Move receiver and argument validation and byref write-back into
+3. **Reflection continuation (complete).** Move receiver and argument validation and byref write-back into
    the body. Delete `InvokeReturn`, `FrameReturnAction`, `reflection_pending` with its
    per-instruction check, and the two reflection fallbacks, or record which shape keeps each.
    If any fallback remains, its calls to suspending intrinsics must use a continuation that can
@@ -152,6 +152,68 @@ exclusions. The remaining order is reflection, non-inline producers, then blocki
    - Tests: the reflection differential fixtures plus one per previously declined shape; the
      ported collection-target regression; byref-write-back-after-throw fixed or restated; a
      benchmark run showing the per-instruction check's removal.
+   - Progress: `MethodInfo`/`ConstructorInfo` target and argument validation now runs in the
+     native body for transportable signatures. Retained reflection dispatch and retry call
+     targets inline, including async-only intrinsics; a retry must not enqueue a native target
+     again when its activation suspends. The collection fixture asserts all three calls select
+     the native path. Exceptional byref write-back is still the documented CLR deviation: the
+     body passes pointers into the original box or argument array, so writes are immediate even
+     on a throw. Changing that requires a separate copy-in/copy-out design and tests for aliasing.
+   - Excluded shapes: every value the native transport cannot root is byref-like (a `ref struct`,
+     `Span<T>`, `TypedReference`). A CLR probe showed it refuses all of them before running the
+     target: `NotSupportedException("Cannot create boxed ByRef-like values.")` for a parameter
+     (by value or by reference) and for an `Activator` target, and
+     `NotSupportedException("Specified method is not supported.")` for a return. The fallback
+     instead ran these targets, returned boxed ref structs, or failed with an internal error
+     (`TypedReference`). The body now raises the CLR exceptions; byref-like detection reads
+     `IsByRefLikeAttribute` through `type_attributes`, because the loader parses attributes
+     lazily and `TypeDefinition::attributes` stays empty.
+   - Activator: the body resolves the target and raises `ArgumentNullException`,
+     `ArgumentException` for an open generic, `NotSupportedException` for a byref-like type, and
+     `MissingMethodException` ("Constructor on type 'X' not found." or the abstract-class
+     message) as the CLR does. With no arguments, a value type without a matching constructor
+     (including primitives, which previously threw `Arg_MustBeType`) returns its boxed default
+     through a new no-call preparation result (`NativeReflectionPlan::Value`). Arrays no longer
+     construct a `DotnetRs.Array`, and `List<>` no longer constructs an instance. `string` keeps
+     `ArgumentException("Arg_MustBeType")`: constructing one needs the intrinsic-constructor
+     protocol, recorded in the README.
+   - Deleted: both selectors' `Fallback` outcomes, the `Invoke` arms of
+     `runtime_method_info_intrinsic_call`, `intrinsic_activator_create_instance_type_args`,
+     `FrameReturnAction`/`InvokeReturn`, `StackFrame::frame_continuation` and
+     `reflection_pending`, `ReflectionPending`, `CallState::reflection_arming`,
+     `NativeActivation::reflection_actions`, `apply_frame_return_actions`,
+     `retry_reflection_target`, `reflection_dispatch_method`, `set_frame_return_action`, the
+     per-instruction pending check in `step_normal`, and the two unit tests that constructed the
+     continuation by hand. `StackFrame` shrinks from 600 to 568 bytes. No guest route reaches the
+     `Invoke`/`Activator` intrinsics non-inline: retained `MulticastState` targets carry an
+     excluded shape, which these signatures lack, and the engine API goes in slice 4.
+   - Tests: `invoke_byref_like_42.cs` (27 native selections, no target runs) matches the CLR
+     line for line; every reflection selection fixture asserts no fallback.
+   - Benchmark: four alternating Criterion pairs per configuration (`bench-fat`, CPU 0 on an
+     AMD Ryzen 9 9900X, separate targets and Criterion homes, `--sample-size 10 --warm-up-time 1
+     --measurement-time 4`), baseline `0c5c58f8`, comparing mean point estimates:
+
+     | Workload | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Mean |
+     |---|---:|---:|---:|---:|---:|
+     | ST dispatch | -1.27% | -0.63% | -0.50% | -0.69% | -0.77% |
+     | ST string | -1.91% | -1.78% | +8.18% | -1.13% | +0.84% |
+     | ST reflection | +0.64% | -1.09% | +0.20% | +0.68% | +0.11% |
+     | MT dispatch | -3.38% | -1.68% | -2.08% | -1.81% | -2.24% |
+     | MT string | -9.00% | -7.56% | -9.16% | -8.04% | -8.44% |
+     | MT reflection | -4.36% | +0.67% | -0.53% | +0.92% | -0.83% |
+
+     Whole-process `perf stat --test` (two pairs each) measured 0.53–0.60% fewer user
+     instructions and 0.79–0.80% fewer branches in both configurations. The fixture DLLs were
+     built per target directory from identical sources and are not byte-identical, unlike plan
+     08's audit. `reflection` (`ReflectionEnumeration_0`) enumerates members and does not call
+     `Invoke`; it is a control. The MT string gain is consistent but not attributed.
+   - Inlining hazard: without the check, LLVM inlined `step_normal` into `ExecutionEngine::run`
+     (189 KB). Under `multithreading` the merged loop stored each `StepResult` with a narrow
+     store and reloaded it with 16-byte loads, so `dispatch` ran 41% slower (+42.4, +41.6,
+     +39.4, +41.8%), `string` 33% and `reflection` 17%, with 1.5% fewer instructions, 34% more
+     cycles and 60% more branch misses; `perf annotate` put 54% of `run`'s samples on the
+     reload. `step_normal` is now `#[inline(never)]`, which restores the baseline's
+     out-of-line structure (`run` is again `0xdfb` bytes in MT).
 4. **Intrinsic-constructor `newobj` and `Other` dispatch.** Route guest calls to inline dispatch
    where the completion contract allows it, including the yielding string constructors. Delete
    `NativeDispatchMode::Other` handling that no longer has a producer. Delete the public
@@ -205,7 +267,7 @@ exclusions. The remaining order is reflection, non-inline producers, then blocki
 | Item | Reason | Test that fails if the reason stops being true |
 |---|---|---|
 | `MulticastState`, its step/return/tail-call checks, and initializer retry | Ref-struct values or byref targets containing managed pointers, byref returns, `TypedReference`, and byrefs with origins other than non-null heap, frame home, static or MT cross-arena object cannot use native transport. Unresolvable or mismatched shapes also decline. | `multicast_selection_precedes_operand_commitment` checks the ref-struct value, byref target, byref return, `TypedReference` and unmanaged byref exclusions; their CLR differential fixtures check execution. Transient byrefs have no known guest producer (slice 5). |
-| Synthetic multicast activation | Non-inline `VmContext` and `ExecutionEngineApi` dispatch can select an otherwise transportable multicast; the synthetic frame gives it a completion destination. Remove with those routes in slices 3–4. | The existing non-inline engine dispatch and reflection continuation tests exercise the routes; no focused test currently asserts synthetic multicast selection. |
+| Synthetic multicast activation | Non-inline `VmContext` and `ExecutionEngineApi` dispatch can select an otherwise transportable multicast; the synthetic frame gives it a completion destination. Remove with those routes in slice 4. | The existing non-inline engine dispatch tests exercise the route; no focused test currently asserts synthetic multicast selection. |
 
 ## Ask the maintainer only if
 

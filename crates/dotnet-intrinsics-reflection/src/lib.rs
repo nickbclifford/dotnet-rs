@@ -37,7 +37,7 @@ use dotnet_value::{
     layout::LayoutManager,
     object::{Object, ObjectRef},
 };
-use dotnet_vm_data::{FrameReturnAction, MethodInfo};
+use dotnet_vm_data::MethodInfo;
 use dotnet_vm_ops::{
     NULL_REF_MSG,
     ops::{ReflectionBaseOps, TypeLayoutOps},
@@ -97,14 +97,6 @@ pub trait ResolutionContextHost<'gc>: TypeLayoutOps {
     ) -> Result<MethodInfo<'static>, TypeResolutionError>;
 
     fn reflection_empty_generics(&self) -> GenericLookup;
-
-    fn reflection_dispatch_method(
-        &mut self,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> dotnet_vm_data::StepResult;
-
-    fn set_frame_return_action(&mut self, action: FrameReturnAction);
 
     fn reflection_constructor_frame(
         &mut self,

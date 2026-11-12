@@ -10,7 +10,7 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnet_vm_data::{FrameReturnAction, StepResult};
+use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
@@ -141,54 +141,156 @@ pub fn intrinsic_activator_create_instance<'gc, T: ReflectionIntrinsicHost<'gc>>
     }
 }
 
-/// Resolve the same positional constructor as the synchronous Activator path, without side effects.
-pub fn resolve_activator_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &T,
+/// What `Activator.CreateInstance(Type, object[])` creates once its operands are validated.
+pub enum ActivatorTarget<'gc> {
+    /// Allocate an instance of the declaring type and run this constructor on it.
+    Constructor(MethodDescription, GenericLookup),
+    /// A value type with no matching constructor and no arguments: its boxed default value.
+    Default(ObjectRef<'gc>),
+}
+
+/// Resolve `Activator.CreateInstance(Type, object[])` the way the CLR does, raising its managed
+/// exceptions: `ArgumentNullException` for a null type, `ArgumentException` for an open generic,
+/// `NotSupportedException` for a byref-like type, and `MissingMethodException` when no public
+/// constructor binds or the type is abstract. With no arguments, a value type without a matching
+/// constructor produces its default value. Among several binding constructors the one needing the
+/// fewest conversions wins rather than raising `AmbiguousMatchException` (a recorded deviation).
+pub fn activator_target<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
     target: ObjectRef<'gc>,
     parameters: ObjectRef<'gc>,
-) -> Option<(MethodDescription, GenericLookup)> {
-    target.0?;
-    let (td, lookup) = match crate::common::resolve_runtime_type(ctx, target).ok()? {
-        RuntimeType::Type(td) => (td, GenericLookup::default()),
-        RuntimeType::Generic(td, args) => {
-            let lookup = GenericLookup::new(
+) -> Result<ActivatorTarget<'gc>, StepResult> {
+    if target.0.is_none() {
+        return Err(ctx.throw_by_name_with_message(
+            "System.ArgumentNullException",
+            "Value cannot be null. (Parameter 'type')",
+        ));
+    }
+    let runtime = crate::common::resolve_runtime_type(ctx, target).map_err(|_| {
+        ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType")
+    })?;
+    if contains_generic_parameters(&runtime) {
+        let message = format!(
+            "Cannot create an instance of {} because Type.ContainsGenericParameters is true.",
+            runtime.get_name()
+        );
+        return Err(ctx.throw_by_name_with_message("System.ArgumentException", &message));
+    }
+    let (td, lookup) = match &runtime {
+        RuntimeType::Type(td) => (td.clone(), GenericLookup::default()),
+        RuntimeType::Generic(td, args) => (
+            td.clone(),
+            GenericLookup::new(
                 args.iter()
                     .map(|arg| arg.to_concrete(ctx.loader().as_ref()))
                     .collect(),
-            );
-            (td, lookup)
+            ),
+        ),
+        // Arrays declare no constructors that `Activator` binds.
+        RuntimeType::Vector(_) | RuntimeType::Array(..) => {
+            return Err(missing_constructor(ctx, &runtime.get_name()));
         }
-        _ => return None,
+        // Constructing a string needs the intrinsic constructor protocol, which reflection does
+        // not use; pointers, byrefs and `void` are not creatable.
+        RuntimeType::String
+        | RuntimeType::Void
+        | RuntimeType::Pointer(_)
+        | RuntimeType::ByRef(_)
+        | RuntimeType::ValuePointer(..)
+        | RuntimeType::FunctionPointer(_) => {
+            return Err(
+                ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType")
+            );
+        }
+        // Primitives, `object` and `TypedReference` are ordinary CoreLib type definitions.
+        other => {
+            let td = ctx
+                .loader()
+                .find_concrete_type(other.to_concrete(ctx.loader().as_ref()))
+                .map_err(|error| StepResult::Error(error.into()))?;
+            (td, GenericLookup::default())
+        }
     };
+    if crate::invoke_args::is_byref_like(ctx, &td) {
+        return Err(crate::invoke_args::throw_byref_like_value(ctx));
+    }
     let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let args = if parameters.0.is_none() {
         Vec::new()
     } else {
-        parameters.as_heap_storage(|storage| match storage {
-            HeapStorage::Vec(vector) => Some(vector.object_ref_elements(&gc).collect::<Vec<_>>()),
-            _ => None,
-        })?
+        parameters
+            .try_as_vector(|vector: &dotnet_value::object::Vector<'gc>| {
+                vector.object_ref_elements(&gc).collect::<Vec<_>>()
+            })
+            .map_err(|error| StepResult::Error(error.into()))?
     };
-    let method = crate::invoke_args::select_constructor(ctx, &td, &lookup, &args)?;
-    Some((method, lookup))
+    if let Some(method) = crate::invoke_args::select_constructor(ctx, &td, &lookup, &args) {
+        if td.definition().flags.abstract_type {
+            let message = format!(
+                "Cannot dynamically create an instance of type '{}'. Reason: Cannot create an abstract class.",
+                td.type_name()
+            );
+            return Err(ctx.throw_by_name_with_message("System.MissingMethodException", &message));
+        }
+        return Ok(ActivatorTarget::Constructor(method, lookup));
+    }
+    let value_type = ctx
+        .reflection_is_value_type_with_lookup(td.clone(), &lookup)
+        .map_err(|error| StepResult::Error(error.into()))?;
+    if args.is_empty() && value_type {
+        let instance = ctx
+            .reflection_new_object_with_lookup(td, &lookup)
+            .map_err(|error| StepResult::Error(error.into()))?;
+        let boxed = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(instance)));
+        ctx.register_new_object(&boxed);
+        return Ok(ActivatorTarget::Default(boxed));
+    }
+    Err(missing_constructor(ctx, &td.type_name()))
 }
 
+fn missing_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
+    ctx: &mut T,
+    name: &str,
+) -> StepResult {
+    ctx.throw_by_name_with_message(
+        "System.MissingMethodException",
+        &format!("Constructor on type '{name}' not found."),
+    )
+}
+
+/// Whether `runtime` mentions an unbound type or method generic parameter (`List<>`, or `T[]`
+/// inside a generic method), which `Type.ContainsGenericParameters` reports.
+fn contains_generic_parameters(runtime: &RuntimeType) -> bool {
+    match runtime {
+        RuntimeType::TypeParameter { .. } | RuntimeType::MethodParameter { .. } => true,
+        RuntimeType::Generic(_, args) => args.iter().any(contains_generic_parameters),
+        RuntimeType::Vector(inner)
+        | RuntimeType::Array(inner, _)
+        | RuntimeType::Pointer(inner)
+        | RuntimeType::ByRef(inner)
+        | RuntimeType::ValuePointer(inner, _) => contains_generic_parameters(inner),
+        _ => false,
+    }
+}
+
+/// Every `Activator.CreateInstance(Type, object[])` runs in the native body; validation there
+/// raises the CLR's managed exceptions.
 pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &T,
+    _ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
     _method: &MethodDescription,
     _generics: &GenericLookup,
 ) -> NativeSelection {
-    let (StackValue::ObjectRef(target), StackValue::ObjectRef(parameters)) =
-        (operands.peek_at(1), operands.peek_at(0))
-    else {
-        return NativeSelection::Fallback;
-    };
-    let Some((method, lookup)) = resolve_activator_constructor(ctx, target, parameters) else {
-        return NativeSelection::Fallback;
-    };
-    if !crate::methods::invoke_arguments_supported(ctx, &method, &lookup, parameters) {
-        return NativeSelection::Fallback;
+    if !matches!(
+        (operands.peek_at(1), operands.peek_at(0)),
+        (StackValue::ObjectRef(_), StackValue::ObjectRef(_))
+    ) {
+        return NativeSelection::Reject(
+            ExecutionError::InternalError(
+                "Activator.CreateInstance operands are not objects".into(),
+            )
+            .into(),
+        );
     }
     tracing::debug!(reflection_invoke_path = "async");
     NativeSelection::Async(NativeInvocation {
@@ -198,109 +300,9 @@ pub fn activator_select<'gc, T: ReflectionIntrinsicHost<'gc>>(
     })
 }
 
-#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])", select = activator_select, fallback = intrinsic_activator_create_instance_type_args)]
+#[dotnet_intrinsic("static object System.Activator::CreateInstance(System.Type, object[])", select = activator_select)]
 pub async fn activator_async(fx: VmEffects) -> NativeResult {
     crate::methods::run_reflection_call(fx).await
-}
-
-pub fn intrinsic_activator_create_instance_type_args<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let ctor_args_obj = ctx.pop_obj();
-    let target_type_obj = ctx.pop_obj();
-
-    if target_type_obj.0.is_none() {
-        return ctx.throw_by_name_with_message(
-            "System.ArgumentNullException",
-            "Value cannot be null. (Parameter 'type')",
-        );
-    }
-
-    let target_runtime_type = match crate::common::resolve_runtime_type(ctx, target_type_obj) {
-        Ok(t) => t,
-        Err(_) => {
-            return ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType");
-        }
-    };
-
-    let (target_td, lookup, invoke_return_type) = match target_runtime_type {
-        RuntimeType::Type(td) => (td.clone(), GenericLookup::default(), RuntimeType::Type(td)),
-        RuntimeType::Generic(td, type_args) => {
-            let lookup = GenericLookup::new(
-                type_args
-                    .iter()
-                    .map(|arg| arg.to_concrete(ctx.loader().as_ref()))
-                    .collect(),
-            );
-            (
-                td.clone(),
-                lookup,
-                RuntimeType::Generic(td, type_args.clone()),
-            )
-        }
-        _ => {
-            return ctx.throw_by_name_with_message("System.ArgumentException", "Arg_MustBeType");
-        }
-    };
-
-    let ctor_arg_objs = if ctor_args_obj.0.is_none() {
-        Vec::new()
-    } else {
-        dotnet_vm_ops::vm_try!(ctor_args_obj.try_as_vector(
-            |v: &dotnet_value::object::Vector<'gc>| v.object_ref_elements(&gc).collect::<Vec<_>>()
-        ))
-    };
-
-    let Some(ctor_desc) =
-        crate::invoke_args::select_constructor(ctx, &target_td, &lookup, &ctor_arg_objs)
-    else {
-        // A struct always has a default value, even without a declared constructor.
-        if ctor_arg_objs.is_empty()
-            && dotnet_vm_ops::vm_try!(
-                ctx.reflection_is_value_type_with_lookup(target_td.clone(), &lookup)
-            )
-        {
-            let instance = dotnet_vm_ops::vm_try!(
-                ctx.reflection_new_object_with_lookup(target_td.clone(), &lookup)
-            );
-            let boxed = ObjectRef::new(gc, HeapStorage::Boxed(Box::new(instance)));
-            ctx.register_new_object(&boxed);
-            ctx.push_obj(boxed);
-            return StepResult::Continue;
-        }
-        return ctx.throw_by_name_with_message(
-            "System.MissingMethodException",
-            "No matching constructor found.",
-        );
-    };
-
-    let ctor_args =
-        match crate::methods::unmarshal_invoke_params(ctx, &gc, &ctor_desc, &lookup, ctor_args_obj)
-        {
-            Ok(args) => args,
-            Err(thrown) => return thrown,
-        };
-
-    let instance =
-        dotnet_vm_ops::vm_try!(ctx.reflection_new_object_with_lookup(target_td.clone(), &lookup));
-    let this_obj = ObjectRef::new(gc, HeapStorage::Obj(Box::new(instance)));
-    ctx.register_new_object(&this_obj);
-
-    // Preserve the created instance so return-frame reflection boxing can return it
-    // after the constructor (which itself returns void) completes.
-    ctx.push_obj(this_obj);
-
-    // Constructor call arguments: `this` first, then positional constructor args.
-    ctx.push_obj(this_obj);
-    for arg in ctor_args {
-        ctx.push(arg);
-    }
-
-    ctx.set_frame_return_action(FrameReturnAction::InvokeReturn(invoke_return_type));
-    ctx.reflection_dispatch_method(ctor_desc, lookup)
 }
 
 pub fn handle_create_instance_check_this<'gc, T: TypedStackOps<'gc>>(
