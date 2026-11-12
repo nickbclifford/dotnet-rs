@@ -74,7 +74,9 @@ pub(crate) struct NativeActivation<'gc> {
     pub stack_height: crate::StackSlotIndex,
     #[collect(require_static)]
     pub output: NativeOutput,
-    pub synthetic_return: bool,
+    #[collect(require_static)]
+    pub constructor_result: Option<dotnet_vm_data::frame_homes::ConstructorResult>,
+    pub constructor: bool,
 }
 
 #[derive(Collect)]

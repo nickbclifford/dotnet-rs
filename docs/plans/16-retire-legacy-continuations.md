@@ -78,9 +78,9 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 | Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
 | Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
 | Monitor byref `Transient` / `Unmanaged` fallback | **Verify, then likely keep** | `lock` statements use a local (`FrameHome`), admitted. A `Transient` `bool&` has no obvious producer in C# or CoreLib; confirm by grepping producers and by a handwritten-IL probe. `Unmanaged` stashing is *not* a new hazard: the legacy retry also writes the raw address after yielding, with the same unchecked trust (`F10.RawMemoryAccessValid`), so plan 13's "stability" objection does not distinguish the two paths. Admitting it is cheap; admitting `Transient` is not (would need tracing a stack-resident value). |
-| `newobj` of an intrinsic constructor (`execute_intrinsic_call`) | **Remove** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`); today `newobj` returns their `Yield` without completing the receiver and re-allocates on retry. Converting the string constructors in the bulk slice depends on this slice. |
+| `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`); today `newobj` returns their `Yield` without completing the receiver and re-allocates on retry. Converting the string constructors in the bulk slice depends on this slice. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
-| `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Remove** (maintainer decision 2026-11-11) | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
+| `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Removed (slice 4)** | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
 | Legacy static-init (`newobj`, `prepare_method_initialization`, `RunClassConstructor`) | **Remove last** | Highest risk: three triggers with different operand contracts, `retrying_initializer`, `initializer_claim` on frames, legacy condvar `wait_for_init`, and the late wrapping that differs from the field path. Do it only after dispatch is inline everywhere, so one `ensure_initialized` effect can serve all callers. |
 | Substring valid-small fast path | **Keep** | Measured in plan 13. |
 | `monitor_retry` frame field | **Remove if** the Unmanaged/Transient decision leaves no timed byref fallback; otherwise it stays for exactly that. |
@@ -214,10 +214,29 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      cycles and 60% more branch misses; `perf annotate` put 54% of `run`'s samples on the
      reload. `step_normal` is now `#[inline(never)]`, which restores the baseline's
      out-of-line structure (`run` is again `0xdfb` bytes in MT).
-4. **Intrinsic-constructor `newobj` and `Other` dispatch.** Route guest calls to inline dispatch
+4. **Intrinsic-constructor `newobj` and `Other` dispatch (complete).** Route guest calls to inline dispatch
    where the completion contract allows it, including the yielding string constructors. Delete
    `NativeDispatchMode::Other` handling that no longer has a producer. Delete the public
    `ExecutionEngine` dispatch APIs and the `ExecutionEngineApi` mode per the audit row.
+   - Intrinsic `newobj` admits native activations with the correct operand and result conventions:
+     reference constructors return their object, while value-type receiver homes are completed
+     only after success. Constructor activation starts after its completion is installed.
+     Existing synchronous string constructors keep their safepoint retry until slice 6 converts
+     the bulk loops.
+   - Deleted the engine APIs, synthetic multicast activation and its return machinery. `Other`
+     remains for the excluded multicast continuation and managed-only dispatches.
+   - `native_newobj_completes_string_and_value_receiver_after_gc` verifies suspended activation
+     completion across collection and checks that failures do not publish the receiver; existing
+     string, span, multicast and threading fixtures cover synchronous constructors and retained
+     dispatch. The contended multicast fixture is now
+     ignored without `multithreading`, as its CLR comparison already was.
+   - Validation: workspace nextest without features (926 passed) and MT (1,204 passed with the
+     documented reflection race excluded); the reflection race passed separately after its CLR
+     sanity check failed under parallel load. A timer comparison also failed under parallel load
+     and passed both individually and in the subsequent run. VM library tests, multicast
+     selection and workspace clippy passed in ST and MT; 20 multicast CLR comparisons and
+     string differential tests passed. `check.sh --fast` was stopped during its silent fixture
+     build after several minutes; the workspace checks used available fixtures instead.
 5. **Blocking intrinsics.** `Thread.Join` (both), `LowLevelLock.Acquire`, the `TryEnter_FastPath`
    family, `GC.Collect` x3. Delete their sync handlers, Join's `monitor_retry_deadline` use and
    any now-unused `MonitorHost` methods. Also settle the Transient/Unmanaged question here and
@@ -267,7 +286,6 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
 | Item | Reason | Test that fails if the reason stops being true |
 |---|---|---|
 | `MulticastState`, its step/return/tail-call checks, and initializer retry | Ref-struct values or byref targets containing managed pointers, byref returns, `TypedReference`, and byrefs with origins other than non-null heap, frame home, static or MT cross-arena object cannot use native transport. Unresolvable or mismatched shapes also decline. | `multicast_selection_precedes_operand_commitment` checks the ref-struct value, byref target, byref return, `TypedReference` and unmanaged byref exclusions; their CLR differential fixtures check execution. Transient byrefs have no known guest producer (slice 5). |
-| Synthetic multicast activation | Non-inline `VmContext` and `ExecutionEngineApi` dispatch can select an otherwise transportable multicast; the synthetic frame gives it a completion destination. Remove with those routes in slice 4. | The existing non-inline engine dispatch tests exercise the route; no focused test currently asserts synthetic multicast selection. |
 
 ## Ask the maintainer only if
 

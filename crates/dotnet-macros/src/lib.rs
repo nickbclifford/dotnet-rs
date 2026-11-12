@@ -241,7 +241,7 @@ fn expand_intrinsic(
 /// larger inputs: Substring does this for at most one chunk; invalid ranges reach the body.
 /// Inline IL calls include
 /// constrained and tail calls, single-cast delegate targets and abstract redirects; non-inline
-/// continuations and public engine dispatch use the optional fallback, or return `NotImplemented`
+/// retained non-inline continuations use the optional fallback, or return `NotImplemented`
 /// without selecting or consuming operands when it is absent. Synchronous registrations keep
 /// their existing convention.
 #[proc_macro_attribute]

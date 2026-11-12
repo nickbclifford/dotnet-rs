@@ -157,7 +157,7 @@ Any method call may trigger static field initialization (`.cctor`) for the decla
 
 The `MethodSource` enum (from the `dotnetdll` crate) represents an unresolved method reference, distinguishing between raw user definitions (`UserMethod`) and generic instantiations.
 
-`ExecutionEngine::unified_dispatch` (in `dispatch/mod.rs`) is the central chokepoint for all method calls:
+`VesContext::unified_dispatch` (in `stack/call_ops_impl.rs`) resolves ordinary method calls:
 1. It accepts a `MethodSource` and an optional `this_type` (for virtual calls).
 2. It resolves the `MethodSource` into a concrete `MethodDescription` using `find_generic_method`.
 3. If `this_type` is provided, it performs virtual dispatch via `resolve_virtual_method`.

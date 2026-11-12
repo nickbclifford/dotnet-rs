@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; value-type transport, multicast audit and reflection continuation removal complete; next is intrinsic-constructor `newobj` and non-inline dispatch |
+| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; constructor dispatch and reflection continuation removal complete; next is blocking intrinsics |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
@@ -72,9 +72,8 @@ Evidence and IDs (p01…, R01…) are defined in the
   monitor fallbacks and independently Thread.Join. Monitor.Wait uses a native wait. Their ownership
   and admitted shapes are defined by [plan 08](08-async-effects.md). Threading and string bodies now validate admitted operands;
   single-cast delegates and other IL calls now forward inline. Guest non-inline routes remain
-  `MulticastState`, intrinsic-constructor `newobj`, and the
-  managed-body-only cctor, span equality slow path and Expression.Compile redirect. Public
-  `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` are also non-inline.
+  `MulticastState` and the managed-body-only cctor, span equality slow path and
+  Expression.Compile redirect. Intrinsic-constructor `newobj` can suspend inline.
   Non-inline calls use a registered fallback or return `NotImplemented` when absent, as for
   `Thread.Yield`, `Thread.SpinWait` and `Monitor.Wait`. Monitor byref exclusions
   remain (reflection's were removed by [plan 16](16-retire-legacy-continuations.md) slice 3); Substring retains its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).

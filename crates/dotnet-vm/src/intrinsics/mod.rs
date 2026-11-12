@@ -384,10 +384,11 @@ pub fn is_intrinsic_field(
     false
 }
 
-pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_constructor_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
+    kind: dotnet_vm_ops::effects::NativeConstructorKind,
 ) -> StepResult {
     let _res_ctx = ResolutionContext::for_method(
         method.clone(),
@@ -422,7 +423,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
         ctx.loader(),
         Some(&ctx.shared().caches.intrinsic_registry),
     );
-    // `intrinsic_call` is entered from paths that already classify/cached the method as
+    // `intrinsic_constructor_call` is entered from paths that already classify/cached the method as
     // intrinsic, so this branch should almost always be taken.
     if vm_likely!(metadata.is_some()) {
         let metadata = metadata.expect("metadata.is_some() checked above");
@@ -432,7 +433,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
             ctx,
             method,
             generics,
-            dotnet_vm_ops::effects::NativeDispatchMode::Other,
+            dotnet_vm_ops::effects::NativeDispatchMode::Constructor(kind),
         );
         ctx.set_current_intrinsic(None);
         return res;

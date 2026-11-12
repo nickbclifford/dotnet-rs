@@ -246,6 +246,7 @@ fn main() {
             || file_name == "canonical_member_objects_42"
             || file_name == "monitor_contended_lock_42"
             || file_name == "delegate_monitor_enter_42"
+            || file_name == "delegate_multicast_contended_42"
             || file_name == "monitor_static_flags_42"
             || file_name == "monitor_fresh_object_race_42"
             || file_name == "foreground_worker_42"

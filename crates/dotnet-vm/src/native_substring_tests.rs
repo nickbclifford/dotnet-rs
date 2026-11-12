@@ -707,7 +707,7 @@ fn substring_selector_rejects_malformed_scalar_operands() {
 fn substring_dispatch_admits_only_inline_calls() {
     use crate::stack::ops::{UnifiedDispatchTarget, VmCallOps};
     for explicit_length in [false, true] {
-        for entry in ["inline", "tail", "engine_api"] {
+        for entry in ["inline", "tail"] {
             let mut executor = executor();
             let method = substring_method(&executor, explicit_length);
             let result = executor
@@ -736,21 +736,14 @@ fn substring_dispatch_admits_only_inline_calls() {
                                 None,
                                 None,
                             ),
-                            _ => ctx.dispatch_resolved_method_for_engine_api(
-                                method,
-                                GenericLookup::default(),
-                            ),
+                            _ => unreachable!(),
                         }
                     })
                 })
                 .unwrap();
-            if entry != "engine_api" {
-                assert_eq!(result, StepResult::Yield);
-                assert_eq!(resume(&mut executor), StepResult::Yield);
-                assert_eq!(resume(&mut executor), StepResult::Continue);
-            } else {
-                assert_eq!(result, StepResult::Continue);
-            }
+            assert_eq!(result, StepResult::Yield);
+            assert_eq!(resume(&mut executor), StepResult::Yield);
+            assert_eq!(resume(&mut executor), StepResult::Continue);
             executor
                 .with_arena(|arena| {
                     arena.mutate(|_, engine| {
@@ -7388,4 +7381,159 @@ public static class Program {
     drop(executor);
     shared.shutdown_workers();
     std::fs::remove_dir_all(output).unwrap();
+}
+
+fn test_constructor_method(executor: &Executor) -> MethodDescription {
+    let (mut res, _, owner) =
+        make_test_assembly!("NativeConstructor.dll", "NativeConstructor", "Owner");
+    let mut signature = parameterless_i32_signature();
+    signature.instance = true;
+    signature.return_type = ReturnType(vec![], None);
+    res.push_method(
+        owner,
+        Method::new(Accessibility::Public, signature, ".ctor", None),
+    );
+    let res = executor.shared.loader.register_owned_assembly(res);
+    MethodDescription::new(
+        TypeDescription::new(res.clone(), owner),
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(0),
+    )
+}
+
+fn test_string_constructor(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        fx.yield_now().await?;
+        fx.vm().await?.push_new_string(vec![65, 66])
+    })
+}
+
+fn test_value_constructor(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let receiver = fx.vm().await?.prepare_multicast()?.0;
+        fx.yield_now().await?;
+        // SAFETY: the test receiver is a live, exclusive one-byte boolean home.
+        unsafe { fx.vm().await?.write_monitor_flag(&receiver, true) }
+    })
+}
+
+fn test_failing_value_constructor(
+    mut fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeFuture {
+    Box::pin(async move {
+        let _receiver = fx.vm().await?.prepare_multicast()?.0;
+        fx.yield_now().await?;
+        Err(dotnet_vm_ops::effects::NativeFailure::Host(
+            crate::error::ExecutionError::InternalError("constructor failure".into()).into(),
+        ))
+    })
+}
+
+#[test]
+fn native_newobj_completes_string_and_value_receiver_after_gc() {
+    use crate::stack::ops::VmCallOps;
+    use dotnet_value::{
+        layout::{FieldLayoutManager, GcDesc},
+        object::Object as ObjectInstance,
+        storage::FieldStorage,
+    };
+    use dotnet_vm_ops::effects::{NativeConstructorKind, NativeDispatchMode, NativeIntrinsicHost};
+    for (kind, fail) in [
+        (NativeConstructorKind::String, false),
+        (NativeConstructorKind::Object, false),
+        (NativeConstructorKind::ValueType, false),
+        (NativeConstructorKind::ValueType, true),
+    ] {
+        let value_type = kind == NativeConstructorKind::ValueType;
+        let mut executor = executor();
+        let method = test_constructor_method(&executor);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — engine is the live arena root.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    let completion = if value_type {
+                        let layout = Arc::new(FieldLayoutManager {
+                            fields: Default::default(),
+                            total_size: 1,
+                            alignment: 1,
+                            gc_desc: GcDesc::default(),
+                            has_ref_fields: false,
+                        });
+                        let instance = ObjectInstance::new(
+                            TypeDescription::NULL,
+                            GenericLookup::default(),
+                            FieldStorage::new(layout, vec![0]),
+                        );
+                        let (completion, pointer) =
+                            ctx.prepare_constructor_receiver(instance).unwrap();
+                        ctx.push(pointer);
+                        Some(completion)
+                    } else {
+                        None
+                    };
+                    let entry: fn(_) -> _ = if fail {
+                        test_failing_value_constructor
+                    } else if value_type {
+                        test_value_constructor
+                    } else {
+                        test_string_constructor
+                    };
+                    assert_eq!(
+                        ctx.start_native(
+                            method.clone(),
+                            NativeDispatchMode::Constructor(kind),
+                            &GenericLookup::default(),
+                            None,
+                            None,
+                            entry
+                        ),
+                        StepResult::Yield
+                    );
+                    if let Some(completion) = completion {
+                        assert!(ctx.defer_native_constructor_receiver(&method, completion));
+                    }
+                    assert_eq!(ctx.advance_native_effect(), StepResult::Yield);
+                })
+            })
+            .unwrap();
+        collect(&mut executor);
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — engine is the live arena root.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    let mut ctx = engine.ves_context(gc);
+                    let result = ctx.advance_native_effect();
+                    if fail {
+                        assert!(matches!(result, StepResult::Error(_)));
+                        assert!(matches!(ctx.pop(), StackValue::ObjectRef(ObjectRef(None))));
+                        assert!(ctx.call_state.native.is_empty());
+                        return;
+                    }
+                    assert!(matches!(result, StepResult::Jump(_)));
+                    match ctx.pop() {
+                        StackValue::ValueType(value) if value_type => {
+                            value.with_data(|bytes| assert_eq!(bytes, &[1]))
+                        }
+                        StackValue::ObjectRef(ObjectRef(Some(value))) if !value_type => {
+                            let value = value.borrow();
+                            let HeapStorage::Str(value) = &value.storage else {
+                                panic!("expected string")
+                            };
+                            assert_eq!(&value[..], &[65, 66]);
+                        }
+                        other => panic!("unexpected constructor result: {other:?}"),
+                    }
+                    assert!(ctx.call_state.native.is_empty());
+                })
+            })
+            .unwrap();
+    }
 }

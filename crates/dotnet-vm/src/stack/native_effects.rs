@@ -906,15 +906,6 @@ fn multicast_entry(fx: VmEffects) -> NativeFuture {
     Box::pin(multicast_body(fx))
 }
 
-fn multicast_fallback<'gc>(
-    ctx: &mut VesContext<'_, 'gc>,
-    method: MethodDescription,
-    lookup: &GenericLookup,
-) -> StepResult {
-    dotnet_intrinsics_delegates::try_delegate_dispatch(ctx, method, lookup)
-        .unwrap_or_else(|| StepResult::internal_error("delegate dispatch unavailable"))
-}
-
 impl NativeActivation<'_> {
     pub(crate) fn cleanup(mut self) {
         drop(self.wait.take());
@@ -932,7 +923,7 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
         fallback: Option<NativeSyncHandler<Self>>,
         entry: fn(VmEffects) -> NativeFuture,
     ) -> StepResult {
-        if mode != NativeDispatchMode::InlineCall {
+        if mode == NativeDispatchMode::Other {
             return match fallback {
                 Some(handler) => handler(self, method, generics),
                 None => dotnet_vm_data::StepResult::not_implemented(format!(
@@ -946,7 +937,7 @@ impl<'gc> NativeIntrinsicHost<'gc> for VesContext<'_, 'gc> {
             selector,
             fallback,
             NativeEntry::Intrinsic(entry),
-            false,
+            mode,
         )
     }
 }
@@ -972,7 +963,7 @@ impl<'gc> VesContext<'_, 'gc> {
             None,
             None,
             NativeEntry::Instruction(action),
-            false,
+            NativeDispatchMode::InlineCall,
         )
     }
 
@@ -983,7 +974,7 @@ impl<'gc> VesContext<'_, 'gc> {
         selector: Option<NativeSelector<'gc, Self>>,
         fallback: Option<NativeSyncHandler<Self>>,
         entry: NativeEntry,
-        synthetic_return: bool,
+        mode: NativeDispatchMode,
     ) -> StepResult {
         let signature = method.signature();
         let count = match &entry {
@@ -991,7 +982,17 @@ impl<'gc> VesContext<'_, 'gc> {
                 usize::from(matches!(action.kind, StaticFieldKind::Store { .. }))
             }
             NativeEntry::Intrinsic(_) => {
-                signature.parameters.len() + usize::from(signature.instance)
+                signature.parameters.len()
+                    + usize::from(
+                        signature.instance
+                            && !matches!(
+                                mode,
+                                NativeDispatchMode::Constructor(
+                                    dotnet_vm_ops::effects::NativeConstructorKind::String
+                                        | dotnet_vm_ops::effects::NativeConstructorKind::Object
+                                )
+                            ),
+                    )
             }
         };
         if self.frame_stack.is_empty()
@@ -1034,7 +1035,18 @@ impl<'gc> VesContext<'_, 'gc> {
                 parameter_count: signature.parameters.len(),
             },
         };
-        let output = if matches!(entry, NativeEntry::Instruction(_)) {
+        let output = if mode
+            == NativeDispatchMode::Constructor(
+                dotnet_vm_ops::effects::NativeConstructorKind::String,
+            ) {
+            NativeOutput::String
+        } else if mode
+            == NativeDispatchMode::Constructor(
+                dotnet_vm_ops::effects::NativeConstructorKind::Object,
+            )
+        {
+            NativeOutput::Object
+        } else if matches!(entry, NativeEntry::Instruction(_)) {
             NativeOutput::Void
         } else {
             let shape = multicast_output(self, &method, generics);
@@ -1126,8 +1138,12 @@ impl<'gc> VesContext<'_, 'gc> {
             caller_ip: self.state().ip,
             stack_height: self.top_of_stack(),
             output,
-            synthetic_return,
+            constructor_result: None,
+            constructor: matches!(mode, NativeDispatchMode::Constructor(_)),
         });
+        if matches!(mode, NativeDispatchMode::Constructor(_)) {
+            return StepResult::Yield;
+        }
         if parent_destination.is_some() {
             let child_id = dotnet_vm_data::NativeId(
                 std::num::NonZeroU64::new(next_id).expect("native identity is nonzero"),
@@ -1217,7 +1233,6 @@ impl<'gc> VesContext<'_, 'gc> {
         &mut self,
         method: MethodDescription,
         generics: &GenericLookup,
-        synthetic: bool,
     ) -> Option<StepResult> {
         let signature = method.signature();
         let count = signature.parameters.len();
@@ -1301,56 +1316,13 @@ impl<'gc> VesContext<'_, 'gc> {
             }
         }
         tracing::debug!(multicast_path = "async", "multicast selection");
-        if !synthetic {
-            return Some(self.start_native(
-                method,
-                NativeDispatchMode::InlineCall,
-                generics,
-                None,
-                Some(multicast_fallback),
-                multicast_entry,
-            ));
-        }
-        let values: Vec<_> = (0..=count)
-            .rev()
-            .map(|offset| self.peek_stack_at(offset))
-            .collect();
-        let info = match dotnet_intrinsics_delegates::DelegateInvokeHost::delegate_method_info(
-            self,
-            method.clone(),
-            generics,
-        ) {
-            Ok(info) => info,
-            Err(error) => return Some(StepResult::Error(error.into())),
-        };
-        let parent_destination = self.call_state.native.last().and_then(|parent| {
-            (parent.caller_depth == self.frame_stack.len())
-                .then_some(parent)
-                .and_then(|parent| {
-                    parent
-                        .pending
-                        .as_ref()
-                        .filter(|pending| pending.staged)
-                        .map(|pending| dotnet_vm_data::NativeReturnDestination {
-                            id: parent.id,
-                            generation: pending.generation,
-                        })
-                })
-        });
-        if let Err(error) = self.call_frame(info, generics.clone()) {
-            return Some(StepResult::Error(error.into()));
-        }
-        self.frame_stack.current_frame_mut().native_return = parent_destination;
-        for value in values {
-            self.push(value);
-        }
-        Some(self.start_native_inner(
+        Some(self.start_native(
             method,
+            NativeDispatchMode::InlineCall,
             generics,
             None,
             None,
-            NativeEntry::Intrinsic(multicast_entry),
-            true,
+            multicast_entry,
         ))
     }
 
@@ -1845,14 +1817,15 @@ impl<'gc> VesContext<'_, 'gc> {
                 for value in work.outputs.drain(..) {
                     self.push(value);
                 }
-                let next = work.caller_ip + 1;
-                let synthetic_return = work.synthetic_return;
-                work.cleanup();
-                if synthetic_return {
-                    self.finish_synthetic_native_return()
-                } else {
-                    StepResult::Jump(next)
+                if let Some(result) = work.constructor_result.take()
+                    && let Err(error) = self.complete_constructor_receiver(result)
+                {
+                    work.cleanup();
+                    return StepResult::Error(error.into());
                 }
+                let next = work.caller_ip + 1;
+                work.cleanup();
+                StepResult::Jump(next)
             }
             Ok(Poll::Ready(Err(NativeFailure::Host(error)))) | Err(error) => {
                 work.cleanup();
@@ -1880,39 +1853,6 @@ impl<'gc> VesContext<'_, 'gc> {
             }
         }
     }
-    fn finish_synthetic_native_return(&mut self) -> StepResult {
-        let destination = self.frame_stack.current_frame_mut().native_return.take();
-        if let Some(destination) = destination {
-            // A synchronous intrinsic may have installed a caller-side return action
-            // before dispatching this Invoke. Apply it before replying to that intrinsic's
-            // native caller, rather than delivering the unboxed target result directly.
-            let result = self.return_frame();
-            if result != StepResult::Continue {
-                return result;
-            }
-            let Some(parent) = self.call_state.native.last() else {
-                return StepResult::internal_error("missing native return destination");
-            };
-            let Some(pending) = parent.pending.as_ref() else {
-                return StepResult::internal_error("missing native call request");
-            };
-            let has_return = pending.call.method.signature().return_type.1.is_some();
-            let expected = parent.stack_height + usize::from(has_return);
-            if self.top_of_stack() != expected {
-                return StepResult::internal_error("native call result shape mismatch");
-            }
-            let value = if has_return { Some(self.pop()) } else { None };
-            return match self.deliver_native_return(destination, value) {
-                Ok(()) => StepResult::Yield,
-                Err(error) => StepResult::Error(error),
-            };
-        }
-        match self.handle_return() {
-            StepResult::Continue => StepResult::Jump(self.state().ip),
-            other => other,
-        }
-    }
-
     fn dispatch_pending_native_call(&mut self, mut work: NativeActivation<'gc>) -> StepResult {
         let preflight = work
             .pending

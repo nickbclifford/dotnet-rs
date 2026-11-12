@@ -3418,77 +3418,61 @@ fn sleep_invalid_timeout_throws_without_waiting() {
 }
 
 #[test]
-fn engine_host_entries_preserve_optional_fallback_contract() {
-    use crate::context::ResolutionContext;
-    use dotnetdll::resolved::members::{MethodSource, UserMethod};
+fn non_inline_dispatch_preserves_optional_fallback_contract() {
     for name in ["Yield", "SpinWait", "Sleep"] {
-        for unified in [false, true] {
-            let mut executor = executor();
-            let mut res = Resolution::new(Module::new("HostThread.dll"));
-            res.assembly = Some(Assembly::new("HostThread"));
-            let mut ty = TypeDefinition::new(None, "Thread");
-            ty.namespace = Some("System.Threading".into());
-            ty.flags.before_field_init = true;
-            let ty_index = res.push_type_definition(ty);
-            let mut signature = parameterless_i32_signature();
-            signature.return_type = ReturnType(
+        let mut executor = executor();
+        let mut res = Resolution::new(Module::new("HostThread.dll"));
+        res.assembly = Some(Assembly::new("HostThread"));
+        let mut ty = TypeDefinition::new(None, "Thread");
+        ty.namespace = Some("System.Threading".into());
+        ty.flags.before_field_init = true;
+        let ty_index = res.push_type_definition(ty);
+        let mut signature = parameterless_i32_signature();
+        signature.return_type = ReturnType(
+            vec![],
+            (name == "Yield").then_some(ParameterType::Value(MethodType::Base(Box::new(
+                BaseType::Boolean,
+            )))),
+        );
+        if name != "Yield" {
+            signature.parameters.push(Parameter(
                 vec![],
-                (name == "Yield").then_some(ParameterType::Value(MethodType::Base(Box::new(
-                    BaseType::Boolean,
-                )))),
-            );
-            if name != "Yield" {
-                signature.parameters.push(Parameter(
-                    vec![],
-                    ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
-                ));
-            }
-            let index = res.push_method(
-                ty_index,
-                Method::new(Accessibility::Public, signature, name, None),
-            );
-            let source = MethodSource::User(UserMethod::Definition(index));
-            let res = executor.shared.loader.register_owned_assembly(res);
-            let method = MethodDescription::new(
-                TypeDescription::new(res.clone(), ty_index),
-                GenericLookup::default(),
-                res.clone(),
-                MethodMemberIndex::Method(0),
-            );
-            let expected = StepResult::not_implemented(format!(
-                "async intrinsic {method:?} reached through non-inline dispatch"
+                ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
             ));
-            executor
-                .with_arena(|arena| {
-                    arena.mutate_root(|gc, engine| {
-                        // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
-                        let gc = unsafe { test_gc_handle(gc, engine) };
-                        // A sentinel below the argument window must survive either host API.
-                        engine.ves_context(gc).push(StackValue::Int32(73));
-                        if name != "Yield" {
-                            engine.ves_context(gc).push(StackValue::Int32(0));
-                        }
-                        let before = engine.stack.execution.evaluation_stack.stack.clone();
-                        let lookup = GenericLookup::default();
-                        let context = ResolutionContext::new(
-                            &lookup,
-                            engine.stack.shared.loader.clone(),
-                            res,
-                            engine.stack.shared.caches.clone(),
-                            Some(Arc::downgrade(&engine.stack.shared)),
-                        );
-                        let result = if unified {
-                            engine.unified_dispatch(gc, &source, None, Some(&context))
-                        } else {
-                            engine.dispatch_method(gc, method, lookup.clone())
-                        };
-                        assert_eq!(result, expected, "{name} unified={unified}");
-                        assert_eq!(engine.stack.execution.evaluation_stack.stack, before);
-                        assert!(engine.stack.execution.call_state.native.is_empty());
-                    })
-                })
-                .unwrap();
         }
+        res.push_method(
+            ty_index,
+            Method::new(Accessibility::Public, signature, name, None),
+        );
+        let res = executor.shared.loader.register_owned_assembly(res);
+        let method = MethodDescription::new(
+            TypeDescription::new(res.clone(), ty_index),
+            GenericLookup::default(),
+            res.clone(),
+            MethodMemberIndex::Method(0),
+        );
+        let expected = StepResult::not_implemented(format!(
+            "async intrinsic {method:?} reached through non-inline dispatch"
+        ));
+        executor
+            .with_arena(|arena| {
+                arena.mutate_root(|gc, engine| {
+                    // SAFETY: F1.GcHandleRooted — the engine is the live arena root for this mutation.
+                    let gc = unsafe { test_gc_handle(gc, engine) };
+                    // A sentinel below the argument window must survive either host API.
+                    engine.ves_context(gc).push(StackValue::Int32(73));
+                    if name != "Yield" {
+                        engine.ves_context(gc).push(StackValue::Int32(0));
+                    }
+                    let before = engine.stack.execution.evaluation_stack.stack.clone();
+                    let lookup = GenericLookup::default();
+                    let result = engine.ves_context(gc).dispatch_method(method, lookup);
+                    assert_eq!(result, expected, "{name}");
+                    assert_eq!(engine.stack.execution.evaluation_stack.stack, before);
+                    assert!(engine.stack.execution.call_state.native.is_empty());
+                })
+            })
+            .unwrap();
     }
 }
 
@@ -3632,15 +3616,11 @@ fn fallback_free_monitor_other_preserves_operands() {
 }
 
 #[test]
-fn engine_host_entries_use_retained_monitor_byref_fallback() {
-    use crate::context::ResolutionContext;
+fn inline_and_non_inline_dispatch_use_retained_monitor_byref_fallback() {
     use crate::sync::SyncBlockOps;
     use dotnet_intrinsics_threading::MonitorHost;
     use dotnet_value::pointer::ManagedPtr;
-    use dotnetdll::{
-        binary::signature::kinds::CallingConvention,
-        resolved::members::{MethodSource, UserMethod},
-    };
+    use dotnetdll::binary::signature::kinds::CallingConvention;
     for unified in [false, true] {
         let mut executor = executor();
         let thread = executor.thread_id;
@@ -3667,11 +3647,10 @@ fn engine_host_entries_use_retained_monitor_byref_fallback() {
             return_type: ReturnType(vec![], None),
             varargs: None,
         };
-        let index = res.push_method(
+        res.push_method(
             ty_index,
             Method::new(Accessibility::Public, signature, "Enter", None),
         );
-        let source = MethodSource::User(UserMethod::Definition(index));
         let res = executor.shared.loader.register_owned_assembly(res);
         let method = MethodDescription::new(
             TypeDescription::new(res.clone(), ty_index),
@@ -3696,17 +3675,10 @@ fn engine_host_entries_use_retained_monitor_byref_fallback() {
                         ManagedPtr::new(Some(address), TypeDescription::NULL, None, false, None);
                     ctx.push(StackValue::ManagedPtr(ptr.into()));
                     let lookup = GenericLookup::default();
-                    let context = ResolutionContext::new(
-                        &lookup,
-                        engine.stack.shared.loader.clone(),
-                        res,
-                        engine.stack.shared.caches.clone(),
-                        Some(Arc::downgrade(&engine.stack.shared)),
-                    );
                     let result = if unified {
-                        engine.unified_dispatch(gc, &source, None, Some(&context))
+                        ctx.dispatch_method_inline(method, lookup)
                     } else {
-                        engine.dispatch_method(gc, method, lookup.clone())
+                        ctx.dispatch_method(method, lookup)
                     };
                     assert_eq!(result, StepResult::Continue);
                     assert_eq!(

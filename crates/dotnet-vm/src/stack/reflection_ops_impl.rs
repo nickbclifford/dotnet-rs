@@ -187,12 +187,13 @@ impl<'a, 'gc> IntrinsicDispatchOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn execute_intrinsic_call(
+    fn dispatch_intrinsic_constructor(
         &mut self,
         method: MethodDescription,
         lookup: &GenericLookup,
+        kind: dotnet_vm_ops::effects::NativeConstructorKind,
     ) -> StepResult {
-        crate::intrinsics::intrinsic_call(self, method, lookup)
+        crate::intrinsics::intrinsic_constructor_call(self, method, lookup, kind)
     }
 }
 

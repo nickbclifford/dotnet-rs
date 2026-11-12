@@ -4,11 +4,10 @@
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
-    ExceptionState, ResolutionContext, StackSlotIndex, StepResult,
+    ExceptionState, StackSlotIndex, StepResult,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::ObjectRef;
 use dotnetdll::prelude::*;
@@ -435,36 +434,6 @@ impl<'gc> ExecutionEngine<'gc> {
 
             return res;
         }
-    }
-
-    pub fn unified_dispatch(
-        &mut self,
-        gc: GCHandle<'gc>,
-        source: &MethodSource,
-        this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_>>,
-    ) -> StepResult {
-        self.ves_context(gc).unified_dispatch_for_engine_api(
-            UnifiedDispatchTarget::Source(source),
-            this_type,
-            ctx,
-        )
-    }
-
-    pub fn dispatch_method(
-        &mut self,
-        gc: GCHandle<'gc>,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> StepResult {
-        let mut ctx = self.stack.ves_context(gc);
-        tracing::debug!(
-            "dispatch_method: method={:?}, pinvoke={:?}, internal_call={}",
-            method,
-            method.method().pinvoke,
-            method.method().internal_call
-        );
-        ctx.dispatch_resolved_method_for_engine_api(method, lookup)
     }
 
     fn handle_multicast_step(&mut self, gc: GCHandle<'gc>) -> StepResult {

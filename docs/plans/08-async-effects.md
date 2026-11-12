@@ -187,10 +187,9 @@ e.g. `start_native`, that the `VesContext` implements). The helper:
    and tail calls, single-cast delegate forwarding and abstract redirects, admit suspension.
    Other dispatch uses the optional registered fallback, or returns `NotImplemented`, before
    selecting or consuming operands: guest
-   `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
-   managed-body-only cctor, span equality slow path and Expression.Compile redirect. Public
-   `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` also deliberately
-   use non-inline dispatch. For an
+   `MulticastState` and the managed-body-only cctor, span equality slow path and
+   Expression.Compile redirect. Intrinsic-constructor `newobj` can suspend, completing its
+   receiver when the activation returns. For an
    admitted mode it runs the optional selector with a read-only operand view; `Fallback`
    and `Reject` return here. With no selector the driver selects the async body with `start` and
    `length` set to zero and `parameter_count` taken from the method signature (excluding the

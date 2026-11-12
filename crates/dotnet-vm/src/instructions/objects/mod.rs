@@ -224,10 +224,18 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                     ctx.push(arg);
                 }
 
-                let res = ctx.execute_intrinsic_call(method, &lookup);
+                let res = ctx.dispatch_intrinsic_constructor(
+                    method.clone(),
+                    &lookup,
+                    dotnet_vm_ops::effects::NativeConstructorKind::ValueType,
+                );
                 match res {
                     StepResult::Continue => {
                         dotnet_vm_ops::vm_try!(ctx.complete_constructor_receiver(completion));
+                    }
+                    StepResult::Yield => {
+                        let _ = ctx.defer_native_constructor_receiver(&method, completion);
+                        return res;
                     }
                     StepResult::FramePushed => {
                         ctx.defer_constructor_receiver(completion);
@@ -239,7 +247,15 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 return StepResult::Continue;
             }
 
-            return ctx.execute_intrinsic_call(method, &lookup);
+            return ctx.dispatch_intrinsic_constructor(
+                method,
+                &lookup,
+                if parent_name == "System.String" {
+                    dotnet_vm_ops::effects::NativeConstructorKind::String
+                } else {
+                    dotnet_vm_ops::effects::NativeConstructorKind::Object
+                },
+            );
         }
 
         let res = ctx.initialize_static_storage(object_type.clone(), lookup.clone());

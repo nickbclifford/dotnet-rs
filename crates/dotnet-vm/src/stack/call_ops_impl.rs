@@ -50,17 +50,6 @@ const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 
 #[cold]
 #[inline(never)]
-fn intrinsic_not_found_step_result(method: &MethodDescription) -> StepResult {
-    StepResult::Error(
-        crate::error::ExecutionError::NotImplemented(
-            format!("intrinsic not found: {:?}", method).into(),
-        )
-        .into(),
-    )
-}
-
-#[cold]
-#[inline(never)]
 fn no_body_in_executing_method_step_result(method: &MethodDescription) -> StepResult {
     StepResult::Error(
         crate::error::ExecutionError::NotImplemented(
@@ -205,7 +194,6 @@ fn try_redirect_expression_compile_to_interpreter(
 enum ResolvedMethodDispatchMode {
     VmContext,
     InlineCall,
-    ExecutionEngineApi,
 }
 
 const DEFAULT_MANAGED_FRAME_LIMIT: usize = 65_536;
@@ -390,6 +378,25 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
         self.evaluation_stack
             .set_slot(result.result_slot, StackValue::ValueType(instance));
         Ok(())
+    }
+
+    fn defer_native_constructor_receiver(
+        &mut self,
+        method: &MethodDescription,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    ) -> bool {
+        if let Some(work) = self.call_state.native.last_mut()
+            && work.constructor
+            && work.method.0 == *method
+            && work.caller_depth == self.frame_stack.len()
+            && work.caller_ip == self.frame_stack.state().ip
+        {
+            assert!(work.constructor_result.is_none());
+            work.constructor_result = Some(result);
+            true
+        } else {
+            false
+        }
     }
 
     fn defer_constructor_receiver(
@@ -641,21 +648,6 @@ impl<'a, 'gc> VmCallOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
-    pub(crate) fn unified_dispatch_for_engine_api(
-        &mut self,
-        target: UnifiedDispatchTarget<'_>,
-        this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_>>,
-    ) -> StepResult {
-        self.unified_dispatch_common(
-            target,
-            this_type,
-            ctx,
-            "unified_dispatch",
-            Self::dispatch_method,
-        )
-    }
-
     fn dispatch_method_with_mode(
         &mut self,
         method: MethodDescription,
@@ -746,18 +738,6 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .map_err(Into::into)
     }
 
-    pub(crate) fn dispatch_resolved_method_for_engine_api(
-        &mut self,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> StepResult {
-        self.dispatch_resolved_method_with_mode(
-            method,
-            lookup,
-            ResolvedMethodDispatchMode::ExecutionEngineApi,
-        )
-    }
-
     fn dispatch_resolved_method_with_mode(
         &mut self,
         method: MethodDescription,
@@ -771,25 +751,18 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         );
         // Instrumented benchmarks for current workloads report intrinsic_call_total=0.
         if vm_unlikely!(intrinsic_metadata.is_some()) {
-            return match mode {
-                ResolvedMethodDispatchMode::VmContext | ResolvedMethodDispatchMode::InlineCall => {
-                    let metadata = intrinsic_metadata.expect("intrinsic metadata must exist");
-                    crate::intrinsics::dispatch_method_intrinsic(
-                        metadata.handler,
-                        self,
-                        method,
-                        &lookup,
-                        if mode == ResolvedMethodDispatchMode::InlineCall {
-                            dotnet_vm_ops::effects::NativeDispatchMode::InlineCall
-                        } else {
-                            dotnet_vm_ops::effects::NativeDispatchMode::Other
-                        },
-                    )
-                }
-                ResolvedMethodDispatchMode::ExecutionEngineApi => {
-                    crate::intrinsics::intrinsic_call(self, method, &lookup)
-                }
-            };
+            let metadata = intrinsic_metadata.expect("intrinsic metadata must exist");
+            return crate::intrinsics::dispatch_method_intrinsic(
+                metadata.handler,
+                self,
+                method,
+                &lookup,
+                if mode == ResolvedMethodDispatchMode::InlineCall {
+                    dotnet_vm_ops::effects::NativeDispatchMode::InlineCall
+                } else {
+                    dotnet_vm_ops::effects::NativeDispatchMode::Other
+                },
+            );
         }
 
         if method.method().pinvoke.is_some() {
@@ -798,21 +771,13 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         if method.body().is_none() {
-            if mode == ResolvedMethodDispatchMode::ExecutionEngineApi
-                && method.method().internal_call
-            {
-                return intrinsic_not_found_step_result(&method);
-            }
-
             if let Some(result) = try_no_body_runtime_stub(self, &method) {
                 return result;
             }
 
-            if let Some(result) = self.try_start_multicast(
-                method.clone(),
-                &lookup,
-                mode != ResolvedMethodDispatchMode::InlineCall,
-            ) {
+            if mode == ResolvedMethodDispatchMode::InlineCall
+                && let Some(result) = self.try_start_multicast(method.clone(), &lookup)
+            {
                 return result;
             }
             let delegate_result = if mode == ResolvedMethodDispatchMode::InlineCall {

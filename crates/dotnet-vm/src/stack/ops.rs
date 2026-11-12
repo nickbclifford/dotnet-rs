@@ -122,10 +122,11 @@ pub trait IntrinsicDispatchOps<'gc> {
         type_generics: Arc<[ConcreteType]>,
         is_address: bool,
     ) -> StepResult;
-    fn execute_intrinsic_call(
+    fn dispatch_intrinsic_constructor(
         &mut self,
         method: MethodDescription,
         lookup: &GenericLookup,
+        kind: dotnet_vm_ops::effects::NativeConstructorKind,
     ) -> StepResult;
 }
 
@@ -216,6 +217,12 @@ pub trait VmCallOps<'gc>: CallArgumentBufferOps<'gc> {
         &mut self,
         result: dotnet_vm_data::frame_homes::ConstructorResult,
     ) -> Result<(), TypeResolutionError>;
+
+    fn defer_native_constructor_receiver(
+        &mut self,
+        method: &MethodDescription,
+        result: dotnet_vm_data::frame_homes::ConstructorResult,
+    ) -> bool;
 
     fn defer_constructor_receiver(
         &mut self,

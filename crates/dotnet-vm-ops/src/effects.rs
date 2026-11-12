@@ -1648,17 +1648,23 @@ pub trait NativeSelectorProvider<'gc, T> {
     fn fallback() -> Option<NativeSyncHandler<T>>;
 }
 
-/// How the resolved intrinsic is being invoked. Inline IL calls, including constrained,
-/// tail, single-cast delegate and abstract redirects, can suspend. `Other` covers guest
-/// `MulticastState`, reflection `InvokeReturn`, intrinsic-constructor `newobj`, and the
-/// managed-body-only cctor, span equality and Expression.Compile routes. Public
-/// `ExecutionEngine::unified_dispatch` and `ExecutionEngine::dispatch_method` also use
-/// non-inline dispatch. These paths use the optional synchronous fallback or return
-/// `NotImplemented` before selection and operand commitment, including for Monitor.Wait.
+/// Inline calls and intrinsic `newobj` can suspend. `Other` covers retained multicast
+/// continuations and the managed-body-only cctor, span equality and Expression.Compile routes;
+/// it uses the optional fallback or returns `NotImplemented` before consuming operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeDispatchMode {
     InlineCall,
+    /// A `newobj` intrinsic, with the result shape determined by its receiver.
+    Constructor(NativeConstructorKind),
     Other,
+}
+
+/// Operand and result convention for intrinsic `newobj`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeConstructorKind {
+    ValueType,
+    String,
+    Object,
 }
 
 /// Host entry hook. Non-inline calls use the optional synchronous fallback, or return
@@ -1676,7 +1682,7 @@ pub trait NativeIntrinsicHost<'gc> {
     where
         Self: Sized,
     {
-        if mode != NativeDispatchMode::InlineCall {
+        if mode == NativeDispatchMode::Other {
             match fallback {
                 Some(handler) => handler(self, method, generics),
                 None => dotnet_vm_data::StepResult::not_implemented(format!(
