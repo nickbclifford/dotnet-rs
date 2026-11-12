@@ -232,6 +232,7 @@ pub struct ThreadManager {
     /// Mutex for GC coordination
     gc_coordination: OrderedMutex<levels::GcCoordination, ()>,
     /// Collection session state, including the period before all mutators park.
+    #[cfg(debug_assertions)]
     stw_in_progress: Arc<AtomicBool>,
     /// True only after all registered mutators have parked.
     world_stopped: Arc<AtomicBool>,
@@ -245,7 +246,7 @@ pub struct ThreadManager {
 }
 
 impl ThreadManager {
-    pub fn new(stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
+    pub fn new(_stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
             threads: OrderedMutex::new(HashMap::new()),
 
@@ -255,7 +256,8 @@ impl ThreadManager {
             threads_at_safepoint: AtomicUsize::new(0),
             all_threads_stopped: Condvar::new(),
             gc_coordination: OrderedMutex::new(()),
-            stw_in_progress,
+            #[cfg(debug_assertions)]
+            stw_in_progress: _stw_in_progress,
             world_stopped: Arc::new(AtomicBool::new(false)),
             coordinator: Mutex::new(None),
             #[cfg(feature = "deadlock-diagnostics")]

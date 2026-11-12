@@ -1364,6 +1364,37 @@ fn stale_frame_home_byref_write_is_rejected_after_frame_reuse() {
     assert_stale_frame_home(error);
 }
 
+// Indirect native-int transfers of a homed byref must preserve its full origin:
+// the second indirect store must still resolve the original local's frame home.
+#[test]
+fn byref_home_indirect_native_int_preserves_origin() {
+    let result = run_il(
+        "ByrefHomeIndirect",
+        3,
+        vec![
+            local(BaseType::Int32),
+            LocalVariable::Variable {
+                custom_modifiers: vec![],
+                pinned: false,
+                by_ref: true,
+                var_type: MethodType::Base(Box::new(BaseType::Int32)),
+            },
+        ],
+        vec![
+            I::LoadLocalAddress(1),
+            I::LoadLocalAddress(0),
+            stind(StoreType::IntPtr),
+            I::LoadLocalAddress(1),
+            ldind(LoadType::IntPtr),
+            I::LoadConstantInt32(73),
+            stind(StoreType::Int32),
+            I::LoadLocal(0),
+            I::Return,
+        ],
+    );
+    assert_eq!(result, 73);
+}
+
 // A byref to a caller's homed local resolves through the caller's live frame while a callee with
 // its own home block runs.
 #[test]

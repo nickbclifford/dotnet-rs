@@ -137,8 +137,10 @@ the variable is reassigned.
   to the bytes is formed except the shared view used while tracing and the read-only views
   `ManagedPtr::with_frame_home_data` hands to span intrinsics. Loads and stores encode values as
   value-type fields do: scalars in their CTS width, object references and managed pointers in
-  their serialized forms. A store applies the ECMA-335 §III.1.6 conversions to native-int and
-  small-integer variables.
+  their serialized forms. Native-int indirect reads and writes targeting a byref variable select
+  the full managed-pointer layout before `frame_home_window` validates the access, preserving
+  its origin. A store applies the ECMA-335 §III.1.6 conversions to native-int and small-integer
+  variables.
 - **Byrefs.** `ldloca` and `ldarga` on a homed variable push a `PointerOrigin::FrameHome` byref
   naming the home block's serial and the home's offset in the block. `FrameStack::issue_home_serial`
   gives every block a serial that is never reused on its thread, so a byref cannot resolve into a
@@ -182,6 +184,10 @@ Limits of this contract:
 - **Observation.** `pop_address` returns an address with no owner. `resolve_address` borrows
   the origin; its result and `ManagedPtr::observe_address` are address observations, not access
   permission, a lasting lease, a storage guard or a range proof.
+- **Inline storage extent.** `VesContext` uses `checked_window` for inline typed accesses,
+  byte copies and pointer-sized atomic slots. It accepts an empty window at the end and returns
+  the original offset, size and storage length on overflow or an out-of-range request. This
+  extent check does not prove initialization, alignment, ownership or synchronization.
 - **Caller obligations.** Every access through any of these still needs provenance, extent,
   initialization, alignment, aliasing, rooting and synchronization established by the caller
   (`F10.RawMemoryAccessValid`).

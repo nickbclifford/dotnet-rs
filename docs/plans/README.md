@@ -37,6 +37,11 @@ Known problems without a plan. Write a plan for one only when it is chosen as th
 Evidence and IDs (p01…, R01…) are defined in the
 [pointer-provenance inventory](../pointer-provenance/INVENTORY.md).
 
+- **Heap byte-read overflow:** `RawMemoryAccess::read_bytes` adds the owner-relative offset
+  and destination length without checked arithmetic. A `VesContext::read_bytes` heap-origin
+  call with `usize::MAX` and a one-byte destination panics instead of returning `BoundsCheck`;
+  examine the heap and cross-arena byte-copy contracts and preserve the owner/write-barrier
+  distinctions when fixing them. Inline and frame-home windows use separate checked paths.
 - **Standalone reflection validation feature:** enabling only
   `dotnet-intrinsics-reflection/generic-constraint-validation` fails to compile because it does
   not enable `dotnet-types/generic-constraint-validation`, which defines

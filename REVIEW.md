@@ -43,7 +43,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 |---|---:|---|---|---|
 | Annotator | 5 | dotnet-assemblies (2), dotnet-vm (3) | 0 / 5 / 0 / 0 | F-INFRA-001 |
 | CargoUnusedDependency | 4 | dotnet-benchmarks (2), dotnet-cli (1), dotnet-value (1) | 4 / 0 / 0 / 0 | F-DEP-001 |
-| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (4 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
+| DuplicatedCode | 70 | dotnet-intrinsics-core (2), dotnet-intrinsics-reflection (3), dotnet-intrinsics-span (8), dotnet-intrinsics-string (4), dotnet-simd (2), dotnet-utils (2), dotnet-value (1), dotnet-vm (48) | 29 (12 resolved) / 0 / 41 / 0 | F-DUP-001 / F-DUP-002 / F-DUP-003 / F-DUP-004 / F-DUP-005 |
 | NewCrateVersionAvailable | 12 | Cargo.toml (3), dotnet-benchmarks (1), dotnet-macros (1), dotnet-macros-core (1), dotnet-value (1), dotnet-vm (4), xtask (1) | 0 / 0 / 0 / 12 | F-DEP-002 |
 | RsAssertEqual | 19 | dotnet-value (17), dotnet-vm (2) | 19 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsDeprecation | 4 | dotnet-utils (2), dotnet-vm (2) | 3 / 0 / 1 / 0 | F-DEPR-001 |
@@ -54,7 +54,7 @@ The generated table below partitions each problem into **fix / refute / keep / d
 | RsThreadLocalStableMethodCanBeUsed | 75 | dotnet-benchmarks (1), dotnet-utils (2), dotnet-value (4), dotnet-vm (64), dotnet-vm-data (4) | 75 / 0 / 0 / 0 | F-IDIOM-001 |
 | RsUnnecessaryCast | 2 | dotnet-assemblies (2) | 2 / 0 / 0 / 0 | F-IDIOM-002 |
 | RsUnnecessaryParentheses | 4 | dotnet-utils (2), dotnet-vm-ops (2) | 4 / 0 / 0 / 0 | F-IDIOM-002 |
-| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 279 / 0 / 17 / 0 | F-QUAL-001 |
+| RsUnnecessaryQualifications | 296 | dotnet-benchmarks (1), dotnet-intrinsics-reflection (2), dotnet-intrinsics-string (2), dotnet-intrinsics-threading (2), dotnet-intrinsics-unsafe (4), dotnet-macros (2), dotnet-macros-core (11), dotnet-metrics (1), dotnet-pinvoke (4), dotnet-runtime-memory (4), dotnet-runtime-resolver (3), dotnet-tracer (2), dotnet-types (4), dotnet-utils (10), dotnet-value (23), dotnet-vm (209), dotnet-vm-data (1), dotnet-vm-ops (11) | 279 (54 resolved) / 0 / 17 / 0 | F-QUAL-001 |
 | RsUnusedMut | 1 | dotnet-vm (1) | 0 / 1 / 0 / 0 | F-IDIOM-002 |
 | UndefinedParamsPresent | 109 | .github (109) | 0 / 109 / 0 / 0 | F-CI-001 |
 
@@ -73,11 +73,19 @@ Group 3 is parallel specialization: reflection Prim includes floats, CTS scalar 
 <a id="F-DUP-002"></a>
 #### F-DUP-002 — Checked memory windows and frame-home codec selection
 
-**High; high effort.** `dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs`, write_to_inline_storage (:24), read_from_inline_storage (:54), bounds_checked_slice_copy (:81) and its read counterpart (:97), duplicate validation. Groups 25/28 use checked_add while group 26 uses unchecked offset+length, which can panic instead of returning BoundsCheck; release arithmetic checks are enabled too. One safe operation returning a validated range makes the domain rule explicit and usable by both directions and pointer-width checks. Preserve offset/size/storage-length error payloads. Range validation does not establish initialization, alignment, ownership, rooting or GC exclusion.
+**High; high effort; resolved in code.** `checked_window` validates inline typed reads and
+writes, slice copies and pointer-sized atomic slots, returning the original bounds payload even
+on arithmetic overflow. It proves extent only; each raw access retains its own safety proof and
+storage guard. `frame_home_access_layout` selects the full managed-pointer encoding for native-int
+indirect access to a byref home; the actual read and write each resolve the live serial and
+complete range separately.
 
-Group 27 (:164,261) repeats NativeInt-to-ManagedPtr layout selection for byref frame homes. Share this semantic decision between read/write while retaining serial/slot checks and F3/F10 proofs at actual accesses. Reject pointer-returning catch-all helpers, merged unsafe blocks and copied blanket SAFETY text.
-
-Acceptance: enabled inline/frame-home read/write/copy tests cover zero size, exact end, usize overflow, stale serial and complete byref codec width; all callers use the new contract and old checks disappear. Run shared-matrix VM clippy/tests, release clippy, relevant pointer Miri controls/batches, provenance lints and doc drift. Registry changes, if needed, ship with the accesses they justify.
+Enabled VM tests cover inline, frame-home and static/transient byte windows, zero and exact-end
+ranges, overflow payloads, retired serials and an IL-level indirect byref roundtrip. See
+[plan 17's memory-window slice](docs/plans/17-inspection-quality-refactor.md#12-make-raw-memory-windows-and-byref-layout-selection-explicit)
+and AGENT_MEMORY.md for verification and limits. Both strict release-clippy configurations pass.
+The independently discovered heap byte-read overflow is recorded under Not yet planned; it is
+not an inline-storage window.
 
 <a id="F-DUP-003"></a>
 #### F-DUP-003 — Exception field initialization and lifecycle operations
@@ -136,7 +144,7 @@ Risk: low for syntax, moderate for future/control-flow/lifetime edits. Verify fu
 <a id="F-QUAL-001"></a>
 #### F-QUAL-001 — Imports should expose the domain, not maximize short names
 
-**Low; default effort after structural edits.** 209 of 296 sites are in VM; raw_memory_ops_impl has 54, condition_wait_tests 48, native_substring_tests 38. Repeated RawMemoryAccess/LayoutManager, errors, metadata constructors and test helpers should use an existing scoped import or one concise explicit import. Structural slices own their touched imports first; sweep remaining files afterward. Avoid wildcard imports or global prelude expansion.
+**Low; default effort after structural edits.** 209 of 296 sites are in VM; raw_memory_ops_impl has 54, condition_wait_tests 48, native_substring_tests 38. The 54 raw-memory entries now use scoped imports; other recurring errors, metadata constructors and test helpers should use an existing scoped import or one concise explicit import. Structural slices own their touched imports first; sweep remaining files afterward. Avoid wildcard imports or global prelude expansion.
 
 Keep macro/core paths conservatively: an import in the generator does not resolve emitted code in consumers. Preserve explicit sync identity and the stack-module intra-doc target. Generic names such as Error/Ordering may need ownership visible; if current cfg shows a proposed shortening is worse or invalid, correct that ledger row with the evidence. “Fix” is an intended readable resolution, not permission to replace every path mechanically.
 
@@ -380,30 +388,30 @@ Parallel temporal readiness phases: keep both polls to close state-change races.
 - `crates/dotnet-vm/src/stack/native_effects.rs:1736` — `advance_monitor_wait`.
 - `crates/dotnet-vm/src/stack/native_effects.rs:1748` — `advance_monitor_wait`.
 
-### Aggregate group 25 — fix
+### Aggregate group 25 — fix (resolved)
 
-True checked range contract for inline reads/writes; unify without merging safety premises.
+`checked_window` supplies the common extent check; reads and writes retain separate safety premises.
 
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:33` — `write_to_inline_storage`.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:63` — `read_from_inline_storage`.
 
-### Aggregate group 26 — fix
+### Aggregate group 26 — fix (resolved)
 
-True slice-window contract; fix unchecked addition and preserve BoundsCheck payload.
+Both slice directions use the checked range and preserve the BoundsCheck payload.
 
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:86` — `bounds_checked_slice_copy`.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:102` — `bounds_checked_slice_read`.
 
-### Aggregate group 27 — fix
+### Aggregate group 27 — fix (resolved)
 
-True frame-home byref codec selection; unify read/write semantic layout choice.
+`frame_home_access_layout` selects the byref codec for both access directions.
 
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:164` — `write_unaligned`.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:261` — `read_unaligned`.
 
-### Aggregate group 28 — fix
+### Aggregate group 28 — fix (resolved)
 
-True pointer-width checked window; use the contract from group 25.
+Pointer-sized slots use `checked_window` while retaining their storage guards.
 
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:487` — `object_atomic`.
 - `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:518` — `object_atomic`.
@@ -523,14 +531,14 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 47 | `crates/dotnet-vm/src/stack/native_effects.rs:577` — `exception` | fix | Aggregate group 22 below/above; `object.as_object_mut(gc, \|obj\| {` |
 | 48 | `crates/dotnet-vm/src/stack/native_effects.rs:1736` — `advance_monitor_wait` | keep | Aggregate group 24 below/above; `if let Some(pulsed) = pending.wait.poll(self.thread_id()) {` |
 | 49 | `crates/dotnet-vm/src/stack/native_effects.rs:1748` — `advance_monitor_wait` | keep | Aggregate group 24 below/above; `if let Some(pulsed) = pending.wait.poll(self.thread_id()) {` |
-| 50 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:33` — `write_to_inline_storage` | fix | Aggregate group 25 below/above; `if offset` |
-| 51 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:63` — `read_from_inline_storage` | fix | Aggregate group 25 below/above; `if offset` |
-| 52 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:86` — `bounds_checked_slice_copy` | fix | Aggregate group 26 below/above; `if offset.as_usize() + src.len() > dest.len() {` |
-| 53 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:102` — `bounds_checked_slice_read` | fix | Aggregate group 26 below/above; `if offset.as_usize() + dest.len() > src.len() {` |
-| 54 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:164` — `write_unaligned` | fix | Aggregate group 27 below/above; `let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))` |
-| 55 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:261` — `read_unaligned` | fix | Aggregate group 27 below/above; `let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))` |
-| 56 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:487` — `object_atomic` | fix | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
-| 57 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:518` — `object_atomic` | fix | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
+| 50 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:33` — `write_to_inline_storage` | fix (resolved) | Aggregate group 25 below/above; `if offset` |
+| 51 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:63` — `read_from_inline_storage` | fix (resolved) | Aggregate group 25 below/above; `if offset` |
+| 52 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:86` — `bounds_checked_slice_copy` | fix (resolved) | Aggregate group 26 below/above; `if offset.as_usize() + src.len() > dest.len() {` |
+| 53 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:102` — `bounds_checked_slice_read` | fix (resolved) | Aggregate group 26 below/above; `if offset.as_usize() + dest.len() > src.len() {` |
+| 54 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:164` — `write_unaligned` | fix (resolved) | Aggregate group 27 below/above; `let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))` |
+| 55 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:261` — `read_unaligned` | fix (resolved) | Aggregate group 27 below/above; `let layout = if matches!(layout, LayoutManager::Scalar(Scalar::NativeInt))` |
+| 56 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:487` — `object_atomic` | fix (resolved) | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
+| 57 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:518` — `object_atomic` | fix (resolved) | Aggregate group 28 below/above; `if end.is_none_or(\|end\| end > data.len()) {` |
 | 58 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:106` — `set_local` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
 | 59 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:297` — `set_argument` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
 | 60 | `crates/dotnet-vm/src/stack/stack_ops_impl.rs:335` — `set_slot` | fix | Aggregate group 29 below/above; `#[cfg(feature = "multithreading")]` |
@@ -1031,60 +1039,60 @@ Each row is one exported problem, identified by inspection and one-based XML ord
 | 222 | `crates/dotnet-vm/src/stack/native_effects.rs:1142` — `start_native` | fix | F-QUAL-001; `dotnet_vm_data::` |
 | 223 | `crates/dotnet-vm/src/stack/ops.rs:66` — `local_address` | fix | F-QUAL-001; `crate::error::` |
 | 224 | `crates/dotnet-vm/src/stack/ops.rs:72` — `argument_address` | fix | F-QUAL-001; `crate::error::` |
-| 225 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:157` — `write_unaligned` | fix | F-QUAL-001; `dotnet_value::layout::` |
-| 226 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:173` — `write_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 227 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:191` — `write_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 228 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:206` — `write_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 229 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:217` — `write_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 230 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:253` — `read_unaligned` | fix | F-QUAL-001; `dotnet_value::layout::` |
-| 231 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:270` — `read_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 232 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:290` — `read_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 233 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:305` — `read_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 234 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:313` — `read_unaligned` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 235 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:348` — `write_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 236 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:361` — `write_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 237 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:370` — `write_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 238 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:378` — `write_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 239 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:407` — `read_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 240 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:420` — `read_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 241 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:427` — `read_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 242 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:435` — `read_bytes` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 243 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:486` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 244 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:490` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 245 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:507` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 246 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:517` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 247 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:521` — `object_atomic` | fix | F-QUAL-001; `std::mem::` |
-| 248 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:553` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 249 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:579` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 250 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:591` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 251 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:605` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 252 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:615` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 253 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:627` — `compare_exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 254 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:659` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 255 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:683` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 256 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:691` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 257 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:703` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 258 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:710` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 259 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:718` — `exchange_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 260 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:748` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 261 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:772` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 262 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:780` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 263 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:792` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 264 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:799` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 265 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:807` — `exchange_add_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 266 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:836` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 267 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:850` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 268 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:858` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 269 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:870` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 270 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:877` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 271 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:885` — `load_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 272 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:913` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 273 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:934` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 274 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:942` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 275 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:953` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 276 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:959` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 277 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:967` — `store_atomic` | fix | F-QUAL-001; `dotnet_runtime_memory::` |
-| 278 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:1102` — `owned_origin_typed_access_checks_complete_range` | fix | F-QUAL-001; `dotnetdll::resolved::` |
+| 225 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:157` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_value::layout::` |
+| 226 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:173` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 227 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:191` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 228 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:206` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 229 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:217` — `write_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 230 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:253` — `read_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_value::layout::` |
+| 231 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:270` — `read_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 232 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:290` — `read_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 233 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:305` — `read_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 234 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:313` — `read_unaligned` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 235 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:348` — `write_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 236 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:361` — `write_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 237 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:370` — `write_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 238 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:378` — `write_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 239 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:407` — `read_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 240 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:420` — `read_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 241 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:427` — `read_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 242 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:435` — `read_bytes` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 243 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:486` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 244 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:490` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 245 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:507` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 246 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:517` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 247 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:521` — `object_atomic` | fix (resolved) | F-QUAL-001; `std::mem::` |
+| 248 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:553` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 249 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:579` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 250 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:591` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 251 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:605` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 252 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:615` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 253 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:627` — `compare_exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 254 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:659` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 255 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:683` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 256 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:691` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 257 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:703` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 258 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:710` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 259 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:718` — `exchange_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 260 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:748` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 261 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:772` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 262 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:780` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 263 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:792` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 264 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:799` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 265 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:807` — `exchange_add_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 266 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:836` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 267 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:850` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 268 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:858` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 269 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:870` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 270 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:877` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 271 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:885` — `load_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 272 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:913` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 273 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:934` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 274 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:942` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 275 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:953` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 276 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:959` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 277 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:967` — `store_atomic` | fix (resolved) | F-QUAL-001; `dotnet_runtime_memory::` |
+| 278 | `crates/dotnet-vm/src/stack/raw_memory_ops_impl/mod.rs:1102` — `owned_origin_typed_access_checks_complete_range` | fix (resolved) | F-QUAL-001; `dotnetdll::resolved::` |
 | 279 | `crates/dotnet-vm/src/sync/mod.rs:95` — `expire_for_test` | fix | F-QUAL-001; `std::time::` |
 | 280 | `crates/dotnet-vm/src/sync/threaded.rs:103` — `lock_and_try_enter` | fix | F-QUAL-001; `super::` |
 | 281 | `crates/dotnet-vm/src/sync/threaded.rs:144` — `enter_with_timeout` | fix | F-QUAL-001; `super::` |
