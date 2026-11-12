@@ -7499,7 +7499,7 @@ fn test_value_constructor(
     Box::pin(async move {
         let receiver = fx.vm().await?.prepare_multicast()?.0;
         fx.yield_now().await?;
-        // SAFETY: the test receiver is a live, exclusive one-byte boolean home.
+        // SAFETY: F10.RawMemoryAccessValid — the receiver is a live, exclusive one-byte boolean home.
         unsafe { fx.vm().await?.write_monitor_flag(&receiver, true) }
     })
 }

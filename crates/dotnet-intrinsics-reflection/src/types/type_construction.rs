@@ -11,7 +11,6 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnet_vm_data::StepResult;
-use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
 };
@@ -21,39 +20,12 @@ use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: ReflectionIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let arg = ctx.peek_stack();
-    let StackValue::ValueType(handle) = arg else {
-        return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-            expected: "RuntimeTypeHandle",
-            actual: format!("{arg:?}").into(),
-        }));
+pub async fn intrinsic_runtime_helpers_run_class_constructor(mut fx: VmEffects) -> NativeResult {
+    let (description, generics) = {
+        let mut vm = fx.vm().await?;
+        vm.with(|region| region.class_constructor_target())??
     };
-
-    let target_obj = ctx
-        .loader()
-        .rth_value_field(&handle.instance_storage, handle.description)
-        .expect("validated RuntimeTypeHandle support slot")
-        .read();
-    let target_type = dotnet_vm_ops::vm_try!(crate::common::resolve_runtime_type(ctx, target_obj));
-    let target_ct = target_type.to_concrete(ctx.loader().as_ref());
-    let target_desc = ctx
-        .loader()
-        .find_concrete_type(target_ct)
-        .expect("Type must exist for RunClassConstructor");
-
-    let res = ctx.initialize_static_storage(target_desc, generics.clone());
-    if res != StepResult::Continue {
-        return res;
-    }
-
-    let _ = ctx.pop();
-    StepResult::Continue
+    fx.ensure_initialized(description, generics).await
 }
 
 #[dotnet_intrinsic("static System.Array System.Array::CreateInstance(System.Type, int)")]

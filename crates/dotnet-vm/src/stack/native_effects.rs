@@ -16,6 +16,7 @@ use dotnet_value::{
     CLRString, StackValue,
     object::{HeapStorage, ObjectRef},
 };
+use dotnet_vm_ops::SupportSlotOps;
 use dotnet_vm_ops::effects::{
     NativeBackend, NativeCall, NativeControl, NativeDispatchMode, NativeEffect, NativeFailure,
     NativeFuture, NativeInitClaim, NativeInitProbe, NativeIntrinsicHost, NativeInvocation,
@@ -410,6 +411,41 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
     }
     fn active_scope_depth(&self) -> usize {
         self.context.local.active_borrows.get()
+    }
+    fn class_constructor_target(
+        &mut self,
+    ) -> Result<(dotnet_types::TypeDescription, GenericLookup), VmError> {
+        let arg = self.operands.last().ok_or_else(|| {
+            dotnet_types::error::ExecutionError::InternalError(
+                "class constructor operand missing".into(),
+            )
+        })?;
+        let StackValue::ValueType(handle) = arg else {
+            return Err(dotnet_types::error::ExecutionError::TypeMismatch {
+                expected: "RuntimeTypeHandle",
+                actual: format!("{arg:?}").into(),
+            }
+            .into());
+        };
+        let target = self
+            .context
+            .loader()
+            .rth_value_field(&handle.instance_storage, handle.description.clone())
+            .expect("validated RuntimeTypeHandle support slot")
+            .read();
+        let ty = dotnet_intrinsics_reflection::common::resolve_runtime_type(self.context, target)?;
+        let loader = self.context.loader();
+        let description = loader.find_concrete_type(ty.to_concrete(loader.as_ref()))?;
+        let generics = match ty {
+            dotnet_types::runtime::RuntimeType::Generic(_, args) => GenericLookup::new(
+                args.iter()
+                    .map(|arg| arg.to_concrete(loader.as_ref()))
+                    .collect(),
+            ),
+            _ => GenericLookup::default(),
+        };
+        self.operands.pop();
+        Ok((description, generics))
     }
     fn probe_initializer(
         &mut self,

@@ -516,6 +516,9 @@ mod async_registry_tests {
                     | "System.Reflection.Binder"
                     | "System.Globalization.CultureInfo"
                     | "System.Type"
+                    // By-value struct holding one RuntimeType object reference; consumed from
+                    // the operand stack before the effect first suspends.
+                    | "System.RuntimeTypeHandle"
                     | "Microsoft.Win32.SafeHandles.SafeWaitHandle"
             )
         };

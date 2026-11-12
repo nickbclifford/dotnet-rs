@@ -4200,7 +4200,7 @@ fn join_timeout_survives_collection() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: the engine is the live root for this mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the live root for this mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 let thread = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(vec![])));
                 engine.stack.shared.workers.register_managed_thread(
@@ -4231,7 +4231,7 @@ fn join_timeout_survives_collection() {
     executor
         .with_arena(|arena| {
             arena.mutate_root(|gc, engine| {
-                // SAFETY: the engine is the live root for this mutation.
+                // SAFETY: F1.GcHandleRooted — the engine is the live root for this mutation.
                 let gc = unsafe { test_gc_handle(gc, engine) };
                 assert_eq!(engine.ves_context(gc).peek_stack_at(0).as_i32(), 0);
             })
@@ -4239,4 +4239,85 @@ fn join_timeout_survives_collection() {
         .unwrap();
     release.send(()).unwrap();
     drop(executor);
+}
+
+#[test]
+fn static_storage_identity_ignores_generic_argument_resolution() {
+    use crate::stack::ops::VmResolutionOps;
+    use dotnet_types::{generics::ConcreteType, resolution::ResolutionS};
+    let mut executor = executor();
+    let method = timed_monitor_method(&executor);
+    // Stand-ins for the corlib-stamped resolution (arguments rebuilt from a `RuntimeType`) and
+    // the referencing assembly's resolution (arguments from a field operand).
+    let mut handle_res = Resolution::new(Module::new("HandleSide.dll"));
+    handle_res.assembly = Some(Assembly::new("HandleSide"));
+    let corlib = executor.shared.loader.register_owned_assembly(handle_res);
+    let other = method.parent.resolution.clone();
+    assert!(corlib != other);
+    let int_in = |res: &ResolutionS| ConcreteType::new(res.clone(), BaseType::Int32);
+    let vector_in =
+        |res: &ResolutionS| ConcreteType::new(res.clone(), BaseType::Vector(vec![], int_in(res)));
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: F1.GcHandleRooted — the engine is the live arena root.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let ctx = engine.ves_context(gc);
+                let lookup = |f: &dyn Fn(&ResolutionS) -> ConcreteType, res: &ResolutionS| {
+                    GenericLookup::new(vec![f(res)])
+                };
+                for shape in [&int_in as &dyn Fn(&ResolutionS) -> ConcreteType, &vector_in] {
+                    let via_handle = lookup(shape, &corlib);
+                    let via_field = lookup(shape, &other);
+                    assert!(
+                        via_handle != via_field,
+                        "raw lookups must differ by resolution"
+                    );
+                    let statics = ctx.shared.statics.clone();
+                    statics
+                        .init(
+                            method.parent.clone(),
+                            &ctx.with_generics(&via_handle),
+                            ctx.thread_id.get(),
+                        )
+                        .unwrap();
+                    // The second spelling reaches the same entry, both before and after `init`.
+                    let first = statics.get(method.parent.clone(), &via_handle);
+                    let second = statics.get(method.parent.clone(), &via_field);
+                    assert!(Arc::ptr_eq(&first, &second));
+                    statics
+                        .init(
+                            method.parent.clone(),
+                            &ctx.with_generics(&via_field),
+                            ctx.thread_id.get(),
+                        )
+                        .unwrap();
+                    assert!(Arc::ptr_eq(
+                        &first,
+                        &statics.get(method.parent.clone(), &via_field)
+                    ));
+                    // Thread-static storage canonicalizes identically.
+                    let t1 = statics.get_for_thread(method.parent.clone(), &via_handle, 7);
+                    let t2 = statics.get_for_thread(method.parent.clone(), &via_field, 7);
+                    assert!(Arc::ptr_eq(&t1, &t2));
+                }
+                // Different arguments still get different storage.
+                let ints = GenericLookup::new(vec![int_in(&other)]);
+                let longs =
+                    GenericLookup::new(vec![ConcreteType::new(other.clone(), BaseType::Int64)]);
+                let statics = ctx.shared.statics.clone();
+                statics
+                    .init(
+                        method.parent.clone(),
+                        &ctx.with_generics(&longs),
+                        ctx.thread_id.get(),
+                    )
+                    .unwrap();
+                assert!(!Arc::ptr_eq(
+                    &statics.get(method.parent.clone(), &ints),
+                    &statics.get(method.parent.clone(), &longs)
+                ));
+            })
+        })
+        .unwrap();
 }

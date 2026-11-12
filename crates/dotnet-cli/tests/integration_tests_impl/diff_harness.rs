@@ -186,6 +186,14 @@ diff_test!(
     "tests/fixtures/statics/cctor_filter_42.cs"
 );
 diff_test!(
+    statics_cctor_run_class_constructor_matches_dotnet,
+    "tests/fixtures/statics/cctor_run_class_constructor_42.cs"
+);
+diff_test!(
+    statics_cctor_generic_handle_matches_dotnet,
+    "tests/fixtures/statics/cctor_generic_handle_42.cs"
+);
+diff_test!(
     statics_cctor_field_operations_matches_dotnet,
     "tests/fixtures/statics/cctor_field_operations_42.cs"
 );

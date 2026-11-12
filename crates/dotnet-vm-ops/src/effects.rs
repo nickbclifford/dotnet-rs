@@ -335,6 +335,17 @@ pub trait NativeBackend<'gc> {
     }
 
     fn active_scope_depth(&self) -> usize;
+    fn class_constructor_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::TypeDescription,
+            dotnet_types::generics::GenericLookup,
+        ),
+        VmError,
+    > {
+        Err(internal("native class constructor target unavailable"))
+    }
     fn probe_initializer(
         &mut self,
         _description: dotnet_types::TypeDescription,
@@ -508,6 +519,17 @@ pub struct NativeRegion<'gc, 'a> {
     backend: &'a mut dyn NativeBackend<'gc>,
 }
 impl<'gc, 'a> NativeRegion<'gc, 'a> {
+    pub fn class_constructor_target(
+        &mut self,
+    ) -> Result<
+        (
+            dotnet_types::TypeDescription,
+            dotnet_types::generics::GenericLookup,
+        ),
+        VmError,
+    > {
+        self.backend.class_constructor_target()
+    }
     pub fn new(
         mc: &'a Mutation<'gc>,
         roots: DynamicRootSet<'gc>,

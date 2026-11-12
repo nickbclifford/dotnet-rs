@@ -406,6 +406,17 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
    wrapping in `unwind_frame`, and update the plan 08 static-initialization slice document.
    - Tests: `statics/cctor_filter_42.cs` and its `newobj`/call/`RunClassConstructor`/delegate/
      reflection variants against the CLR; recursive and cross-thread initialization.
+   - Partial: `RunClassConstructor` uses `ensure_initialized`; the filter and recursive
+     non-generic comparison passes, as do the cross-thread success and failure fixtures.
+     The closed-generic identity mismatch (handle-derived arguments carry the corlib
+     resolution, field operands the referencing assembly's, and `ConcreteType` equality
+     includes it) is resolved: `StaticStorageManager` now builds every shard and thread-static
+     key from canonicalized type arguments (`canonical_concrete` in `statics.rs`: primitives
+     and array/vector/pointer shapes carry no resolution, user types are spelled by their
+     resolved `TypeDef`), with `init` recording loader-resolved aliases for the loader-free
+     lookups. `statics/cctor_generic_handle_42.cs` compares handle-first and field-first
+     initialization against the CLR. Still open: the `newobj` and
+     `prepare_method_initialization` triggers remain on `unwind_frame`.
 8. **Cleanup.** `grep` every item in the Problem table; remove leftovers; update the README
    "Fallback continuations" and "Legacy static-initialization triggers" entries and plan 08's
    residual-callers text.

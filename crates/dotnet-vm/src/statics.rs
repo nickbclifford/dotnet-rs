@@ -2,9 +2,13 @@ use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::static_fields,
     threading::ThreadManagerOps,
 };
+use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
-    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
+    TypeDescription,
+    error::TypeResolutionError,
+    generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
+    resolution::ResolutionS,
 };
 use dotnet_utils::{
     DebugStr,
@@ -15,6 +19,7 @@ use dotnet_value::{
     object::ObjectRef,
     storage::FieldStorage,
 };
+use dotnetdll::prelude::{BaseType, TypeSource, UserType};
 use gc_arena::{Collect, collect::Trace};
 use std::{
     collections::HashMap,
@@ -212,6 +217,9 @@ pub struct StaticStorageManager {
     // INVARIANT: F6.ThreadStaticRoot — retained with the VM, like retired executor arenas: managed byrefs can outlive
     // the thread that first obtained the address.
     thread_statics: RwLock<HashMap<(TypeDescription, GenericLookup, u64), Arc<StaticStorage>>>,
+    /// Loader-resolved canonical type arguments, remembered per raw spelling by `init` so the
+    /// loader-free lookups (`get`, `get_init_state`, ...) agree with the keys `init` created.
+    canonical_args: RwLock<HashMap<GenericLookup, Arc<[ConcreteType]>>>,
     /// Active initialization dependencies, including independently parked segments on one thread.
     wait_graph: OrderedMutex<levels::StaticWaitGraph, WaitGraph>,
     pool_placeholder: FieldStorage,
@@ -219,6 +227,116 @@ pub struct StaticStorageManager {
 }
 
 const NUM_SHARDS: usize = 16;
+
+/// Maps a primitive `System.*` type definition to its signature element type.
+fn primitive_base(td: &TypeDescription) -> Option<BaseType<ConcreteType>> {
+    let def = td.definition();
+    if def.namespace.as_deref() != Some("System") {
+        return None;
+    }
+    Some(match def.name.as_ref() {
+        "Boolean" => BaseType::Boolean,
+        "Char" => BaseType::Char,
+        "SByte" => BaseType::Int8,
+        "Byte" => BaseType::UInt8,
+        "Int16" => BaseType::Int16,
+        "UInt16" => BaseType::UInt16,
+        "Int32" => BaseType::Int32,
+        "UInt32" => BaseType::UInt32,
+        "Int64" => BaseType::Int64,
+        "UInt64" => BaseType::UInt64,
+        "Single" => BaseType::Float32,
+        "Double" => BaseType::Float64,
+        "IntPtr" => BaseType::IntPtr,
+        "UIntPtr" => BaseType::UIntPtr,
+        "Object" => BaseType::Object,
+        "String" => BaseType::String,
+        _ => return None,
+    })
+}
+
+/// Resolution-independent form of a generic argument, used only for static-storage keys.
+///
+/// `ConcreteType` equality includes its metadata resolution, so one closed generic reached via
+/// a `RuntimeType` (corlib-stamped primitives) and via a field operand (referencing-assembly
+/// stamped) would otherwise get two storage entries. Primitives and structural shapes
+/// (vectors, arrays, pointers) carry no resolution (`ResolutionS::NULL`); user types are
+/// spelled as a `TypeDef` in their defining resolution, which unifies `TypeRef` and `TypeDef`
+/// spellings. Without a loader, user types cannot be resolved and are left as spelled;
+/// `StaticStorageManager::canonical_lookup` bridges that gap with the aliases `init` records.
+fn canonical_concrete(ty: &ConcreteType, loader: Option<&AssemblyLoader>) -> ConcreteType {
+    let canon_user = |source: ResolutionS,
+                      user: UserType|
+     -> (ResolutionS, UserType, Option<BaseType<ConcreteType>>) {
+        match loader.and_then(|l| l.locate_type(source.clone(), user).ok()) {
+            Some(td) => {
+                let primitive = primitive_base(&td);
+                (td.resolution, UserType::Definition(td.index), primitive)
+            }
+            None => (source, user, None),
+        }
+    };
+    let rebuild = |modifiers_empty: bool, base: BaseType<ConcreteType>| {
+        let source = if modifiers_empty {
+            ResolutionS::NULL
+        } else {
+            ty.resolution()
+        };
+        ConcreteType::new(source, base)
+    };
+    match ty.get() {
+        BaseType::Type {
+            source: TypeSource::User(user),
+            ..
+        } => {
+            let (resolution, user, primitive) = canon_user(ty.resolution(), *user);
+            match primitive {
+                Some(base) => ConcreteType::new(ResolutionS::NULL, base),
+                None => ConcreteType::new(
+                    resolution,
+                    BaseType::Type {
+                        source: TypeSource::User(user),
+                        value_kind: None,
+                    },
+                ),
+            }
+        }
+        BaseType::Type {
+            source: TypeSource::Generic { base, parameters },
+            ..
+        } => {
+            let (resolution, base, _) = canon_user(ty.resolution(), *base);
+            let parameters = parameters
+                .iter()
+                .map(|p| canonical_concrete(p, loader))
+                .collect();
+            ConcreteType::new(
+                resolution,
+                BaseType::Type {
+                    source: TypeSource::Generic { base, parameters },
+                    value_kind: None,
+                },
+            )
+        }
+        BaseType::Vector(modifiers, inner) => rebuild(
+            modifiers.is_empty(),
+            BaseType::Vector(modifiers.clone(), canonical_concrete(inner, loader)),
+        ),
+        BaseType::Array(inner, shape) => rebuild(
+            true,
+            BaseType::Array(canonical_concrete(inner, loader), shape.clone()),
+        ),
+        BaseType::ValuePointer(modifiers, inner) => rebuild(
+            modifiers.is_empty(),
+            BaseType::ValuePointer(
+                modifiers.clone(),
+                inner.as_ref().map(|i| canonical_concrete(i, loader)),
+            ),
+        ),
+        BaseType::FunctionPointer(_) => ty.clone(),
+        primitive => ConcreteType::new(ResolutionS::NULL, primitive.clone()),
+    }
+}
 
 #[derive(Default)]
 struct WaitGraph {
@@ -448,6 +566,7 @@ impl StaticStorageManager {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
             thread_statics: RwLock::new(HashMap::new()),
+            canonical_args: RwLock::new(HashMap::new()),
             wait_graph: OrderedMutex::new(WaitGraph::default()),
             pool_placeholder: {
                 let mut fields = hashbrown::HashMap::new();
@@ -496,6 +615,34 @@ impl StaticStorageManager {
         }
     }
 
+    /// Builds the storage-map key's generic component.
+    ///
+    /// Only the type arguments are canonicalized (see [`canonical_concrete`]); the method
+    /// arguments are kept as given. The lookup stored in the entry and used for layout and
+    /// initializer execution is never replaced by this value.
+    fn canonical_lookup(
+        &self,
+        generics: &GenericLookup,
+        loader: Option<&AssemblyLoader>,
+    ) -> GenericLookup {
+        if generics.type_generics.is_empty() {
+            return generics.clone();
+        }
+        let raw = GenericLookup::from_type_arc(generics.type_generics.clone());
+        if let Some(known) = self.canonical_args.read().get(&raw) {
+            return GenericLookup::from_arcs(known.clone(), generics.method_generics.clone());
+        }
+        let canonical: Arc<[ConcreteType]> = generics
+            .type_generics
+            .iter()
+            .map(|arg| canonical_concrete(arg, loader))
+            .collect();
+        if loader.is_some() {
+            self.canonical_args.write().insert(raw, canonical.clone());
+        }
+        GenericLookup::from_arcs(canonical, generics.method_generics.clone())
+    }
+
     fn get_shard_idx(&self, key: &(TypeDescription, GenericLookup)) -> usize {
         use std::hash::{Hash, Hasher};
         let mut s = std::collections::hash_map::DefaultHasher::new();
@@ -538,7 +685,11 @@ impl StaticStorageManager {
         generics: &GenericLookup,
         thread_id: u64,
     ) -> Arc<StaticStorage> {
-        let key = (description.clone(), generics.clone(), thread_id);
+        let key = (
+            description.clone(),
+            self.canonical_lookup(generics, None),
+            thread_id,
+        );
         if let Some(storage) = self.thread_statics.read().get(&key) {
             return storage.clone();
         }
@@ -577,7 +728,7 @@ impl StaticStorageManager {
         description: TypeDescription,
         generics: &GenericLookup,
     ) -> Option<Arc<StaticStorage>> {
-        let key = (description, generics.clone());
+        let key = (description, self.canonical_lookup(generics, None));
         let shard_idx = self.get_shard_idx(&key);
         let shard = self.shards[shard_idx].read();
         shard.get(&key).cloned()
@@ -698,7 +849,10 @@ impl StaticStorageManager {
         context: &ResolutionContext,
         thread_id: dotnet_utils::ArenaId,
     ) -> Result<StaticInitResult, TypeResolutionError> {
-        let key = (description.clone(), context.generics.clone());
+        let key = (
+            description.clone(),
+            self.canonical_lookup(context.generics, Some(context.loader())),
+        );
         let shard_idx = self.get_shard_idx(&key);
 
         // Ensure the storage exists.
