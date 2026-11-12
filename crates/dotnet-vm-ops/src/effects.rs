@@ -51,6 +51,8 @@ enum RootCellValue<'gc> {
         inner_type: dotnet_types::TypeDescription,
         offset: ByteOffset,
         pinned: bool,
+        #[collect(require_static)]
+        unmanaged_address: Option<std::ptr::NonNull<u8>>,
     },
 }
 
@@ -104,15 +106,18 @@ impl RootedValue {
             }
             StackValue::ManagedPtr(pointer) => {
                 // INVARIANT: F6.NativePointerDescriptor — only traced heap owners,
-                // non-reused frame-home serials, static metadata, or (multithreading)
-                // cross-arena origins can survive across polls. Static storage is resolved
+                // non-reused frame-home serials, static metadata, unmanaged addresses, or
+                // (multithreading) cross-arena origins can survive across polls. Static storage is resolved
                 // by type and generics on every raw access, never by a cached address. A
                 // cross-arena origin is kept live by its recorded cross-arena reference and
                 // re-validated against the owner's lease on use.
                 let supported = match pointer.origin() {
                     PointerOrigin::Heap(ObjectRef(Some(_)))
                     | PointerOrigin::FrameHome(_)
-                    | PointerOrigin::Static(_) => true,
+                    | PointerOrigin::Static(_)
+                    // F10.RawMemoryAccessValid: as in the legacy path, guest-supplied
+                    // unmanaged addresses must remain valid across the call. They are not traced.
+                    | PointerOrigin::Unmanaged => true,
                     #[cfg(feature = "multithreading")]
                     PointerOrigin::CrossArenaObjectRef(_) => true,
                     _ => false,
@@ -125,6 +130,9 @@ impl RootedValue {
                     inner_type: pointer.inner_type(),
                     offset: pointer.byte_offset(),
                     pinned: pointer.is_pinned(),
+                    unmanaged_address: matches!(pointer.origin(), PointerOrigin::Unmanaged)
+                        .then(|| pointer.observe_address())
+                        .flatten(),
                 };
                 RootedValueInner::Object(roots.stash(mc, Gc::new(mc, RootCell { value })))
             }
@@ -154,13 +162,17 @@ impl RootedValue {
                     inner_type,
                     offset,
                     pinned,
+                    unmanaged_address,
                 } => {
                     // INVARIANT: F6.NativePointerDescriptor — the root keeps a heap origin
                     // live (a cross-arena origin is live through its recorded cross-arena
                     // reference and lease check); frame-home addresses are resolved anew and
                     // retired homes fail. Static descriptors are deliberately addressless;
-                    // their storage is resolved afresh by origin-aware raw access.
-                    let address = if let PointerOrigin::FrameHome(serial) = origin {
+                    // their storage is resolved afresh by origin-aware raw access. Unmanaged
+                    // addresses retain their original provenance but carry no root.
+                    let address = if matches!(origin, PointerOrigin::Unmanaged) {
+                        *unmanaged_address
+                    } else if let PointerOrigin::FrameHome(serial) = origin {
                         let (base, length) = backend
                             .frame_home_block(*serial)
                             .ok_or_else(|| internal("native frame home is no longer live"))?;
@@ -180,7 +192,9 @@ impl RootedValue {
                         );
                         pointer.observe_address()
                     };
-                    if address.is_none() && !matches!(origin, PointerOrigin::Static(_)) {
+                    if address.is_none()
+                        && !matches!(origin, PointerOrigin::Static(_) | PointerOrigin::Unmanaged)
+                    {
                         return Err(internal("native pointer owner unavailable"));
                     }
                     StackValue::ManagedPtr(
@@ -1711,7 +1725,7 @@ impl<'a, 'gc> NativeOperandView<'a, 'gc> {
 /// `Fallback` runs the `fallback` handler registered on the same `#[dotnet_intrinsic]`, so a
 /// selector never names it and the two cannot drift apart. Requesting an absent handler is a
 /// driver invariant error. Threading selectors capture timeout
-/// values and exclude Transient and Unmanaged byref origins; their bodies validate committed
+/// values and reject Transient byref origins; their bodies validate committed
 /// operands; Monitor.Wait has no fallback. Threading and Substring selectors reject malformed
 /// captured operand shapes. Substring selects a measured synchronous fast path only for valid
 /// copies of at most one chunk; invalid ranges and larger copies reach the body. Reflection
@@ -1720,6 +1734,7 @@ pub enum NativeSelection {
     Async(NativeInvocation),
     Fallback,
     Reject(VmError),
+    InvalidProgram,
 }
 pub type NativeSyncHandler<T> = fn(
     &mut T,
@@ -2724,9 +2739,14 @@ mod tests {
                 false,
                 None,
             );
-            assert!(
-                RootedValue::stash(mc, roots, StackValue::ManagedPtr(unmanaged.into())).is_err()
-            );
+            let unmanaged_root =
+                RootedValue::stash(mc, roots, StackValue::ManagedPtr(unmanaged.into())).unwrap();
+            let StackValue::ManagedPtr(fetched) = unmanaged_root.fetch(roots, &backend).unwrap()
+            else {
+                panic!("expected unmanaged pointer")
+            };
+            assert_eq!(fetched.observe_address(), Some(address));
+            assert_eq!(fetched.byte_offset().as_usize(), address.as_ptr().addr());
             let layout = dotnet_value::layout::FieldLayoutManager {
                 fields: Default::default(),
                 total_size: 0,

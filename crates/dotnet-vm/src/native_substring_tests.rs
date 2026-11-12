@@ -7019,6 +7019,7 @@ fn validation_executor() -> Executor {
         ("System", "ArgumentNullException", argument),
         ("System", "ArgumentOutOfRangeException", argument),
         ("System", "NullReferenceException", exception),
+        ("System", "InvalidProgramException", exception),
         (
             "System.Threading",
             "SynchronizationLockException",
@@ -7049,10 +7050,11 @@ fn assert_validation_exception<'gc>(
     parameter: Option<&str>,
 ) {
     assert_eq!(result, StepResult::Exception);
-    let ExceptionState::Filtering(state) = *ctx.exception_mode else {
-        panic!("expected filtering exception")
+    let exception = match *ctx.exception_mode {
+        ExceptionState::Filtering(state) => state.exception,
+        ExceptionState::Throwing(exception, _) => exception,
+        _ => panic!("expected managed exception"),
     };
-    let exception = state.exception;
     assert_eq!(
         exception.as_object(|obj| obj.description.type_name()),
         expected

@@ -154,9 +154,6 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult {
-        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.monitor_retry = None;
-        }
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode {
             self.push_handler_unwind(state);
         }
@@ -166,9 +163,6 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn rethrow(&mut self) -> StepResult {
-        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.monitor_retry = None;
-        }
         let Some(exception) = self.current_frame().exception_stack.last().cloned() else {
             return StepResult::Error(VmError::Execution(ExecutionError::InvalidCil(
                 "rethrow without active exception".into(),

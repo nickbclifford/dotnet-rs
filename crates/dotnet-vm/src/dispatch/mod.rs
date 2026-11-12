@@ -210,13 +210,6 @@ impl<'gc> ExecutionEngine<'gc> {
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let result = self.step_inner(gc);
-        if matches!(
-            result,
-            StepResult::Exception | StepResult::MethodThrew(_) | StepResult::Error(_)
-        ) && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
-        {
-            frame.monitor_retry = None;
-        }
         self.finish_finalizer_segment(result)
     }
 
@@ -328,11 +321,6 @@ impl<'gc> ExecutionEngine<'gc> {
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let result = self.run_inner(gc);
-        if matches!(result, StepResult::MethodThrew(_) | StepResult::Error(_))
-            && let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut()
-        {
-            frame.monitor_retry = None;
-        }
         self.finish_finalizer_segment(result)
     }
 
@@ -426,9 +414,6 @@ impl<'gc> ExecutionEngine<'gc> {
             };
 
             if res == StepResult::Exception {
-                if let Some(frame) = self.stack.execution.frame_stack.current_frame_opt_mut() {
-                    frame.monitor_retry = None;
-                }
                 continue;
             }
 

@@ -1125,6 +1125,12 @@ impl<'gc> VesContext<'_, 'gc> {
                     };
                 }
                 NativeSelection::Reject(error) => return StepResult::Error(error),
+                NativeSelection::InvalidProgram => {
+                    return self.throw_by_name_with_message(
+                        "System.InvalidProgramException",
+                        "Common Language Runtime detected an invalid program.",
+                    );
+                }
             },
             None => NativeInvocation {
                 start: 0,
@@ -1166,6 +1172,26 @@ impl<'gc> VesContext<'_, 'gc> {
         if matches!(output, NativeOutput::Unsupported) {
             return StepResult::internal_error("unsupported native return shape");
         }
+        // Raw addresses can occur as byref operands in unsafe IL. Resolve their declared
+        // target types before committing operands, then canonicalize them for native calls.
+        let mut raw_byrefs = Vec::new();
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if matches!(entry, NativeEntry::Intrinsic(_))
+                && let ParameterType::Ref(ty) = &parameter.1
+                && matches!(
+                    self.peek_stack_at(count - index - 1),
+                    StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_)
+                )
+            {
+                let concrete = dotnet_vm_ops::vm_try!(generics.make_concrete(
+                    method.resolution(),
+                    ty.clone(),
+                    self.loader().as_ref()
+                ));
+                let ty = dotnet_vm_ops::vm_try!(self.loader().find_concrete_type(concrete));
+                raw_byrefs.push((index + count - signature.parameters.len(), ty));
+            }
+        }
         let control = NativeControl::new();
         let fx = match control.effects(invocation) {
             Ok(fx) => fx,
@@ -1176,6 +1202,18 @@ impl<'gc> VesContext<'_, 'gc> {
         };
         let roots = DynamicRootSet::new(self.gc.mutation());
         let mut operands = self.pop_multiple(count);
+        for (index, ty) in raw_byrefs {
+            let address = match operands[index] {
+                StackValue::NativeInt(value) => {
+                    std::ptr::NonNull::new(std::ptr::with_exposed_provenance_mut(value as usize))
+                }
+                StackValue::UnmanagedPtr(pointer) => Some(pointer.0),
+                _ => unreachable!(),
+            };
+            operands[index] = StackValue::ManagedPtr(
+                dotnet_value::pointer::ManagedPtr::new(address, ty, None, false, None).into(),
+            );
+        }
         if matches!(&entry, NativeEntry::Intrinsic(_)) {
             for value in &mut operands {
                 if let StackValue::ManagedPtr(pointer) = value
@@ -1355,6 +1393,17 @@ impl<'gc> VesContext<'_, 'gc> {
         if !multicast {
             return None;
         }
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if matches!(parameter.1, ParameterType::Ref(_))
+                && matches!(self.peek_stack_at(count - index - 1), StackValue::ManagedPtr(pointer)
+                    if matches!(pointer.origin(), dotnet_value::pointer::PointerOrigin::Transient(_)))
+            {
+                return Some(self.throw_by_name_with_message(
+                    "System.InvalidProgramException",
+                    "Common Language Runtime detected an invalid program.",
+                ));
+            }
+        }
         if matches!(
             multicast_output(self, &method, generics),
             NativeOutput::Unsupported
@@ -1374,7 +1423,9 @@ impl<'gc> VesContext<'_, 'gc> {
                     &value,
                 ),
                 ParameterType::Ref(ty) => match value {
-                    StackValue::ManagedPtr(pointer)
+                    value @ (StackValue::ManagedPtr(_)
+                    | StackValue::NativeInt(_)
+                    | StackValue::UnmanagedPtr(_))
                         if generics
                             .make_concrete(method.resolution(), ty.clone(), self.loader().as_ref())
                             .ok()
@@ -1390,13 +1441,20 @@ impl<'gc> VesContext<'_, 'gc> {
                             })
                             .is_some_and(|layout| !layout.has_managed_ptrs()) =>
                     {
-                        match pointer.origin() {
-                            dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
-                            | dotnet_value::pointer::PointerOrigin::FrameHome(_)
-                            | dotnet_value::pointer::PointerOrigin::Static(_) => true,
-                            #[cfg(feature = "multithreading")]
-                            dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => true,
-                            _ => false,
+                        match value {
+                            StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) => true,
+                            StackValue::ManagedPtr(pointer) => match pointer.origin() {
+                                dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(_)))
+                                | dotnet_value::pointer::PointerOrigin::FrameHome(_)
+                                | dotnet_value::pointer::PointerOrigin::Static(_)
+                                | dotnet_value::pointer::PointerOrigin::Unmanaged => true,
+                                #[cfg(feature = "multithreading")]
+                                dotnet_value::pointer::PointerOrigin::CrossArenaObjectRef(_) => {
+                                    true
+                                }
+                                _ => false,
+                            },
+                            _ => unreachable!(),
                         }
                     }
                     _ => false,

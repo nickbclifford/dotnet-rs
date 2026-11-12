@@ -139,7 +139,6 @@ impl<'gc> CallState<'gc> {
             if frames.len() == work.caller_depth && !frames.is_empty() {
                 stack.truncate(work.stack_height);
                 let frame = frames.current_frame_mut();
-                frame.monitor_retry = None;
                 frame.stack_height = work
                     .stack_height
                     .checked_sub(frame.base.stack.as_usize())
@@ -837,7 +836,7 @@ mod host_adapter_trait_tests {
             T: dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>,
         >() {
             let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
-                dotnet_intrinsics_threading::monitor::intrinsic_monitor_reliable_enter::<T>;
+                dotnet_intrinsics_threading::monitor::intrinsic_monitor_exit::<T>;
         }
 
         fn assert_reflection_handler<

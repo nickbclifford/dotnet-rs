@@ -1,4 +1,3 @@
-use crate::{gc::coordinator::GCCoordinator, threading::ThreadManagerOps};
 use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{num::NonZeroUsize, sync::OnceLock, time::Duration};
@@ -33,13 +32,6 @@ pub(crate) use threaded::WAIT_TEST_HOOK;
 #[cfg(feature = "multithreading")]
 pub use threaded::{SyncBlock, SyncBlockManager};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LockResult {
-    Success,
-    Timeout,
-    Yield,
-}
-
 pub trait SyncBlockOps {
     fn try_enter(&self, thread_id: ArenaId) -> bool;
     fn enter(&self, thread_id: ArenaId, metrics: &RuntimeMetrics);
@@ -49,21 +41,6 @@ pub trait SyncBlockOps {
         timeout_ms: u64,
         metrics: &RuntimeMetrics,
     ) -> bool;
-    fn enter_safe(
-        &self,
-        thread_id: ArenaId,
-        metrics: &RuntimeMetrics,
-        thread_manager: &impl ThreadManagerOps,
-        gc_coordinator: &GCCoordinator,
-    ) -> LockResult;
-    fn enter_with_timeout_safe(
-        &self,
-        thread_id: ArenaId,
-        deadline: std::time::Instant,
-        metrics: &RuntimeMetrics,
-        thread_manager: &impl ThreadManagerOps,
-        gc_coordinator: &GCCoordinator,
-    ) -> LockResult;
     fn exit(&self, thread_id: ArenaId) -> bool;
     fn is_owned(&self, thread_id: ArenaId) -> bool;
     fn begin_wait(

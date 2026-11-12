@@ -55,14 +55,6 @@ pub struct NativeReturnDestination {
     pub generation: u64,
 }
 
-/// A timed byref monitor fallback or Thread.Join retry belongs to one invocation in this frame.
-pub struct MonitorRetry {
-    pub method: dotnet_types::members::MethodDescription,
-    pub ip: usize,
-    pub stack_top: StackSlotIndex,
-    pub deadline: std::time::Instant,
-}
-
 /// A synchronization-only obligation owned by a legacy initializer frame.
 ///
 /// # Safety
@@ -84,7 +76,6 @@ pub struct StackFrame<'gc> {
     pub pinned_locals: PinnedLocals,
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
-    pub monitor_retry: Option<Box<MonitorRetry>>,
     pub native_return: Option<NativeReturnDestination>,
     // INVARIANT: F6.InitializerClaimLifetime — frame disposal and pooling drop the synchronization-only obligation.
     pub initializer_claim: Option<Box<dyn InitializerClaim>>,
@@ -115,7 +106,6 @@ impl<'gc> StackFrame<'gc> {
             pinned_locals,
             is_finalizer: false,
             multicast_state: None,
-            monitor_retry: None,
             native_return: None,
             initializer_claim: None,
             homes: FrameHomes::default(),
@@ -140,7 +130,6 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals = pinned_locals;
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.monitor_retry = None;
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;
@@ -157,7 +146,6 @@ impl<'gc> StackFrame<'gc> {
         self.pinned_locals.clear();
         self.is_finalizer = false;
         self.multicast_state = None;
-        self.monitor_retry = None;
         self.native_return = None;
         self.initializer_claim = None;
         self.constructor_result = None;

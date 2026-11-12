@@ -18,8 +18,7 @@
 //! [`MonitorHost<'gc>`] defines the monitor-specific synchronization hooks used
 //! by `Monitor.Enter`/`TryEnter`/`Exit` handlers: sync-block lookup/creation
 //! (`monitor_get_sync_block_for_object`,
-//! `monitor_get_or_create_sync_block_for_object`), acquisition (`monitor_try_enter`,
-//! `monitor_enter_safe`, `monitor_enter_with_timeout_safe`), and release
+//! `monitor_get_or_create_sync_block_for_object`), acquisition (`monitor_try_enter`), and release
 //! (`monitor_exit`).
 //!
 //! See `docs/BUILD_TIME_CODE_GENERATION.md` for how intrinsic handlers are
@@ -29,7 +28,6 @@ use dotnet_types::TypeDescription;
 use dotnet_utils::{ArenaId, gc::GCHandle};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnet_vm_ops::ops::{RawMemoryOps, ThreadingBaseOps};
-use std::time::Instant;
 
 pub(crate) mod atomic_dispatch;
 pub mod events;
@@ -39,13 +37,6 @@ pub mod monitor;
 pub mod pool;
 pub mod thread;
 pub mod volatile;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MonitorLockResult {
-    Success,
-    Timeout,
-    Yield,
-}
 
 pub trait MonitorHost<'gc> {
     type SyncBlock: Clone;
@@ -59,26 +50,6 @@ pub trait MonitorHost<'gc> {
     ) -> Self::SyncBlock;
 
     fn monitor_try_enter(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;
-
-    fn monitor_enter_safe(
-        &self,
-        sync_block: &Self::SyncBlock,
-        thread_id: ArenaId,
-    ) -> MonitorLockResult;
-
-    fn monitor_enter_with_timeout_safe(
-        &self,
-        sync_block: &Self::SyncBlock,
-        thread_id: ArenaId,
-        deadline: Instant,
-    ) -> MonitorLockResult;
-
-    fn monitor_retry_deadline(
-        &mut self,
-        method: &dotnet_types::members::MethodDescription,
-        timeout_ms: i32,
-    ) -> Instant;
-    fn monitor_clear_retry(&mut self);
 
     fn monitor_exit(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;
     fn monitor_is_owned(&self, sync_block: &Self::SyncBlock, thread_id: ArenaId) -> bool;

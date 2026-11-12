@@ -3,7 +3,7 @@ use crate::{
     MethodState, StepResult,
     resolution::ValueResolution,
     stack::ops::*,
-    sync::{Arc, LockResult, SyncBlockOps, SyncManagerOps},
+    sync::{Arc, SyncBlockOps, SyncManagerOps},
 };
 use dotnet_tracer::Tracer;
 use dotnet_types::{
@@ -525,79 +525,6 @@ impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, '
         thread_id: dotnet_utils::ArenaId,
     ) -> bool {
         sync_block.try_enter(thread_id)
-    }
-
-    #[inline]
-    fn monitor_enter_safe(
-        &self,
-        sync_block: &Self::SyncBlock,
-        thread_id: dotnet_utils::ArenaId,
-    ) -> dotnet_intrinsics_threading::MonitorLockResult {
-        match sync_block.enter_safe(
-            thread_id,
-            &self.shared().metrics,
-            self.shared().thread_manager.as_ref(),
-            &self.shared().gc_coordinator,
-        ) {
-            LockResult::Success => dotnet_intrinsics_threading::MonitorLockResult::Success,
-            LockResult::Timeout => dotnet_intrinsics_threading::MonitorLockResult::Timeout,
-            LockResult::Yield => dotnet_intrinsics_threading::MonitorLockResult::Yield,
-        }
-    }
-
-    #[inline]
-    fn monitor_enter_with_timeout_safe(
-        &self,
-        sync_block: &Self::SyncBlock,
-        thread_id: dotnet_utils::ArenaId,
-        deadline: std::time::Instant,
-    ) -> dotnet_intrinsics_threading::MonitorLockResult {
-        match sync_block.enter_with_timeout_safe(
-            thread_id,
-            deadline,
-            &self.shared().metrics,
-            self.shared().thread_manager.as_ref(),
-            &self.shared().gc_coordinator,
-        ) {
-            LockResult::Success => dotnet_intrinsics_threading::MonitorLockResult::Success,
-            LockResult::Timeout => dotnet_intrinsics_threading::MonitorLockResult::Timeout,
-            LockResult::Yield => dotnet_intrinsics_threading::MonitorLockResult::Yield,
-        }
-    }
-
-    fn monitor_retry_deadline(
-        &mut self,
-        method: &dotnet_types::members::MethodDescription,
-        timeout_ms: i32,
-    ) -> std::time::Instant {
-        let ip = self.state().ip;
-        let stack_top = self.top_of_stack();
-        let frame = self.frame_stack.current_frame_mut();
-        // Non-inline dispatch retains the target operands on this caller's stack across a stop.
-        if let Some(record) = &frame.monitor_retry
-            && record.ip == ip
-            && record.stack_top == stack_top
-            && record.method == *method
-        {
-            return record.deadline;
-        }
-        let duration = if timeout_ms < 0 {
-            std::time::Duration::from_secs(100 * 365 * 24 * 3600)
-        } else {
-            std::time::Duration::from_millis(timeout_ms as u64)
-        };
-        let deadline = std::time::Instant::now() + duration;
-        frame.monitor_retry = Some(Box::new(dotnet_vm_data::stack::MonitorRetry {
-            method: method.clone(),
-            ip,
-            stack_top,
-            deadline,
-        }));
-        deadline
-    }
-
-    fn monitor_clear_retry(&mut self) {
-        self.frame_stack.current_frame_mut().monitor_retry = None;
     }
 
     #[inline]

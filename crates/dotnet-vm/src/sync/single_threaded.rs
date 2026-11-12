@@ -1,8 +1,4 @@
-use crate::{
-    gc::coordinator::GCCoordinator,
-    sync::{Arc, LockResult, Mutex, SyncBlockOps},
-    threading::ThreadManagerOps,
-};
+use crate::sync::{Arc, Mutex, SyncBlockOps};
 use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{
@@ -59,38 +55,6 @@ impl super::SyncBlockOps for SyncBlock {
     ) -> bool {
         self.enter(thread_id, _metrics);
         true
-    }
-
-    fn enter_safe(
-        &self,
-        thread_id: ArenaId,
-        metrics: &RuntimeMetrics,
-        _thread_manager: &impl ThreadManagerOps,
-        _gc_coordinator: &GCCoordinator,
-    ) -> LockResult {
-        self.enter(thread_id, metrics);
-        LockResult::Success
-    }
-
-    fn enter_with_timeout_safe(
-        &self,
-        thread_id: ArenaId,
-        deadline: std::time::Instant,
-        metrics: &RuntimeMetrics,
-        _thread_manager: &impl ThreadManagerOps,
-        _gc_coordinator: &GCCoordinator,
-    ) -> LockResult {
-        let now = std::time::Instant::now();
-        let timeout_ms = if deadline > now {
-            (deadline - now).as_millis() as u64
-        } else {
-            0
-        };
-        if self.enter_with_timeout(thread_id, timeout_ms, metrics) {
-            LockResult::Success
-        } else {
-            LockResult::Timeout
-        }
     }
 
     fn exit(&self, _thread_id: ArenaId) -> bool {
@@ -183,60 +147,10 @@ impl Default for SyncBlockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc::coordinator::GCCoordinator;
-    use crate::sync::{LockResult, SyncBlockOps, SyncManagerOps};
-    use crate::threading::ThreadManagerOps;
-    use dotnet_metrics::RuntimeMetrics;
+    use crate::sync::{SyncBlockOps, SyncManagerOps};
     use dotnet_utils::ArenaId;
-    use std::sync::Arc as StdArc;
-    use std::sync::atomic::AtomicBool;
 
     const THREAD_A: ArenaId = ArenaId::new(1);
-
-    struct MockSTWGuard;
-    impl crate::threading::STWGuardOps for MockSTWGuard {
-        fn elapsed_micros(&self) -> u64 {
-            0
-        }
-    }
-
-    struct MockThreadManager;
-    impl ThreadManagerOps for MockThreadManager {
-        type Guard<'a> = MockSTWGuard;
-        fn register_thread(&self) -> ArenaId {
-            THREAD_A
-        }
-        fn register_thread_traced(&self, _: &mut dotnet_tracer::Tracer, _: &str) -> ArenaId {
-            THREAD_A
-        }
-        fn unregister_thread(&self, _: ArenaId) {}
-        fn unregister_thread_traced(&self, _: ArenaId, _: &mut dotnet_tracer::Tracer) {}
-        fn current_thread_id(&self) -> Option<ArenaId> {
-            Some(THREAD_A)
-        }
-        fn thread_count(&self) -> usize {
-            1
-        }
-        fn is_gc_stop_requested(&self) -> bool {
-            false
-        }
-        fn safe_point(&self, _: ArenaId, _: &GCCoordinator) {}
-        fn execute_gc_command(&self, _: crate::gc::coordinator::GCCommand, _: &GCCoordinator) {}
-        fn safe_point_traced(
-            &self,
-            _: ArenaId,
-            _: &GCCoordinator,
-            _: &mut dotnet_tracer::Tracer,
-            _: &str,
-        ) {
-        }
-        fn request_stop_the_world(&self) -> Self::Guard<'_> {
-            MockSTWGuard
-        }
-        fn request_stop_the_world_traced(&self, _: &mut dotnet_tracer::Tracer) -> Self::Guard<'_> {
-            MockSTWGuard
-        }
-    }
 
     #[test]
     fn test_single_threaded_monitor_recursion() {
@@ -254,21 +168,6 @@ mod tests {
 
         // Extra exit should fail
         assert!(!block.exit(THREAD_A));
-    }
-
-    #[test]
-    fn test_single_threaded_enter_safe() {
-        let block = SyncBlock::new();
-        let metrics = RuntimeMetrics::new();
-        let tm = MockThreadManager;
-        let gc = GCCoordinator::new(StdArc::new(AtomicBool::new(false)));
-
-        assert_eq!(
-            block.enter_safe(THREAD_A, &metrics, &tm, &gc),
-            LockResult::Success
-        );
-        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 1);
-        assert!(block.exit(THREAD_A));
     }
 
     #[test]

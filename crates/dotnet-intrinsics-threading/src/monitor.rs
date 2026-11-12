@@ -1,12 +1,8 @@
-use crate::{MonitorLockResult, ThreadingIntrinsicHost};
+use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::ArenaId;
-use dotnet_value::{
-    StackValue,
-    object::ObjectRef,
-    pointer::{ManagedPtr, PointerOrigin},
-};
+use dotnet_value::{StackValue, object::ObjectRef, pointer::PointerOrigin};
 use dotnet_vm_data::StepResult;
 use dotnet_vm_ops::effects::{
     NativeInvocation, NativeOperandView, NativeResult, NativeSelection, VmEffects,
@@ -54,59 +50,6 @@ pub fn intrinsic_monitor_exit<'gc, T: ThreadingIntrinsicHost<'gc>>(
     StepResult::Continue
 }
 
-/// System.Threading.Monitor::ReliableEnter(object, ref bool)
-pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
-    let obj_ref = ctx.peek_stack_at(1).as_object_ref();
-    let lock_taken = match read_monitor_lock_taken(ctx, &success_ptr) {
-        Ok(value) => value,
-        Err(error) => return StepResult::Error(error),
-    };
-    if let Some(error) = monitor_argument_error(lock_taken, obj_ref.0.is_some(), None) {
-        ctx.drop_top(2);
-        return throw_monitor_argument_error(ctx, error);
-    }
-
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let thread_id = ctx.thread_id();
-    assert_ne!(
-        thread_id,
-        ArenaId::INVALID,
-        "Monitor.ReliableEnter called from unregistered thread"
-    );
-
-    let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
-
-    let lock_res = ctx.monitor_enter_safe(&sync_block, thread_id);
-
-    match lock_res {
-        MonitorLockResult::Success => {}
-        MonitorLockResult::Yield => return StepResult::Yield,
-        MonitorLockResult::Timeout => unreachable!(),
-    }
-
-    // SAFETY: F10.RawMemoryAccessValid — the out parameter is a `bool&` by signature;
-    // managed origins are bounds-checked against the live owner. Legacy dispatch preserves the
-    // VM's trust in guest-supplied unmanaged addresses.
-    if let Err(error) = unsafe {
-        ctx.write_bytes(
-            success_ptr.origin().clone(),
-            success_ptr.byte_offset(),
-            &[1u8],
-        )
-    } {
-        return StepResult::Error(error.into());
-    }
-
-    // Pop success_ptr, then obj_ref after all work that may yield or trigger GC.
-    ctx.drop_top(2);
-    StepResult::Continue
-}
-
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub async fn monitor_try_enter_fast_path(mut fx: VmEffects) -> NativeResult {
@@ -120,66 +63,6 @@ pub async fn monitor_try_enter_fast_path(mut fx: VmEffects) -> NativeResult {
     };
     let acquired = fx.monitor_enter(object, Some(Instant::now())).await?;
     fx.vm().await?.push_bool(acquired)
-}
-
-/// System.Threading.Monitor::TryEnter(object, int, ref bool)
-pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
-    let timeout_ms = ctx.peek_stack_at(1).as_i32();
-    let obj_ref = ctx.peek_stack_at(2).as_object_ref();
-    let lock_taken = match read_monitor_lock_taken(ctx, &success_ptr) {
-        Ok(value) => value,
-        Err(error) => return StepResult::Error(error),
-    };
-    if let Some(error) = monitor_argument_error(lock_taken, obj_ref.0.is_some(), Some(timeout_ms)) {
-        ctx.monitor_clear_retry();
-        ctx.drop_top(3);
-        return throw_monitor_argument_error(ctx, error);
-    }
-
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let thread_id = ctx.thread_id();
-    assert_ne!(
-        thread_id,
-        ArenaId::INVALID,
-        "Monitor.TryEnter called from unregistered thread"
-    );
-
-    let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
-
-    let deadline = ctx.monitor_retry_deadline(&method, timeout_ms);
-    let lock_res = ctx.monitor_enter_with_timeout_safe(&sync_block, thread_id, deadline);
-
-    if lock_res != MonitorLockResult::Yield {
-        ctx.monitor_clear_retry();
-    }
-
-    let success = match lock_res {
-        MonitorLockResult::Success => true,
-        MonitorLockResult::Timeout => false,
-        MonitorLockResult::Yield => return StepResult::Yield,
-    };
-
-    // SAFETY: F10.RawMemoryAccessValid — the out parameter is a `bool&` by signature;
-    // managed origins are bounds-checked against the live owner. Legacy dispatch preserves the
-    // VM's trust in guest-supplied unmanaged addresses.
-    if let Err(error) = unsafe {
-        ctx.write_bytes(
-            success_ptr.origin().clone(),
-            success_ptr.byte_offset(),
-            &[if success { 1u8 } else { 0u8 }],
-        )
-    } {
-        return StepResult::Error(error.into());
-    }
-
-    // Pop success_ptr, timeout_ms, then obj_ref after all work that may yield or trigger GC.
-    ctx.drop_top(3);
-    StepResult::Continue
 }
 
 #[cfg(feature = "multithreading")]
@@ -215,38 +98,6 @@ fn monitor_argument_error(
     }
 }
 
-fn throw_monitor_argument_error<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    error: MonitorArgumentError,
-) -> StepResult {
-    match error {
-        MonitorArgumentError::LockTaken => ctx.throw_by_name_with_message(
-            "System.ArgumentException",
-            "The lockTaken argument must be initialized to false.",
-        ),
-        MonitorArgumentError::NullObject => {
-            ctx.throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.")
-        }
-        MonitorArgumentError::Timeout => ctx.throw_by_name_with_message(
-            "System.ArgumentOutOfRangeException",
-            "The timeout must be greater than or equal to -1.",
-        ),
-    }
-}
-
-fn read_monitor_lock_taken<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &T,
-    pointer: &ManagedPtr<'gc>,
-) -> Result<bool, dotnet_types::error::VmError> {
-    let mut value = [0u8; 1];
-    // SAFETY: F10.RawMemoryAccessValid — `pointer` is the `bool&` operand by the resolved method
-    // signature; managed origins are bounds-checked by `read_bytes`, while legacy dispatch retains
-    // the VM's trust contract for guest-supplied unmanaged references.
-    unsafe { ctx.read_bytes(pointer.origin().clone(), pointer.byte_offset(), &mut value) }
-        .map_err(dotnet_types::error::VmError::from)?;
-    Ok(value[0] != 0)
-}
-
 fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     ctx: &T,
     operands: NativeOperandView<'_, 'gc>,
@@ -255,34 +106,36 @@ fn select_monitor<'gc, T: ThreadingIntrinsicHost<'gc>>(
     byref: bool,
 ) -> NativeSelection {
     if byref {
-        let StackValue::ManagedPtr(ptr) = operands.peek_at(0) else {
-            return NativeSelection::Reject(
-                dotnet_types::error::ExecutionError::InternalError(
-                    "Monitor lockTaken is not a managed pointer".into(),
-                )
-                .into(),
-            );
-        };
-        let supported = matches!(
-            ptr.origin(),
-            PointerOrigin::Heap(ObjectRef(Some(_)))
-                | PointerOrigin::FrameHome(_)
-                | PointerOrigin::Static(_)
-        ) || cross_arena_origin(ptr.origin());
-        if !supported {
-            return if matches!(
-                ptr.origin(),
-                PointerOrigin::Transient(_) | PointerOrigin::Unmanaged
-            ) {
-                NativeSelection::Fallback
-            } else {
-                NativeSelection::Reject(
+        match operands.peek_at(0) {
+            StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) => {}
+            StackValue::ManagedPtr(ptr) => {
+                if matches!(ptr.origin(), PointerOrigin::Transient(_)) {
+                    return NativeSelection::InvalidProgram;
+                }
+                let supported = matches!(
+                    ptr.origin(),
+                    PointerOrigin::Heap(ObjectRef(Some(_)))
+                        | PointerOrigin::FrameHome(_)
+                        | PointerOrigin::Static(_)
+                        | PointerOrigin::Unmanaged
+                ) || cross_arena_origin(ptr.origin());
+                if !supported {
+                    return NativeSelection::Reject(
+                        dotnet_types::error::ExecutionError::InternalError(
+                            "Monitor lockTaken has an invalid origin".into(),
+                        )
+                        .into(),
+                    );
+                }
+            }
+            _ => {
+                return NativeSelection::Reject(
                     dotnet_types::error::ExecutionError::InternalError(
-                        "Monitor lockTaken has an invalid origin".into(),
+                        "Monitor lockTaken is not a pointer".into(),
                     )
                     .into(),
-                )
-            };
+                );
+            }
         }
     }
     let timeout = if timed {
@@ -378,8 +231,8 @@ pub(crate) async fn enter_effect(
     let acquired = fx.monitor_enter(object, deadline).await?;
     if let Some(flag) = flag {
         let mut vm = fx.vm().await?;
-        // SAFETY: F10.RawMemoryAccessValid — admission restricts the origin to managed storage, so
-        // the backend resolves its owner and bounds-checks the complete byte range. That the byte is
+        // SAFETY: F10.RawMemoryAccessValid — managed origins are resolved and bounds-checked; unmanaged addresses rely on the
+        // guest to keep the complete byte range valid across suspension. That the byte is
         // a bool and not a reference slot rests on the `bool&` signature and is not verified here.
         unsafe { vm.write_monitor_flag(&flag, acquired)? };
     }
@@ -393,16 +246,16 @@ pub(crate) async fn enter_effect(
 pub async fn monitor_enter(fx: VmEffects) -> NativeResult {
     enter_effect(fx, false, false, false).await
 }
-#[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)", select = reliable_enter_select, fallback = intrinsic_monitor_reliable_enter)]
-#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)", select = reliable_enter_select, fallback = intrinsic_monitor_reliable_enter)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)", select = reliable_enter_select)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)", select = reliable_enter_select)]
 pub async fn monitor_reliable_enter(fx: VmEffects) -> NativeResult {
     enter_effect(fx, false, true, false).await
 }
 // These private CoreLib helpers are also called by public TryEnter overloads; route them through
 // the same argument gate so helper dispatch cannot bypass validation.
-#[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)", select = try_enter_ref_select, fallback = intrinsic_monitor_try_enter_timeout_ref)]
-#[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnterTimeout(object, int, bool&)", select = try_enter_ref_select, fallback = intrinsic_monitor_try_enter_timeout_ref)]
-#[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter_FastPath_WithTimeout(object, int, bool&)", select = try_enter_ref_select, fallback = intrinsic_monitor_try_enter_timeout_ref)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)", select = try_enter_ref_select)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnterTimeout(object, int, bool&)", select = try_enter_ref_select)]
+#[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter_FastPath_WithTimeout(object, int, bool&)", select = try_enter_ref_select)]
 pub async fn monitor_try_enter_ref(fx: VmEffects) -> NativeResult {
     enter_effect(fx, true, true, false).await
 }

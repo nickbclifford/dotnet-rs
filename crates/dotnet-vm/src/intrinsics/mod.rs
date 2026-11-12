@@ -475,6 +475,10 @@ mod async_registry_tests {
             ("System_GC_Collect_", 3),
             ("System_Threading_Thread_Join_", 2),
             ("System_Threading_LowLevelLock_Acquire_", 1),
+            ("System_Threading_Monitor_ReliableEnter_", 1),
+            ("System_Threading_Monitor_Enter_", 2),
+            ("System_Threading_Monitor_TryEnter_", 2),
+            ("System_Threading_Monitor_ReliableEnterTimeout_", 1),
             ("System_Threading_Monitor_TryEnter_FastPath_", 1),
             ("System_Threading_Monitor_TryEnter_FastPath_WithTimeout_", 2),
         ] {
@@ -486,12 +490,7 @@ mod async_registry_tests {
                 })
                 .collect();
             assert_eq!(matches.len(), expected, "{prefix}");
-            for (name, _, _, fallback, _, parameters) in matches {
-                // The byref timeout overload retains its fallback for transient and unmanaged flags.
-                if prefix.ends_with("WithTimeout_") && parameters.contains(&"Boolean&") {
-                    assert!(*fallback, "{name} must retain its byref fallback");
-                    continue;
-                }
+            for (name, _, _, fallback, _, _) in matches {
                 assert!(!fallback, "{name}");
             }
         }
@@ -505,6 +504,7 @@ mod async_registry_tests {
                 ty,
                 "Void"
                     | "Boolean"
+                    | "Boolean&"
                     | "Int32"
                     | "IntPtr"
                     | "String"

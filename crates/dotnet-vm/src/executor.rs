@@ -1180,15 +1180,6 @@ impl Executor {
             arena.mutate_root(|_, c| {
                 c.retire_finalizer_segment();
                 let execution = &mut c.stack.execution;
-                for frame in execution
-                    .frame_stack
-                    .frames
-                    .iter_mut()
-                    .chain(execution.frame_stack.suspended_frames.iter_mut())
-                    .chain(execution.frame_stack.pooled_frames.iter_mut())
-                {
-                    frame.monitor_retry = None;
-                }
                 execution
                     .call_state
                     .cleanup_native(&mut execution.frame_stack, &mut execution.evaluation_stack);

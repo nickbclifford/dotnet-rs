@@ -10,7 +10,7 @@ In priority order. Each plan's own `Status:` line is the only record of its stat
 
 | ID | Plan | Note |
 |---|---|---|
-| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; slices 1–5 complete; next is slice 5b (retire the byref Monitor fallbacks) |
+| 16 | [Retire legacy continuations and move suspending intrinsics to effects](16-retire-legacy-continuations.md) | In progress; slices 1–5b complete; next is slice 6 (bulk intrinsics) |
 | 15 | [CoreLib `Task` and the thread pool](15-corelib-task-and-thread-pool.md) | CoreLib tasks/resources, capped background pool workers, unnamed events and managed timers are active |
 | 14 | [Canonical reflection objects across threads](14-canonical-reflection-objects.md) | Complete; shared canonical type, member and assembly objects |
 | 13 | [Async intrinsic API: the body is the implementation](13-async-intrinsic-api.md) | Complete; body validation, inline dispatch and optional fallbacks verified; measured Substring fast path retained |
@@ -66,17 +66,13 @@ Evidence and IDs (p01…, R01…) are defined in the
   `unwind_frame` wrapper, after outer filters have already run on the original exception. Their
   timing and wrapping differ from the field-instruction effect path described in the
   [static-initialization slice](08-async-effects/slice-4-static-initialization.md).
-- **Fallback continuations for excluded shapes:** `MulticastState` and the
-  frame retry deadline remain necessary until a plan covers invocation and wait
-  shapes excluded from native effects; the retry record serves timed Transient/Unmanaged byref
-  monitor fallbacks and independently Thread.Join. Monitor.Wait uses a native wait. Their ownership
-  and admitted shapes are defined by [plan 08](08-async-effects.md). Threading and string bodies now validate admitted operands;
-  single-cast delegates and other IL calls now forward inline. Guest non-inline routes remain
-  `MulticastState` and the managed-body-only cctor, span equality slow path and
-  Expression.Compile redirect. Intrinsic-constructor `newobj` can suspend inline.
-  Non-inline calls use a registered fallback or return `NotImplemented` when absent, as for
-  `Thread.Yield`, `Thread.SpinWait` and `Monitor.Wait`. Monitor byref exclusions
-  remain (reflection's were removed by [plan 16](16-retire-legacy-continuations.md) slice 3); Substring retains its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
+- **Fallback continuations for excluded shapes:** `MulticastState` remains for ref-struct
+  values and byref targets containing managed pointers, byref returns and `TypedReference`.
+  Non-null heap, frame-home, static, unmanaged and MT cross-arena byref arguments with
+  pointer-free targets use native effects; transient byrefs are invalid. The managed-body-only
+  cctor, span equality slow path and Expression.Compile routes remain non-inline. Non-inline
+  intrinsics use a registered fallback or return `NotImplemented` when absent. Substring retains
+  its measured valid-small fast path ([plan 13](13-async-intrinsic-api.md#substring-fast-path-measurement)).
 - **Cross-thread GC handles:** `intrinsic_gchandle_internal_get` and related operations index the
   calling arena's local handle table, so a `WeakReference` created on one thread cannot reliably
   read its target from another, even while both arenas remain registered.

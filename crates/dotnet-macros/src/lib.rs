@@ -235,8 +235,7 @@ fn expand_intrinsic(
 /// so the selector never names it), or rejection. Without a selector the whole parameter list is
 /// the invocation. Admitted threading and Substring bodies validate committed arguments and
 /// construct rooted managed exceptions; reflection still excludes its unsupported shapes.
-/// Sleep, finalizer wait, Monitor.Wait and object-only Enter and timed TryEnter have no fallback;
-/// Monitor byref variants retain theirs for Transient and Unmanaged origins. A measured bulk
+/// Sleep, finalizer wait, and Monitor.Enter/TryEnter/Wait have no fallback. A measured bulk
 /// intrinsic may select a synchronous fast path for valid small inputs and use its async body for
 /// larger inputs: Substring does this for at most one chunk; invalid ranges reach the body.
 /// Inline IL calls include

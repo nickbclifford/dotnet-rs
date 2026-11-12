@@ -132,7 +132,7 @@ fn multicast_selection_precedes_operand_commitment() {
         ("delegate_multicast_ref_struct_42.cs", (0, 2, 1)),
         ("delegate_multicast_byref_return_42.cs", (0, 0, 1)),
         ("delegate_multicast_typed_reference_42.cs", (0, 1, 0)),
-        ("delegate_multicast_unmanaged_ref_42.cs", (0, 1, 0)),
+        ("delegate_multicast_unmanaged_ref_42.cs", (2, 0, 0)),
         ("delegate_multicast_gc_collect_42.cs", (3, 0, 0)),
         #[cfg(feature = "multithreading")]
         ("delegate_multicast_contended_42.cs", (1, 0, 0)),
