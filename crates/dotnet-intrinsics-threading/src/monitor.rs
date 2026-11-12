@@ -109,31 +109,17 @@ pub fn intrinsic_monitor_reliable_enter<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
-pub fn intrinsic_monitor_try_enter_fast_path<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let obj_ref = ctx.pop_obj();
-
-    if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id();
-        assert_ne!(
-            thread_id,
-            ArenaId::INVALID,
-            "Monitor.TryEnter_FastPath called from unregistered thread"
-        );
-
-        let sync_block = ctx.monitor_get_or_create_sync_block_for_object(obj_ref, gc);
-        let success = ctx.monitor_try_enter(&sync_block, thread_id);
-        ctx.push_i32(if success { 1 } else { 0 });
-    } else {
-        return ctx
-            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
-    }
-
-    StepResult::Continue
+pub async fn monitor_try_enter_fast_path(mut fx: VmEffects) -> NativeResult {
+    let object = {
+        let mut vm = fx.vm().await?;
+        let (object, _, _) = vm.prepare_monitor(false, false)?;
+        if vm.is_null(&object)? {
+            return Err(vm.exception("System.ArgumentNullException", "Value cannot be null.")?);
+        }
+        object
+    };
+    let acquired = fx.monitor_enter(object, Some(Instant::now())).await?;
+    fx.vm().await?.push_bool(acquired)
 }
 
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
@@ -348,7 +334,7 @@ pub fn try_enter_select<'gc, T: ThreadingIntrinsicHost<'gc>>(
     select_monitor(ctx, operands, method, true, false)
 }
 
-async fn enter_effect(
+pub(crate) async fn enter_effect(
     mut fx: VmEffects,
     timed: bool,
     byref: bool,

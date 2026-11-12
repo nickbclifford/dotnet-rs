@@ -125,14 +125,6 @@ pub trait ManagedThreadHost<'gc> {
         thread: ObjectRef<'gc>,
         value: Option<bool>,
     ) -> dotnet_vm_data::StepResult;
-
-    /// Joins the receiver still retained on the evaluation stack.
-    ///
-    /// The host must leave it in place while yielding so it remains rooted across safepoints.
-    fn threading_join_managed_thread(
-        &mut self,
-        method: Option<dotnet_types::members::MethodDescription>,
-    ) -> dotnet_vm_data::StepResult;
 }
 
 /// VM-owned accounting and worker lifecycle for CoreLib's managed work queue.

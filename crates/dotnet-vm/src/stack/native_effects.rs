@@ -131,6 +131,45 @@ struct NativeInitializerClaim {
     claim: crate::statics::InitializerClaim,
 }
 
+struct ThreadCompletion(Option<crate::threading::workers::WorkerCompletion>);
+
+impl dotnet_vm_ops::effects::NativeThreadCompletion for ThreadCompletion {
+    fn finished(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|completion| completion.is_finished())
+    }
+    fn outcome(&self) -> Result<(), String> {
+        match self
+            .0
+            .as_ref()
+            .and_then(|completion| completion.take_outcome())
+        {
+            None | Some(Ok(crate::ExecutorResult::Exited(_))) => Ok(()),
+            Some(Ok(crate::ExecutorResult::Threw(_))) => {
+                unreachable!("worker exceptions are process fatal")
+            }
+            Some(Ok(crate::ExecutorResult::Error(error))) => Err(format!(
+                "Managed ThreadStart failed: Internal VM Error: {error}"
+            )),
+            Some(Err(_)) => Err("Managed ThreadStart panicked.".into()),
+        }
+    }
+    fn sleeper(&self) -> Box<dyn dotnet_vm_ops::effects::NativeInitSleeper> {
+        Box::new(ThreadCompletionSleeper(self.0.clone()))
+    }
+}
+struct ThreadCompletionSleeper(Option<crate::threading::workers::WorkerCompletion>);
+impl dotnet_vm_ops::effects::NativeInitSleeper for ThreadCompletionSleeper {
+    fn wait(&self, duration: std::time::Duration) {
+        if let Some(completion) = &self.0 {
+            completion.wait(duration);
+        } else {
+            std::thread::sleep(duration);
+        }
+    }
+}
+
 impl NativeInitClaim for NativeInitializerClaim {
     fn succeed(&mut self) {
         dotnet_vm_data::stack::InitializerClaim::succeed(&mut self.claim);
@@ -310,6 +349,39 @@ impl<'gc> NativeBackend<'gc> for Adapter<'_, '_, 'gc> {
         self.context.shared.thread_manager.is_gc_stop_requested()
             || self.context.local.heap.needs_full_collect.get()
             || self.context.gc.needs_collection()
+    }
+    fn request_full_collection(&mut self) -> Result<(), VmError> {
+        self.context.local.heap.needs_full_collect.set(true);
+        Ok(())
+    }
+    fn thread_join(
+        &mut self,
+        thread: ObjectRef<'gc>,
+    ) -> Result<dotnet_vm_ops::effects::NativeThreadJoin, VmError> {
+        let Some(ptr) = thread.as_ptr() else {
+            return Err(dotnet_types::error::ExecutionError::InternalError(
+                "null thread receiver".into(),
+            )
+            .into());
+        };
+        let completion = self.context.shared.workers.managed_completion(ptr);
+        let current = self.context.local.managed_threads.current() == Some(thread);
+        #[cfg(feature = "multithreading")]
+        let started = current
+            || self
+                .context
+                .shared
+                .workers
+                .managed_thread(ptr)
+                .is_some_and(|record| record.started);
+        #[cfg(not(feature = "multithreading"))]
+        let started = current;
+        if completion.is_none() && !started {
+            return Ok(dotnet_vm_ops::effects::NativeThreadJoin::Unstarted);
+        }
+        Ok(dotnet_vm_ops::effects::NativeThreadJoin::Waiting(Box::new(
+            ThreadCompletion(completion),
+        )))
     }
     fn active_scope_depth(&self) -> usize {
         self.context.local.active_borrows.get()
@@ -1932,7 +2004,7 @@ impl<'gc> VesContext<'_, 'gc> {
         *self.original_ip = saved_ip;
         *self.original_stack_height = saved_height;
         // A synchronous target can finish, advance this frame's IP itself and then yield so the
-        // executor can collect (`GC.Collect`). That is completion, not a request to retry: replaying
+        // executor can collect. That is completion, not a request to retry: replaying
         // the call would repeat its effects and trip the caller-IP check on the next turn.
         let completed_yield = matches!(result, StepResult::Yield)
             && self.frame_stack.len() == depth

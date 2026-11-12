@@ -4,7 +4,7 @@
 //! uncontended fast path use the native `LowLevelMonitor` even though the work queue is
 //! managed. Keeping the lock on the VM's existing monitor path avoids that native dependency.
 
-use crate::{MonitorLockResult, ThreadingIntrinsicHost};
+use crate::ThreadingIntrinsicHost;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::ArenaId;
@@ -44,29 +44,10 @@ pub fn low_level_lock_try_acquire<'gc, T: ThreadingIntrinsicHost<'gc>>(
 }
 
 #[dotnet_intrinsic("void System.Threading.LowLevelLock::Acquire()")]
-pub fn low_level_lock_acquire<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _: MethodDescription,
-    _: &GenericLookup,
-) -> StepResult {
-    let receiver = ctx.peek_stack_at(0).as_object_ref();
-    assert!(receiver.0.is_some(), "LowLevelLock receiver is null");
-    let thread_id = ctx.thread_id();
-    assert_ne!(
-        thread_id,
-        ArenaId::INVALID,
-        "LowLevelLock used by an unregistered thread"
-    );
-    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
-    let sync_block = ctx.monitor_get_or_create_sync_block_for_object(receiver, gc);
-    match ctx.monitor_enter_safe(&sync_block, thread_id) {
-        MonitorLockResult::Success => {
-            ctx.drop_top(1);
-            StepResult::Continue
-        }
-        MonitorLockResult::Yield => StepResult::Yield,
-        MonitorLockResult::Timeout => unreachable!("untimed LowLevelLock acquisition timed out"),
-    }
+pub async fn low_level_lock_acquire(
+    fx: dotnet_vm_ops::effects::VmEffects,
+) -> dotnet_vm_ops::effects::NativeResult {
+    crate::monitor::enter_effect(fx, false, false, false).await
 }
 
 #[dotnet_intrinsic("void System.Threading.LowLevelLock::Release()")]

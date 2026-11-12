@@ -215,7 +215,8 @@ pub trait NativeInitClaim {
     fn fail(&mut self, exception: ObjectRef<'_>);
 }
 
-/// A wait registration owns its wait-graph edge until it is dropped.
+/// A wait registration. Initializer registrations own their wait-graph edge until dropped;
+/// thread joins reuse this stop-aware protocol and recheck completion after every wake.
 pub trait NativeInitWait {
     fn ready(&self) -> bool;
     fn sleeper(&self) -> Box<dyn NativeInitSleeper>;
@@ -224,6 +225,49 @@ pub trait NativeInitWait {
 /// A condition wait that can run outside an arena mutation.
 pub trait NativeInitSleeper {
     fn wait(&self, duration: std::time::Duration);
+}
+
+/// A thread completion token contains no arena-branded references.
+pub trait NativeThreadCompletion {
+    fn finished(&self) -> bool;
+    fn outcome(&self) -> Result<(), String>;
+    fn sleeper(&self) -> Box<dyn NativeInitSleeper>;
+}
+
+pub enum NativeThreadJoin {
+    Unstarted,
+    Waiting(Box<dyn NativeThreadCompletion>),
+}
+
+struct ThreadJoinWait {
+    completion: Rc<dyn NativeThreadCompletion>,
+    deadline: Option<std::time::Instant>,
+}
+impl NativeInitWait for ThreadJoinWait {
+    fn ready(&self) -> bool {
+        self.completion.finished()
+            || self
+                .deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+    }
+    fn sleeper(&self) -> Box<dyn NativeInitSleeper> {
+        Box::new(ThreadJoinSleeper {
+            sleeper: self.completion.sleeper(),
+            deadline: self.deadline,
+        })
+    }
+}
+struct ThreadJoinSleeper {
+    sleeper: Box<dyn NativeInitSleeper>,
+    deadline: Option<std::time::Instant>,
+}
+impl NativeInitSleeper for ThreadJoinSleeper {
+    fn wait(&self, duration: std::time::Duration) {
+        let duration = self.deadline.map_or(duration, |d| {
+            duration.min(d.saturating_duration_since(std::time::Instant::now()))
+        });
+        self.sleeper.wait(duration);
+    }
 }
 
 /// Result of probing the shared initializer state during a branded access.
@@ -253,6 +297,12 @@ pub struct NativeEventMethods {
 /// Adapter supplied for one poll. It owns no native future and must not dispatch recursively.
 pub trait NativeBackend<'gc> {
     fn stop_requested(&self) -> bool;
+    fn request_full_collection(&mut self) -> Result<(), VmError> {
+        Err(internal("native collection unavailable"))
+    }
+    fn thread_join(&mut self, _thread: ObjectRef<'gc>) -> Result<NativeThreadJoin, VmError> {
+        Err(internal("native thread join unavailable"))
+    }
     fn event_methods(&mut self) -> Result<NativeEventMethods, VmError> {
         Err(internal("native events unavailable"))
     }
@@ -418,6 +468,15 @@ impl<'gc, 'a> NativeRegion<'gc, 'a> {
         backend: &'a mut dyn NativeBackend<'gc>,
     ) -> Self {
         Self { mc, roots, backend }
+    }
+    pub fn request_full_collection(&mut self) -> Result<(), VmError> {
+        self.backend.request_full_collection()
+    }
+    pub fn thread_join(&mut self, thread: &RootedValue) -> Result<NativeThreadJoin, VmError> {
+        let StackValue::ObjectRef(thread) = self.fetch(thread)? else {
+            return Err(internal("invalid thread receiver"));
+        };
+        self.backend.thread_join(thread)
     }
     pub fn event_methods(&mut self) -> Result<NativeEventMethods, VmError> {
         self.backend.event_methods()
@@ -1068,6 +1127,17 @@ impl VmEffects {
     pub fn invocation(&self) -> NativeInvocation {
         self.invocation
     }
+    /// Request a full collection and resume only after the executor has serviced it.
+    pub async fn collect(&mut self, operand_count: usize) -> NativeResult {
+        {
+            let mut vm = self.vm().await?;
+            vm.discard_scalars(operand_count)?;
+            vm.with(|region| region.request_full_collection())??;
+        }
+        self.yield_now().await?;
+        drop(self.vm().await?);
+        Ok(())
+    }
     /// Call managed code transparently.
     pub async fn call(&mut self, call: NativeCall) -> Result<NativeValue, NativeFailure> {
         self.call_inner(call, false).await
@@ -1222,6 +1292,27 @@ impl VmEffects {
     async fn wait_initializer(&mut self, wait: Box<dyn NativeInitWait>) -> NativeResult {
         self.request(Request::Initializer(wait)).await?;
         Ok(())
+    }
+    /// Wait for a managed thread, retaining the same deadline across GC stops.
+    pub async fn join_thread(
+        &mut self,
+        completion: Box<dyn NativeThreadCompletion>,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Option<Result<(), String>>, NativeFailure> {
+        let completion: Rc<dyn NativeThreadCompletion> = Rc::from(completion);
+        loop {
+            if completion.finished() {
+                return Ok(Some(completion.outcome()));
+            }
+            if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Ok(None);
+            }
+            self.wait_initializer(Box::new(ThreadJoinWait {
+                completion: completion.clone(),
+                deadline,
+            }))
+            .await?;
+        }
     }
     /// Wait until no arena, live or retired, has queued or running finalizers.
     pub async fn wait_finalizers(&mut self) -> NativeResult {

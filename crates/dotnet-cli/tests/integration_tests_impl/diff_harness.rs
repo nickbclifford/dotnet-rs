@@ -829,3 +829,20 @@ diff_test!(
     threading_timer_idle_background_exit_matches_dotnet,
     "tests/fixtures/threading/threading_timer_idle_background_exit_42.cs"
 );
+
+// The VM can construct a Transient pointer from an eval-stack struct, but the CLR rejects
+// this candidate before Monitor receives it. Reflection.Emit supplies the handwritten IL.
+#[cfg(not(feature = "fuzzing"))]
+#[test]
+fn monitor_transient_stack_value_il_is_rejected_by_clr() {
+    use crate::integration_tests_impl::harness::TestHarness;
+    let dll = TestHarness::get().ensure_dll(std::path::Path::new(
+        "tests/debug_fixtures/monitor_transient_il_42.cs",
+    ));
+    let output = std::process::Command::new("dotnet")
+        .arg(dll)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(42));
+    assert_eq!(output.stdout, b"rejected\n");
+}

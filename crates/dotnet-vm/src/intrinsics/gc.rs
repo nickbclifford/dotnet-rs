@@ -3,7 +3,6 @@ use crate::{
     instructions::objects::get_ptr_info,
     stack::ops::{
         EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, ThreadOps, TypedStackOps, VesBaseOps,
-        VesInternals,
     },
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -162,41 +161,20 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, T: TypedStackOps<'gc> + MemoryO
 
 /// System.GC::Collect()
 #[dotnet_intrinsic("static void System.GC::Collect()")]
-pub fn intrinsic_gc_collect_0<'gc, T: MemoryOps<'gc> + VesInternals<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    ctx.heap().needs_full_collect.set(true);
-    ctx.increment_ip();
-    StepResult::Yield
+pub async fn gc_collect_0(mut fx: VmEffects) -> NativeResult {
+    fx.collect(0).await
 }
 
 /// System.GC::Collect(int)
 #[dotnet_intrinsic("static void System.GC::Collect(int)")]
-pub fn intrinsic_gc_collect_1<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesInternals<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let _generation = ctx.pop_i32();
-    ctx.heap().needs_full_collect.set(true);
-    ctx.increment_ip();
-    StepResult::Yield
+pub async fn gc_collect_1(mut fx: VmEffects) -> NativeResult {
+    fx.collect(1).await
 }
 
 /// System.GC::Collect(int, GCCollectionMode)
 #[dotnet_intrinsic("static void System.GC::Collect(int, System.GCCollectionMode)")]
-pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesInternals<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let _mode = ctx.pop_i32();
-    let _generation = ctx.pop_i32();
-    ctx.heap().needs_full_collect.set(true);
-    ctx.increment_ip();
-    StepResult::Yield
+pub async fn gc_collect_2(mut fx: VmEffects) -> NativeResult {
+    fx.collect(2).await
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]

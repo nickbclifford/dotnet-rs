@@ -118,21 +118,54 @@ pub fn intrinsic_thread_name_changed<'gc, T: ThreadingIntrinsicHost<'gc>>(
 
 /// System.Threading.Thread::Join()
 #[dotnet_intrinsic("void System.Threading.Thread::Join()")]
-pub fn intrinsic_thread_join<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    ctx.threading_join_managed_thread(None)
+pub async fn thread_join(fx: VmEffects) -> NativeResult {
+    join_effect(fx, false).await
 }
 
-#[dotnet_intrinsic("bool System.Threading.Thread::Join(int)")]
-pub fn intrinsic_thread_join_timeout<'gc, T: ThreadingIntrinsicHost<'gc>>(
-    ctx: &mut T,
-    method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    ctx.threading_join_managed_thread(Some(method))
+#[dotnet_intrinsic("bool System.Threading.Thread::Join(int)", select = sleep_select)]
+pub async fn thread_join_timeout(fx: VmEffects) -> NativeResult {
+    join_effect(fx, true).await
+}
+
+async fn join_effect(mut fx: VmEffects, timed: bool) -> NativeResult {
+    let timeout = if timed {
+        fx.invocation().start as u32 as i32
+    } else {
+        -1
+    };
+    let deadline = (timeout >= 0).then(|| Instant::now() + Duration::from_millis(timeout as u64));
+    let (_receiver, completion) = {
+        let mut vm = fx.vm().await?;
+        let (receiver, _, _) = vm.prepare_monitor(timed, false)?;
+        if timeout < -1 {
+            return Err(vm.exception(
+                "System.ArgumentOutOfRangeException",
+                "The timeout must be greater than or equal to -1.",
+            )?);
+        }
+        if vm.is_null(&receiver)? {
+            return Err(vm.exception("System.NullReferenceException", dotnet_vm_ops::NULL_REF_MSG)?);
+        }
+        let completion = vm.with(|region| region.thread_join(&receiver))??;
+        match completion {
+            dotnet_vm_ops::effects::NativeThreadJoin::Unstarted => {
+                return Err(vm.exception(
+                    "System.Threading.ThreadStateException",
+                    "Thread has not been started.",
+                )?);
+            }
+            dotnet_vm_ops::effects::NativeThreadJoin::Waiting(completion) => (receiver, completion),
+        }
+    };
+    let outcome = fx.join_thread(completion, deadline).await?;
+    let mut vm = fx.vm().await?;
+    if let Some(Err(message)) = &outcome {
+        return Err(vm.exception("System.InvalidOperationException", message)?);
+    }
+    if timed {
+        vm.push_bool(outcome.is_some())?;
+    }
+    Ok(())
 }
 
 /// The worker registry owns native handles independently of the managed Thread object.

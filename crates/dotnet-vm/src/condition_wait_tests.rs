@@ -4262,3 +4262,76 @@ fn event_wait_deadline_survives_collection() {
     event.set();
     assert_eq!(resume(&mut executor), StepResult::Continue);
 }
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn join_timeout_survives_collection() {
+    use dotnet_vm_ops::effects::NativeDispatchMode;
+    use std::time::Duration;
+    let mut executor = executor();
+    let (mut res, _, owner) = make_test_assembly!("JoinTest.dll", "JoinTest", "Thread");
+    let mut signature = parameterless_i32_signature();
+    signature.instance = true;
+    signature.parameters.push(Parameter(
+        vec![],
+        ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
+    ));
+    res.push_method(
+        owner,
+        Method::new(Accessibility::Public, signature, "Join", None),
+    );
+    let res = executor.shared.loader.register_owned_assembly(res);
+    let method = MethodDescription::new(
+        TypeDescription::new(res.clone(), owner),
+        GenericLookup::default(),
+        res,
+        MethodMemberIndex::Method(0),
+    );
+    let (release, held) = std::sync::mpsc::channel();
+    let completion = executor.shared.workers.spawn_owner(move |running| {
+        let _ = held.recv_timeout(Duration::from_secs(5));
+        running.complete(ExecutorResult::Exited(0)).retire();
+    });
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: the engine is the live root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                let thread = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(vec![])));
+                engine.stack.shared.workers.register_managed_thread(
+                    thread.as_ptr().unwrap(),
+                    crate::threading::workers::ManagedThreadMetadata {
+                        id: 1,
+                        delegate: None,
+                        parameterized: false,
+                        started: true,
+                        background: false,
+                        completion_index: Some(completion.index()),
+                        retained: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    },
+                );
+                let mut ctx = engine.ves_context(gc);
+                ctx.push(StackValue::ObjectRef(thread));
+                ctx.push(StackValue::Int32(50));
+                assert_eq!(crate::intrinsics::dispatch_method_intrinsic(
+            crate::intrinsics::MethodIntrinsicId::System_Threading_Thread_Join_29405bd0fb2c031a,
+            &mut ctx, method, &Default::default(), NativeDispatchMode::InlineCall,
+        ), StepResult::Yield);
+            })
+        })
+        .unwrap();
+    collect(&mut executor);
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(resume(&mut executor), StepResult::Continue);
+    executor
+        .with_arena(|arena| {
+            arena.mutate_root(|gc, engine| {
+                // SAFETY: the engine is the live root for this mutation.
+                let gc = unsafe { test_gc_handle(gc, engine) };
+                assert_eq!(engine.ves_context(gc).peek_stack_at(0).as_i32(), 0);
+            })
+        })
+        .unwrap();
+    release.send(()).unwrap();
+    drop(executor);
+}

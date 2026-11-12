@@ -34,6 +34,7 @@ struct Entry {
 #[derive(Default)]
 struct RegistryState {
     entries: Vec<Entry>,
+    completion_signal: std::sync::Arc<(std::sync::Mutex<()>, std::sync::Condvar)>,
     // Keys and delegate pointers are inert: their allocations remain rooted by arena-local
     // records while the worker can use them, and the registry never dereferences them.
     // Completed entries may outlive their allocations and are replaced on address reuse.
@@ -89,6 +90,19 @@ impl WorkerCompletion {
             | Lifecycle::ShuttingDown(outcome)
             | Lifecycle::Drained(outcome)
             | Lifecycle::Leaked(outcome) => outcome.take(),
+        }
+    }
+
+    pub(crate) fn wait(&self, duration: std::time::Duration) {
+        let signal = self.state.lock().completion_signal.clone();
+        let guard = signal.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !self.is_finished() {
+            drop(
+                signal
+                    .1
+                    .wait_timeout(guard, duration)
+                    .unwrap_or_else(|e| e.into_inner()),
+            );
         }
     }
 
@@ -212,6 +226,9 @@ impl WorkerRegistry {
                     | Lifecycle::Leaked(outcome) => outcome.take(),
                 };
                 state.entries[index].lifecycle = Lifecycle::Leaked(outcome);
+                let signal = state.completion_signal.clone();
+                drop(state);
+                notify_completion(&signal);
             }
         });
         state.entries.push(Entry {
@@ -352,16 +369,26 @@ impl RunningWorker {
     }
 
     pub(crate) fn complete(self, result: ExecutorResult) -> CompletedWorker {
-        {
+        let signal = {
             let mut state = self.state.lock();
             assert!(matches!(
                 state.entries[self.index].lifecycle,
                 Lifecycle::Running
             ));
             state.entries[self.index].lifecycle = Lifecycle::Completed(Some(Ok(result)));
-        }
+            state.completion_signal.clone()
+        };
+        notify_completion(&signal);
         CompletedWorker(self)
     }
+}
+
+#[cfg(feature = "multithreading")]
+fn notify_completion(signal: &(std::sync::Mutex<()>, std::sync::Condvar)) {
+    // Check completion while holding this same lock, so notification cannot be lost
+    // between the check and parking on the condition variable.
+    let _guard = signal.0.lock().unwrap_or_else(|e| e.into_inner());
+    signal.1.notify_all();
 }
 
 #[cfg(feature = "multithreading")]
@@ -442,6 +469,9 @@ impl WorkerCompletion {
     pub(crate) fn take_outcome(&self) -> Option<Outcome> {
         None
     }
+    pub(crate) fn wait(&self, duration: std::time::Duration) {
+        std::thread::sleep(duration);
+    }
 }
 
 #[cfg(not(feature = "multithreading"))]
@@ -471,6 +501,32 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn completion_wait_wakes_on_publication_and_after_publication() {
+        let registry = WorkerRegistry::default();
+        let (release, held) = std::sync::mpsc::channel();
+        let completion = registry.spawn(move || {
+            held.recv().unwrap();
+            ExecutorResult::Exited(0)
+        });
+        let waiter = completion.clone();
+        let (ready, started) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            waiter.wait(Duration::from_secs(5));
+            done.send(waiter.is_finished()).unwrap();
+        });
+        started.recv().unwrap();
+        release.send(()).unwrap();
+        assert!(finished.recv_timeout(Duration::from_secs(2)).unwrap());
+        thread.join().unwrap();
+        let start = Instant::now();
+        completion.wait(Duration::from_secs(5));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        registry.shutdown(|| {});
+    }
+
+    #[test]
     fn completed_outcomes_remain_consumable_after_retirement() {
         use crate::error::{ExecutionError, VmError};
         use dotnet_vm_data::ManagedException;
@@ -492,6 +548,7 @@ mod tests {
                     background: false,
                 }],
                 threads: HashMap::new(),
+                completion_signal: Default::default(),
             }));
             let completion = WorkerCompletion {
                 state: state.clone(),
@@ -533,6 +590,7 @@ mod tests {
                 background: false,
             }],
             threads: HashMap::new(),
+            completion_signal: Default::default(),
         }));
         let retired = RunningWorker {
             state: state.clone(),
@@ -560,6 +618,7 @@ mod tests {
                 background: false,
             }],
             threads: HashMap::new(),
+            completion_signal: Default::default(),
         }));
         let completion = WorkerCompletion {
             state: state.clone(),
@@ -593,6 +652,7 @@ mod tests {
                 background: false,
             }],
             threads: HashMap::new(),
+            completion_signal: Default::default(),
         }));
         let completion = WorkerCompletion {
             state: state.clone(),

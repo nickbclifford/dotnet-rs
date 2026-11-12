@@ -464,3 +464,86 @@ pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
         unsupported_intrinsic_field_step_result(&field)
     }
 }
+
+#[cfg(test)]
+mod async_registry_tests {
+    use super::ASYNC_INTRINSIC_SIGNATURES;
+
+    #[test]
+    fn blocking_intrinsics_have_no_sync_fallback() {
+        for (prefix, expected) in [
+            ("System_GC_Collect_", 3),
+            ("System_Threading_Thread_Join_", 2),
+            ("System_Threading_LowLevelLock_Acquire_", 1),
+            ("System_Threading_Monitor_TryEnter_FastPath_", 1),
+            ("System_Threading_Monitor_TryEnter_FastPath_WithTimeout_", 2),
+        ] {
+            let matches: Vec<_> = ASYNC_INTRINSIC_SIGNATURES
+                .iter()
+                .filter(|(name, _, _, _, _, _)| {
+                    name.strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.chars().all(|c| c.is_ascii_hexdigit()))
+                })
+                .collect();
+            assert_eq!(matches.len(), expected, "{prefix}");
+            for (name, _, _, fallback, _, parameters) in matches {
+                // The byref timeout overload retains its fallback for transient and unmanaged flags.
+                if prefix.ends_with("WithTimeout_") && parameters.contains(&"Boolean&") {
+                    assert!(*fallback, "{name} must retain its byref fallback");
+                    continue;
+                }
+                assert!(!fallback, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn async_only_intrinsic_signatures_are_transportable() {
+        // Explicit types ensure a new byref-like or pointer-shaped registration gets reviewed.
+        let allowed = |ty: &str| {
+            matches!(
+                ty,
+                "Void"
+                    | "Boolean"
+                    | "Int32"
+                    | "IntPtr"
+                    | "String"
+                    | "Object"
+                    | "Object[]"
+                    | "System.GCCollectionMode"
+                    | "System.Threading.EventResetMode"
+                    | "System.Reflection.BindingFlags"
+                    | "System.Reflection.Binder"
+                    | "System.Globalization.CultureInfo"
+                    | "System.Type"
+                    | "Microsoft.Win32.SafeHandles.SafeWaitHandle"
+            )
+        };
+        for (name, receiver, is_static, fallback, result, parameters) in ASYNC_INTRINSIC_SIGNATURES
+        {
+            if *fallback {
+                continue;
+            }
+            assert!(allowed(result), "unsupported result {result} in {name}");
+            for parameter in *parameters {
+                assert!(
+                    allowed(parameter),
+                    "unsupported parameter {parameter} in {name}"
+                );
+            }
+            if !is_static {
+                assert!(
+                    matches!(
+                        *receiver,
+                        "System.Threading.Thread"
+                            | "System.Threading.LowLevelLock"
+                            | "System.Threading.EventWaitHandle"
+                            | "DotnetRs.MethodInfo"
+                            | "DotnetRs.ConstructorInfo"
+                    ),
+                    "unsupported receiver {receiver} in {name}"
+                );
+            }
+        }
+    }
+}

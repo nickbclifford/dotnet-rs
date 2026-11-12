@@ -536,7 +536,7 @@ impl<'gc> ExecutionEngine<'gc> {
             let initializer = (matches!(result, StepResult::FramePushed)
                 && ctx.frame_stack.len() == depth + 1
                 && ctx.frame_stack.current_frame().state.info_handle.is_cctor)
-                // A yield that advanced the IP is a completed `GC.Collect`, not an initializer retry.
+                // Retained synchronous fallbacks retry without advancing the caller.
                 || (matches!(result, StepResult::Yield)
                     && ctx.frame_stack.len() == depth
                     && ctx.state().ip == ip_before);

@@ -15,7 +15,7 @@ leaf operations that never suspend; converting them would add cost and remove no
 that matter still hand-roll suspension as `StepResult::Yield` plus re-execution, or park
 state on the caller's frame:
 
-| Legacy mechanism | Users today |
+| Legacy mechanism | Users at the start of this plan |
 |---|---|
 | Sync yield-retry intrinsics (re-run the instruction after `StepResult::Yield`) | `Thread.Join()`/`Join(int)` (`thread.rs`, `join_managed_thread` in `context_ops.rs`), `LowLevelLock.Acquire`, `Monitor.TryEnter_FastPath` family (`monitor.rs`), `GC.Collect` x3 (`gc.rs`, `increment_ip` + `Yield`) |
 | Bulk loops that yield at `check_gc_safe_point` | string `operations`/`constructors`/`search`, `mem_helpers`, `buffer`, span `equality`, `cpblk`/`initblk` (`instructions/memory.rs`) |
@@ -70,14 +70,14 @@ Checked against the code on `main`. "Reachable" means a valid guest program can 
 
 | Fallback / mechanism | Verdict | Reason |
 |---|---|---|
-| `Thread.Join` yield loop | **Remove** | No operand-shape problem; the operand is an object and an int. Becomes a body that registers a completion wait. Frees `monitor_retry` from its second user. |
-| `LowLevelLock.Acquire`, `TryEnter_FastPath`, other `monitor_enter_safe` + `Yield` users | **Remove** | Same shape as already-migrated `Monitor.Enter(object)`. |
-| `GC.Collect` x3 | **Remove** | The `increment_ip` + `Yield` trick is a hand-written effect. Needs an effect that requests a full collect and resumes after the stop. |
+| `Thread.Join` yield loop | **Removed (slice 5)** | A native body waits on worker completion with an absolute deadline. `monitor_retry` is no longer used by Join. |
+| `LowLevelLock.Acquire`, `TryEnter_FastPath` | **Removed (slice 5)** | Native bodies use the monitor effect; legacy `monitor_enter_safe` remains for the retained byref fallbacks. |
+| `GC.Collect` x3 | **Removed (slice 5)** | Native bodies request a full collection and resume after the executor services it. |
 | Bulk string/mem/span/buffer loops | **Remove, measured** | Plan 04 measured a large-call cost for native activations. Each family needs a before/after on its benchmark (`substring`, `end_to_end`, `runtime_primitives`); small-input paths keep an inline fast path as Substring does. A fast path registered as a sync `fallback` is also what any remaining `Other` dispatch receives, so it must either handle every input size or `Other` must have no producer for that intrinsic. Overlapping memmove (above) is a correctness reason, not only a cleanup. |
 | `cpblk`/`initblk` instruction yields | **Fix, then decide** | These are instructions, not intrinsics, but share `chunked_copy_with_safe_point` and its restart-from-zero overlap hazard. At minimum keep progress across the yield; whether they become effects is decided with the `mem_helpers` family. |
 | Multicast `Invoke` (`MulticastState`) | **Keep for excluded shapes** | Ref-structs, byref returns, `TypedReference` and unsupported byref origins remain excluded; see "Kept". The `retrying_initializer` flag goes with the static-init slice. |
 | Reflection `InvokeReturn` / `reflection_pending` | **Removed (slice 3)** | Every remaining declined shape was byref-like, which the CLR refuses with `NotSupportedException` before the target runs; the body now raises that, and Activator's binding and default-value cases. Byref write-back after a throw and ambiguous-match "first best match" remain README deviations. |
-| Monitor byref `Transient` / `Unmanaged` fallback | **Verify, then likely keep** | `lock` statements use a local (`FrameHome`), admitted. A `Transient` `bool&` has no obvious producer in C# or CoreLib; confirm by grepping producers and by a handwritten-IL probe. `Unmanaged` stashing is *not* a new hazard: the legacy retry also writes the raw address after yielding, with the same unchecked trust (`F10.RawMemoryAccessValid`), so plan 13's "stability" objection does not distinguish the two paths. Admitting it is cheap; admitting `Transient` is not (would need tracing a stack-resident value). |
+| Monitor byref `Transient` / `Unmanaged` fallback | **Kept (slice 5)** | Both unsupported origins retain the existing fallback; see "Kept". The CLR rejects the probed stack-value `ldflda` route. |
 | `newobj` of an intrinsic constructor (formerly `execute_intrinsic_call`) | **Removed (slice 4)** | Completion (`complete_constructor_receiver`) can be the activation's completion action, as `Jump` is for inline calls. Intrinsic constructors **do** suspend: `String::.ctor(char[])`, `.ctor(char, int)`, `.ctor(ReadOnlySpan<char>)` and `.ctor(char*)` yield at safepoints (`constructors.rs`). `newobj` now dispatches intrinsic constructors in `NativeDispatchMode::Constructor`, so an async constructor body can suspend and the value-type receiver is completed only on success. The synchronous string constructors still return their safepoint `Yield` and re-allocate on retry until slice 6 converts them; that slice should add a managed-exception case showing the receiver is not published. |
 | `.cctor` dispatch, span equality slow path, `Expression.Compile` redirect | **Keep** | They dispatch managed bodies, never intrinsics; `Other` is correct for them. |
 | `ExecutionEngine::unified_dispatch`/`dispatch_method` public APIs (`ResolvedMethodDispatchMode::ExecutionEngineApi`) | **Removed (slice 4)** | Plan 13 kept them as a host entry contract, but no production code calls them: the only callers are `condition_wait_tests.rs` and `native_substring_tests.rs`. `ExecutionEngineApi` sends intrinsics straight to `intrinsic_call`, i.e. the sync handler, so every async-only intrinsic is unreachable through them. Delete both APIs, `dispatch_resolved_method_for_engine_api`, `unified_dispatch_for_engine_api` and the `ExecutionEngineApi` mode; port those tests to drive guest IL or the inline path. |
@@ -237,7 +237,7 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      selection and workspace clippy passed in ST and MT; 20 multicast CLR comparisons and
      string differential tests passed. `check.sh --fast` was stopped during its silent fixture
      build after several minutes; the workspace checks used available fixtures instead.
-5. **Blocking intrinsics.** `Thread.Join` (both), `LowLevelLock.Acquire`, the `TryEnter_FastPath`
+5. **Blocking intrinsics (complete).** `Thread.Join` (both), `LowLevelLock.Acquire`, the `TryEnter_FastPath`
    family, `GC.Collect` x3. Delete their sync handlers, Join's `monitor_retry_deadline` use and
    any now-unused `MonitorHost` methods. Also settle the Transient/Unmanaged question here and
    either admit `Unmanaged` (deleting the byref monitor fallbacks and, if nothing else uses it,
@@ -254,6 +254,22 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
      removed fallback that fails if the registration reappears; a registry test that every
      async intrinsic without a fallback has a signature the native multicast and reflection
      selectors admit, so no retained continuation can reach it.
+   - Both Join overloads wait on worker completion notifications; timed joins keep the absolute
+     deadline across GC stops. `GC.Collect` requests a full collection and yields until it is
+     serviced; contention for the collection coordinator leaves the request pending.
+   - The byref Monitor fallbacks remain for both `Transient` and `Unmanaged`, along with the
+     retry field and MonitorHost methods they use. Producer search found `ldflda` on a stack
+     value as a candidate; the handwritten IL probe is rejected by the CLR with
+     `InvalidProgramException`. No other guest `Transient bool&` producer was established.
+   - `join_timeout_survives_collection`, `completion_wait_wakes_on_publication_and_after_publication`,
+     `collection_request_retries_when_coordinator_is_busy`, the async registry guards and the CLR
+     IL probe cover the new paths and retained exclusions.
+   - Validation: workspace nextest passed in ST (929 tests) and `multithreading` (1,211 tests,
+     with the reflection race filter used in slice 4); VM clippy passed in both configurations.
+     The finalizer and multicast collection fixtures and the CLR IL probe passed separately.
+     Source search finds no `threading_join_managed_thread`, `intrinsic_thread_join`,
+     `intrinsic_gc_collect`, or `intrinsic_monitor_try_enter_fast_path`; `monitor_enter_safe`
+     remains only for the retained byref Monitor fallback.
 6. **Bulk intrinsics.** `mem_helpers`/`buffer` first (correctness), then string, then span
    equality, one family per commit, each gated on a benchmark comparison against the parent
    commit. `cpblk`/`initblk` keep progress across the yield even if they stay instructions.
@@ -286,6 +302,7 @@ exclusions. Slice 3 then removed the reflection continuation; the remaining orde
 | Item | Reason | Test that fails if the reason stops being true |
 |---|---|---|
 | `MulticastState`, its step/return/tail-call checks, and initializer retry | Ref-struct values or byref targets containing managed pointers, byref returns, `TypedReference`, and byrefs with origins other than non-null heap, frame home, static or MT cross-arena object cannot use native transport. Unresolvable or mismatched shapes also decline. | `multicast_selection_precedes_operand_commitment` checks the ref-struct value, byref target, byref return, `TypedReference` and unmanaged byref exclusions; their CLR differential fixtures check execution. Transient byrefs have no known guest producer (slice 5). |
+| Monitor byref fallbacks, `monitor_retry`, and their `MonitorHost` methods | `Transient` and `Unmanaged` pointers are not admitted by native transport; both retain the existing synchronous retry path. | `monitor_legacy_unmanaged_timeout_retains_deadline_across_stop` and the selection tests exercise the fallback; `monitor_transient_stack_value_il_is_rejected_by_clr` probes the stack-value candidate. |
 
 ## Ask the maintainer only if
 

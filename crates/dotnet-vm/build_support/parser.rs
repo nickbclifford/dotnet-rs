@@ -26,6 +26,7 @@ pub struct IntrinsicEntry {
     pub is_async: bool,
     pub selector: Option<String>,
     pub fallback: Option<String>,
+    pub signature: Option<(String, Vec<String>)>,
     pub original_handler_path: String,
     pub filter_name: Option<String>,
     pub variant_name: String,
@@ -216,6 +217,7 @@ fn process_intrinsic_fn(
             let sanitized_method = parsed.method_name.replace(['.', '$'], "_");
             let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_method, sig_hash);
             entries.push(IntrinsicEntry {
+                signature: Some((parsed.return_type.clone(), parsed.parameters.clone())),
                 type_name: parsed.class_name,
                 member_name: parsed.method_name,
                 arity,
@@ -239,6 +241,7 @@ fn process_intrinsic_fn(
             let sanitized_field = parsed.field_name.replace(['.', '$'], "_");
             let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_field, sig_hash);
             entries.push(IntrinsicEntry {
+                signature: None,
                 type_name: parsed.class_name,
                 member_name: parsed.field_name,
                 arity: 0,

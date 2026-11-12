@@ -6282,10 +6282,12 @@ mod condition_wait_tests;
 #[cfg(feature = "multithreading")]
 #[test]
 fn managed_join_returns_before_native_worker_exits() {
-    use dotnet_intrinsics_threading::ManagedThreadHost;
+    use dotnet_vm_ops::effects::{NativeDispatchMode, NativeIntrinsicHost};
     use std::time::{Duration, Instant};
 
     let mut executor = executor();
+    let method = test_constructor_method(&executor);
+    boundary_start(&mut executor);
     let shared = executor.shared.clone();
     let (release, held) = std::sync::mpsc::channel();
     let (ready, published) = std::sync::mpsc::channel();
@@ -6319,7 +6321,14 @@ fn managed_join_returns_before_native_worker_exits() {
                 );
                 let mut ctx = engine.ves_context(gc);
                 ctx.push(StackValue::ObjectRef(thread));
-                ctx.threading_join_managed_thread(None)
+                ctx.start_native(
+                    method,
+                    NativeDispatchMode::InlineCall,
+                    &Default::default(),
+                    None,
+                    None,
+                    |fx| Box::pin(dotnet_intrinsics_threading::thread::thread_join(fx)),
+                )
             })
         })
         .unwrap();
@@ -6327,7 +6336,7 @@ fn managed_join_returns_before_native_worker_exits() {
     let released = release.send(()).is_ok();
     drop(executor);
     shared.shutdown_workers();
-    assert!(matches!(result, StepResult::Continue));
+    assert!(matches!(result, StepResult::Jump(1)));
     assert!(released, "native worker exited before Join returned");
     assert!(
         elapsed < Duration::from_secs(4),

@@ -1232,7 +1232,12 @@ impl Executor {
             //    we unwind before the explicit `finish()` below.
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
             let Some(session) = coordinator.begin_collection() else {
-                return Ok(()); // Another thread is already collecting
+                // The other session may not have stopped this thread yet. Keep the request
+                // pending so an explicit collection cannot complete before a collection runs.
+                self.with_arena(|arena| {
+                    arena.mutate(|_, c| c.stack.local.heap.needs_full_collect.set(true));
+                })?;
+                return Ok(());
             };
 
             self.with_arena(|arena| {

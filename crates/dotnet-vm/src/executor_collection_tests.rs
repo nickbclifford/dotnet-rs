@@ -641,3 +641,26 @@ fn arena_lifetime_installation_checks_arena_generation() {
         "mark installation does not compare the destination arena's original generation"
     );
 }
+
+#[cfg(feature = "multithreading")]
+#[test]
+fn collection_request_retries_when_coordinator_is_busy() {
+    let state = shared();
+    let mut executor = Executor::new(Arc::clone(&state));
+    let coordinator = Arc::clone(&state.gc_coordinator);
+    let (ready, acquired) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let session = coordinator.begin_collection().unwrap();
+        ready.send(()).unwrap();
+        held.recv().unwrap();
+        drop(session);
+    });
+    acquired.recv().unwrap();
+    executor.perform_full_gc().unwrap();
+    assert_eq!(executor.collection_check().unwrap(), (true, true));
+    release.send(()).unwrap();
+    thread.join().unwrap();
+    executor.perform_full_gc().unwrap();
+    assert_eq!(executor.collection_check().unwrap(), (false, false));
+}
