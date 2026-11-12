@@ -1174,12 +1174,14 @@ impl<'gc> VesContext<'_, 'gc> {
         }
         // Raw addresses can occur as byref operands in unsafe IL. Resolve their declared
         // target types before committing operands, then canonicalize them for native calls.
+        // `count` includes an instance receiver below the parameters; parameter `index` is at
+        // depth `parameters - index - 1` and at operand `index + receiver`.
         let mut raw_byrefs = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             if matches!(entry, NativeEntry::Intrinsic(_))
                 && let ParameterType::Ref(ty) = &parameter.1
                 && matches!(
-                    self.peek_stack_at(count - index - 1),
+                    self.peek_stack_at(signature.parameters.len() - index - 1),
                     StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_)
                 )
             {
