@@ -120,6 +120,10 @@ Evidence and IDs (p01…, R01…) are defined in the
 - **Thread-static retention:** thread-static storage and its object references remain rooted until
   VM shutdown, including after an explicit worker exits, so outstanding byrefs remain valid.
   Reclaiming these values when no byref can reach them remains unplanned.
+- **Timer pool-thread fixture under load:** `threading_timer_callback_pool_thread_42` failed
+  twice during full parallel `dotnet-cli` integration runs on 2026-11-11 (once single-threaded,
+  once during plan 16 slice 4 validation) and passed every isolated and repeated run. The
+  failure message was not captured; reproduce under load and record it before diagnosing.
 - **Reflection race witness:** `invoke_argument_race_42` uses bounded concurrent churn, so the
   CLR can finish without observing the intended `ArgumentException` and its differential sanity
   check can fail despite correct execution.
